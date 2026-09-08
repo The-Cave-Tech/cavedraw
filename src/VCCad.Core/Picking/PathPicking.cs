@@ -18,6 +18,9 @@ public enum PickKind
 /// <summary>A picked editable feature of a path (used by the node tool).</summary>
 public readonly record struct NodePick(SubPath SubPath, int NodeIndex, bool IsInHandle, bool IsOutHandle);
 
+/// <summary>A picked segment of a path plus its distance from the query point.</summary>
+public readonly record struct SegmentPick(SubPath SubPath, int SegmentIndex, double Distance);
+
 /// <summary>
 /// Geometry tests that let the UI decide what a click grabbed. All distances are
 /// expressed in model points and are independent of zoom; the view layer converts
@@ -111,6 +114,32 @@ public static class PathPicking
         }
 
         return PickKind.None;
+    }
+
+    /// <summary>
+    /// The nearest segment of a path whose outline comes within
+    /// <paramref name="tolerance"/> of <paramref name="query"/>. This lets the
+    /// direct-selection tool pick an individual line/Bézier segment (rather than
+    /// the whole object). Returns null when nothing is close enough.
+    /// </summary>
+    public static SegmentPick? ClosestSegment(PathItem path, Point2D query, double tolerance)
+    {
+        SegmentPick? best = null;
+        for (int s = 0; s < path.SubPaths.Count; s++)
+        {
+            SubPath sub = path.SubPaths[s];
+            for (int i = 0; i < sub.SegmentCount; i++)
+            {
+                CubicBezier segment = sub.GetSegment(i);
+                segment.NearestPoint(query, out _, out double distance);
+                if (distance <= tolerance && (best is null || distance < best.Value.Distance))
+                {
+                    best = new SegmentPick(sub, i, distance);
+                }
+            }
+        }
+
+        return best;
     }
 
     /// <summary>

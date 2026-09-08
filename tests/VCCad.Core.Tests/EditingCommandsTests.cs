@@ -63,4 +63,31 @@ public class EditingCommandsTests
         Assert.Equal(a, layer.Children[0]); // original z-order restored
         Assert.Equal(layer, a.Container);
     }
+
+    [Fact]
+    public void CompositeCommandUndoesInReverseOrderAsOneStep()
+    {
+        CadDocument doc = CadDocument.CreateDefault();
+        Layer layer = doc.Artboards[0].Layers[0];
+
+        PathItem a = PathFactory.CreateRectangle("a", new Rect2D(0, 0, 10, 10));
+        PathItem b = PathFactory.CreateRectangle("b", new Rect2D(0, 0, 10, 10));
+        PathItem c = PathFactory.CreateRectangle("c", new Rect2D(0, 0, 10, 10));
+        layer.AddItem(a);
+        layer.AddItem(b);
+        layer.AddItem(c);
+
+        var stack = new CommandStack();
+        stack.Execute(new CompositeCommand(
+            "Delete three",
+            new[] { new RemoveItemCommand(a), new RemoveItemCommand(b), new RemoveItemCommand(c) }));
+
+        Assert.Empty(layer.Children);
+        Assert.True(stack.CanUndo);
+
+        stack.Undo();
+        Assert.Equal(3, layer.Children.Count);
+        Assert.Equal(new[] { a, b, c }, layer.Children);
+        Assert.False(stack.CanUndo); // one composite step, not three
+    }
 }

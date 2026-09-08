@@ -146,6 +146,49 @@ public sealed class PathItem : LayerItem
         NotifyPropertyChanged(nameof(SubPaths));
     }
 
+    /// <summary>Rotates every anchor and handle about <paramref name="center"/> by
+    /// <paramref name="radians"/> (positive = clockwise on screen, i.e. standard
+    /// angle convention applied to model points). Used by the rotation handle.</summary>
+    public void RotateGeometryAbout(Point2D center, double radians)
+    {
+        double cos = Math.Cos(radians);
+        double sin = Math.Sin(radians);
+
+        Point2D Rotate(Point2D p)
+        {
+            double dx = p.X - center.X;
+            double dy = p.Y - center.Y;
+            return new Point2D(
+                center.X + dx * cos - dy * sin,
+                center.Y + dx * sin + dy * cos);
+        }
+
+        foreach (SubPath sp in SubPaths)
+        {
+            foreach (PathNode node in sp.Nodes)
+            {
+                node.Anchor = Rotate(node.Anchor);
+                node.InHandle = Rotate(node.InHandle);
+                node.OutHandle = Rotate(node.OutHandle);
+            }
+        }
+
+        NotifyPropertyChanged(nameof(SubPaths));
+    }
+
+    /// <summary>Translates the two end nodes of one segment by <paramref name="delta"/> —
+    /// the direct-selection "drag a segment" operation. Nodes move with their
+    /// handles so the segment keeps its shape while sliding.</summary>
+    public void TranslateSegmentBy(SubPath sub, int segmentIndex, Vector2D delta)
+    {
+        (int start, int end) = sub.SegmentEndNodes(segmentIndex);
+        TranslateNode(sub, start, delta);
+        if (end != start)
+        {
+            TranslateNode(sub, end, delta);
+        }
+    }
+
     /// <inheritdoc/>
     public override LayerItem Clone()
     {

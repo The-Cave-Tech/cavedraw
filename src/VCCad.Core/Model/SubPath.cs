@@ -85,6 +85,21 @@ public sealed class SubPath
         }
     }
 
+    /// <summary>Returns the indices of the two nodes bounding a segment. For a
+    /// closed subpath the last segment wraps from the final node back to node 0,
+    /// so <c>End</c> may be smaller than <c>Start</c> (or equal for a two-node loop).</summary>
+    public (int Start, int End) SegmentEndNodes(int segmentIndex)
+    {
+        int segmentCount = SegmentCount;
+        if (segmentIndex < 0 || segmentIndex >= segmentCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(segmentIndex), "Segment index out of range.");
+        }
+
+        int n = Nodes.Count;
+        return (segmentIndex, segmentIndex + 1 < n ? segmentIndex + 1 : 0);
+    }
+
     /// <summary>
     /// The tight bounding box of this subpath: the union of every segment's own
     /// tight box. Empty subpaths yield <see cref="Rect2D.Empty"/>.
