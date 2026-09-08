@@ -78,6 +78,11 @@ public sealed class CanvasWorkspace : Control
     private (Point2D A, Point2D I, Point2D O) _segmentOrigA;
     private (Point2D A, Point2D I, Point2D O) _segmentOrigB;
 
+    // Segment bend mode: dragging a STRAIGHT segment pulls out its (collapsed)
+    // control handles so the line bends into a curve that follows the pointer.
+    private bool _segmentBendMode;
+    private Point2D _bendMidpoint;
+
     // Whether the current gesture actually displaced anything (commit gating).
     private bool _gestureMoved;
 
@@ -738,6 +743,19 @@ public sealed class CanvasWorkspace : Control
         _segmentNodeB = sub.Nodes[b];
         _segmentOrigA = (sub.Nodes[a].Anchor, sub.Nodes[a].InHandle, sub.Nodes[a].OutHandle);
         _segmentOrigB = (sub.Nodes[b].Anchor, sub.Nodes[b].InHandle, sub.Nodes[b].OutHandle);
+
+        // A "line" is just a cubic whose two control points sit on the endpoints.
+        // Dragging such a straight segment should bend it: pull the collapsed
+        // handles out toward the pointer instead of sliding the whole segment.
+        PathNode from = sub.Nodes[a];
+        PathNode to = sub.Nodes[b];
+        bool straight = from.OutHandle.NearlyEquals(from.Anchor)
+                        && to.InHandle.NearlyEquals(to.Anchor);
+        _segmentBendMode = straight && a != b;
+        _bendMidpoint = new Point2D(
+            (_segmentOrigA.A.X + _segmentOrigB.A.X) / 2.0,
+            (_segmentOrigA.A.Y + _segmentOrigB.A.Y) / 2.0);
+
         _dragStartModel = model;
         _gestureMoved = false;
     }
@@ -784,8 +802,28 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        if (_segmentPath is not null && _segmentNodeA is not null)
+        if (_segmentPath is not null && _segmentNodeA is not null && _segmentNodeB is not null)
         {
+            if (_segmentBendMode)
+            {
+                // Bend: endpoints stay fixed; recompute the two control handles
+                // from the original anchors so the curve passes through the
+                // pointer. For a symmetric handle offset h, the cubic's midpoint
+                // is mid + 3h/4, so h = 4/3 (pointer − mid).
+                Vector2D w = _shiftHeld ? SnapTranslation(model - _bendMidpoint) : model - _bendMidpoint;
+                if (w.IsZero)
+                {
+                    return;
+                }
+
+                _gestureMoved = true;
+                Vector2D h = w * (4.0 / 3.0);
+                _segmentNodeA.OutHandle = _segmentOrigA.A + h;
+                _segmentNodeB.InHandle = _segmentOrigB.A + h;
+                InvalidateVisual();
+                return;
+            }
+
             Vector2D delta = model - _dragStartModel;
             if (_shiftHeld)
             {
@@ -799,11 +837,7 @@ public sealed class CanvasWorkspace : Control
 
             _gestureMoved = true;
             SetNodeFromOriginal(_segmentNodeA, _segmentOrigA, delta);
-            if (_segmentNodeB is not null)
-            {
-                SetNodeFromOriginal(_segmentNodeB, _segmentOrigB, delta);
-            }
-
+            SetNodeFromOriginal(_segmentNodeB, _segmentOrigB, delta);
             InvalidateVisual();
         }
     }
@@ -827,7 +861,8 @@ public sealed class CanvasWorkspace : Control
         if (_segmentPath is not null && _segmentBefore is not null && _gestureMoved)
         {
             _vm!.Execute(new GeometryReplaceCommand(
-                _segmentPath, _segmentBefore, _segmentPath.GeometrySnapshot(), "Move segment"));
+                _segmentPath, _segmentBefore, _segmentPath.GeometrySnapshot(),
+                _segmentBendMode ? "Bend segment" : "Move segment"));
         }
 
         _nodePath = null;
@@ -838,6 +873,7 @@ public sealed class CanvasWorkspace : Control
         _segmentBefore = null;
         _segmentNodeA = null;
         _segmentNodeB = null;
+        _segmentBendMode = false;
         _gestureMoved = false;
     }
 
