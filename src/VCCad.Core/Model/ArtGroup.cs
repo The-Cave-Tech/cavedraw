@@ -80,7 +80,7 @@ public sealed class ArtGroup : LayerItem, IItemContainer
                 _ => Rect2D.Empty,
             };
 
-            box = box.IsEmpty ? childBox : box.Union(childBox);
+            box = box.Union(childBox);
         }
 
         return box;

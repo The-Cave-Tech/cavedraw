@@ -48,14 +48,29 @@ public static class PdfSidecarReader
         }
 
         string namesBody = ReadObject(pdfBytes, offsets, namesRef);
-        int specRef = FindReference(namesBody, "/EmbeddedFiles");
-        if (specRef < 0)
+
+        // The names object nests: << /EmbeddedFiles << /Names [(name) specRef 0 R] >> >>.
+        // Find the Filespec object reference inside the embedded-files /Names array
+        // (our writer emits a single-element array, which is all a minimal reader
+        // needs to support; parsing general name trees is out of scope for M4 seed).
+        int embeddedFiles = namesBody.IndexOf("/EmbeddedFiles", StringComparison.Ordinal);
+        if (embeddedFiles < 0)
         {
             throw new InvalidDataException("Names tree has no /EmbeddedFiles entry.");
         }
 
-        // The embedded-files name tree is an array [name fileSpec name fileSpec …].
-        // We already resolved it to the Filespec object reference above.
+        int namesArray = namesBody.IndexOf("/Names", embeddedFiles, StringComparison.Ordinal);
+        if (namesArray < 0)
+        {
+            throw new InvalidDataException("EmbeddedFiles has no /Names array.");
+        }
+
+        int specRef = FindIndirectAfter(namesBody, namesArray);
+        if (specRef < 0)
+        {
+            throw new InvalidDataException("EmbeddedFiles /Names array has no Filespec reference.");
+        }
+
         string specBody = ReadObject(pdfBytes, offsets, specRef);
         int streamRef = FindReference(specBody, "/EF");
         if (streamRef < 0)
@@ -139,7 +154,9 @@ public static class PdfSidecarReader
         // Find "endobj" after the object start; object bodies we write never
         // contain the token otherwise.
         int from = (int)start;
-        string tail = Encoding.ASCII.GetString(bytes, from, bytes.Length - from);
+        // Latin1 (not ASCII) so any binary stream payload inside the object is
+        // preserved byte-for-byte when we slice it back out for inflation.
+        string tail = Encoding.Latin1.GetString(bytes, from, bytes.Length - from);
         int endobj = tail.IndexOf("endobj", StringComparison.Ordinal);
         if (endobj < 0)
         {
@@ -198,30 +215,51 @@ public static class PdfSidecarReader
     private static int FindReference(string body, string key)
     {
         int index = body.IndexOf(key, StringComparison.Ordinal);
-        if (index < 0)
-        {
-            return -1;
-        }
+        return index < 0 ? -1 : FindIndirectAfter(body, index + key.Length);
+    }
 
-        // After "key " the next token is the object number. Skip non-digits.
-        int scan = index + key.Length;
-        while (scan < body.Length && (body[scan] == ' ' || body[scan] == '/'))
+    /// <summary>
+    /// Finds the next "<c>digits 0 R</c>" (indirect reference) at or after
+    /// <paramref name="startIndex"/> and returns the referenced object number.
+    /// Returns −1 when none exists. The token layout is "<c>N 0 R</c>" — number,
+    /// space, 0, space, R — so the digit run sits one or more spaces to the left
+    /// of the '0' we search for.
+    /// </summary>
+    private static int FindIndirectAfter(string body, int startIndex)
+    {
+        int search = startIndex;
+        while (true)
         {
-            scan++;
-        }
+            int refIndex = body.IndexOf("0 R", search, StringComparison.Ordinal);
+            if (refIndex < 0)
+            {
+                return -1;
+            }
 
-        int numStart = scan;
-        while (scan < body.Length && char.IsDigit(body[scan]))
-        {
-            scan++;
-        }
+            // Move left across any spaces separating the digit run from the '0'.
+            int onePastDigits = refIndex;
+            while (onePastDigits > 0 && body[onePastDigits - 1] == ' ')
+            {
+                onePastDigits--;
+            }
 
-        if (scan == numStart)
-        {
-            return -1;
-        }
+            // Then walk across the digits themselves.
+            int firstDigit = onePastDigits;
+            while (firstDigit > 0 && char.IsDigit(body[firstDigit - 1]))
+            {
+                firstDigit--;
+            }
 
-        return int.Parse(body[numStart..scan], System.Globalization.CultureInfo.InvariantCulture);
+            if (firstDigit < onePastDigits)
+            {
+                return int.Parse(body[firstDigit..onePastDigits],
+                    System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            // The "0 R" we found was not an indirect reference (no number before
+            // it); keep scanning for the next candidate.
+            search = refIndex + 3;
+        }
     }
 
     /// <summary>Minimal line reader over an ASCII span (xref tables are ASCII).</summary>

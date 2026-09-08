@@ -94,7 +94,9 @@ public static class PdfDocumentExporter
         {
             Artboard artboard = document.Artboards[i];
             byte[] content = BuildArtboardContent(artboard);
-            assembler.SetBody(contentNumbers[i], MakeStreamObject(content));
+            // Content streams are FlateDecode-filtered like the sidecar; the raw
+            // operator text is compressed here before being wrapped.
+            assembler.SetBody(contentNumbers[i], MakeStreamObject(Compress(content)));
 
             assembler.SetBody(
                 pageNumbers[i],

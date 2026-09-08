@@ -88,13 +88,17 @@ public sealed class SubPath
     /// <summary>
     /// The tight bounding box of this subpath: the union of every segment's own
     /// tight box. Empty subpaths yield <see cref="Rect2D.Empty"/>.
+    ///
+    /// Union is used directly rather than guarded by "is empty" checks: a purely
+    /// straight horizontal/vertical segment still carries real extents in one axis
+    /// even though its box is degenerate, and discarding it would corrupt bounds.
     /// </summary>
     public Rect2D BoundingBox()
     {
         Rect2D box = Rect2D.Empty;
         foreach (CubicBezier segment in Segments())
         {
-            box = box.IsEmpty ? segment.BoundingBox() : box.Union(segment.BoundingBox());
+            box = box.Union(segment.BoundingBox());
         }
 
         return box;

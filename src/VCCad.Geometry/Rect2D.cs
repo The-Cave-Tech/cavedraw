@@ -72,12 +72,18 @@ public readonly record struct Rect2D(double X, double Y, double Width, double He
     /// <summary>Smallest rectangle containing both <c>this</c> and <paramref name="other"/>.</summary>
     public Rect2D Union(Rect2D other)
     {
-        if (IsEmpty)
+        // Rect2D.Empty is the canonical "nothing here" value and acts as the
+        // identity element of the union. Everything else — including degenerate
+        // boxes with zero width or height — carries real extent in at least one
+        // axis and must participate in the min/max computation. Treating
+        // degenerate boxes as "empty" would silently discard, say, a purely
+        // horizontal line when computing artwork bounds.
+        if (this == Empty)
         {
             return other;
         }
 
-        if (other.IsEmpty)
+        if (other == Empty)
         {
             return this;
         }

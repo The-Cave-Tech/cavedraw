@@ -85,6 +85,13 @@ public static class PolynomialRoots
             double u = Math.Cbrt(-halfQ);            // 2·cubert(−q/2) repeated
             roots[0] = 2.0 * u - b / 3.0;
             roots[1] = -u - b / 3.0;
+
+            // Keep the documented ascending-order contract.
+            if (roots[1] < roots[0])
+            {
+                (roots[0], roots[1]) = (roots[1], roots[0]);
+            }
+
             return 2;
         }
 

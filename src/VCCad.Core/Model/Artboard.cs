@@ -121,10 +121,7 @@ public sealed class Artboard : CadObject
                     _ => Rect2D.Empty,
                 };
 
-                if (!childBox.IsEmpty)
-                {
-                    box = box.IsEmpty ? childBox : box.Union(childBox);
-                }
+                box = box.Union(childBox);
             }
         }
 

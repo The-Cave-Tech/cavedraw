@@ -68,8 +68,7 @@ public sealed class PathItem : LayerItem
         Rect2D box = Rect2D.Empty;
         foreach (SubPath sp in SubPaths)
         {
-            Rect2D sb = sp.BoundingBox();
-            box = box.IsEmpty ? sb : box.Union(sb);
+            box = box.Union(sp.BoundingBox());
         }
 
         return box;

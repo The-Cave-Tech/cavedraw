@@ -65,7 +65,15 @@ public sealed class AddLayerCommand : IUndoableCommand
 
     public void Do()
     {
-        _created ??= _artboard.AddLayer(_layerName);
+        if (_created is null)
+        {
+            _created = _artboard.AddLayer(_layerName);
+        }
+        else
+        {
+            // Re-run after an Undo: restore the *same* instance so identity holds.
+            _artboard.AddLayer(_created);
+        }
     }
 
     public void Undo()
