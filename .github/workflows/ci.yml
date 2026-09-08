@@ -23,6 +23,11 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      # wasm-tools is needed even to restore the browser project once
+      # WasmBuildNative is enabled (Skia native linking).
+      - name: Install wasm-tools workload
+        run: dotnet workload install wasm-tools
+
       - name: Cache NuGet
         uses: actions/cache@v4
         with:
@@ -46,9 +51,7 @@ jobs:
           dotnet test tests/VCCad.Api.Integration.Tests -c Release --no-build --no-restore
 
       - name: Publish WebAssembly editor (smoke)
-        run: |
-          dotnet workload install wasm-tools
-          dotnet publish src/VCCad.App.Browser -c Release -o artifacts/wasm
+        run: dotnet publish src/VCCad.App.Browser -c Release -o artifacts/wasm
 
       - name: Verify wasm artifacts
         run: |

@@ -13,7 +13,9 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
-# Restore first (cache-friendly layer).
+# Restore first (cache-friendly layer). wasm-tools (emscripten) must be
+# present before restore because the browser project enables WasmBuildNative
+# to link the SkiaSharp/HarfBuzz native stubs.
 COPY VCCad.sln Directory.Build.props ./
 COPY src/VCCad.Geometry/VCCad.Geometry.csproj src/VCCad.Geometry/
 COPY src/VCCad.Core/VCCad.Core.csproj src/VCCad.Core/
@@ -25,7 +27,8 @@ COPY tests/VCCad.Geometry.Tests/VCCad.Geometry.Tests.csproj tests/VCCad.Geometry
 COPY tests/VCCad.Core.Tests/VCCad.Core.Tests.csproj tests/VCCad.Core.Tests/
 COPY tests/VCCad.Pdf.Tests/VCCad.Pdf.Tests.csproj tests/VCCad.Pdf.Tests/
 COPY tests/VCCad.Api.Integration.Tests/VCCad.Api.Integration.Tests.csproj tests/VCCad.Api.Integration.Tests/
-RUN dotnet restore VCCad.sln
+RUN dotnet workload install wasm-tools \
+ && dotnet restore VCCad.sln
 
 # Full source for build + test.
 COPY . .
