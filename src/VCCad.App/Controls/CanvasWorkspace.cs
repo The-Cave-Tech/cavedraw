@@ -48,6 +48,10 @@ public sealed class CanvasWorkspace : Control
     private bool _shiftHeld;
     private Point2D? _hoverModel;
 
+    // Select-tool bookkeeping.
+    private bool _selectMoved;
+    private LayerItem? _shiftToggleCandidate;
+
     // Whole-object move / rotate targets (Select tool).
     private readonly List<PathItem> _dragPaths = new();
     private readonly Dictionary<PathItem, PathItem> _dragOriginals = new();
@@ -313,6 +317,7 @@ public sealed class CanvasWorkspace : Control
         Point position = e.GetPosition(this);
         Point2D model = ModelPointAtScreen(position);
         _hoverModel = model;
+        _shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
 
         if (_isPanning)
         {
@@ -451,36 +456,45 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        if (HitRotationHandle(model))
-        {
-            BeginRotate(model);
-            return;
-        }
+        _shiftToggleCandidate = null;
+        _selectMoved = false;
 
         PathItem? hit = HitTestTopPath(model);
         if (_shiftHeld)
         {
-            if (hit is not null)
+            // Shift semantics: clicking an unselected object adds it (so a
+            // drag can move the whole selection); clicking an already selected
+            // object starts a constrained drag and only removes it if the press
+            // turns out to be a plain click (handled on release).
+            if (hit is not null && !_vm.IsObjectSelected(hit))
             {
                 _vm.ToggleObjectSelection(hit);
             }
+            else if (hit is not null)
+            {
+                _shiftToggleCandidate = hit;
+            }
 
+            BeginObjectMoveTargets(model);
             return;
         }
 
         _vm.SelectObject(hit);
+        BeginObjectMoveTargets(model);
+        InvalidateVisual();
+    }
 
-        // Prepare a multi-object move: dragging any selected path moves all of them.
+    private void BeginObjectMoveTargets(Point2D model)
+    {
         _dragPaths.Clear();
         _dragOriginals.Clear();
-        foreach (PathItem path in _vm.SelectedPaths())
+        foreach (PathItem path in _vm!.SelectedPaths())
         {
             _dragPaths.Add(path);
             _dragOriginals[path] = path.GeometrySnapshot();
         }
 
         _dragStartModel = model;
-        InvalidateVisual();
     }
 
     private void SelectDrag(Point2D model)
@@ -490,7 +504,15 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        Vector2D delta = model - _dragStartModel;
+        // Shift constrains the drag to the dominant axis (Illustrator behaviour):
+        // the axis with the largest total displacement wins.
+        Vector2D delta = SnapTranslation(model - _dragStartModel);
+        if (delta.IsZero)
+        {
+            return;
+        }
+
+        _selectMoved = true;
         foreach (PathItem path in _dragPaths)
         {
             path.RestoreGeometryFrom(_dragOriginals[path]);
@@ -502,25 +524,28 @@ public sealed class CanvasWorkspace : Control
 
     private void SelectRelease(Point2D model)
     {
-        if (_dragPaths.Count > 0 && !(model - _dragStartModel).IsZero)
+        if (_selectMoved)
         {
             CommitMultiPathEdit("Move objects");
+        }
+        else if (_shiftToggleCandidate is not null && _shiftHeld)
+        {
+            // A Shift click (no drag) on an already-selected object removes it.
+            _vm!.ToggleObjectSelection(_shiftToggleCandidate);
         }
 
         _dragPaths.Clear();
         _dragOriginals.Clear();
+        _shiftToggleCandidate = null;
+        _selectMoved = false;
     }
 
-    private void EndRotate()
-    {
-        if (_rotatePaths.Count > 0)
-        {
-            CommitRotateEdit();
-        }
-
-        _rotatePaths.Clear();
-        _rotateOriginals.Clear();
-    }
+    /// <summary>Locks a translation to the horizontal or vertical axis, whichever
+    /// has the greater magnitude — the orthogonal-drag constraint.</summary>
+    private static Vector2D SnapTranslation(Vector2D delta)
+        => Math.Abs(delta.X) >= Math.Abs(delta.Y)
+            ? new Vector2D(delta.X, 0.0)
+            : new Vector2D(0.0, delta.Y);
 
     private void CommitMultiPathEdit(string label)
         => CommitPaths(label, _dragPaths, _dragOriginals);
@@ -551,7 +576,16 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
-    // ---- rotation handle -------------------------------------------------
+    private void EndRotate()
+    {
+        if (_rotatePaths.Count > 0)
+        {
+            CommitRotateEdit();
+        }
+
+        _rotatePaths.Clear();
+        _rotateOriginals.Clear();
+    }
 
     private void BeginRotate(Point2D model)
     {
@@ -715,6 +749,11 @@ public sealed class CanvasWorkspace : Control
             // Mutate the grabbed node directly, recomputing from the stored
             // originals — never restoring whole geometry mid-gesture.
             Vector2D delta = model - _nodeAnchorStart;
+            if (_shiftHeld)
+            {
+                delta = SnapTranslation(delta);
+            }
+
             if (delta.IsZero)
             {
                 return;
@@ -748,6 +787,11 @@ public sealed class CanvasWorkspace : Control
         if (_segmentPath is not null && _segmentNodeA is not null)
         {
             Vector2D delta = model - _dragStartModel;
+            if (_shiftHeld)
+            {
+                delta = SnapTranslation(delta);
+            }
+
             if (delta.IsZero)
             {
                 return;

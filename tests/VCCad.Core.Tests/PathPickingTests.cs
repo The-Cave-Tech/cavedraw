@@ -103,6 +103,23 @@ public class PathPickingTests
     }
 
     [Fact]
+    public void AnchorWinsWhenHandleCoincidesWithEndpoint()
+    {
+        // A handle pulled out almost onto its own anchor: clicking the endpoint
+        // must grab the anchor, not the coincident control point.
+        var wave = new PathItem();
+        SubPath sub = wave.AddSubPath(closed: false);
+        PathNode start = sub.AppendNode(new Point2D(0, 0));
+        sub.AppendNode(new Point2D(100, 0));
+        start.OutHandle = new Point2D(0.2, 0); // within picking tolerance of (0,0)
+
+        NodePick? pick = PathPicking.PickNode(wave, new Point2D(0, 0), 2.0);
+        Assert.NotNull(pick);
+        Assert.Equal(0, pick.Value.NodeIndex);
+        Assert.False(pick.Value.IsInHandle || pick.Value.IsOutHandle); // an anchor, not a handle
+    }
+
+    [Fact]
     public void FillContainsOpenPathNeverReturnsTrue()
     {
         var open = PathFactory.CreatePolyline("o", new[]

@@ -144,20 +144,36 @@ public static class PathPicking
 
     /// <summary>
     /// Returns the editable feature (anchor or handle) of a path nearest to
-    /// <paramref name="query"/> within <paramref name="tolerance"/>. Anchors are
-    /// checked before handles so overlapping features prefer the anchor.
+    /// <paramref name="query"/> within <paramref name="tolerance"/>.
+    ///
+    /// Anchors are preferred over handles <em>globally</em> (two passes): when a
+    /// control handle sits on or very near an endpoint — which happens constantly
+    /// while sculpting curves — clicking that spot must grab the anchor, not the
+    /// coincident handle.
     /// </summary>
     public static NodePick? PickNode(PathItem path, Point2D query, double tolerance)
     {
+        // Pass 1 — every anchor across the whole path.
+        for (int s = 0; s < path.SubPaths.Count; s++)
+        {
+            SubPath sub = path.SubPaths[s];
+            for (int n = 0; n < sub.Nodes.Count; n++)
+            {
+                if (sub.Nodes[n].Anchor.DistanceTo(query) <= tolerance)
+                {
+                    return new NodePick(sub, n, false, false);
+                }
+            }
+        }
+
+        // Pass 2 — handles (only the ones that are actually pulled out; collapsed
+        // corner handles are not editable and are skipped).
         for (int s = 0; s < path.SubPaths.Count; s++)
         {
             SubPath sub = path.SubPaths[s];
             for (int n = 0; n < sub.Nodes.Count; n++)
             {
                 PathNode node = sub.Nodes[n];
-
-                // Incoming and outgoing handles, but never the (always-present)
-                // collapsed straight-state handles of corner nodes.
                 if (!node.HasStraightIncoming && node.InHandle.DistanceTo(query) <= tolerance)
                 {
                     return new NodePick(sub, n, true, false);
@@ -166,11 +182,6 @@ public static class PathPicking
                 if (!node.HasStraightOutgoing && node.OutHandle.DistanceTo(query) <= tolerance)
                 {
                     return new NodePick(sub, n, false, true);
-                }
-
-                if (node.Anchor.DistanceTo(query) <= tolerance)
-                {
-                    return new NodePick(sub, n, false, false);
                 }
             }
         }
