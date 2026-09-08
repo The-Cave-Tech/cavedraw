@@ -130,6 +130,39 @@ if (hasEditor)
 {
     app.UseDefaultFiles();
     app.UseStaticFiles();
+
+    // Some wasm runtime assets (e.g. icudt_*.dat, *.wasm) are requested with
+    // byte-exact paths that the static-file content-type pipeline does not
+    // always match. If the request 404s but the file exists on disk, serve it
+    // straight from disk so the .NET runtime's integrity checks pass.
+    string webRootPath = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+    app.Use(async (context, next) =>
+    {
+        await next();
+        if (context.Response.StatusCode != StatusCodes.Status404NotFound || context.Response.HasStarted)
+        {
+            return;
+        }
+
+        string? relative = context.Request.Path.Value?.TrimStart('/');
+        if (string.IsNullOrEmpty(relative) ||
+            relative.StartsWith("api/", StringComparison.Ordinal) ||
+            relative.StartsWith("ws/", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        string fullPath = Path.GetFullPath(Path.Combine(webRootPath, relative));
+        if (!fullPath.StartsWith(webRootPath, StringComparison.Ordinal) || !File.Exists(fullPath))
+        {
+            return;
+        }
+
+        context.Response.Clear();
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        await context.Response.SendFileAsync(fullPath);
+    });
+
     app.MapFallbackToFile("index.html");
 }
 
