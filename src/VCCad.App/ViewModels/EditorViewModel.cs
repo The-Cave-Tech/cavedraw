@@ -10,28 +10,31 @@ using VCCad.Geometry;
 
 namespace VCCad.App.ViewModels;
 
-/// <summary>The active editing tool (Illustrator letters: V/A/P).</summary>
+/// <summary>The active editing tool.</summary>
 public enum EditorTool
 {
-    /// <summary>Selection &amp; move (V).</summary>
+    /// <summary>Selection &amp; move (V). Shift adds to the selection.</summary>
     Select,
 
-    /// <summary>Direct selection: drag nodes and Bézier handles (A).</summary>
+    /// <summary>Direct selection (A): drag nodes and handles, click/Shift-click to
+    /// select individual segments.</summary>
     Node,
 
     /// <summary>Pen: click to add anchors, drag for smooth handles, click the start
     /// anchor to close (P).</summary>
     Pen,
+
+    /// <summary>Drag out a closed rectangle between two corner points.</summary>
+    Rectangle,
+
+    /// <summary>Drag out a closed ellipse between two bounding-box corners.</summary>
+    Ellipse,
 }
 
 /// <summary>
 /// Editor view-model: owns the live <see cref="CadDocument"/>, its command stack,
-/// the current <see cref="Selection"/> and the active <see cref="Tool"/>.
-///
-/// Everything a tool or the toolbar does funnels through undoable commands (the
-/// same commands the automation API executes — ADR-04). Pointer gestures that
-/// need live feedback mutate geometry during the drag and are committed on
-/// release via <see cref="GeometryReplaceCommand"/>.
+/// the current selection (objects + per-path segments) and the active tool.
+/// All edits funnel through undoable commands (same set the automation API uses).
 /// </summary>
 public sealed class EditorViewModel : INotifyPropertyChanged
 {
@@ -39,7 +42,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     private CadDocument _document = CadDocument.CreateDefault("Untitled");
     private readonly CommandStack _stack = new();
-    private LayerItem? _selection;
+    private readonly List<LayerItem> _selectedObjects = new();
+    private readonly Dictionary<PathItem, List<(int Sub, int Seg)>> _selectedSegments = new();
     private EditorTool _tool = EditorTool.Select;
     private string _status = "Ready";
 
@@ -47,40 +51,23 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// from window.location; the desktop default targets a local host.</summary>
     public static string ServerBase { get; set; } = "http://127.0.0.1:5099";
 
-    /// <summary>Raised after any change that must trigger a workspace repaint or
-    /// a tree refresh (document edits, selection, tool switch).</summary>
+    /// <summary>Raised after any change that must trigger a workspace repaint or a
+    /// tree refresh (document edits, selection changes, tool switches).</summary>
     public event EventHandler? DocumentChanged;
 
-    /// <summary>The live document rendered by the workspace.</summary>
     public CadDocument Document
     {
         get => _document;
         private set
         {
             _document = value;
+            _selectedObjects.Clear();
+            _selectedSegments.Clear();
             DocumentChanged?.Invoke(this, EventArgs.Empty);
             OnPropertyChanged();
         }
     }
 
-    /// <summary>Currently selected layer item, or null.</summary>
-    public LayerItem? Selection
-    {
-        get => _selection;
-        set
-        {
-            if (ReferenceEquals(_selection, value))
-            {
-                return;
-            }
-
-            _selection = value;
-            OnPropertyChanged();
-            DocumentChanged?.Invoke(this, EventArgs.Empty); // redraw highlight + tree
-        }
-    }
-
-    /// <summary>The active tool.</summary>
     public EditorTool Tool
     {
         get => _tool;
@@ -97,8 +84,6 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>Status-bar line (messages, hints, results). Setter is internal so
-    /// the view code can push tool hints without exposing general mutation.</summary>
     public string Status
     {
         get => _status;
@@ -111,21 +96,179 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>Creates a fresh A4-landscape document (File → New).</summary>
-    public void NewDocument(string? name = null)
+    // ------------------------------------------------------------------
+    // Selection model
+    // ------------------------------------------------------------------
+
+    /// <summary>Selected objects (paths and groups), in picking order.</summary>
+    public IReadOnlyList<LayerItem> SelectedObjects => _selectedObjects;
+
+    /// <summary>The last selected object (used for Properties and rotation centre).</summary>
+    public LayerItem? PrimarySelection => _selectedObjects.Count > 0 ? _selectedObjects[^1] : null;
+
+    /// <summary>True when more than one object is selected.</summary>
+    public bool HasMultiSelection => _selectedObjects.Count > 1;
+
+    public bool IsObjectSelected(LayerItem item) => _selectedObjects.Contains(item);
+
+    /// <summary>All selected path segments as (path, subpath index, segment index).</summary>
+    public IEnumerable<(PathItem Path, int Sub, int Seg)> SelectedSegments()
     {
-        Document = CadDocument.CreateDefault(name);
-        _stack.Clear();
-        Status = "New document created (A4 landscape)";
+        foreach (KeyValuePair<PathItem, List<(int Sub, int Seg)>> entry in _selectedSegments)
+        {
+            foreach ((int sub, int seg) in entry.Value)
+            {
+                yield return (entry.Key, sub, seg);
+            }
+        }
     }
 
-    /// <summary>Replaces the whole document (File → Open from server).</summary>
-    public void ReplaceDocument(CadDocument document)
+    public bool HasSegmentSelection => _selectedSegments.Count > 0;
+
+    /// <summary>Whether a given segment of a path is in the segment selection.</summary>
+    public bool IsSegmentSelected(PathItem path, int sub, int seg)
+        => _selectedSegments.TryGetValue(path, out List<(int Sub, int Seg)>? list) && list.Contains((sub, seg));
+
+    /// <summary>Replaces the whole selection with a single object (or clears it).</summary>
+    public void SelectObject(LayerItem? item)
     {
-        Document = document;
-        _stack.Clear();
-        Selection = null;
-        Status = $"Opened {document.Name}";
+        _selectedObjects.Clear();
+        _selectedSegments.Clear();
+        if (item is not null)
+        {
+            _selectedObjects.Add(item);
+        }
+
+        NotifySelectionChanged();
+    }
+
+    /// <summary>Shift-click object selection: toggle membership, keep everything else.</summary>
+    public void ToggleObjectSelection(LayerItem item)
+    {
+        if (_selectedObjects.Remove(item))
+        {
+            _selectedSegments.Remove(item as PathItem);
+        }
+        else
+        {
+            _selectedObjects.Add(item);
+        }
+
+        NotifySelectionChanged();
+    }
+
+    /// <summary>
+    /// Adds a set of objects to the selection (after an object drag on a shared
+    /// element) without disturbing segment selections.
+    /// </summary>
+    public void AddObjects(IEnumerable<LayerItem> items)
+    {
+        bool changed = false;
+        foreach (LayerItem item in items)
+        {
+            if (!_selectedObjects.Contains(item))
+            {
+                _selectedObjects.Add(item);
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            NotifySelectionChanged();
+        }
+    }
+
+    /// <summary>
+    /// Selects a segment of a path for direct selection. Without
+    /// <paramref name="additive"/> the whole selection is replaced by (this path,
+    /// this segment); additive (Shift) toggles the segment and keeps other
+    /// objects/segments selected.
+    /// </summary>
+    public void SelectSegment(PathItem path, int sub, int seg, bool additive)
+    {
+        if (!additive)
+        {
+            _selectedObjects.Clear();
+            _selectedSegments.Clear();
+            _selectedObjects.Add(path);
+            _selectedSegments[path] = new List<(int, int)> { (sub, seg) };
+        }
+        else
+        {
+            if (!_selectedObjects.Contains(path))
+            {
+                _selectedObjects.Add(path);
+            }
+
+            if (!_selectedSegments.TryGetValue(path, out List<(int Sub, int Seg)>? list))
+            {
+                _selectedSegments[path] = list = new List<(int, int)>();
+            }
+
+            (int, int) key = (sub, seg);
+            if (list.Contains(key))
+            {
+                list.Remove(key);
+                if (list.Count == 0)
+                {
+                    _selectedSegments.Remove(path);
+                }
+            }
+            else
+            {
+                list.Add(key);
+            }
+        }
+
+        NotifySelectionChanged();
+    }
+
+    /// <summary>Clears object and segment selections.</summary>
+    public void ClearSelection()
+    {
+        if (_selectedObjects.Count == 0 && _selectedSegments.Count == 0)
+        {
+            return;
+        }
+
+        _selectedObjects.Clear();
+        _selectedSegments.Clear();
+        NotifySelectionChanged();
+    }
+
+    /// <summary>Removes segment selections whose path object is no longer selected.</summary>
+    private void PruneSegmentSelection()
+    {
+        foreach (PathItem path in _selectedSegments.Keys.Where(p => !_selectedObjects.Contains(p)).ToArray())
+        {
+            _selectedSegments.Remove(path);
+        }
+    }
+
+    /// <summary>Selected paths whose geometry can be edited (identity hierarchies).</summary>
+    public IEnumerable<PathItem> SelectedPaths() => _selectedObjects.OfType<PathItem>();
+
+    /// <summary>The combined model-space bounds of the selected objects.</summary>
+    public Rect2D SelectionBounds()
+    {
+        Rect2D box = Rect2D.Empty;
+        foreach (PathItem path in SelectedPaths())
+        {
+            box = box.Union(path.BoundingBox());
+        }
+
+        return box;
+    }
+
+    // ------------------------------------------------------------------
+    // Commands / undo / actions
+    // ------------------------------------------------------------------
+
+    public void Execute(IUndoableCommand command)
+    {
+        _stack.Execute(command);
+        NotifyCanvas();
     }
 
     public void Undo()
@@ -154,27 +297,47 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>Executes a command (used by tools and menus) and repaints.</summary>
-    public void Execute(IUndoableCommand command)
-    {
-        _stack.Execute(command);
-        NotifyCanvas();
-    }
-
-    /// <summary>Deletes the selection (Edit → Delete).</summary>
+    /// <summary>Deletes the selected objects (single composite undo step).</summary>
     public void DeleteSelection()
     {
-        if (Selection is not { } item || item.Container is null)
+        if (_selectedObjects.Count == 0)
         {
             return;
         }
 
-        Execute(new RemoveItemCommand(item));
-        Selection = null;
-        Status = $"Deleted {item.Name}";
+        var remove = new List<IUndoableCommand>();
+        foreach (LayerItem item in _selectedObjects.Where(i => i.Container is not null))
+        {
+            remove.Add(new RemoveItemCommand(item));
+        }
+
+        if (remove.Count == 0)
+        {
+            return;
+        }
+
+        string label = remove.Count == 1 ? "Delete object" : $"Delete {remove.Count} objects";
+        Execute(new CompositeCommand(label, remove));
+        _selectedObjects.Clear();
+        _selectedSegments.Clear();
+        NotifySelectionChanged();
+        Status = label;
     }
 
-    /// <summary>Exports the current document to PDF bytes (UI demo path).</summary>
+    public void NewDocument(string? name = null)
+    {
+        Document = CadDocument.CreateDefault(name);
+        _stack.Clear();
+        Status = "New document created (A4 landscape)";
+    }
+
+    public void ReplaceDocument(CadDocument document)
+    {
+        Document = document;
+        _stack.Clear();
+        Status = $"Opened {document.Name}";
+    }
+
     public byte[] ExportPdf()
     {
         byte[] pdf = VCCad.Pdf.PdfDocumentExporter.Export(Document);
@@ -182,49 +345,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         return pdf;
     }
 
-    // ------------------------------------------------------------------
-    // Shape creation (Object menu / toolbar)
-    // ------------------------------------------------------------------
-
-    public void AddRectangle(double x, double y, double width, double height)
-    {
-        PathItem rect = PathFactory.CreateRectangle("Rectangle", new Rect2D(x, y, width, height));
-        rect.Fill = FillSpec.Solid(ColorRgb.FromBytes(220, 60, 60));
-        AddItem(rect);
-        Selection = rect;
-    }
-
-    public void AddEllipse(double cx, double cy, double rx, double ry)
-    {
-        PathItem ellipse = PathFactory.CreateEllipse("Ellipse", new Point2D(cx, cy), rx, ry);
-        ellipse.Fill = FillSpec.Solid(ColorRgb.FromBytes(60, 140, 220));
-        AddItem(ellipse);
-        Selection = ellipse;
-    }
-
-    public void AddLine(double x1, double y1, double x2, double y2)
-    {
-        PathItem line = PathFactory.CreateLine("Line", new Point2D(x1, y1), new Point2D(x2, y2));
-        line.Stroke = StrokeSpec.Hairline(ColorRgb.Black);
-        AddItem(line);
-        Selection = line;
-    }
-
-    private void AddItem(LayerItem item)
-    {
-        Artboard artboard = Document.Artboards.Count > 0
-            ? Document.Artboards[0]
-            : Document.AddArtboard(PageSizes.A4Landscape);
-        Layer layer = artboard.Layers.Count > 0
-            ? artboard.Layers[0]
-            : artboard.AddLayer("Layer 1");
-
-        Execute(new AddItemCommand(layer, item));
-        Status = $"Added {item.Name}";
-    }
-
-    /// <summary>The default target layer for tool-created items (the top layer of
-    /// the first artboard; creates one when the document is empty).</summary>
+    /// <summary>The default target layer for tool-created items.</summary>
     public Layer TargetLayer()
     {
         if (Document.Artboards.Count == 0)
@@ -245,14 +366,14 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     // Server-backed Save / Open
     // ------------------------------------------------------------------
 
-    /// <summary>Pushes the current document to the host (PUT upsert).</summary>
     public async Task<bool> SaveToServerAsync()
     {
         try
         {
             string payload = VccadDocumentSerializer.Serialize(Document);
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-            using HttpResponseMessage response = await Http.PutAsync($"{ServerBase.TrimEnd('/')}/api/v1/documents/{Document.Id}", content);
+            using HttpResponseMessage response = await Http.PutAsync(
+                $"{ServerBase.TrimEnd('/')}/api/v1/documents/{Document.Id}", content);
             if (!response.IsSuccessStatusCode)
             {
                 Status = $"Save failed: HTTP {(int)response.StatusCode}";
@@ -269,8 +390,6 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>Loads a stored document: the copy of the current id when present,
-    /// otherwise the most recently created document on the host.</summary>
     public async Task<bool> LoadFromServerAsync()
     {
         try
@@ -294,7 +413,6 @@ public sealed class EditorViewModel : INotifyPropertyChanged
                 return false;
             }
 
-            // Prefer the copy of our own document, then the first stored one.
             string? target = null;
             foreach (JsonElement item in documents)
             {
@@ -323,6 +441,19 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             Status = $"Open error: {ex.Message}";
             return false;
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Notifications
+    // ------------------------------------------------------------------
+
+    private void NotifySelectionChanged()
+    {
+        PruneSegmentSelection();
+        OnPropertyChanged(nameof(SelectedObjects));
+        OnPropertyChanged(nameof(PrimarySelection));
+        OnPropertyChanged(nameof(HasMultiSelection));
+        DocumentChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void NotifyCanvas()

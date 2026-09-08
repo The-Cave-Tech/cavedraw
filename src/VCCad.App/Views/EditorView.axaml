@@ -31,11 +31,9 @@
         <MenuItem Header="Selection (_V)" Click="OnToolSelect"/>
         <MenuItem Header="Direct Selection / _Nodes (A)" Click="OnToolNode"/>
         <MenuItem Header="_Pen (P)" Click="OnToolPen"/>
-      </MenuItem>
-      <MenuItem Header="_Object">
-        <MenuItem Header="_Rectangle" Click="OnAddRectangle"/>
-        <MenuItem Header="_Ellipse" Click="OnAddEllipse"/>
-        <MenuItem Header="_Line" Click="OnAddLine"/>
+        <Separator/>
+        <MenuItem Header="_Rectangle" Click="OnToolRectangle"/>
+        <MenuItem Header="_Ellipse" Click="OnToolEllipse"/>
       </MenuItem>
       <MenuItem Header="_View">
         <MenuItem Header="_Zoom In" Click="OnZoomIn"/>
@@ -48,20 +46,19 @@
     <!-- Toolbar -->
     <Border Grid.Row="1" BorderBrush="#CCCCCC" BorderThickness="0,0,0,1" Padding="4,2">
       <StackPanel Orientation="Horizontal" Spacing="4">
-        <Button x:Name="NewButton" Content="New" Click="OnNew"/>
-        <Button x:Name="OpenButton" Content="Open" Click="OnOpen"/>
-        <Button x:Name="SaveButton" Content="Save" Click="OnSave"/>
+        <Button Content="New" Click="OnNew"/>
+        <Button Content="Open" Click="OnOpen"/>
+        <Button Content="Save" Click="OnSave"/>
         <Border Width="1" Background="#CCCCCC" Margin="4,2"/>
-        <Button x:Name="UndoButton" Content="Undo" Click="OnUndo"/>
-        <Button x:Name="RedoButton" Content="Redo" Click="OnRedo"/>
+        <Button Content="Undo" Click="OnUndo"/>
+        <Button Content="Redo" Click="OnRedo"/>
         <Border Width="1" Background="#CCCCCC" Margin="4,2"/>
         <Button x:Name="ToolSelectButton" Content="Select (V)" Click="OnToolSelect"/>
         <Button x:Name="ToolNodeButton" Content="Nodes (A)" Click="OnToolNode"/>
         <Button x:Name="ToolPenButton" Content="Pen (P)" Click="OnToolPen"/>
         <Border Width="1" Background="#CCCCCC" Margin="4,2"/>
-        <Button Content="Rectangle" Click="OnAddRectangle"/>
-        <Button Content="Ellipse" Click="OnAddEllipse"/>
-        <Button Content="Line" Click="OnAddLine"/>
+        <Button x:Name="ToolRectButton" Content="Rectangle" Click="OnToolRectangle"/>
+        <Button x:Name="ToolEllipseButton" Content="Ellipse" Click="OnToolEllipse"/>
         <Border Width="1" Background="#CCCCCC" Margin="4,2"/>
         <Button Content="Zoom −" Click="OnZoomOut"/>
         <Button Content="Zoom +" Click="OnZoomIn"/>
@@ -86,10 +83,10 @@
       <DockPanel Grid.Column="4">
         <TextBlock DockPanel.Dock="Top" Text="Properties" FontWeight="Bold" Margin="8,6"/>
         <StackPanel Margin="8,4" Spacing="6">
-          <TextBlock Name="SelectionInfo" Text="(no selection)" TextWrapping="Wrap"/>
+          <TextBlock x:Name="SelectionInfo" Text="(no selection)" TextWrapping="Wrap"/>
           <TextBlock Text="Hints:" FontWeight="SemiBold"/>
-          <TextBlock Name="HintText" TextWrapping="Wrap" Foreground="#666666"
-                    Text="V — select/move · A — nodes/handles · P — pen&#10;Drag with middle or right mouse button to pan · Ctrl+wheel zooms"/>
+          <TextBlock x:Name="HintText" TextWrapping="Wrap" Foreground="#666666"
+                    Text="V — select/move · Shift adds · A — nodes, segments, handles&#10;P — pen · drag Rectangle/Ellipse to draw&#10;Middle/right drag pans · Ctrl+wheel zooms"/>
         </StackPanel>
       </DockPanel>
     </Grid>

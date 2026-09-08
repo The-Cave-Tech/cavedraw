@@ -1,3 +1,4 @@
+using System.Collections;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Media;
@@ -8,13 +9,17 @@ using VCCad.Geometry;
 namespace VCCad.App.Views;
 
 /// <summary>
-/// Code-behind for the editor chrome. The <see cref="EditorViewModel"/> owns all
-/// state; this class shuttles between XAML and that view model, builds the
-/// hierarchical object tree, and reflects tool changes back onto the buttons.
+/// Code-behind for the editor chrome: shuttles between XAML and the
+/// <see cref="EditorViewModel"/>, builds the hierarchical object tree, keeps the
+/// tree selection in sync with the canvas selection (and vice versa), and shows
+/// which tool is active.
 /// </summary>
 public partial class EditorView : UserControl
 {
     private readonly EditorViewModel _viewModel = new();
+    private bool _syncingTreeSelection;
+
+    private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.FromRgb(0xBD, 0xDD, 0xF7));
 
     public EditorView()
     {
@@ -31,10 +36,6 @@ public partial class EditorView : UserControl
         HighlightActiveTool();
     }
 
-    // ------------------------------------------------------------------
-    // View-model plumbing
-    // ------------------------------------------------------------------
-
     private void OnDocumentChanged(object? sender, EventArgs e)
     {
         UpdateStatusAndZoom();
@@ -47,7 +48,9 @@ public partial class EditorView : UserControl
         {
             UpdateStatusAndZoom();
         }
-        else if (e.PropertyName == nameof(EditorViewModel.Tool))
+        else if (e.PropertyName is nameof(EditorViewModel.Tool)
+                 or nameof(EditorViewModel.PrimarySelection)
+                 or nameof(EditorViewModel.SelectedObjects))
         {
             HighlightActiveTool();
             UpdateStatusAndZoom();
@@ -58,15 +61,25 @@ public partial class EditorView : UserControl
     {
         StatusText.Text = _viewModel.Status;
         ZoomLabel.Text = $"{Workspace.Zoom * 100:0.##}%";
-        SelectionInfo.Text = DescribeSelection(_viewModel.Selection);
+        SelectionInfo.Text = DescribeSelection();
     }
 
-    private static string DescribeSelection(LayerItem? item)
+    private string DescribeSelection()
     {
-        if (item is null)
+        IReadOnlyList<LayerItem> objects = _viewModel.SelectedObjects;
+        if (objects.Count == 0)
         {
             return "(no selection)";
         }
+
+        if (objects.Count > 1)
+        {
+            Rect2D b = _viewModel.SelectionBounds();
+            return $"{objects.Count} objects selected\nBounds: {b.X:0.##}, {b.Y:0.##} → {b.Right:0.##}, {b.Bottom:0.##}pt";
+        }
+
+        LayerItem item = objects[0];
+        int segmentCount = _viewModel.SelectedSegments().Count(s => s.Path == item);
 
         if (item is PathItem path)
         {
@@ -76,8 +89,9 @@ public partial class EditorView : UserControl
             string stroke = path.Stroke.HasVisibleOutline
                 ? $"stroke {path.Stroke.Width:0.##}pt"
                 : "no-stroke";
+            string extra = segmentCount > 0 ? $"\n{segmentCount} segment(s) selected — drag the orange handles to reshape" : string.Empty;
             return $"Path '{item.Name}'\n{segments} segment(s), {fill}, {stroke}\n" +
-                   $"Bounds: {b.X:0.##}, {b.Y:0.##} → {b.Right:0.##}, {b.Bottom:0.##}pt";
+                   $"Bounds: {b.X:0.##}, {b.Y:0.##} → {b.Right:0.##}, {b.Bottom:0.##}pt{extra}";
         }
 
         if (item is ArtGroup group)
@@ -100,7 +114,7 @@ public partial class EditorView : UserControl
     }
 
     // ------------------------------------------------------------------
-    // Object tree (hierarchical, click to select)
+    // Object tree
     // ------------------------------------------------------------------
 
     private void RefreshTree()
@@ -112,13 +126,13 @@ public partial class EditorView : UserControl
 
         foreach (Artboard artboard in _viewModel.Document.Artboards)
         {
-            var boardNode = MakeNode($"{artboard.Name}  ({artboard.Layers.Count} layer{(artboard.Layers.Count == 1 ? "" : "s")})", artboard);
+            var boardNode = MakeNode($"{artboard.Name}", artboard, isHeader: true);
             foreach (Layer layer in artboard.Layers)
             {
-                var layerNode = MakeNode(FormatLayer(layer), layer);
+                var layerNode = MakeNode(FormatLayer(layer), layer, isHeader: true);
                 foreach (LayerItem child in layer.Children)
                 {
-                    AddItemNode(layerNode, child, 0);
+                    AddItemNode(layerNode, child);
                 }
 
                 boardNode.Items.Add(layerNode);
@@ -126,6 +140,8 @@ public partial class EditorView : UserControl
 
             ObjectTree.Items.Add(boardNode);
         }
+
+        SyncTreeToSelection();
     }
 
     private static string FormatLayer(Layer layer)
@@ -139,14 +155,14 @@ public partial class EditorView : UserControl
         return $"{layer.Name}{flags}";
     }
 
-    private void AddItemNode(TreeViewItem parent, LayerItem item, int depth)
+    private void AddItemNode(TreeViewItem parent, LayerItem item)
     {
         var node = MakeNode(DescribeItem(item), item);
         if (item is ArtGroup group)
         {
             foreach (LayerItem child in group.Children)
             {
-                AddItemNode(node, child, depth + 1);
+                AddItemNode(node, child);
             }
         }
 
@@ -157,150 +173,154 @@ public partial class EditorView : UserControl
     {
         return item switch
         {
-            PathItem path => DescribePath(path),
+            PathItem path => $"{NameOf(path.Name, "path")} · {DescribePathBrief(path)}",
             ArtGroup group => $"▸ {NameOf(group.Name, "Group")}",
             _ => item.Name,
         };
     }
 
-    private static string DescribePath(PathItem path)
+    private static string DescribePathBrief(PathItem path)
     {
-        string label = NameOf(path.Name, "path");
-        string kind = path.IsFullyClosed ? "◼" : "◻";
-        return $"{kind} {label}";
+        string kind = path.IsFullyClosed ? "closed" : "open";
+        string segments = path.SubPaths.Sum(sp => sp.SegmentCount).ToString();
+        return $"{segments} seg · {kind}";
     }
 
     private static string NameOf(string name, string fallback)
         => string.IsNullOrWhiteSpace(name) ? fallback : name;
 
-    private static TreeViewItem MakeNode(string text, object? tag)
-        => new() { Header = text, Tag = tag };
+    private static TreeViewItem MakeNode(string text, object? tag, bool isHeader = false)
+    {
+        var node = new TreeViewItem { Header = text, Tag = tag, IsExpanded = isHeader };
+        return node;
+    }
+
+    /// <summary>Highlights the first selected object in the tree, or clears it.</summary>
+    private void SyncTreeToSelection()
+    {
+        _syncingTreeSelection = true;
+        try
+        {
+            TreeViewItem? toSelect = null;
+            if (_viewModel.SelectedObjects.Count > 0)
+            {
+                toSelect = FindNode(ObjectTree.Items, _viewModel.SelectedObjects[0]);
+            }
+
+            ObjectTree.SelectedItem = toSelect;
+        }
+        finally
+        {
+            _syncingTreeSelection = false;
+        }
+    }
+
+    private static TreeViewItem? FindNode(IEnumerable items, LayerItem target)
+    {
+        foreach (object child in items)
+        {
+            if (child is not TreeViewItem node)
+            {
+                continue;
+            }
+
+            if (ReferenceEquals(node.Tag, target))
+            {
+                return node;
+            }
+
+            if (FindNode(node.Items, target) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
 
     private void OnTreeSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (ObjectTree.SelectedItem is TreeViewItem node &&
-            node.Tag is LayerItem { } item)
+        if (_syncingTreeSelection)
         {
-            _viewModel.Selection = item;
-            UpdateStatusAndZoom();
+            return;
+        }
+
+        if (ObjectTree.SelectedItem is TreeViewItem { Tag: LayerItem item })
+        {
+            _viewModel.SelectObject(item);
         }
     }
 
     // ------------------------------------------------------------------
-    // Tool buttons + highlighting
+    // Tool highlighting
     // ------------------------------------------------------------------
-
-    private IBrush _inactiveBrush = Brushes.Transparent;
-    private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.FromRgb(0xBD, 0xDD, 0xF7));
 
     private void HighlightActiveTool()
     {
         SetActive(ToolSelectButton, _viewModel.Tool == EditorTool.Select);
         SetActive(ToolNodeButton, _viewModel.Tool == EditorTool.Node);
         SetActive(ToolPenButton, _viewModel.Tool == EditorTool.Pen);
+        SetActive(ToolRectButton, _viewModel.Tool == EditorTool.Rectangle);
+        SetActive(ToolEllipseButton, _viewModel.Tool == EditorTool.Ellipse);
     }
 
     private static void SetActive(Button button, bool active)
         => button.Background = active ? ActiveBrush : Brushes.Transparent;
-
-    // ------------------------------------------------------------------
-    // Event handlers (File / Edit / Tools / Object / View)
-    // ------------------------------------------------------------------
-
-    private void OnNew(object? sender, RoutedEventArgs e)
-    {
-        _viewModel.NewDocument();
-        UpdateStatusAndZoom();
-    }
-
-    private async void OnOpen(object? sender, RoutedEventArgs e)
-    {
-        StatusText.Text = "Opening from server…";
-        await _viewModel.LoadFromServerAsync();
-        UpdateStatusAndZoom();
-    }
-
-    private async void OnSave(object? sender, RoutedEventArgs e)
-    {
-        StatusText.Text = "Saving to server…";
-        await _viewModel.SaveToServerAsync();
-        UpdateStatusAndZoom();
-    }
-
-    private void OnUndo(object? sender, RoutedEventArgs e) => _viewModel.Undo();
-
-    private void OnRedo(object? sender, RoutedEventArgs e) => _viewModel.Redo();
-
-    private void OnDelete(object? sender, RoutedEventArgs e)
-    {
-        _viewModel.DeleteSelection();
-        UpdateStatusAndZoom();
-    }
-
-    private void OnToolSelect(object? sender, RoutedEventArgs e) => SetTool(EditorTool.Select);
-    private void OnToolNode(object? sender, RoutedEventArgs e) => SetTool(EditorTool.Node);
-    private void OnToolPen(object? sender, RoutedEventArgs e) => SetTool(EditorTool.Pen);
 
     private void SetTool(EditorTool tool)
     {
         _viewModel.Tool = tool;
         _viewModel.Status = tool switch
         {
-            EditorTool.Select => "Selection tool (V): click to pick a path, drag to move it",
-            EditorTool.Node => "Node tool (A): drag anchors to move, drag handles to shape curves",
+            EditorTool.Select => "Selection tool (V): click to pick, Shift+click for multiple, drag to move all",
+            EditorTool.Node => "Node tool (A): drag anchors/handles, click a segment to select it (Shift adds)",
             EditorTool.Pen => "Pen (P): click adds anchors, drag pulls a handle, click the start anchor to close",
+            EditorTool.Rectangle => "Rectangle: drag between two corners",
+            EditorTool.Ellipse => "Ellipse: drag between two corners of its bounding box",
             _ => _viewModel.Status,
         };
         HighlightActiveTool();
         UpdateStatusAndZoom();
     }
 
-    private void OnAddRectangle(object? sender, RoutedEventArgs e)
+    // ------------------------------------------------------------------
+    // File / Edit / Tools / View handlers
+    // ------------------------------------------------------------------
+
+    private void OnNew(object? sender, RoutedEventArgs e) => _viewModel.NewDocument();
+    private void OnOpen(object? sender, RoutedEventArgs e) => FireAndForget(_viewModel.LoadFromServerAsync(), "Opening…");
+    private void OnSave(object? sender, RoutedEventArgs e) => FireAndForget(_viewModel.SaveToServerAsync(), "Saving…");
+
+    private async void FireAndForget(Task task, string busyText)
     {
-        _viewModel.AddRectangle(80, 60, 240, 160);
-        UpdateStatusAndZoom();
+        StatusText.Text = busyText;
+        try
+        {
+            await task;
+        }
+        finally
+        {
+            UpdateStatusAndZoom();
+        }
     }
 
-    private void OnAddEllipse(object? sender, RoutedEventArgs e)
-    {
-        _viewModel.AddEllipse(430, 140, 130, 90);
-        UpdateStatusAndZoom();
-    }
+    private void OnUndo(object? sender, RoutedEventArgs e) => _viewModel.Undo();
+    private void OnRedo(object? sender, RoutedEventArgs e) => _viewModel.Redo();
+    private void OnDelete(object? sender, RoutedEventArgs e) => _viewModel.DeleteSelection();
+    private void OnToolSelect(object? sender, RoutedEventArgs e) => SetTool(EditorTool.Select);
+    private void OnToolNode(object? sender, RoutedEventArgs e) => SetTool(EditorTool.Node);
+    private void OnToolPen(object? sender, RoutedEventArgs e) => SetTool(EditorTool.Pen);
+    private void OnToolRectangle(object? sender, RoutedEventArgs e) => SetTool(EditorTool.Rectangle);
+    private void OnToolEllipse(object? sender, RoutedEventArgs e) => SetTool(EditorTool.Ellipse);
 
-    private void OnAddLine(object? sender, RoutedEventArgs e)
-    {
-        _viewModel.AddLine(80, 320, 720, 420);
-        UpdateStatusAndZoom();
-    }
-
-    private void OnZoomIn(object? sender, RoutedEventArgs e)
-    {
-        Workspace.ZoomIn();
-        UpdateStatusAndZoom();
-    }
-
-    private void OnZoomOut(object? sender, RoutedEventArgs e)
-    {
-        Workspace.ZoomOut();
-        UpdateStatusAndZoom();
-    }
-
-    private void OnActualSize(object? sender, RoutedEventArgs e)
-    {
-        Workspace.ZoomToActualSize();
-        UpdateStatusAndZoom();
-    }
-
-    private void OnFitInWindow(object? sender, RoutedEventArgs e)
-    {
-        Workspace.ZoomToFit();
-        UpdateStatusAndZoom();
-    }
+    private void OnZoomIn(object? sender, RoutedEventArgs e) => Workspace.ZoomIn();
+    private void OnZoomOut(object? sender, RoutedEventArgs e) => Workspace.ZoomOut();
+    private void OnActualSize(object? sender, RoutedEventArgs e) => Workspace.ZoomToActualSize();
+    private void OnFitInWindow(object? sender, RoutedEventArgs e) => Workspace.ZoomToFit();
 
     private void OnExportPdf(object? sender, RoutedEventArgs e)
     {
         byte[] pdf = _viewModel.ExportPdf();
-        UpdateStatusAndZoom();
         SelectionInfo.Text = $"PDF payload ready: {pdf.Length:N0} bytes";
     }
 

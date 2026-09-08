@@ -12,56 +12,84 @@ using VCCad.Geometry;
 namespace VCCad.App.Controls;
 
 /// <summary>
-/// The editable pasteboard. Renders the document (artboards + paths) and hosts
-/// the interactive tools:
-/// <list type="bullet">
-/// <item><b>Select (V)</b> — click to pick the top-most path, drag to move it.</item>
-/// <item><b>Node (A)</b> — shows anchors/handles of the selected path; drag an
-/// anchor (moves the node) or a handle (reshapes the curve).</item>
-/// <item><b>Pen (P)</b> — click places a corner anchor on the active pen path,
-/// drag pulls an outgoing handle, click the start anchor to close; Enter/Escape
-/// or switching tools finalises.</item>
-/// </list>
-/// Panning happens with the middle or right mouse button; Ctrl+wheel zooms
-/// anchored at the cursor. Live drags mutate geometry for instant feedback and
-/// are committed on release through <see cref="GeometryReplaceCommand"/> so every
-/// gesture is one undo step.
+/// The editable pasteboard.
 ///
-/// The pasteboard rule (one full viewport past every object) is enforced by
-/// <see cref="VCCad.Core.Viewport.PasteboardLayout"/>.
+/// <b>Select (V)</b> — click picks the top path; Shift adds/toggles objects;
+/// drag moves every selected object together (one composite undo step). A
+/// rotation handle floats above the selection and drags rotate it about its
+/// centre.
+///
+/// <b>Node / direct selection (A)</b> — anchors and handles of the selected path
+/// are shown and draggable; clicking a line/Bézier segment selects that segment
+/// (Shift adds), a selected segment can be dragged to slide its two end nodes.
+///
+/// <b>Pen (P)</b> — click adds corner anchors on the active path, drag pulls the
+/// outgoing handle, clicking the start anchor closes the path (which finalises it
+/// so the next click starts a fresh path), Enter/Escape or a tool switch
+/// finalises.
+///
+/// <b>Rectangle / Ellipse</b> — drag between two corners to create the shape
+/// (closed, four segments; the ellipse is four joined cubics).
+///
+/// Live drags mutate geometry for instant feedback and commit through
+/// <see cref="GeometryReplaceCommand"/> (composed for multi-object gestures) so
+/// every gesture is a single undo step. Middle/right drag pans, Ctrl+wheel zooms.
 /// </summary>
 public sealed class CanvasWorkspace : Control
 {
     private CadDocument? _document;
     private PasteboardLayout _layout = new(Rect2D.Empty);
-    private Vector2D _offset;         // artwork top-left position on screen, px
+    private Vector2D _offset;
     private bool _isPanning;
     private bool _hasLaidOutOnce;
 
-    private EditorViewModel? _viewModel;
+    private EditorViewModel? _vm;
     private bool _leftDown;
-
-    // Cursor position in model space, updated on hover (pen preview, snaps).
+    private bool _shiftHeld;
     private Point2D? _hoverModel;
 
-    // Move (Select tool) gesture.
-    private PathItem? _moveItem;
-    private PathItem? _moveBefore;
-    private Point2D _gestureStartModel;
-    private bool _gestureMoved;
+    // Whole-object move / rotate targets (Select tool).
+    private readonly List<PathItem> _dragPaths = new();
+    private readonly Dictionary<PathItem, PathItem> _dragOriginals = new();
+    private Point2D _dragStartModel;
 
-    // Node drag (Node tool) gesture.
+    // Node / handle drag (Node tool).
     private PathItem? _nodePath;
     private SubPath? _nodeSub;
     private int _nodeIndex;
     private bool _nodeGrabHandle;
-    private bool _nodeIsInHandle;
+    private bool _nodeIsIn;
     private PathItem? _nodeBefore;
-    private Point2D _nodeOriginalPoint;
+    private Point2D _nodeAnchorStart;
+    private Point2D _nodeInStart;
+    private Point2D _nodeOutStart;
+
+    // Segment drag (Node tool).
+    private PathItem? _segmentPath;
+    private SubPath? _segmentSub;
+    private int _segmentIndex;
+    private PathItem? _segmentBefore;
+    private PathNode? _segmentNodeA;
+    private PathNode? _segmentNodeB;
+    private (Point2D A, Point2D I, Point2D O) _segmentOrigA;
+    private (Point2D A, Point2D I, Point2D O) _segmentOrigB;
+
+    // Whether the current gesture actually displaced anything (commit gating).
+    private bool _gestureMoved;
+
+    // Rotation handle drag (Select tool).
+    private Point2D _rotateCenter;
+    private double _rotateStartAngle;
+    private readonly List<PathItem> _rotatePaths = new();
+    private readonly Dictionary<PathItem, PathItem> _rotateOriginals = new();
+
+    // Shape tools (Rectangle / Ellipse).
+    private Point2D? _shapeStart;
+    private Point2D _shapeCurrent;
 
     // Pen tool.
     private PathItem? _penPath;
-    private PathNode? _penNode;          // anchor currently being placed / dragged
+    private PathNode? _penNode;
     private PathItem? _penBefore;
     private bool _penClosePending;
 
@@ -71,17 +99,13 @@ public sealed class CanvasWorkspace : Control
         Focusable = true;
     }
 
-    /// <summary>Binds the workspace to the editor session it renders and edits.</summary>
     public void AttachEditor(EditorViewModel viewModel)
     {
-        _viewModel = viewModel;
+        _vm = viewModel;
         _document = viewModel.Document;
         _layout = new PasteboardLayout(ComputeExtent());
         viewModel.DocumentChanged += (_, _) =>
         {
-            // Preserve zoom and pan while re-clamping to the (possibly grown)
-            // artwork extent so newly drawn objects outside the old pasteboard
-            // remain reachable.
             double zoom = _layout.Zoom;
             Vector2D offset = _offset;
             _document = viewModel.Document;
@@ -89,10 +113,19 @@ public sealed class CanvasWorkspace : Control
             _offset = _layout.ClampTopLeft(offset, ViewportPixels);
             InvalidateVisual();
         };
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            // Leaving the pen tool (toolbar/menu path) must finalise the active
+            // pen path even though the tool was changed outside the canvas.
+            if (args.PropertyName == nameof(EditorViewModel.Tool)
+                && _penPath is not null && viewModel.Tool != EditorTool.Pen)
+            {
+                FinalizePen();
+            }
+        };
         InvalidateVisual();
     }
 
-    /// <summary>Current zoom factor (0.02× .. 64×).</summary>
     public double Zoom
     {
         get => _layout.Zoom;
@@ -103,12 +136,7 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
-    /// <summary>The viewport size in pixels, derived from our laid-out bounds.</summary>
     private Size2D ViewportPixels => new(Math.Max(Bounds.Width, 1), Math.Max(Bounds.Height, 1));
-
-    // ------------------------------------------------------------------
-    // Zoom / fit API (toolbar + status bar bind through these).
-    // ------------------------------------------------------------------
 
     public void ZoomIn() => ZoomAtCenter(Zoom * 1.25);
     public void ZoomOut() => ZoomAtCenter(Zoom / 1.25);
@@ -118,13 +146,6 @@ public sealed class CanvasWorkspace : Control
     {
         _layout.Zoom = _layout.ZoomToFit(ViewportPixels);
         _offset = _layout.CenterInViewport(ViewportPixels);
-        InvalidateVisual();
-    }
-
-    /// <summary>Refits after the artwork extent changed drastically (e.g. open).</summary>
-    public void RefreshFromDocument()
-    {
-        _layout = new PasteboardLayout(ComputeExtent());
         InvalidateVisual();
     }
 
@@ -149,7 +170,7 @@ public sealed class CanvasWorkspace : Control
     }
 
     // ------------------------------------------------------------------
-    // Model ↔ screen mapping
+    // Mapping / picking helpers
     // ------------------------------------------------------------------
 
     private Point ModelToScreen(Point2D model)
@@ -160,10 +181,8 @@ public sealed class CanvasWorkspace : Control
         => new((screen.X - _offset.X) / _layout.Zoom + _layout.Extent.Left,
                (screen.Y - _offset.Y) / _layout.Zoom + _layout.Extent.Top);
 
-    /// <summary>Picking tolerance in model units: ~5 px regardless of zoom.</summary>
     private double PickTolerance => Math.Max(0.05, 5.0 / Math.Max(_layout.Zoom, 1e-6));
 
-    /// <summary>The union of artboards and all painted content.</summary>
     private Rect2D ComputeExtent()
     {
         if (_document is null)
@@ -181,440 +200,6 @@ public sealed class CanvasWorkspace : Control
         return extent;
     }
 
-    // ------------------------------------------------------------------
-    // Pointer interaction
-    // ------------------------------------------------------------------
-
-    protected override void OnPointerPressed(PointerPressedEventArgs e)
-    {
-        base.OnPointerPressed(e);
-        Focus();
-        Point position = e.GetPosition(this);
-        Point2D model = ModelPointAtScreen(position);
-        PointerPointProperties props = e.GetCurrentPoint(this).Properties;
-
-        // Middle / right button always pans (space-equivalent for touchpads).
-        if (props.IsMiddleButtonPressed || props.IsRightButtonPressed)
-        {
-            StartPan(e, position);
-            return;
-        }
-
-        if (!props.IsLeftButtonPressed)
-        {
-            return;
-        }
-
-        _leftDown = true;
-        e.Pointer.Capture(this);
-        e.Handled = true;
-
-        switch (_viewModel?.Tool ?? EditorTool.Select)
-        {
-            case EditorTool.Select:
-                StartMoveGesture(model);
-                break;
-
-            case EditorTool.Node:
-                StartNodeGesture(model);
-                break;
-
-            case EditorTool.Pen:
-                PenPress(model);
-                break;
-        }
-    }
-
-    protected override void OnPointerMoved(PointerEventArgs e)
-    {
-        base.OnPointerMoved(e);
-        Point position = e.GetPosition(this);
-        Point2D model = ModelPointAtScreen(position);
-        _hoverModel = model;
-
-        if (_isPanning)
-        {
-            Vector2D delta = new(position.X - _lastPan.X, position.Y - _lastPan.Y);
-            _lastPan = position;
-            _offset = _layout.ClampTopLeft(_offset + delta, ViewportPixels);
-            InvalidateVisual();
-            return;
-        }
-
-        if (_leftDown)
-        {
-            switch (_viewModel?.Tool ?? EditorTool.Select)
-            {
-                case EditorTool.Select:
-                    UpdateMoveGesture(model);
-                    break;
-
-                case EditorTool.Node:
-                    UpdateNodeGesture(model);
-                    break;
-
-                case EditorTool.Pen:
-                    PenDrag(model);
-                    break;
-            }
-        }
-
-        // Hover feedback (pen rubber band, node hover) needs a repaint even when
-        // not pressing.
-        if (_viewModel?.Tool == EditorTool.Pen && _penPath is not null)
-        {
-            InvalidateVisual();
-        }
-    }
-
-    protected override void OnPointerReleased(PointerReleasedEventArgs e)
-    {
-        base.OnPointerReleased(e);
-        Point2D model = ModelPointAtScreen(e.GetPosition(this));
-
-        if (_isPanning)
-        {
-            _isPanning = false;
-            e.Pointer.Capture(null);
-            return;
-        }
-
-        if (!_leftDown)
-        {
-            return;
-        }
-
-        _leftDown = false;
-        e.Pointer.Capture(null);
-
-        switch (_viewModel?.Tool ?? EditorTool.Select)
-        {
-            case EditorTool.Select:
-                CommitMoveGesture();
-                break;
-
-            case EditorTool.Node:
-                CommitNodeGesture();
-                break;
-
-            case EditorTool.Pen:
-                PenRelease(model);
-                break;
-        }
-    }
-
-    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
-    {
-        base.OnPointerWheelChanged(e);
-
-        if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
-        {
-            Point cursor = e.GetPosition(this);
-            Point2D before = ModelPointAtScreen(cursor);
-            double factor = e.Delta.Y > 0 ? 1.1 : 1 / 1.1;
-            _layout.Zoom = _layout.Zoom * factor;
-            _offset = new Vector2D(
-                cursor.X - (before.X - _layout.Extent.Left) * _layout.Zoom,
-                cursor.Y - (before.Y - _layout.Extent.Top) * _layout.Zoom);
-            _offset = _layout.ClampTopLeft(_offset, ViewportPixels);
-            InvalidateVisual();
-        }
-        else
-        {
-            Vector2D delta = new(0, -e.Delta.Y * 60.0);
-            _offset = _layout.ClampTopLeft(_offset + delta, ViewportPixels);
-            InvalidateVisual();
-        }
-
-        e.Handled = true;
-    }
-
-    private Point _lastPan;
-
-    private void StartPan(PointerPressedEventArgs e, Point position)
-    {
-        _lastPan = position;
-        _isPanning = true;
-        e.Pointer.Capture(this);
-        e.Handled = true;
-    }
-
-    // ------------------------------------------------------------------
-    // Select tool: pick + move whole paths
-    // ------------------------------------------------------------------
-
-    private void StartMoveGesture(Point2D model)
-    {
-        PathItem? hit = HitTestTopPath(model);
-        _viewModel!.Selection = hit;
-
-        _moveItem = hit;
-        _moveBefore = hit?.GeometrySnapshot();
-        _gestureStartModel = model;
-        _gestureMoved = false;
-        InvalidateVisual();
-    }
-
-    private void UpdateMoveGesture(Point2D model)
-    {
-        if (_moveItem is null)
-        {
-            return;
-        }
-
-        Vector2D delta = model - _gestureStartModel;
-        if (Math.Abs(delta.X) < 1e-9 && Math.Abs(delta.Y) < 1e-9)
-        {
-            return;
-        }
-
-        // Live feedback: restore the press-time geometry, then re-apply the whole
-        // displacement. Re-applying from the snapshot avoids cumulative drift.
-        _moveItem.RestoreGeometryFrom(_moveBefore!);
-        _moveItem.TranslateGeometryBy(delta);
-        _gestureMoved = true;
-        InvalidateVisual();
-    }
-
-    private void CommitMoveGesture()
-    {
-        if (_moveItem is not null && _gestureMoved)
-        {
-            PathItem after = _moveItem.GeometrySnapshot();
-            _viewModel!.Execute(new GeometryReplaceCommand(_moveItem, _moveBefore!, after, "Move"));
-        }
-
-        _moveItem = null;
-        _moveBefore = null;
-    }
-
-    // ------------------------------------------------------------------
-    // Node tool: drag anchors and handles
-    // ------------------------------------------------------------------
-
-    private void StartNodeGesture(Point2D model)
-    {
-        // Ensure the selection is a path (clicking an unselected path with the
-        // node tool selects it first).
-        if (_viewModel!.Selection is not PathItem path)
-        {
-            path = HitTestTopPath(model);
-            _viewModel.Selection = path;
-        }
-
-        _nodePath = path;
-        _nodeSub = null;
-        _nodeGrabHandle = false;
-
-        if (path is null)
-        {
-            return;
-        }
-
-        NodePick? pick = PathPicking.PickNode(path, model, PickTolerance * 1.5);
-        if (pick is null)
-        {
-            return;
-        }
-
-        _nodeSub = pick.Value.SubPath;
-        _nodeIndex = pick.Value.NodeIndex;
-        _nodeGrabHandle = pick.Value.IsInHandle || pick.Value.IsOutHandle;
-        _nodeIsInHandle = pick.Value.IsInHandle;
-        _nodeBefore = path.GeometrySnapshot();
-        PathNode node = pick.Value.SubPath.Nodes[pick.Value.NodeIndex];
-        _nodeOriginalPoint = _nodeGrabHandle ? (_nodeIsInHandle ? node.InHandle : node.OutHandle) : node.Anchor;
-        _gestureStartModel = model;
-        _gestureMoved = false;
-        InvalidateVisual();
-    }
-
-    private void UpdateNodeGesture(Point2D model)
-    {
-        if (_nodePath is null || _nodeSub is null)
-        {
-            return;
-        }
-
-        Vector2D delta = model - _gestureStartModel;
-        if (Math.Abs(delta.X) < 1e-9 && Math.Abs(delta.Y) < 1e-9)
-        {
-            return;
-        }
-
-        _nodePath.RestoreGeometryFrom(_nodeBefore!);
-        PathNode node = _nodeSub.Nodes[_nodeIndex];
-
-        if (_nodeGrabHandle)
-        {
-            Point2D target = _nodeOriginalPoint + delta;
-            if (_nodeIsInHandle)
-            {
-                node.InHandle = target;
-            }
-            else
-            {
-                node.OutHandle = target;
-            }
-        }
-        else
-        {
-            // Dragging an anchor carries both handles so adjacent curves keep
-            // their shape.
-            node.Anchor += delta;
-            node.InHandle += delta;
-            node.OutHandle += delta;
-        }
-
-        _gestureMoved = true;
-        InvalidateVisual();
-    }
-
-    private void CommitNodeGesture()
-    {
-        if (_nodePath is not null && _gestureMoved && _nodeBefore is not null)
-        {
-            PathItem after = _nodePath.GeometrySnapshot();
-            _viewModel!.Execute(new GeometryReplaceCommand(_nodePath, _nodeBefore, after, "Edit nodes"));
-        }
-
-        _nodePath = null;
-        _nodeBefore = null;
-        _nodeSub = null;
-    }
-
-    // ------------------------------------------------------------------
-    // Pen tool
-    // ------------------------------------------------------------------
-
-    private void PenPress(Point2D model)
-    {
-        if (_viewModel is null)
-        {
-            return;
-        }
-
-        // Clicking the start anchor of the active path closes it.
-        if (_penPath is not null && _penPath.SubPaths[0].Nodes.Count >= 2 &&
-            _penPath.SubPaths[0].Nodes[0].Anchor.DistanceTo(model) <= PickTolerance * 2)
-        {
-            _penClosePending = true;
-            _penBefore = _penPath.GeometrySnapshot();
-            return;
-        }
-
-        // Otherwise begin a new anchor at the press point. Pen paths are committed
-        // to the document on the first anchor so they render as they grow.
-        if (_penPath is null)
-        {
-            _penPath = new PathItem { Name = "Pen path", Stroke = StrokeSpec.Hairline(ColorRgb.Black) };
-            _penPath.AddSubPath(closed: false);
-            _viewModel.Execute(new AddItemCommand(_viewModel.TargetLayer(), _penPath));
-            _penBefore = _penPath.GeometrySnapshot();
-        }
-        else
-        {
-            _penBefore = _penPath.GeometrySnapshot();
-        }
-
-        SubPath sub = _penPath.SubPaths[0];
-        _penNode = sub.AppendNode(model);
-        _gestureStartModel = model;
-        _gestureMoved = false;
-        InvalidateVisual();
-    }
-
-    private void PenDrag(Point2D model)
-    {
-        if (_penNode is null || _penPath is null)
-        {
-            return;
-        }
-
-        Vector2D delta = model - _gestureStartModel;
-        if (Math.Abs(delta.X) < 1e-9 && Math.Abs(delta.Y) < 1e-9)
-        {
-            return;
-        }
-
-        _gestureMoved = true;
-
-        // Live: pull the outgoing handle of the anchor being placed toward the
-        // cursor. The anchor stays at its press point (Illustrator behaviour).
-        // We must NOT restore the pre-press snapshot here — it predates the node
-        // we just appended, and restoring would drop it.
-        _penNode.OutHandle = model;
-        InvalidateVisual();
-    }
-
-    private void PenRelease(Point2D model)
-    {
-        if (_viewModel is null)
-        {
-            return;
-        }
-
-        if (_penClosePending && _penPath is not null)
-        {
-            // Final geometry replace: mark the subpath closed.
-            _penPath.SubPaths[0].IsClosed = true;
-            CommitPenGeometry("Close path");
-            return;
-        }
-
-        if (_penPath is not null && _penNode is not null)
-        {
-            CommitPenGeometry(_gestureMoved ? "Add curve" : "Add point");
-            return;
-        }
-
-        _penNode = null;
-    }
-
-    private void CommitPenGeometry(string description)
-    {
-        if (_penPath is null || _penBefore is null)
-        {
-            _penNode = null;
-            return;
-        }
-
-        PathItem after = _penPath.GeometrySnapshot();
-        _viewModel!.Execute(new GeometryReplaceCommand(_penPath, _penBefore, after, description));
-        _penNode = null;
-        _penBefore = null;
-        _penClosePending = false;
-        InvalidateVisual();
-    }
-
-    /// <summary>Ends an active pen path: removes a stray single-anchor path.</summary>
-    private void FinalizePen()
-    {
-        if (_penPath is null)
-        {
-            return;
-        }
-
-        if (_penPath.SubPaths[0].Nodes.Count < 2)
-        {
-            _viewModel!.Execute(new RemoveItemCommand(_penPath));
-        }
-
-        _penPath = null;
-        _penNode = null;
-        _penBefore = null;
-        InvalidateVisual();
-    }
-
-    // ------------------------------------------------------------------
-    // Hit testing
-    // ------------------------------------------------------------------
-
-    /// <summary>
-    /// The top-most (last-painted) path item under <paramref name="model"/>, or
-    /// null. Searches every artboard and honours z-order across layers, groups
-    /// and sibling order (identity-transform hierarchies for this seed).
-    /// </summary>
     private PathItem? HitTestTopPath(Point2D model)
     {
         if (_document is null)
@@ -638,7 +223,7 @@ public sealed class CanvasWorkspace : Control
                     PathItem? hit = HitTestItem(item, model, tolerance);
                     if (hit is not null)
                     {
-                        topmost = hit; // later iterations paint above earlier ones
+                        topmost = hit;
                     }
                 }
             }
@@ -675,6 +260,690 @@ public sealed class CanvasWorkspace : Control
         }
 
         return topmost;
+    }
+
+    // ------------------------------------------------------------------
+    // Pointer plumbing
+    // ------------------------------------------------------------------
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        base.OnPointerPressed(e);
+        Focus();
+        Point position = e.GetPosition(this);
+        Point2D model = ModelPointAtScreen(position);
+        PointerPointProperties props = e.GetCurrentPoint(this).Properties;
+        _shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+
+        if (props.IsMiddleButtonPressed || props.IsRightButtonPressed)
+        {
+            _lastPan = position;
+            _isPanning = true;
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            return;
+        }
+
+        if (!props.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        _leftDown = true;
+        e.Pointer.Capture(this);
+        e.Handled = true;
+
+        switch (_vm?.Tool ?? EditorTool.Select)
+        {
+            case EditorTool.Select: SelectPress(model); break;
+            case EditorTool.Node: NodePress(model); break;
+            case EditorTool.Pen: PenPress(model); break;
+            case EditorTool.Rectangle:
+            case EditorTool.Ellipse:
+                _shapeStart = model;
+                _shapeCurrent = model;
+                _vm!.ClearSelection();
+                break;
+        }
+    }
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        base.OnPointerMoved(e);
+        Point position = e.GetPosition(this);
+        Point2D model = ModelPointAtScreen(position);
+        _hoverModel = model;
+
+        if (_isPanning)
+        {
+            Vector2D delta = new(position.X - _lastPan.X, position.Y - _lastPan.Y);
+            _lastPan = position;
+            _offset = _layout.ClampTopLeft(_offset + delta, ViewportPixels);
+            InvalidateVisual();
+            return;
+        }
+
+        if (_leftDown)
+        {
+            switch (_vm?.Tool ?? EditorTool.Select)
+            {
+                case EditorTool.Select:
+                    if (_rotatePaths.Count > 0)
+                    {
+                        RotateDrag(model);
+                    }
+                    else
+                    {
+                        SelectDrag(model);
+                    }
+
+                    break;
+                case EditorTool.Node: NodeDrag(model); break;
+                case EditorTool.Pen: PenDrag(model); break;
+                case EditorTool.Rectangle:
+                case EditorTool.Ellipse:
+                    if (_shapeStart is not null)
+                    {
+                        _shapeCurrent = model;
+                        InvalidateVisual();
+                    }
+
+                    break;
+            }
+        }
+        else if (_vm?.Tool == EditorTool.Pen && _penPath is not null)
+        {
+            InvalidateVisual();
+        }
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+        Point2D model = ModelPointAtScreen(e.GetPosition(this));
+
+        if (_isPanning)
+        {
+            _isPanning = false;
+            e.Pointer.Capture(null);
+            return;
+        }
+
+        if (!_leftDown)
+        {
+            return;
+        }
+
+        _leftDown = false;
+        e.Pointer.Capture(null);
+
+        switch (_vm?.Tool ?? EditorTool.Select)
+        {
+            case EditorTool.Select:
+                if (_rotatePaths.Count > 0)
+                {
+                    EndRotate();
+                }
+                else
+                {
+                    SelectRelease(model);
+                }
+
+                break;
+            case EditorTool.Node: NodeRelease(); break;
+            case EditorTool.Pen: PenRelease(model); break;
+            case EditorTool.Rectangle: CreateShape(rect: true); break;
+            case EditorTool.Ellipse: CreateShape(rect: false); break;
+        }
+    }
+
+    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+    {
+        base.OnPointerWheelChanged(e);
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            Point cursor = e.GetPosition(this);
+            Point2D before = ModelPointAtScreen(cursor);
+            double factor = e.Delta.Y > 0 ? 1.1 : 1 / 1.1;
+            _layout.Zoom *= factor;
+            _offset = new Vector2D(
+                cursor.X - (before.X - _layout.Extent.Left) * _layout.Zoom,
+                cursor.Y - (before.Y - _layout.Extent.Top) * _layout.Zoom);
+            _offset = _layout.ClampTopLeft(_offset, ViewportPixels);
+        }
+        else
+        {
+            Vector2D delta = new(0, -e.Delta.Y * 60.0);
+            _offset = _layout.ClampTopLeft(_offset + delta, ViewportPixels);
+        }
+
+        InvalidateVisual();
+        e.Handled = true;
+    }
+
+    private Point _lastPan;
+
+    // ------------------------------------------------------------------
+    // Select tool: multi-object move + rotate handle
+    // ------------------------------------------------------------------
+
+    private bool HitRotationHandle(Point2D model)
+    {
+        if (_vm is null || !_vm.SelectedPaths().Any() || _shiftHeld)
+        {
+            return false;
+        }
+
+        Rect2D bounds = _vm.SelectionBounds();
+        if (bounds.IsEmpty)
+        {
+            return false;
+        }
+
+        Point2D handle = new((bounds.Left + bounds.Right) / 2, bounds.Top);
+        return model.DistanceTo(handle) <= PickTolerance * 2.0;
+    }
+
+    private void SelectPress(Point2D model)
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        if (HitRotationHandle(model))
+        {
+            BeginRotate(model);
+            return;
+        }
+
+        PathItem? hit = HitTestTopPath(model);
+        if (_shiftHeld)
+        {
+            if (hit is not null)
+            {
+                _vm.ToggleObjectSelection(hit);
+            }
+
+            return;
+        }
+
+        _vm.SelectObject(hit);
+
+        // Prepare a multi-object move: dragging any selected path moves all of them.
+        _dragPaths.Clear();
+        _dragOriginals.Clear();
+        foreach (PathItem path in _vm.SelectedPaths())
+        {
+            _dragPaths.Add(path);
+            _dragOriginals[path] = path.GeometrySnapshot();
+        }
+
+        _dragStartModel = model;
+        InvalidateVisual();
+    }
+
+    private void SelectDrag(Point2D model)
+    {
+        if (_dragPaths.Count == 0)
+        {
+            return;
+        }
+
+        Vector2D delta = model - _dragStartModel;
+        foreach (PathItem path in _dragPaths)
+        {
+            path.RestoreGeometryFrom(_dragOriginals[path]);
+            path.TranslateGeometryBy(delta);
+        }
+
+        InvalidateVisual();
+    }
+
+    private void SelectRelease(Point2D model)
+    {
+        if (_dragPaths.Count > 0 && !(model - _dragStartModel).IsZero)
+        {
+            CommitMultiPathEdit("Move objects");
+        }
+
+        _dragPaths.Clear();
+        _dragOriginals.Clear();
+    }
+
+    private void EndRotate()
+    {
+        if (_rotatePaths.Count > 0)
+        {
+            CommitRotateEdit();
+        }
+
+        _rotatePaths.Clear();
+        _rotateOriginals.Clear();
+    }
+
+    private void CommitMultiPathEdit(string label)
+        => CommitPaths(label, _dragPaths, _dragOriginals);
+
+    private void CommitRotateEdit()
+        => CommitPaths("Rotate objects", _rotatePaths, _rotateOriginals);
+
+    private void CommitPaths(string label, IReadOnlyList<PathItem> paths,
+        Dictionary<PathItem, PathItem> originals)
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        var edits = new List<IUndoableCommand>();
+        foreach (PathItem path in paths)
+        {
+            if (originals.TryGetValue(path, out PathItem? before))
+            {
+                edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot()));
+            }
+        }
+
+        if (edits.Count > 0)
+        {
+            _vm.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand(label, edits));
+        }
+    }
+
+    // ---- rotation handle -------------------------------------------------
+
+    private void BeginRotate(Point2D model)
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        Rect2D bounds = _vm.SelectionBounds();
+        _rotateCenter = bounds.Center;
+        Vector2D fromCenter = model - _rotateCenter;
+        _rotateStartAngle = Math.Atan2(fromCenter.Y, fromCenter.X);
+
+        _rotatePaths.Clear();
+        _rotateOriginals.Clear();
+        foreach (PathItem path in _vm.SelectedPaths())
+        {
+            _rotatePaths.Add(path);
+            _rotateOriginals[path] = path.GeometrySnapshot();
+        }
+    }
+
+    private void RotateDrag(Point2D model)
+    {
+        if (_rotatePaths.Count == 0)
+        {
+            return;
+        }
+
+        Vector2D fromCenter = model - _rotateCenter;
+        double angle = Math.Atan2(fromCenter.Y, fromCenter.X) - _rotateStartAngle;
+        foreach (PathItem path in _rotatePaths)
+        {
+            path.RestoreGeometryFrom(_rotateOriginals[path]);
+            path.RotateGeometryAbout(_rotateCenter, angle);
+        }
+
+        InvalidateVisual();
+    }
+
+    // Node tool: nodes, handles and segments
+    // ------------------------------------------------------------------
+
+    private void NodePress(Point2D model)
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        // 1) Grabbing a node or handle takes priority over segment selection.
+        PathItem? pickPath = null;
+        NodePick? pick = null;
+        foreach (PathItem candidate in _vm.SelectedPaths())
+        {
+            NodePick? candidatePick = PathPicking.PickNode(candidate, model, PickTolerance * 1.6);
+            if (candidatePick is not null)
+            {
+                pick = candidatePick;
+                pickPath = candidate;
+                break;
+            }
+        }
+
+        if (pick is null)
+        {
+            pickPath = HitTestTopPath(model);
+            if (pickPath is not null)
+            {
+                pick = PathPicking.PickNode(pickPath, model, PickTolerance * 1.6);
+            }
+        }
+
+        if (pick is not null && pickPath is not null)
+        {
+            if (!_shiftHeld && !_vm.IsObjectSelected(pickPath))
+            {
+                _vm.SelectObject(pickPath); // select the path whose node we grab
+            }
+
+            BeginNodeDrag(pickPath, pick.Value);
+            return;
+        }
+
+        // 2) Clicking a line/Bézier segment selects it (Shift adds toggles);
+        //    the segment can then be dragged to slide its end nodes.
+        PathItem? segmentPath = pickPath;
+        SegmentPick? segment = segmentPath is null
+            ? null
+            : PathPicking.ClosestSegment(segmentPath, model, PickTolerance * 1.6);
+        if (segment is null)
+        {
+            segmentPath = HitTestTopPath(model);
+            segment = segmentPath is null
+                ? null
+                : PathPicking.ClosestSegment(segmentPath, model, PickTolerance * 1.6);
+        }
+
+        if (segment is not null && segmentPath is not null)
+        {
+            int subIndex = segmentPath.SubPaths.IndexOf(segment.Value.SubPath);
+            _vm.SelectSegment(segmentPath, subIndex, segment.Value.SegmentIndex, additive: _shiftHeld);
+            InvalidateVisual();
+
+            // Drag the segment only when it is still selected after the toggle.
+            if (_vm.IsSegmentSelected(segmentPath, subIndex, segment.Value.SegmentIndex))
+            {
+                BeginSegmentDrag(segmentPath, subIndex, segment.Value.SegmentIndex, model);
+            }
+
+            return;
+        }
+
+        // 3) Otherwise: focus a whole path or clear the selection.
+        if (!_shiftHeld)
+        {
+            _vm.SelectObject(HitTestTopPath(model));
+        }
+        else if (segmentPath is not null)
+        {
+            _vm.ToggleObjectSelection(segmentPath);
+        }
+    }
+
+    private void BeginNodeDrag(PathItem path, NodePick pick)
+    {
+        _nodePath = path;
+        _nodeSub = pick.SubPath;
+        _nodeIndex = pick.NodeIndex;
+        _nodeGrabHandle = pick.IsInHandle || pick.IsOutHandle;
+        _nodeIsIn = pick.IsInHandle;
+        PathNode node = pick.SubPath.Nodes[pick.NodeIndex];
+        _nodeAnchorStart = node.Anchor;
+        _nodeInStart = node.InHandle;
+        _nodeOutStart = node.OutHandle;
+        _nodeBefore = path.GeometrySnapshot();
+        _gestureMoved = false;
+        InvalidateVisual();
+    }
+
+    private void BeginSegmentDrag(PathItem path, int subIndex, int segmentIndex, Point2D model)
+    {
+        SubPath sub = path.SubPaths[subIndex];
+        (int a, int b) = sub.SegmentEndNodes(segmentIndex);
+        _segmentPath = path;
+        _segmentSub = sub;
+        _segmentIndex = segmentIndex;
+        _segmentBefore = path.GeometrySnapshot();
+        _segmentNodeA = sub.Nodes[a];
+        _segmentNodeB = sub.Nodes[b];
+        _segmentOrigA = (sub.Nodes[a].Anchor, sub.Nodes[a].InHandle, sub.Nodes[a].OutHandle);
+        _segmentOrigB = (sub.Nodes[b].Anchor, sub.Nodes[b].InHandle, sub.Nodes[b].OutHandle);
+        _dragStartModel = model;
+        _gestureMoved = false;
+    }
+
+    private void NodeDrag(Point2D model)
+    {
+        if (_nodePath is not null && _nodeSub is not null)
+        {
+            // Mutate the grabbed node directly, recomputing from the stored
+            // originals — never restoring whole geometry mid-gesture.
+            Vector2D delta = model - _nodeAnchorStart;
+            if (delta.IsZero)
+            {
+                return;
+            }
+
+            _gestureMoved = true;
+            PathNode node = _nodeSub.Nodes[_nodeIndex];
+            if (_nodeGrabHandle)
+            {
+                Point2D target = (_nodeIsIn ? _nodeInStart : _nodeOutStart) + delta;
+                if (_nodeIsIn)
+                {
+                    node.InHandle = target;
+                }
+                else
+                {
+                    node.OutHandle = target;
+                }
+            }
+            else
+            {
+                node.Anchor = _nodeAnchorStart + delta;
+                node.InHandle = _nodeInStart + delta;
+                node.OutHandle = _nodeOutStart + delta;
+            }
+
+            InvalidateVisual();
+            return;
+        }
+
+        if (_segmentPath is not null && _segmentNodeA is not null)
+        {
+            Vector2D delta = model - _dragStartModel;
+            if (delta.IsZero)
+            {
+                return;
+            }
+
+            _gestureMoved = true;
+            SetNodeFromOriginal(_segmentNodeA, _segmentOrigA, delta);
+            if (_segmentNodeB is not null)
+            {
+                SetNodeFromOriginal(_segmentNodeB, _segmentOrigB, delta);
+            }
+
+            InvalidateVisual();
+        }
+    }
+
+    private static void SetNodeFromOriginal(PathNode node, (Point2D A, Point2D I, Point2D O) original, Vector2D delta)
+    {
+        node.Anchor = original.A + delta;
+        node.InHandle = original.I + delta;
+        node.OutHandle = original.O + delta;
+    }
+
+    private void NodeRelease()
+    {
+        if (_nodePath is not null && _nodeBefore is not null && _gestureMoved)
+        {
+            _vm!.Execute(new GeometryReplaceCommand(
+                _nodePath, _nodeBefore, _nodePath.GeometrySnapshot(),
+                _nodeGrabHandle ? "Edit handle" : "Move node"));
+        }
+
+        if (_segmentPath is not null && _segmentBefore is not null && _gestureMoved)
+        {
+            _vm!.Execute(new GeometryReplaceCommand(
+                _segmentPath, _segmentBefore, _segmentPath.GeometrySnapshot(), "Move segment"));
+        }
+
+        _nodePath = null;
+        _nodeSub = null;
+        _nodeBefore = null;
+        _segmentPath = null;
+        _segmentSub = null;
+        _segmentBefore = null;
+        _segmentNodeA = null;
+        _segmentNodeB = null;
+        _gestureMoved = false;
+    }
+
+    // ------------------------------------------------------------------
+    // Pen tool
+    // ------------------------------------------------------------------
+
+    private void PenPress(Point2D model)
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        // Clicking the start anchor of the active path closes (and finalises) it.
+        if (_penPath is not null && _penPath.SubPaths[0].Nodes.Count >= 2 &&
+            _penPath.SubPaths[0].Nodes[0].Anchor.DistanceTo(model) <= PickTolerance * 2.5)
+        {
+            _penClosePending = true;
+            _penBefore = _penPath.GeometrySnapshot();
+            return;
+        }
+
+        if (_penPath is null)
+        {
+            _penPath = new PathItem { Name = "Path", Stroke = StrokeSpec.Hairline(ColorRgb.Black) };
+            _penPath.AddSubPath(closed: false);
+            _vm.Execute(new AddItemCommand(_vm.TargetLayer(), _penPath));
+            _penBefore = _penPath.GeometrySnapshot();
+        }
+        else
+        {
+            _penBefore = _penPath.GeometrySnapshot();
+        }
+
+        SubPath sub = _penPath.SubPaths[0];
+        _penNode = sub.AppendNode(model);
+        _dragStartModel = model;
+        InvalidateVisual();
+    }
+
+    private void PenDrag(Point2D model)
+    {
+        if (_penNode is null)
+        {
+            return;
+        }
+
+        if ((model - _dragStartModel).IsZero)
+        {
+            return;
+        }
+
+        _penNode.OutHandle = model;
+        InvalidateVisual();
+    }
+
+    private void PenRelease(Point2D model)
+    {
+        if (_penClosePending && _penPath is not null)
+        {
+            _penPath.SubPaths[0].IsClosed = true;
+            CommitPenGeometry("Close path");
+            FinalizePen(select: true);
+            return;
+        }
+
+        if (_penPath is not null && _penNode is not null)
+        {
+            CommitPenGeometry(_penNode.OutHandle != _penNode.Anchor ? "Add curve" : "Add point");
+        }
+
+        _penNode = null;
+    }
+
+    private void CommitPenGeometry(string description)
+    {
+        if (_penPath is null || _penBefore is null)
+        {
+            return;
+        }
+
+        PathItem after = _penPath.GeometrySnapshot();
+        _vm!.Execute(new GeometryReplaceCommand(_penPath, _penBefore, after, description));
+        _penNode = null;
+        _penBefore = null;
+        _penClosePending = false;
+        InvalidateVisual();
+    }
+
+    /// <summary>Ends the active pen path. Stray single-anchor paths are removed;
+    /// finished paths become the selection so the tree highlights them.</summary>
+    private void FinalizePen(bool select = true)
+    {
+        if (_penPath is null)
+        {
+            return;
+        }
+
+        if (_penPath.SubPaths[0].Nodes.Count < 2)
+        {
+            _vm!.Execute(new RemoveItemCommand(_penPath));
+        }
+        else if (select)
+        {
+            _vm!.SelectObject(_penPath);
+        }
+
+        _penPath = null;
+        _penNode = null;
+        _penBefore = null;
+        _penClosePending = false;
+        InvalidateVisual();
+    }
+
+    // ------------------------------------------------------------------
+    // Shape tools
+    // ------------------------------------------------------------------
+
+    private void CreateShape(bool rect)
+    {
+        if (_vm is null || _shapeStart is null)
+        {
+            _shapeStart = null;
+            return;
+        }
+
+        Point2D a = _shapeStart.Value;
+        Point2D b = _shapeCurrent;
+        _shapeStart = null;
+        InvalidateVisual();
+
+        if (a.DistanceTo(b) < PickTolerance)
+        {
+            return; // a click, not a drag — no shape
+        }
+
+        Rect2D box = Rect2D.FromPoints(a, b);
+        PathItem shape = rect
+            ? PathFactory.CreateRectangle("Rectangle", box)
+            : PathFactory.CreateEllipse("Ellipse",
+                new Point2D((a.X + b.X) / 2, (a.Y + b.Y) / 2),
+                Math.Abs(box.Width) / 2,
+                Math.Abs(box.Height) / 2);
+        shape.Stroke = StrokeSpec.Hairline(ColorRgb.Black);
+        shape.Fill = FillSpec.None;
+
+        _vm.Execute(new AddItemCommand(_vm.TargetLayer(), shape));
+        _vm.SelectObject(shape);
+        _vm.Status = rect ? "Rectangle created" : "Ellipse created";
     }
 
     // ------------------------------------------------------------------
@@ -800,20 +1069,31 @@ public sealed class CanvasWorkspace : Control
         context.DrawGeometry(fillVisible ? fillBrush : null, strokeVisible ? strokePen : null, geometry);
     }
 
-    /// <summary>Selection chrome, node handles and the pen preview overlay.</summary>
+    /// <summary>Everything drawn above the artwork: selection chrome, node/segment
+    /// overlays, shape previews and the pen rubber band.</summary>
     private void PaintOverlays(DrawingContext context)
     {
-        if (_viewModel is null)
+        if (_vm is null)
         {
             return;
         }
 
-        EditorTool tool = _viewModel.Tool;
-        if (_viewModel.Selection is PathItem selected)
+        EditorTool tool = _vm.Tool;
+        foreach (PathItem path in _vm.SelectedPaths())
         {
-            // Node tool exposes full anchors/handles; the select tool draws a
-            // light bounding box around the picked path.
-            PaintNodeOverlay(context, selected, fullNodeUi: tool == EditorTool.Node);
+            bool editNodes = tool == EditorTool.Node;
+            bool hasSegments = _vm.SelectedSegments().Any(s => s.Path == path);
+            PaintObjectChrome(context, path, showNodes: editNodes, showSegments: editNodes || hasSegments);
+        }
+
+        if (_vm.HasSegmentSelection)
+        {
+            PaintSegmentHighlights(context);
+        }
+
+        if ((tool is EditorTool.Rectangle or EditorTool.Ellipse) && _shapeStart is { } start)
+        {
+            PaintShapePreview(context, start, _shapeCurrent, rect: tool == EditorTool.Rectangle);
         }
 
         if (tool == EditorTool.Pen && _penPath is not null && _penPath.SubPaths[0].Nodes.Count > 0)
@@ -822,32 +1102,26 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
-    /// <summary>
-    /// Draws anchors/handles of the selected path. In node tool every node is
-    /// drawn; the select tool draws a light bounding box only.
-    /// </summary>
-    private void PaintNodeOverlay(DrawingContext context, PathItem path, bool fullNodeUi)
+    private void PaintObjectChrome(DrawingContext context, PathItem path, bool showNodes, bool showSegments)
     {
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
-        var anchorPen = new Pen(accent, 1.0);
+        var pen = new Pen(accent, 1.0);
         double half = Math.Max(2.0 / _layout.Zoom, 0.5);
 
-        if (!fullNodeUi)
+        Rect2D box = path.BoundingBox();
+        if (!box.IsEmpty)
         {
-            Rect2D box = path.BoundingBox();
-            if (box.IsEmpty)
-            {
-                return;
-            }
-
             Point tl = ModelToScreen(new Point2D(box.Left, box.Top));
             var screen = new Rect(tl.X, tl.Y, box.Width * _layout.Zoom, box.Height * _layout.Zoom);
-            var selBrush = new SolidColorBrush(Color.FromArgb(60, 0x19, 0x76, 0xD2));
-            context.DrawRectangle(selBrush, anchorPen, screen);
+            var selBrush = new SolidColorBrush(Color.FromArgb(45, 0x19, 0x76, 0xD2));
+            context.DrawRectangle(selBrush, pen, screen);
+        }
+
+        if (!showNodes)
+        {
             return;
         }
 
-        // Node tool: handles then anchors so anchors stay clickable on top.
         foreach (SubPath sub in path.SubPaths)
         {
             foreach (PathNode node in sub.Nodes)
@@ -869,15 +1143,15 @@ public sealed class CanvasWorkspace : Control
                 Point anchor = ModelToScreen(node.Anchor);
                 if (!node.HasStraightIncoming)
                 {
-                    context.DrawEllipse(Brushes.White, anchorPen, ModelToScreen(node.InHandle), half, half);
+                    context.DrawEllipse(Brushes.White, pen, ModelToScreen(node.InHandle), half, half);
                 }
 
                 if (!node.HasStraightOutgoing)
                 {
-                    context.DrawEllipse(Brushes.White, anchorPen, ModelToScreen(node.OutHandle), half, half);
+                    context.DrawEllipse(Brushes.White, pen, ModelToScreen(node.OutHandle), half, half);
                 }
 
-                context.DrawRectangle(Brushes.White, anchorPen,
+                context.DrawRectangle(Brushes.White, pen,
                     new Rect(anchor.X - half, anchor.Y - half, half * 2, half * 2));
             }
         }
@@ -885,8 +1159,93 @@ public sealed class CanvasWorkspace : Control
 
     private void DrawHandleLine(DrawingContext context, Point from, Point to)
     {
-        var lineBrush = new SolidColorBrush(Color.FromArgb(220, 0x76, 0x76, 0x76));
+        var lineBrush = new SolidColorBrush(Color.FromArgb(210, 0x76, 0x76, 0x76));
         context.DrawLine(new Pen(lineBrush, 1.0), from, to);
+    }
+
+    private void PaintSegmentHighlights(DrawingContext context)
+    {
+        var accent = new SolidColorBrush(Color.FromRgb(0xE6, 0x6A, 0x00));
+        var pen = new Pen(accent, Math.Max(2.5, 3.0 * _layout.Zoom));
+        var handlePen = new Pen(new SolidColorBrush(Color.FromRgb(0xC6, 0x4A, 0x00)), 1.0);
+        double half = Math.Max(2.0 / _layout.Zoom, 0.5);
+
+        foreach ((PathItem path, int sub, int seg) in _vm!.SelectedSegments())
+        {
+            if (sub >= path.SubPaths.Count || path.SubPaths[sub].SegmentCount <= seg)
+            {
+                continue;
+            }
+
+            SubPath sp = path.SubPaths[sub];
+            CubicBezier curve = sp.GetSegment(seg);
+
+            // 1) The segment itself, highlighted.
+            var geometry = new StreamGeometry();
+            using (StreamGeometryContext g = geometry.Open())
+            {
+                Point p0 = ModelToScreen(curve.P0);
+                g.BeginFigure(p0, false);
+                if (Near(ModelToScreen(curve.P1), p0) && Near(ModelToScreen(curve.P2), ModelToScreen(curve.P3)))
+                {
+                    g.LineTo(ModelToScreen(curve.P3));
+                }
+                else
+                {
+                    g.CubicBezierTo(ModelToScreen(curve.P1), ModelToScreen(curve.P2), ModelToScreen(curve.P3));
+                }
+
+                g.EndFigure(false);
+            }
+
+            context.DrawGeometry(null, pen, geometry);
+
+            // 2) For a Bézier segment also reveal its two control handles so the
+            //    curve can be reshaped directly (Illustrator behaviour). The start
+            //    node's outgoing handle and the end node's incoming handle define
+            //    this segment's shape.
+            (int startNode, int endNode) = sp.SegmentEndNodes(seg);
+            PathNode start = sp.Nodes[startNode];
+            PathNode end = sp.Nodes[endNode];
+
+            Point anchorStart = ModelToScreen(start.Anchor);
+            Point anchorEnd = ModelToScreen(end.Anchor);
+
+            if (!start.HasStraightOutgoing)
+            {
+                Point handle = ModelToScreen(start.OutHandle);
+                context.DrawLine(handlePen, anchorStart, handle);
+                context.DrawEllipse(Brushes.White, handlePen, handle, half, half);
+            }
+
+            if (!end.HasStraightIncoming)
+            {
+                Point handle = ModelToScreen(end.InHandle);
+                context.DrawLine(handlePen, anchorEnd, handle);
+                context.DrawEllipse(Brushes.White, handlePen, handle, half, half);
+            }
+        }
+    }
+
+    private void PaintShapePreview(DrawingContext context, Point2D a, Point2D b, bool rect)
+    {
+        var previewPen = new Pen(new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2)), 1.0);
+        previewPen.DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0);
+        Rect2D box = Rect2D.FromPoints(a, b);
+        Point tl = ModelToScreen(new Point2D(box.Left, box.Top));
+        var screen = new Rect(tl.X, tl.Y, box.Width * _layout.Zoom, box.Height * _layout.Zoom);
+
+        if (rect)
+        {
+            context.DrawRectangle(null, previewPen, screen);
+        }
+        else
+        {
+            context.DrawEllipse(null, previewPen,
+                ModelToScreen(new Point2D((a.X + b.X) / 2, (a.Y + b.Y) / 2)),
+                Math.Max(0, box.Width / 2 * _layout.Zoom),
+                Math.Max(0, box.Height / 2 * _layout.Zoom));
+        }
     }
 
     private void PaintPenOverlay(DrawingContext context)
@@ -896,14 +1255,11 @@ public sealed class CanvasWorkspace : Control
         previewPen.DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0);
 
         Point last = ModelToScreen(sub.Nodes[^1].Anchor);
-
-        // Rubber band from the last anchor to the hovered position.
-        if (_hoverModel is { } hover && sub.Nodes.Count >= 1)
+        if (_hoverModel is { } hover)
         {
             context.DrawLine(previewPen, last, ModelToScreen(hover));
         }
 
-        // First anchor indicator for "click here to close".
         if (sub.Nodes.Count >= 2)
         {
             Point start = ModelToScreen(sub.Nodes[0].Anchor);
@@ -920,7 +1276,7 @@ public sealed class CanvasWorkspace : Control
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (_viewModel is null)
+        if (_vm is null)
         {
             return;
         }
@@ -928,29 +1284,49 @@ public sealed class CanvasWorkspace : Control
         switch (e.Key)
         {
             case Key.V:
-                _viewModel.Tool = EditorTool.Select;
-                FinalizePen();
+                _vm.Tool = EditorTool.Select;
+                FinalizePen(select: false);
                 e.Handled = true;
                 break;
 
             case Key.A:
-                _viewModel.Tool = EditorTool.Node;
-                FinalizePen();
+                _vm.Tool = EditorTool.Node;
+                FinalizePen(select: false);
                 e.Handled = true;
                 break;
 
             case Key.P:
-                _viewModel.Tool = EditorTool.Pen;
+                _vm.Tool = EditorTool.Pen;
+                e.Handled = true;
+                break;
+
+            case Key.M:
+                _vm.Tool = EditorTool.Rectangle;
+                FinalizePen();
+                e.Handled = true;
+                break;
+
+            case Key.L:
+                _vm.Tool = EditorTool.Ellipse;
+                FinalizePen();
                 e.Handled = true;
                 break;
 
             case Key.Delete:
-                _viewModel.DeleteSelection();
+                if (_vm.HasSegmentSelection)
+                {
+                    _vm.ClearSelection();
+                }
+                else
+                {
+                    _vm.DeleteSelection();
+                }
+
                 e.Handled = true;
                 break;
 
             case Key.Escape or Key.Enter:
-                FinalizePen();
+                FinalizePen(select: false);
                 e.Handled = true;
                 break;
         }
