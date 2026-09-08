@@ -8,6 +8,11 @@
          Trimming would break deserialization at runtime; disable trimming until
          the serializer moves to a JsonSerializerContext (project plan M9). -->
     <PublishTrimmed>false</PublishTrimmed>
+    <!-- SkiaSharp/HarfBuzz ship native .a stubs for wasm. They are only linked
+         when WasmBuildNative (or AOT) is on — without it the canvas renderer
+         fails at runtime with "type initializer for SKImageInfo". Requires the
+         wasm-tools workload (emscripten), installed in CI and the Dockerfile. -->
+    <WasmBuildNative>true</WasmBuildNative>
     <AssemblyName>VCCad.App.Browser</AssemblyName>
     <RootNamespace>VCCad.App.Browser</RootNamespace>
     <Description>WebAssembly host for the VCCad editor shell (browser hosting of VCCad.App).</Description>

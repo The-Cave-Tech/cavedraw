@@ -46,7 +46,9 @@ jobs:
           dotnet test tests/VCCad.Api.Integration.Tests -c Release --no-build --no-restore
 
       - name: Publish WebAssembly editor (smoke)
-        run: dotnet publish src/VCCad.App.Browser -c Release -o artifacts/wasm
+        run: |
+          dotnet workload install wasm-tools
+          dotnet publish src/VCCad.App.Browser -c Release -o artifacts/wasm
 
       - name: Verify wasm artifacts
         run: |

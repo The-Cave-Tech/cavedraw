@@ -40,9 +40,11 @@ RUN dotnet test tests/VCCad.Geometry.Tests -c Release --no-build --no-restore --
 # Publish the API host (its wwwroot is filled from the wasm output below).
 RUN dotnet publish src/VCCad.Api -c Release -o /app/api --no-restore
 
-# Publish the WebAssembly editor. This runs in the same stage as the restore
-# so the NuGet package cache is present (a fresh stage would need re-restore).
-RUN dotnet publish src/VCCad.App.Browser -c Release -o /app/www --no-restore
+# Publish the WebAssembly editor. Runs in the same stage as the restore so the
+# NuGet cache is present; the wasm-tools workload (emscripten) is required to
+# link the SkiaSharp/HarfBuzz native stubs (WasmBuildNative=true).
+RUN dotnet workload install wasm-tools \
+ && dotnet publish src/VCCad.App.Browser -c Release -o /app/www --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
