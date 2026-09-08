@@ -526,7 +526,7 @@ public sealed class CanvasWorkspace : Control
 
     private void PenDrag(Point2D model)
     {
-        if (_penNode is null || _penBefore is null || _penPath is null)
+        if (_penNode is null || _penPath is null)
         {
             return;
         }
@@ -539,11 +539,10 @@ public sealed class CanvasWorkspace : Control
 
         _gestureMoved = true;
 
-        // Live: pull the outgoing handle of the anchor being placed towards the
-        // cursor. Restoring from the pre-press snapshot keeps this a pure function
-        // of the total drag.
-        _penPath.RestoreGeometryFrom(_penBefore);
-        _penNode = _penPath.SubPaths[0].Nodes[^1];
+        // Live: pull the outgoing handle of the anchor being placed toward the
+        // cursor. The anchor stays at its press point (Illustrator behaviour).
+        // We must NOT restore the pre-press snapshot here — it predates the node
+        // we just appended, and restoring would drop it.
         _penNode.OutHandle = model;
         InvalidateVisual();
     }
