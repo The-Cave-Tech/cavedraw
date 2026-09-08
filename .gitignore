@@ -31,6 +31,8 @@ packages/
 # Avalonia browser publish output
 wwwroot/
 **/publish/
+!src/VCCad.App.Browser/wwwroot/
+!src/VCCad.App.Browser/wwwroot/**
 
 # Test results
 TestResults/
