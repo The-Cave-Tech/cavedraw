@@ -124,15 +124,27 @@ public partial class EditorView : UserControl
             ObjectTree.Items.Clear();
         }
 
+        // Objects whose whole bounds lie outside any artboard (i.e. living on the
+        // pasteboard) are shown at the top level of the tree — not nested under an
+        // artboard — mirroring how artwork "off the page" reads in Illustrator.
+        var pasteboardItems = new List<LayerItem>();
+
         foreach (Artboard artboard in _viewModel.Document.Artboards)
         {
-            var boardNode = MakeNode($"{artboard.Name}", artboard, isHeader: true);
+            var boardNode = MakeNode(artboard.Name, artboard, isHeader: true);
             foreach (Layer layer in artboard.Layers)
             {
                 var layerNode = MakeNode(FormatLayer(layer), layer, isHeader: true);
                 foreach (LayerItem child in layer.Children)
                 {
-                    AddItemNode(layerNode, child);
+                    if (IntersectsArtboard(child, artboard))
+                    {
+                        AddItemNode(layerNode, child);
+                    }
+                    else
+                    {
+                        pasteboardItems.Add(child);
+                    }
                 }
 
                 boardNode.Items.Add(layerNode);
@@ -141,7 +153,50 @@ public partial class EditorView : UserControl
             ObjectTree.Items.Add(boardNode);
         }
 
+        if (pasteboardItems.Count > 0)
+        {
+            var pasteNode = MakeNode("Pasteboard (off-artboard)", null, isHeader: true);
+            foreach (LayerItem item in pasteboardItems)
+            {
+                AddItemNode(pasteNode, item);
+            }
+
+            ObjectTree.Items.Add(pasteNode);
+        }
+
         SyncTreeToSelection();
+    }
+
+    /// <summary>World-space bounds of an item (identity-transform hierarchies).</summary>
+    private static Rect2D BoundsOf(LayerItem item)
+    {
+        switch (item)
+        {
+            case PathItem path:
+                return path.BoundingBox();
+            case ArtGroup group:
+                return group.Transform.Transform(group.BoundingBox());
+            default:
+                return Rect2D.Empty;
+        }
+    }
+
+    /// <summary>
+    /// True when the item's <em>whole</em> bounds overlap the artboard. Individual
+    /// points/segments poking off the page do not count — only whole objects.
+    /// </summary>
+    private static bool IntersectsArtboard(LayerItem item, Artboard artboard)
+    {
+        Rect2D bounds = BoundsOf(item);
+        if (bounds.IsEmpty)
+        {
+            return true; // nothing measurable — keep it where its layer is
+        }
+
+        // Overlap test (inclusive edges) against a slightly enlarged artboard so
+        // a shape sitting flush on the edge is still treated as on the page.
+        Rect2D page = artboard.Bounds.Inflated(0.25);
+        return bounds.Intersects(page);
     }
 
     private static string FormatLayer(Layer layer)

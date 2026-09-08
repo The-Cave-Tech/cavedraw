@@ -81,7 +81,7 @@ public sealed class CanvasWorkspace : Control
     // Segment bend mode: dragging a STRAIGHT segment pulls out its (collapsed)
     // control handles so the line bends into a curve that follows the pointer.
     private bool _segmentBendMode;
-    private Point2D _bendMidpoint;
+    private double _bendGrabU;
 
     // Whether the current gesture actually displaced anything (commit gating).
     private bool _gestureMoved;
@@ -511,7 +511,8 @@ public sealed class CanvasWorkspace : Control
 
         // Shift constrains the drag to the dominant axis (Illustrator behaviour):
         // the axis with the largest total displacement wins.
-        Vector2D delta = SnapTranslation(model - _dragStartModel);
+        Vector2D raw = model - _dragStartModel;
+        Vector2D delta = _shiftHeld ? SnapTranslation(raw) : raw;
         if (delta.IsZero)
         {
             return;
@@ -747,15 +748,20 @@ public sealed class CanvasWorkspace : Control
         // A "line" is just a cubic whose two control points sit on the endpoints.
         // Dragging such a straight segment should bend it: pull the collapsed
         // handles out toward the pointer instead of sliding the whole segment.
-        PathNode from = sub.Nodes[a];
-        PathNode to = sub.Nodes[b];
-        bool straight = from.OutHandle.NearlyEquals(from.Anchor)
-                        && to.InHandle.NearlyEquals(to.Anchor);
-        _segmentBendMode = straight && a != b;
-        _bendMidpoint = new Point2D(
-            (_segmentOrigA.A.X + _segmentOrigB.A.X) / 2.0,
-            (_segmentOrigA.A.Y + _segmentOrigB.A.Y) / 2.0);
+        // The grab parameter u locates where on the segment the pointer grabbed
+        // (projected onto the A-B chord). During the drag we bend the curve so it
+        // passes through the pointer at that same u — the endpoints never move.
+        Point2D a0 = _segmentOrigA.A;
+        Point2D b0 = _segmentOrigB.A;
+        Vector2D chord = b0 - a0;
+        double u = 0.5;
+        if (chord.LengthSquared > 1e-9)
+        {
+            u = MathUtils.Clamp01((model - a0).Dot(chord) / chord.LengthSquared);
+        }
 
+        _segmentBendMode = a != b;
+        _bendGrabU = MathUtils.Clamp(u, 0.1, 0.9);
         _dragStartModel = model;
         _gestureMoved = false;
     }
@@ -804,40 +810,36 @@ public sealed class CanvasWorkspace : Control
 
         if (_segmentPath is not null && _segmentNodeA is not null && _segmentNodeB is not null)
         {
-            if (_segmentBendMode)
+            if (!_segmentBendMode)
             {
-                // Bend: endpoints stay fixed; recompute the two control handles
-                // from the original anchors so the curve passes through the
-                // pointer. For a symmetric handle offset h, the cubic's midpoint
-                // is mid + 3h/4, so h = 4/3 (pointer − mid).
-                Vector2D w = _shiftHeld ? SnapTranslation(model - _bendMidpoint) : model - _bendMidpoint;
-                if (w.IsZero)
-                {
-                    return;
-                }
-
-                _gestureMoved = true;
-                Vector2D h = w * (4.0 / 3.0);
-                _segmentNodeA.OutHandle = _segmentOrigA.A + h;
-                _segmentNodeB.InHandle = _segmentOrigB.A + h;
-                InvalidateVisual();
                 return;
             }
 
-            Vector2D delta = model - _dragStartModel;
-            if (_shiftHeld)
+            // A symmetric handle offset h makes the cubic pass through the point
+            // A(1−u) + B·u + h·3u(1−u) at parameter u, so solve for h to make the
+            // curve follow the pointer while A and B stay put.
+            Point2D a0 = _segmentOrigA.A;
+            Point2D b0 = _segmentOrigB.A;
+            double u = _bendGrabU;
+            double spread = 3.0 * u * (1.0 - u);
+            if (spread < 1e-6)
             {
-                delta = SnapTranslation(delta);
+                return;
             }
 
-            if (delta.IsZero)
+            Point2D target = _shiftHeld
+                ? _dragStartModel + SnapTranslation(model - _dragStartModel)
+                : model;
+            Point2D baseline = a0 + (b0 - a0) * u;
+            Vector2D h = (target - baseline) / spread;
+            if (h.LengthSquared < 1e-12)
             {
                 return;
             }
 
             _gestureMoved = true;
-            SetNodeFromOriginal(_segmentNodeA, _segmentOrigA, delta);
-            SetNodeFromOriginal(_segmentNodeB, _segmentOrigB, delta);
+            _segmentNodeA.OutHandle = a0 + h;
+            _segmentNodeB.InHandle = b0 + h;
             InvalidateVisual();
         }
     }
