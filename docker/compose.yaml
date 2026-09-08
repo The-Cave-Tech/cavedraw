@@ -1,0 +1,18 @@
+# VCCad compose — local/remote containerised run.
+# Target host: user@host (Docker 29.x). See project plan §6.
+
+services:
+  vccad:
+    image: vccad:0.1.0
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped

@@ -1,0 +1,24 @@
+# =============================================================================
+# VCCad - .dockerignore
+# Keep the build context lean; obj/bin are rebuilt inside the image anyway.
+# =============================================================================
+
+**/bin/
+**/obj/
+.git
+.github
+.vs
+.idea
+.vscode
+artifacts
+TestResults
+*.log
+*.trx
+coverage
+docker-compose.yml
+docker/compose.yaml
+docker/.env
+README.md
+projectplan.md
+docs/
+scripts/

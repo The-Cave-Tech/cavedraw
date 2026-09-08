@@ -1,0 +1,62 @@
+# =============================================================================
+# VCCad — CI: build, test, and publish the WebAssembly editor.
+# Runs on every push to main and every pull request (trunk-based, §6).
+# =============================================================================
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_NOLOGO: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore VCCad.sln
+
+      - name: Build
+        # Note: no -warnaserror — the wasm SDK emits a benign NativeFileReference
+        # info message unless wasm AOT is enabled (see VCCad.App.Browser).
+        run: dotnet build VCCad.sln -c Release --no-restore
+
+      - name: Unit + integration tests
+        run: |
+          dotnet test tests/VCCad.Geometry.Tests -c Release --no-build --no-restore
+          dotnet test tests/VCCad.Core.Tests -c Release --no-build --no-restore
+          dotnet test tests/VCCad.Pdf.Tests -c Release --no-build --no-restore
+          dotnet test tests/VCCad.Api.Integration.Tests -c Release --no-build --no-restore
+
+      - name: Publish WebAssembly editor (smoke)
+        run: dotnet publish src/VCCad.App.Browser -c Release -o artifacts/wasm
+
+      - name: Verify wasm artifacts
+        run: |
+          test -f artifacts/wasm/wwwroot/_framework/dotnet.js
+          test -f artifacts/wasm/wwwroot/index.html
+          test -f artifacts/wasm/VCCad.App.Browser.dll
+          echo "wasm bundle OK"
+
+      - name: Upload wasm bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: vccad-wasm
+          path: artifacts/wasm/wwwroot
