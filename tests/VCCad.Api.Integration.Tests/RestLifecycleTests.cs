@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using VCCad.Core.Model;
 using Xunit;
 
 namespace VCCad.Api.Integration.Tests;
@@ -81,6 +82,27 @@ public class RestLifecycleTests : ApiTestBase
 
         using HttpResponseMessage gone = await client.GetAsync($"/api/v1/documents/{id}");
         Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpsertRoundTripsTheCanonicalModel()
+    {
+        // Build a document locally, push it with PUT, and confirm the server's
+        // GET returns byte-identical canonical JSON (save/load contract).
+        CadDocument original = CadDocument.CreateDefault("upsert-doc");
+        original.Artboards[0].Layers[0].AddItem(
+            VCCad.Core.Model.PathFactory.CreateEllipse("dot", new Geometry.Point2D(50, 50), 20, 10));
+        string payload = VCCad.Core.Serialization.VccadDocumentSerializer.Serialize(original);
+
+        using HttpClient client = Factory.CreateClient();
+        using var putContent = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+        using HttpResponseMessage put = await client.PutAsync($"/api/v1/documents/{original.Id}", putContent);
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+
+        using HttpResponseMessage get = await client.GetAsync($"/api/v1/documents/{original.Id}");
+        Assert.Equal(HttpStatusCode.OK, get.StatusCode);
+        string fetched = await get.Content.ReadAsStringAsync();
+        Assert.Equal(payload, fetched);
     }
 
     [Fact]

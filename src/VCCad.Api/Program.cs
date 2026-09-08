@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using VCCad.Api.JsonRpc;
 using VCCad.Api.Services;
 using VCCad.Core.Model;
@@ -79,6 +80,33 @@ api.MapDelete("/documents/{id:guid}", (Guid id, IDocumentStore store) =>
         return Results.NoContent();
     })
     .WithName("DeleteDocument");
+
+// Upsert: replace (or create) a stored document from its canonical model JSON.
+// The body is the exact VccadDocumentSerializer payload the editor saves.
+api.MapPut("/documents/{id:guid}", async (Guid id, HttpRequest request, IDocumentStore store) =>
+    {
+        using var reader = new StreamReader(request.Body);
+        string payload = await reader.ReadToEndAsync();
+        CadDocument incoming;
+        try
+        {
+            incoming = VccadDocumentSerializer.Deserialize(payload);
+        }
+        catch (Exception ex) when (ex is FormatException or NotSupportedException or JsonException)
+        {
+            return Results.BadRequest(new { error = $"Invalid document payload: {ex.Message}" });
+        }
+
+        bool replaced = store.Find(id) is not null;
+        if (replaced)
+        {
+            store.Remove(id);
+        }
+
+        store.Add(new DocumentSession { Document = incoming, Stack = new VCCad.Core.Commands.CommandStack() });
+        return Results.Ok(new { id = incoming.Id, name = incoming.Name, saved = true, replaced });
+    })
+    .WithName("UpsertDocument");
 
 // --- JSON-RPC over WebSocket --------------------------------------------------
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });

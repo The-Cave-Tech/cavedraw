@@ -14,6 +14,8 @@
     <Menu Grid.Row="0">
       <MenuItem Header="_File">
         <MenuItem Header="_New" Click="OnNew"/>
+        <MenuItem Header="_Open from Server…" Click="OnOpen"/>
+        <MenuItem Header="_Save to Server" Click="OnSave"/>
         <Separator/>
         <MenuItem Header="_Export PDF…" Click="OnExportPdf"/>
         <Separator/>
@@ -22,6 +24,13 @@
       <MenuItem Header="_Edit">
         <MenuItem Header="_Undo" Click="OnUndo"/>
         <MenuItem Header="_Redo" Click="OnRedo"/>
+        <Separator/>
+        <MenuItem Header="_Delete" Click="OnDelete"/>
+      </MenuItem>
+      <MenuItem Header="_Tools">
+        <MenuItem Header="Selection (_V)" Click="OnToolSelect"/>
+        <MenuItem Header="Direct Selection / _Nodes (A)" Click="OnToolNode"/>
+        <MenuItem Header="_Pen (P)" Click="OnToolPen"/>
       </MenuItem>
       <MenuItem Header="_Object">
         <MenuItem Header="_Rectangle" Click="OnAddRectangle"/>
@@ -36,13 +45,19 @@
       </MenuItem>
     </Menu>
 
-    <!-- Toolbar (Avalonia has no ToolBar control; a button strip keeps the
-         Windows look without a third-party dependency) -->
+    <!-- Toolbar -->
     <Border Grid.Row="1" BorderBrush="#CCCCCC" BorderThickness="0,0,0,1" Padding="4,2">
       <StackPanel Orientation="Horizontal" Spacing="4">
-        <Button Content="New" Click="OnNew"/>
-        <Button Content="Undo" Click="OnUndo"/>
-        <Button Content="Redo" Click="OnRedo"/>
+        <Button x:Name="NewButton" Content="New" Click="OnNew"/>
+        <Button x:Name="OpenButton" Content="Open" Click="OnOpen"/>
+        <Button x:Name="SaveButton" Content="Save" Click="OnSave"/>
+        <Border Width="1" Background="#CCCCCC" Margin="4,2"/>
+        <Button x:Name="UndoButton" Content="Undo" Click="OnUndo"/>
+        <Button x:Name="RedoButton" Content="Redo" Click="OnRedo"/>
+        <Border Width="1" Background="#CCCCCC" Margin="4,2"/>
+        <Button x:Name="ToolSelectButton" Content="Select (V)" Click="OnToolSelect"/>
+        <Button x:Name="ToolNodeButton" Content="Nodes (A)" Click="OnToolNode"/>
+        <Button x:Name="ToolPenButton" Content="Pen (P)" Click="OnToolPen"/>
         <Border Width="1" Background="#CCCCCC" Margin="4,2"/>
         <Button Content="Rectangle" Click="OnAddRectangle"/>
         <Button Content="Ellipse" Click="OnAddEllipse"/>
@@ -54,26 +69,27 @@
       </StackPanel>
     </Border>
 
-    <!-- Dockable-pane workspace: configurable split panes either side of the
-         pasteboard. Drag-out/tab docking integration lands in milestone M5. -->
-    <Grid Grid.Row="2" ColumnDefinitions="230,4,*,4,260">
+    <!-- Dockable-pane workspace -->
+    <Grid Grid.Row="2" ColumnDefinitions="240,4,*,4,260">
       <DockPanel Grid.Column="0">
-        <TextBlock DockPanel.Dock="Top" Text="Layers" FontWeight="Bold" Margin="8,6"/>
-        <ListBox Name="LayersList" Margin="6"/>
+        <TextBlock DockPanel.Dock="Top" Text="Objects" FontWeight="Bold" Margin="8,6"/>
+        <TreeView x:Name="ObjectTree" Margin="4" SelectionChanged="OnTreeSelectionChanged"/>
       </DockPanel>
       <GridSplitter Grid.Column="1" Background="#DDDDDD" HorizontalAlignment="Stretch"/>
 
       <DockPanel Grid.Column="2">
-        <controls:CanvasWorkspace Name="Workspace" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+        <controls:CanvasWorkspace x:Name="Workspace" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
       </DockPanel>
 
       <GridSplitter Grid.Column="3" Background="#DDDDDD" HorizontalAlignment="Stretch"/>
 
       <DockPanel Grid.Column="4">
-        <TextBlock DockPanel.Dock="Top" Text="Appearance" FontWeight="Bold" Margin="8,6"/>
-        <StackPanel Margin="8,4" Spacing="4">
-          <TextBlock Text="Selected item properties appear here." TextWrapping="Wrap"/>
-          <TextBlock Name="SelectionInfo" Text="(no selection)" Foreground="#666666" TextWrapping="Wrap"/>
+        <TextBlock DockPanel.Dock="Top" Text="Properties" FontWeight="Bold" Margin="8,6"/>
+        <StackPanel Margin="8,4" Spacing="6">
+          <TextBlock Name="SelectionInfo" Text="(no selection)" TextWrapping="Wrap"/>
+          <TextBlock Text="Hints:" FontWeight="SemiBold"/>
+          <TextBlock Name="HintText" TextWrapping="Wrap" Foreground="#666666"
+                    Text="V — select/move · A — nodes/handles · P — pen&#10;Drag with middle or right mouse button to pan · Ctrl+wheel zooms"/>
         </StackPanel>
       </DockPanel>
     </Grid>
@@ -81,8 +97,8 @@
     <!-- Status bar -->
     <Border Grid.Row="3" BorderBrush="#CCCCCC" BorderThickness="0,1,0,0" Padding="8,3">
       <DockPanel>
-        <TextBlock DockPanel.Dock="Right" Name="ZoomLabel" Text="100%" Margin="8,0"/>
-        <TextBlock Name="StatusText" Text="Ready" TextTrimming="CharacterEllipsis"/>
+        <TextBlock DockPanel.Dock="Right" x:Name="ZoomLabel" Text="100%" Margin="8,0"/>
+        <TextBlock x:Name="StatusText" Text="Ready" TextTrimming="CharacterEllipsis"/>
       </DockPanel>
     </Border>
 
