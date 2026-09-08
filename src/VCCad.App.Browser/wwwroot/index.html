@@ -13,6 +13,19 @@
         <div class="vccad-splash">Loading VCCad…</div>
     </div>
     <script type="module" src="./main.js"></script>
+    <script>
+        // Remove the full-screen splash as soon as the Avalonia canvas exists so
+        // the (absolute-positioned) overlay never hides the running editor.
+        (function () {
+            var timer = setInterval(function () {
+                if (document.querySelector('#out canvas')) {
+                    var splash = document.querySelector('.vccad-splash');
+                    if (splash) splash.remove();
+                    clearInterval(timer);
+                }
+            }, 250);
+        })();
+    </script>
 </body>
 
 </html>
