@@ -307,4 +307,73 @@ public readonly record struct CubicBezier(Point2D P0, Point2D P1, Point2D P2, Po
             }
         }
     }
+
+    /// <summary>
+    /// Finds the point on the curve nearest to <paramref name="query"/> together
+    /// with its parameter t and the distance. This backs stroke picking, snapping
+    /// and the pen tool's hover preview.
+    ///
+    /// Algorithm:
+    /// <list type="bullet">
+    /// <item>A coarse scan of 24 samples localises the best bracket of t.</item>
+    /// <item>The result is refined with Newton's method on the squared-distance
+    /// function f(t) = |B(t) − q|², whose derivatives are
+    /// f′(t) = 2(B − q)·B′ and f″(t) = 2(|B′|² + (B − q)·B″). Newton converges
+    /// quadratically once the coarse scan has put us in the correct basin.</item>
+    /// <item>The final iterate is clamped to [0,1] so the answer always lies on
+    /// the curve (never on its extension).</item>
+    /// </list>
+    /// </summary>
+    /// <param name="query">The point to measure from (any location).</param>
+    /// <param name="t">Receives the parameter of the closest point.</param>
+    /// <param name="distance">Receives the closest distance.</param>
+    /// <param name="distanceTolerance">Convergence tolerance on the distance estimate.</param>
+    public void NearestPoint(Point2D query, out double t, out double distance, double distanceTolerance = 1e-4)
+    {
+        // Coarse scan: sample dense enough that no extremum can hide between two
+        // samples for a cubic (they are smooth), then Newton-refine the winner.
+        const int samples = 24;
+        double bestT = 0.0;
+        double bestDistanceSquared = double.PositiveInfinity;
+        for (int i = 0; i <= samples; i++)
+        {
+            double ti = i / (double)samples;
+            Point2D p = PointAt(ti);
+            double dsq = p.DistanceSquaredTo(query);
+            if (dsq < bestDistanceSquared)
+            {
+                bestDistanceSquared = dsq;
+                bestT = ti;
+            }
+        }
+
+        // Newton refinement of f'(t) = 0. Guard against a zero denominator
+        // (f'' = 0 when the curve is locally a straight line at constant speed).
+        const int iterations = 12;
+        for (int i = 0; i < iterations; i++)
+        {
+            Vector2D b = PointAt(bestT) - query;
+            Vector2D b1 = DerivativeAt(bestT);
+            Vector2D b2 = SecondDerivativeAt(bestT);
+
+            double numerator = b.Dot(b1);
+            double denominator = b1.LengthSquared + b.Dot(b2);
+            if (Math.Abs(denominator) <= MathUtils.Epsilon)
+            {
+                break;
+            }
+
+            double step = numerator / denominator;
+            bestT = MathUtils.Clamp01(bestT - step);
+
+            // Terminate when the Newton step stops moving us (quadratic basin).
+            if (Math.Abs(step) <= 1e-12)
+            {
+                break;
+            }
+        }
+
+        t = bestT;
+        distance = PointAt(t).DistanceTo(query);
+    }
 }

@@ -74,6 +74,78 @@ public sealed class PathItem : LayerItem
         return box;
     }
 
+    /// <summary>
+    /// Deep copy of the path's geometry only (subpaths + nodes); styling is not
+    /// copied. Used as the "before/after" snapshot for geometry edit commands.
+    /// </summary>
+    public PathItem GeometrySnapshot()
+    {
+        var copy = new PathItem();
+        foreach (SubPath sp in SubPaths)
+        {
+            copy.AddSubPath(sp.IsClosed);
+        }
+
+        for (int s = 0; s < SubPaths.Count; s++)
+        {
+            foreach (PathNode node in SubPaths[s].Nodes)
+            {
+                copy.SubPaths[s].Nodes.Add(new PathNode(node.Anchor, node.InHandle, node.OutHandle));
+            }
+        }
+
+        return copy;
+    }
+
+    /// <summary>Replaces this path's geometry with a snapshot's geometry (undo/redo).</summary>
+    public void RestoreGeometryFrom(PathItem snapshot)
+    {
+        SubPaths.Clear();
+        foreach (SubPath sp in snapshot.SubPaths)
+        {
+            var copy = AddSubPath(sp.IsClosed);
+            foreach (PathNode node in sp.Nodes)
+            {
+                copy.Nodes.Add(new PathNode(node.Anchor, node.InHandle, node.OutHandle));
+            }
+        }
+
+        NotifyPropertyChanged(nameof(SubPaths));
+    }
+
+    /// <summary>Translates every anchor and handle by <paramref name="delta"/> (in
+    /// the path's own coordinate space) — the "move object" geometry operation.</summary>
+    public void TranslateGeometryBy(Vector2D delta)
+    {
+        foreach (SubPath sp in SubPaths)
+        {
+            foreach (PathNode node in sp.Nodes)
+            {
+                node.Anchor += delta;
+                node.InHandle += delta;
+                node.OutHandle += delta;
+            }
+        }
+
+        NotifyPropertyChanged(nameof(SubPaths));
+    }
+
+    /// <summary>Translates a single node and its two handles by <paramref name="delta"/>.
+    /// Handles travel with the anchor so the adjacent curves keep their shape.</summary>
+    public void TranslateNode(SubPath sub, int nodeIndex, Vector2D delta)
+    {
+        if (nodeIndex < 0 || nodeIndex >= sub.Nodes.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(nodeIndex));
+        }
+
+        PathNode node = sub.Nodes[nodeIndex];
+        node.Anchor += delta;
+        node.InHandle += delta;
+        node.OutHandle += delta;
+        NotifyPropertyChanged(nameof(SubPaths));
+    }
+
     /// <inheritdoc/>
     public override LayerItem Clone()
     {
