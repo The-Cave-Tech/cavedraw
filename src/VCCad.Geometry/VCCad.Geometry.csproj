@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>VCCad.Geometry</AssemblyName>
+    <RootNamespace>VCCad.Geometry</RootNamespace>
+    <Description>Pure vector/geometry math kernel for VCCad. Dependency-free, headless-testable.</Description>
+  </PropertyGroup>
+
+</Project>

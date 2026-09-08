@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>VCCad.Core</AssemblyName>
+    <RootNamespace>VCCad.Core</RootNamespace>
+    <Description>VCCad document object model, styling, command/undo bus and lossless serializer.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VCCad.Geometry\VCCad.Geometry.csproj" />
+  </ItemGroup>
+
+</Project>

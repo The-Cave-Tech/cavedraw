@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>VCCad.Api</AssemblyName>
+    <RootNamespace>VCCad.Api</RootNamespace>
+    <Description>VCCad automation host: REST document lifecycle + JSON-RPC 2.0 over WebSocket; serves the Avalonia WASM editor.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VCCad.Core\VCCad.Core.csproj" />
+    <ProjectReference Include="..\VCCad.Pdf\VCCad.Pdf.csproj" />
+  </ItemGroup>
+
+</Project>

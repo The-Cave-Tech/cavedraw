@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>VCCad.Pdf</AssemblyName>
+    <RootNamespace>VCCad.Pdf</RootNamespace>
+    <Description>Lossless PDF writer/reader for VCCad documents (faithful rendering + embedded sidecar).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VCCad.Core\VCCad.Core.csproj" />
+    <ProjectReference Include="..\VCCad.Geometry\VCCad.Geometry.csproj" />
+  </ItemGroup>
+
+</Project>

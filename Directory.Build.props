@@ -1,0 +1,25 @@
+<!--
+  Directory.Build.props
+  Central compiler settings shared by every project in the repository.
+  Individual projects may override these with their own properties if needed.
+-->
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <Deterministic>true</Deterministic>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <Version>0.1.0</Version>
+    <Authors>VCCad contributors</Authors>
+    <Product>VCCad</Product>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+</Project>

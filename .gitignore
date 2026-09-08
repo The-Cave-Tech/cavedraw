@@ -1,0 +1,52 @@
+# =============================================================================
+# VCCad - .gitignore
+# Standard ignores for .NET / Avalonia / Docker / editor artifacts.
+# =============================================================================
+
+# --- .NET build output -------------------------------------------------------
+bin/
+obj/
+artifacts/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.bts
+*.tlb
+*.tlb.dSYM
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+*.nuget.props
+*.nuget.targets
+
+# IDEs
+.idea/
+.vs/
+.vscode/
+.ionide/
+
+# Avalonia browser publish output
+wwwroot/
+**/publish/
+
+# Test results
+TestResults/
+*.trx
+coverage/
+*.coverage
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Logs / secrets (never commit)
+*.log
+.env
+.env.*
+!.env.example
+*.pfx
+*.key
+secrets/
