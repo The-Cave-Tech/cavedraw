@@ -37,12 +37,11 @@ RUN dotnet test tests/VCCad.Geometry.Tests -c Release --no-build --no-restore --
  && dotnet test tests/VCCad.Pdf.Tests -c Release --no-build --no-restore --logger "console;verbosity=minimal" \
  && dotnet test tests/VCCad.Api.Integration.Tests -c Release --no-build --no-restore --logger "console;verbosity=minimal"
 
-# Publish the API host (its wwwroot is filled from the wasm stage below).
+# Publish the API host (its wwwroot is filled from the wasm output below).
 RUN dotnet publish src/VCCad.Api -c Release -o /app/api --no-restore
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS wasm
-WORKDIR /src
-COPY --from=build /src .
+# Publish the WebAssembly editor. This runs in the same stage as the restore
+# so the NuGet package cache is present (a fresh stage would need re-restore).
 RUN dotnet publish src/VCCad.App.Browser -c Release -o /app/www --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
@@ -50,7 +49,7 @@ WORKDIR /app
 RUN useradd --create-home --uid 10001 vccad
 
 COPY --from=build /app/api ./
-COPY --from=wasm /app/www/wwwroot ./wwwroot
+COPY --from=build /app/www/wwwroot ./wwwroot
 
 ENV ASPNETCORE_URLS=http://+:8080
 ENV DOTNET_NOLOGO=1
