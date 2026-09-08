@@ -28,6 +28,7 @@ public sealed class CanvasWorkspace : Control
     private Vector2D _offset;         // artwork top-left position on screen, px
     private Point _lastPointer;
     private bool _isPanning;
+    private bool _hasLaidOutOnce;
 
     /// <summary>The document being edited; assigning invalidates the canvas.</summary>
     public CadDocument? Document
@@ -59,6 +60,18 @@ public sealed class CanvasWorkspace : Control
     public CanvasWorkspace()
     {
         ClipToBounds = true;
+    }
+
+    protected override void OnSizeChanged(Avalonia.Controls.SizeChangedEventArgs e)
+    {
+        base.OnSizeChanged(e);
+        // The initial view offset is computed before layout gives us real bounds;
+        // on the first meaningful size, fit the artwork so it is actually visible.
+        if (!_hasLaidOutOnce && e.NewSize.Width > 10 && e.NewSize.Height > 10 && _document is not null)
+        {
+            _hasLaidOutOnce = true;
+            ZoomToFit();
+        }
     }
 
     // ------------------------------------------------------------------
