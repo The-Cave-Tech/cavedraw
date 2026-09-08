@@ -13,6 +13,12 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
+# Emscripten (from the wasm-tools workload) requires python on PATH.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 \
+ && ln -sf /usr/bin/python3 /usr/local/bin/python \
+ && rm -rf /var/lib/apt/lists/*
+
 # Restore first (cache-friendly layer). wasm-tools (emscripten) must be
 # present before restore because the browser project enables WasmBuildNative
 # to link the SkiaSharp/HarfBuzz native stubs.
