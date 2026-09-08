@@ -313,6 +313,7 @@ public sealed class CanvasWorkspace : Control
                 _shapeStart = model;
                 _shapeCurrent = model;
                 _vm!.ClearSelection();
+                _vm.ClearPointSelection();
                 break;
         }
     }
@@ -464,6 +465,7 @@ public sealed class CanvasWorkspace : Control
 
         _shiftToggleCandidate = null;
         _selectMoved = false;
+        _vm!.ClearPointSelection();
 
         PathItem? hit = HitTestTopPath(model);
         if (_shiftHeld)
@@ -674,6 +676,18 @@ public sealed class CanvasWorkspace : Control
             }
 
             BeginNodeDrag(pickPath, pick.Value, model);
+
+            // Anchor grabs become "point" selections (position-only editing);
+            // handle grabs edit the curve, so they drop any point selection.
+            if (pick.Value.IsInHandle || pick.Value.IsOutHandle)
+            {
+                _vm.ClearPointSelection();
+            }
+            else
+            {
+                _vm.SelectPoint(pickPath, pickPath.SubPaths.IndexOf(pick.Value.SubPath), pick.Value.NodeIndex);
+            }
+
             return;
         }
 
@@ -693,6 +707,7 @@ public sealed class CanvasWorkspace : Control
 
         if (segment is not null && segmentPath is not null)
         {
+            _vm.ClearPointSelection(); // a segment isn't a point
             int subIndex = segmentPath.SubPaths.IndexOf(segment.Value.SubPath);
             _vm.SelectSegment(segmentPath, subIndex, segment.Value.SegmentIndex, additive: _shiftHeld);
             InvalidateVisual();
@@ -707,6 +722,7 @@ public sealed class CanvasWorkspace : Control
         }
 
         // 3) Otherwise: focus a whole path or clear the selection.
+        _vm.ClearPointSelection();
         if (!_shiftHeld)
         {
             _vm.SelectObject(HitTestTopPath(model));
@@ -919,6 +935,8 @@ public sealed class CanvasWorkspace : Control
         {
             return;
         }
+
+        _vm.ClearPointSelection();
 
         // Clicking the start anchor of the active path closes (and finalises) it.
         if (_penPath is not null && _penPath.SubPaths[0].Nodes.Count >= 2 &&

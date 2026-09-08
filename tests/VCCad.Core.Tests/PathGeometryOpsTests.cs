@@ -53,6 +53,19 @@ public class PathGeometryOpsTests
     }
 
     [Fact]
+    public void ScaleAboutCornerKeepsReferenceStationary()
+    {
+        PathItem square = PathFactory.CreateRectangle("sq", new Rect2D(0, 0, 100, 100));
+        square.ScaleGeometryAbout(new Point2D(0, 0), 0.5, 0.5);
+
+        Assert.True(square.SubPaths[0].Nodes[0].Anchor.NearlyEquals(new Point2D(0, 0), 1e-9));
+        Assert.True(square.SubPaths[0].Nodes[1].Anchor.NearlyEquals(new Point2D(50, 0), 1e-9));
+        Rect2D box = square.BoundingBox();
+        Assert.Equal(50.0, box.Width, 9);
+        Assert.Equal(50.0, box.Height, 9);
+    }
+
+    [Fact]
     public void ClosestSegmentFindsThePickedSegment()
     {
         // Path of two collinear runs: horizontal from (0,0) and a vertical tail.

@@ -1,5 +1,7 @@
 using System.Collections;
+using System.Globalization;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using VCCad.App.ViewModels;
@@ -31,9 +33,16 @@ public partial class EditorView : UserControl
 
         Workspace.AttachEditor(_viewModel);
 
+        _pivotButtons = new[] { Pivot0, Pivot1, Pivot2, Pivot3, Pivot4, Pivot5, Pivot6, Pivot7, Pivot8 };
+        foreach (TextBox box in _fieldBoxes)
+        {
+            box.LostFocus += (_, _) => CommitFromField(box);
+        }
+
         UpdateStatusAndZoom();
         RefreshTree();
         HighlightActiveTool();
+        HighlightPivot();
     }
 
     private void OnDocumentChanged(object? sender, EventArgs e)
@@ -62,6 +71,199 @@ public partial class EditorView : UserControl
         StatusText.Text = _viewModel.Status;
         ZoomLabel.Text = $"{Workspace.Zoom * 100:0.##}%";
         SelectionInfo.Text = DescribeSelection();
+        RefreshTransformFields();
+    }
+
+    // ------------------------------------------------------------------
+    // Numeric Transform panel (X / Y / W / H / rotation + 9-point pivot)
+    // ------------------------------------------------------------------
+
+    private Button[] _pivotButtons = Array.Empty<Button>();
+    private int _pivot = 4; // centre
+
+    private TextBox[] _fieldBoxes => new[] { XBox, YBox, WBox, HBox, AngleBox };
+
+    private void HighlightPivot()
+    {
+        for (int i = 0; i < _pivotButtons.Length; i++)
+        {
+            _pivotButtons[i].Background = i == _pivot ? ActiveBrush : Brushes.Transparent;
+        }
+    }
+
+    private void OnPivot(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: int index })
+        {
+            _pivot = index;
+            HighlightPivot();
+            RefreshTransformFields();
+        }
+    }
+
+    private void OnFieldKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && sender is TextBox box)
+        {
+            CommitFromField(box);
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>Commits whatever numeric change the just-edited field represents.</summary>
+    private void CommitFromField(TextBox field)
+    {
+        if (_viewModel.HasPointSelection)
+        {
+            CommitPointField(field);
+            return;
+        }
+
+        if (_viewModel.HasTransformableSelection)
+        {
+            CommitObjectFields();
+        }
+    }
+
+    private void CommitPointField(TextBox field)
+    {
+        if (_viewModel.PointPosition is not { } current)
+        {
+            return;
+        }
+
+        Point2D target = current;
+        if (field == XBox && TryRead(XBox, out double x))
+        {
+            target = new Point2D(x, current.Y);
+        }
+        else if (field == YBox && TryRead(YBox, out double y))
+        {
+            target = new Point2D(current.X, y);
+        }
+
+        _viewModel.MovePointTo(target);
+        RefreshTransformFields();
+    }
+
+    private void CommitObjectFields()
+    {
+        (Rect2D bounds, double currentAngle) = _viewModel.TransformReadout();
+        if (bounds.IsEmpty)
+        {
+            return;
+        }
+
+        Point2D pivot = ReferencePoint(bounds, _pivot);
+        Point2D currentRef = ReferencePoint(bounds, _pivot);
+
+        Vector2D translation = new();
+        double? targetX = TryRead(XBox, out double rx) ? rx : null;
+        double? targetY = TryRead(YBox, out double ry) ? ry : null;
+        if (targetX.HasValue || targetY.HasValue)
+        {
+            Point2D desired = new(targetX ?? currentRef.X, targetY ?? currentRef.Y);
+            translation = desired - currentRef;
+        }
+
+        double scaleX = 1.0, scaleY = 1.0;
+        if (TryRead(WBox, out double w) && bounds.Width > 1e-6)
+        {
+            scaleX = w / bounds.Width;
+        }
+
+        if (TryRead(HBox, out double h) && bounds.Height > 1e-6)
+        {
+            scaleY = h / bounds.Height;
+        }
+
+        double rotationDelta = 0.0;
+        if (TryRead(AngleBox, out double angle))
+        {
+            rotationDelta = angle - currentAngle;
+        }
+
+        _viewModel.ApplyTransform(pivot, translation, scaleX, scaleY, rotationDelta);
+        RefreshTransformFields();
+    }
+
+    private static bool TryRead(TextBox box, out double value)
+    {
+        return double.TryParse(box.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+    }
+
+    /// <summary>Reference point for a 9-cell matrix: row-major 0..8.</summary>
+    private static Point2D ReferencePoint(Rect2D bounds, int pivot)
+    {
+        double x = (pivot % 3) switch { 0 => bounds.Left, 1 => bounds.Center.X, _ => bounds.Right };
+        double y = (pivot / 3) switch { 0 => bounds.Top, 1 => bounds.Center.Y, _ => bounds.Bottom };
+        return new Point2D(x, y);
+    }
+
+    private void RefreshTransformFields()
+    {
+        HighlightPivot();
+        SetBoxText(XBox, null);
+        SetBoxText(YBox, null);
+        SetBoxText(WBox, null);
+        SetBoxText(HBox, null);
+        SetBoxText(AngleBox, null);
+
+        bool pointMode = _viewModel.HasPointSelection;
+        bool objectMode = _viewModel.HasTransformableSelection;
+        bool any = pointMode || objectMode;
+
+        if (pointMode && _viewModel.PointPosition is { } pos)
+        {
+            SetBoxText(XBox, pos.X);
+            SetBoxText(YBox, pos.Y);
+            TransformModeNote.Text = "Point — position only (no width/height/rotation)";
+        }
+        else if (objectMode)
+        {
+            (Rect2D bounds, double angle) = _viewModel.TransformReadout();
+            if (!bounds.IsEmpty)
+            {
+                Point2D reference = ReferencePoint(bounds, _pivot);
+                SetBoxText(XBox, reference.X);
+                SetBoxText(YBox, reference.Y);
+                SetBoxText(WBox, bounds.Width);
+                SetBoxText(HBox, bounds.Height);
+                SetBoxText(AngleBox, Math.Round(angle, 3));
+            }
+
+            TransformModeNote.Text = _viewModel.SelectedObjects.Count > 1
+                ? "Selection bounds — position/size/rotation"
+                : "Object — position/size/rotation";
+        }
+        else
+        {
+            TransformModeNote.Text = "Select an object to edit its transform";
+        }
+
+        foreach (Button button in _pivotButtons)
+        {
+            button.IsEnabled = objectMode;
+        }
+
+        XBox.IsEnabled = any;
+        YBox.IsEnabled = any;
+        WBox.IsEnabled = objectMode;
+        HBox.IsEnabled = objectMode;
+        AngleBox.IsEnabled = objectMode;
+    }
+
+    /// <summary>Sets a field's text unless the user is editing that field.</summary>
+    private void SetBoxText(TextBox box, double? value)
+    {
+        if (box.IsFocused)
+        {
+            return;
+        }
+
+        box.Text = value.HasValue
+            ? value.Value.ToString("0.###", CultureInfo.InvariantCulture)
+            : string.Empty;
     }
 
     private string DescribeSelection()

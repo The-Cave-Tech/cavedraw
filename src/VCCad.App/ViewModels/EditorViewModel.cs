@@ -134,6 +134,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     {
         _selectedObjects.Clear();
         _selectedSegments.Clear();
+        _point = null;
         if (item is not null)
         {
             _selectedObjects.Add(item);
@@ -191,6 +192,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         {
             _selectedObjects.Clear();
             _selectedSegments.Clear();
+            _point = null;
             _selectedObjects.Add(path);
             _selectedSegments[path] = new List<(int, int)> { (sub, seg) };
         }
@@ -234,6 +236,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
         _selectedObjects.Clear();
         _selectedSegments.Clear();
+        _point = null;
         NotifySelectionChanged();
     }
 
@@ -259,6 +262,209 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         }
 
         return box;
+    }
+
+    // ------------------------------------------------------------------
+    // Point (node) selection & numeric editing
+    // ------------------------------------------------------------------
+
+    private (PathItem Path, int Sub, int Node)? _point;
+
+    /// <summary>True when a single node has been picked (point editing mode: only
+    /// position applies — a point has no width, height or rotation).</summary>
+    public bool HasPointSelection => _point is not null && ResolvePointNode() is not null;
+
+    /// <summary>The anchor of the currently selected point, or null.</summary>
+    public Point2D? PointPosition => ResolvePointNode()?.Anchor;
+
+    /// <summary>Remembers the picked node (also selects its path so the tree and
+    /// overlays show it).</summary>
+    public void SelectPoint(PathItem path, int sub, int node)
+    {
+        // Ensure the path is part of the object selection WITHOUT clearing the
+        // point we are about to set (SelectObject would wipe it).
+        if (!_selectedObjects.Contains(path))
+        {
+            _selectedObjects.Add(path);
+        }
+
+        _point = (path, sub, node);
+        NotifySelectionChanged();
+    }
+
+    public void ClearPointSelection()
+    {
+        if (_point is null)
+        {
+            return;
+        }
+
+        _point = null;
+        NotifySelectionChanged();
+    }
+
+    private PathNode? ResolvePointNode()
+    {
+        if (_point is not { } p)
+        {
+            return null;
+        }
+
+        if (p.Sub < 0 || p.Sub >= p.Path.SubPaths.Count)
+        {
+            return null;
+        }
+
+        SubPath sub = p.Path.SubPaths[p.Sub];
+        if (p.Node < 0 || p.Node >= sub.Nodes.Count)
+        {
+            return null;
+        }
+
+        return sub.Nodes[p.Node];
+    }
+
+    /// <summary>Moves the selected point (its anchor and both handles) to an
+    /// absolute model coordinate — one undo step.</summary>
+    public void MovePointTo(Point2D target)
+    {
+        if (_point is not { } p)
+        {
+            return;
+        }
+
+        PathNode node = ResolvePointNode();
+        if (node is null)
+        {
+            return;
+        }
+
+        PathItem before = p.Path.GeometrySnapshot();
+        Vector2D delta = target - node.Anchor;
+        p.Path.TranslateNode(p.Path.SubPaths[p.Sub], p.Node, delta);
+        PathItem after = p.Path.GeometrySnapshot();
+        Execute(new VCCad.Core.Commands.GeometryReplaceCommand(p.Path, before, after, "Move point"));
+    }
+
+    // ------------------------------------------------------------------
+    // Object numeric transform (X / Y / W / H / rotation + 9-point pivot)
+    // ------------------------------------------------------------------
+
+    /// <summary>True when whole-object transform fields are meaningful (objects
+    /// selected, no point mode).</summary>
+    public bool HasTransformableSelection => !HasPointSelection && SelectedPaths().Any();
+
+    /// <summary>Current bounds + principal-axis angle (degrees, 0..180) of the
+    /// selected objects — the basis the numeric fields display.</summary>
+    public (Rect2D Bounds, double AngleDeg) TransformReadout()
+    {
+        var anchors = new List<Point2D>();
+        Rect2D box = Rect2D.Empty;
+        foreach (PathItem path in SelectedPaths())
+        {
+            box = box.Union(path.BoundingBox());
+            foreach (SubPath sub in path.SubPaths)
+            {
+                foreach (PathNode node in sub.Nodes)
+                {
+                    anchors.Add(node.Anchor);
+                }
+            }
+        }
+
+        return (box, PrincipalAngleDeg(anchors));
+    }
+
+    /// <summary>
+    /// Applies numeric object transforms to every selected path in one undo step:
+    /// translate by <paramref name="translation"/>, scale by sx/sy about the pivot,
+    /// then rotate by <paramref name="rotationDegrees"/> about the pivot.
+    /// </summary>
+    public void ApplyTransform(Point2D pivot, Vector2D translation, double scaleX, double scaleY, double rotationDegrees)
+    {
+        if (!HasTransformableSelection)
+        {
+            return;
+        }
+
+        bool anyTranslation = !translation.IsZero;
+        bool anyScale = Math.Abs(scaleX - 1.0) > 1e-9 || Math.Abs(scaleY - 1.0) > 1e-9;
+        bool anyRotation = Math.Abs(rotationDegrees) > 1e-6;
+        if (!anyTranslation && !anyScale && !anyRotation)
+        {
+            return;
+        }
+
+        var edits = new List<IUndoableCommand>();
+        foreach (PathItem path in SelectedPaths())
+        {
+            PathItem before = path.GeometrySnapshot();
+            if (anyTranslation)
+            {
+                path.TranslateGeometryBy(translation);
+            }
+
+            if (anyScale)
+            {
+                path.ScaleGeometryAbout(pivot, scaleX, scaleY);
+            }
+
+            if (anyRotation)
+            {
+                path.RotateGeometryAbout(pivot, rotationDegrees * Math.PI / 180.0);
+            }
+
+            edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot()));
+        }
+
+        Execute(edits.Count == 1
+            ? edits[0]
+            : new CompositeCommand("Transform objects", edits));
+    }
+
+
+    /// <summary>
+    /// Principal-axis angle of a point cloud via the 2D covariance matrix:
+    /// θ = ½·atan2(2·ΣΔxΔy, ΣΔx² − ΣΔy²), normalised to [0°, 180°). This is the
+    /// rotation readout for arbitrary geometry (stable under translation/uniform
+    /// scale; mirrors flip it 180°, which is harmless in a 0..180 display).
+    /// </summary>
+    private static double PrincipalAngleDeg(IReadOnlyList<Point2D> points)
+    {
+        if (points.Count < 2)
+        {
+            return 0.0;
+        }
+
+        double meanX = 0, meanY = 0;
+        foreach (Point2D p in points)
+        {
+            meanX += p.X;
+            meanY += p.Y;
+        }
+
+        meanX /= points.Count;
+        meanY /= points.Count;
+
+        double xx = 0, yy = 0, xy = 0;
+        foreach (Point2D p in points)
+        {
+            double dx = p.X - meanX;
+            double dy = p.Y - meanY;
+            xx += dx * dx;
+            yy += dy * dy;
+            xy += dx * dy;
+        }
+
+        double degrees = 0.5 * Math.Atan2(2.0 * xy, xx - yy) * 180.0 / Math.PI;
+        if (degrees < 0)
+        {
+            degrees += 180.0;
+        }
+
+        // A rotationally symmetric point set has no principal axis worth showing.
+        double variance = (xx + yy) / points.Count;
+        return variance < 1e-9 ? 0.0 : degrees;
     }
 
     // ------------------------------------------------------------------
@@ -320,6 +526,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         Execute(new CompositeCommand(label, remove));
         _selectedObjects.Clear();
         _selectedSegments.Clear();
+        _point = null;
         NotifySelectionChanged();
         Status = label;
     }

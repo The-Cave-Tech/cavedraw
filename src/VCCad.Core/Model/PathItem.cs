@@ -189,6 +189,27 @@ public sealed class PathItem : LayerItem
         }
     }
 
+    /// <summary>Scales every anchor and handle about <paramref name="center"/> by
+    /// (sx, sy). The reference point stays fixed — the numeric Transform panel's
+    /// "resize about the chosen reference point" behaviour.</summary>
+    public void ScaleGeometryAbout(Point2D center, double sx, double sy)
+    {
+        Point2D Scale(Point2D p)
+            => new(center.X + (p.X - center.X) * sx, center.Y + (p.Y - center.Y) * sy);
+
+        foreach (SubPath sp in SubPaths)
+        {
+            foreach (PathNode node in sp.Nodes)
+            {
+                node.Anchor = Scale(node.Anchor);
+                node.InHandle = Scale(node.InHandle);
+                node.OutHandle = Scale(node.OutHandle);
+            }
+        }
+
+        NotifyPropertyChanged(nameof(SubPaths));
+    }
+
     /// <inheritdoc/>
     public override LayerItem Clone()
     {
