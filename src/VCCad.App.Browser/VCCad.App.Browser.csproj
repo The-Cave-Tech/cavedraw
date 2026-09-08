@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-browser</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- The lossless serializer uses reflection-based System.Text.Json today.
+         Trimming would break deserialization at runtime; disable trimming until
+         the serializer moves to a JsonSerializerContext (project plan M9). -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <AssemblyName>VCCad.App.Browser</AssemblyName>
+    <RootNamespace>VCCad.App.Browser</RootNamespace>
+    <Description>WebAssembly host for the VCCad editor shell (browser hosting of VCCad.App).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Browser" Version="11.3.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VCCad.App\VCCad.App.csproj" />
+  </ItemGroup>
+
+</Project>

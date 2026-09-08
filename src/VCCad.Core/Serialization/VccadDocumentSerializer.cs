@@ -177,6 +177,7 @@ internal sealed record LayerDto(
 
 internal sealed record DocumentDto(
     int Version,
+    Guid Id,
     string Name,
     ArtboardDto[] Artboards);
 
@@ -246,6 +247,7 @@ public static class VccadDocumentSerializer
     private static DocumentDto ToDto(CadDocument d)
         => new(
             CurrentVersion,
+            d.Id,
             d.Name,
             d.Artboards.Select(a => new ArtboardDto(
                 a.Id,
@@ -271,6 +273,7 @@ public static class VccadDocumentSerializer
         }
 
         var document = new CadDocument { Name = dto.Name };
+        document.RestoreIdentity(dto.Id);
         foreach (ArtboardDto a in dto.Artboards)
         {
             var artboard = new Artboard(new Size2D(a.Width, a.Height), new Point2D(a.X, a.Y)) { Name = a.Name };

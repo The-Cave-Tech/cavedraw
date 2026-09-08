@@ -23,6 +23,13 @@ public sealed class CadDocument
 
     private string _name = "Untitled";
 
+    /// <summary>Document identity — the key used by the automation API and the
+    /// artifact (PDF) naming. Persisted by the lossless serializer.</summary>
+    public Guid Id { get; private set; } = Guid.NewGuid();
+
+    /// <summary>Restores a persisted identity (deserialization only).</summary>
+    internal void RestoreIdentity(Guid id) => Id = id;
+
     /// <summary>Document title (used as the default PDF/sidecar file base name).</summary>
     public string Name
     {

@@ -1,0 +1,153 @@
+using System.Net.WebSockets;
+using System.Text;
+using VCCad.Api.JsonRpc;
+using VCCad.Api.Services;
+using VCCad.Core.Model;
+using VCCad.Core.Serialization;
+using VCCad.Pdf;
+
+// =============================================================================
+// VCCad automation host.
+//
+// Serves three things from one Kestrel process (see the container layout in the
+// project plan §4):
+//   1. REST   /api/v1/*    — document lifecycle + PDF produce/consume.
+//   2. WS     /ws/rpc      — JSON-RPC 2.0 command channel (the full editor API).
+//   3. Static /            — the published Avalonia WebAssembly editor.
+// =============================================================================
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddSingleton<IDocumentStore, InMemoryDocumentStore>();
+builder.Services.AddSingleton<EditorApi>();
+builder.Services.AddSingleton<JsonRpcDispatcher>();
+
+var app = builder.Build();
+
+// --- REST lifecycle -----------------------------------------------------------
+var api = app.MapGroup("/api/v1");
+
+api.MapGet("/health", () => Results.Ok(new { status = "ok", service = "vccad-api", version = "0.1.0" }))
+    .WithName("Health");
+
+api.MapGet("/documents", (IDocumentStore store) => Results.Ok(
+        store.List().Select(d => new { id = d.Id, name = d.Name, artboards = d.Artboards.Count })))
+    .WithName("ListDocuments");
+
+api.MapPost("/documents", (CreateDocumentRequest body, IDocumentStore store, EditorApi apiService) =>
+    {
+        CadDocument doc = CadDocument.CreateDefault(body.Name ?? "Untitled");
+        store.Add(new DocumentSession { Document = doc, Stack = new VCCad.Core.Commands.CommandStack() });
+        return Results.Created($"/api/v1/documents/{doc.Id}", new { id = doc.Id, name = doc.Name });
+    })
+    .WithName("CreateDocument");
+
+api.MapGet("/documents/{id:guid}", (Guid id, IDocumentStore store) =>
+    {
+        CadDocument? doc = store.Find(id);
+        if (doc is null)
+        {
+            return Results.NotFound(new { error = $"Document '{id}' does not exist." });
+        }
+
+        // The canonical lossless payload — the same bytes the PDF sidecar embeds.
+        return Results.Text(VccadDocumentSerializer.Serialize(doc), "application/json");
+    })
+    .WithName("GetDocument");
+
+api.MapGet("/documents/{id:guid}/pdf", (Guid id, IDocumentStore store) =>
+    {
+        CadDocument? doc = store.Find(id);
+        if (doc is null)
+        {
+            return Results.NotFound(new { error = $"Document '{id}' does not exist." });
+        }
+
+        byte[] pdf = PdfDocumentExporter.Export(doc);
+        string fileName = $"{Sanitize(doc.Name)}.pdf";
+        return Results.File(pdf, "application/pdf", fileName);
+    })
+    .WithName("GetPdf");
+
+api.MapDelete("/documents/{id:guid}", (Guid id, IDocumentStore store) =>
+    {
+        if (store.Remove(id) is null)
+        {
+            return Results.NotFound(new { error = $"Document '{id}' does not exist." });
+        }
+
+        return Results.NoContent();
+    })
+    .WithName("DeleteDocument");
+
+// --- JSON-RPC over WebSocket --------------------------------------------------
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
+
+app.Map("/ws/rpc", async (HttpContext context, JsonRpcDispatcher dispatcher) =>
+{
+    if (!context.WebSockets.IsWebSocketRequest)
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    using WebSocket socket = await context.WebSockets.AcceptWebSocketAsync();
+    var buffer = new byte[16 * 1024];
+    while (socket.State == WebSocketState.Open)
+    {
+        var incoming = new MemoryStream();
+        WebSocketReceiveResult receive;
+        do
+        {
+            receive = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), context.RequestAborted);
+            if (receive.MessageType == WebSocketMessageType.Close)
+            {
+                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", context.RequestAborted);
+                return;
+            }
+
+            incoming.Write(buffer, 0, receive.Count);
+        }
+        while (!receive.EndOfMessage);
+
+        string requestText = Encoding.UTF8.GetString(incoming.ToArray());
+        string? responseText = dispatcher.Process(requestText);
+        if (responseText is not null)
+        {
+            byte[] payload = Encoding.UTF8.GetBytes(responseText);
+            await socket.SendAsync(new ArraySegment<byte>(payload), WebSocketMessageType.Text, true, context.RequestAborted);
+        }
+    }
+});
+
+// --- Static hosting of the Avalonia WebAssembly editor ------------------------
+// The wasm publish output is copied into wwwroot by the Dockerfile. When the
+// folder is absent (dev/test without a published editor) the app still serves
+// the API so headless automation and integration tests work.
+string webRoot = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+bool hasEditor = Directory.Exists(webRoot) && File.Exists(Path.Combine(webRoot, "index.html"));
+if (hasEditor)
+{
+    app.UseDefaultFiles();
+    app.UseStaticFiles();
+    app.MapFallbackToFile("index.html");
+}
+
+app.Run();
+
+/// <summary>Cleans a document name into something file-system safe.</summary>
+static string Sanitize(string name)
+{
+    foreach (char invalid in Path.GetInvalidFileNameChars())
+    {
+        name = name.Replace(invalid, '-');
+    }
+
+    return string.IsNullOrWhiteSpace(name) ? "document" : name;
+}
+
+/// <summary>Request body for POST /documents.</summary>
+public sealed record CreateDocumentRequest(string? Name);
+
+// Public so WebApplicationFactory<Program> in the integration tests can host it.
+public partial class Program;

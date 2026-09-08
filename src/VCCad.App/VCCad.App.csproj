@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>VCCad.App</AssemblyName>
+    <RootNamespace>VCCad.App</RootNamespace>
+    <Description>VCCad editor shell (Avalonia): windows-style menus/toolbars, docking panes and the pasteboard workspace. Consumed by the WebAssembly host.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.11" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.11" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.11" />
+    <PackageReference Include="Avalonia.Diagnostics" Version="11.3.11">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VCCad.Core\VCCad.Core.csproj" />
+    <ProjectReference Include="..\VCCad.Geometry\VCCad.Geometry.csproj" />
+    <ProjectReference Include="..\VCCad.Pdf\VCCad.Pdf.csproj" />
+  </ItemGroup>
+
+</Project>
