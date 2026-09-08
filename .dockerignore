@@ -1,6 +1,8 @@
 # =============================================================================
 # VCCad - .dockerignore
 # Keep the build context lean; obj/bin are rebuilt inside the image anyway.
+# NOTE: do NOT add a bare `wwwroot/` pattern — the browser host's static files
+# (src/VCCad.App.Browser/wwwroot) are required in the build context.
 # =============================================================================
 
 **/bin/
@@ -15,10 +17,6 @@ TestResults
 *.log
 *.trx
 coverage
+**/publish/
 docker-compose.yml
-docker/compose.yaml
 docker/.env
-README.md
-projectplan.md
-docs/
-scripts/
