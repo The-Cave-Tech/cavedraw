@@ -67,6 +67,7 @@ public sealed class CanvasWorkspace : Control
     private Point2D _nodeAnchorStart;
     private Point2D _nodeInStart;
     private Point2D _nodeOutStart;
+    private bool _nodeWasSmooth;
 
     // Segment drag (Node tool).
     private PathItem? _segmentPath;
@@ -672,7 +673,7 @@ public sealed class CanvasWorkspace : Control
                 _vm.SelectObject(pickPath); // select the path whose node we grab
             }
 
-            BeginNodeDrag(pickPath, pick.Value);
+            BeginNodeDrag(pickPath, pick.Value, model);
             return;
         }
 
@@ -716,7 +717,7 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
-    private void BeginNodeDrag(PathItem path, NodePick pick)
+    private void BeginNodeDrag(PathItem path, NodePick pick, Point2D pressModel)
     {
         _nodePath = path;
         _nodeSub = pick.SubPath;
@@ -728,8 +729,26 @@ public sealed class CanvasWorkspace : Control
         _nodeInStart = node.InHandle;
         _nodeOutStart = node.OutHandle;
         _nodeBefore = path.GeometrySnapshot();
+        _nodeWasSmooth = HandlesAntiParallel(_nodeAnchorStart, _nodeInStart, _nodeOutStart);
+        _dragStartModel = pressModel; // grab point — handle deltas are measured from here
         _gestureMoved = false;
         InvalidateVisual();
+    }
+
+    /// <summary>True when a node's two handles are collinear with (and opposite to)
+    /// the anchor — the smooth-continuity condition. Dragging such a handle should
+    /// keep the opposite handle collinear (symmetric reflection).</summary>
+    private static bool HandlesAntiParallel(Point2D anchor, Point2D inHandle, Point2D outHandle)
+    {
+        Vector2D vi = inHandle - anchor;
+        Vector2D vo = outHandle - anchor;
+        if (vi.LengthSquared <= 1e-12 || vo.LengthSquared <= 1e-12)
+        {
+            return false; // a collapsed (corner/straight) handle isn't a curve pair
+        }
+
+        double scale = Math.Max(1.0, vi.Length * vo.Length);
+        return vi.Dot(vo) < 0 && Math.Abs(vi.Cross(vo)) <= 1e-6 * scale;
     }
 
     private void BeginSegmentDrag(PathItem path, int subIndex, int segmentIndex, Point2D model)
@@ -771,8 +790,10 @@ public sealed class CanvasWorkspace : Control
         if (_nodePath is not null && _nodeSub is not null)
         {
             // Mutate the grabbed node directly, recomputing from the stored
-            // originals — never restoring whole geometry mid-gesture.
-            Vector2D delta = model - _nodeAnchorStart;
+            // originals — never restoring whole geometry mid-gesture. The delta
+            // is measured from the grab point (press position), so a handle
+            // follows the cursor 1:1 instead of inheriting a fixed offset.
+            Vector2D delta = model - _dragStartModel;
             if (_shiftHeld)
             {
                 delta = SnapTranslation(delta);
@@ -791,10 +812,19 @@ public sealed class CanvasWorkspace : Control
                 if (_nodeIsIn)
                 {
                     node.InHandle = target;
+                    // Keep the shared endpoint smooth: mirror the opposite handle.
+                    if (_nodeWasSmooth)
+                    {
+                        node.OutHandle = _nodeAnchorStart + (_nodeAnchorStart - target);
+                    }
                 }
                 else
                 {
                     node.OutHandle = target;
+                    if (_nodeWasSmooth)
+                    {
+                        node.InHandle = _nodeAnchorStart + (_nodeAnchorStart - target);
+                    }
                 }
             }
             else
