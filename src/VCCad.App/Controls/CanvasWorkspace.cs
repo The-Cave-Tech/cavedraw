@@ -52,6 +52,19 @@ public sealed class CanvasWorkspace : Control
     private bool _selectMoved;
     private LayerItem? _shiftToggleCandidate;
 
+    // Marquee (rubber-band) selection.
+    private bool _marqueeActive;
+    private Point2D _marqueeStart;
+    private Point2D _marqueeCurrent;
+
+    // Bounding-box resize handles (drag W/H from the selection rectangle).
+    private bool _resizeActive;
+    private int _resizeHandle;
+    private Point2D _resizePivot;
+    private Rect2D _resizeRect0;
+    private readonly List<PathItem> _resizePaths = new();
+    private readonly Dictionary<PathItem, PathItem> _resizeOriginals = new();
+
     // Whole-object move / rotate targets (Select tool).
     private readonly List<PathItem> _dragPaths = new();
     private readonly Dictionary<PathItem, PathItem> _dragOriginals = new();
@@ -465,25 +478,54 @@ public sealed class CanvasWorkspace : Control
 
         _shiftToggleCandidate = null;
         _selectMoved = false;
-        _vm!.ClearPointSelection();
+        _vm.ClearPointSelection();
+
+        // Rotation handle sits above the selection box.
+        if (HitRotationHandle(model))
+        {
+            BeginRotate(model);
+            return;
+        }
+
+        // Resize handles on the dashed selection rectangle.
+        if (!_shiftHeld && HitResizeHandle(model))
+        {
+            BeginResize(model);
+            return;
+        }
 
         PathItem? hit = HitTestTopPath(model);
         if (_shiftHeld)
         {
-            // Shift semantics: clicking an unselected object adds it (so a
-            // drag can move the whole selection); clicking an already selected
-            // object starts a constrained drag and only removes it if the press
-            // turns out to be a plain click (handled on release).
-            if (hit is not null && !_vm.IsObjectSelected(hit))
+            if (hit is null)
+            {
+                // Shift + drag on empty space: additive marquee.
+                BeginMarquee(model);
+                return;
+            }
+
+            // Shift semantics: clicking an unselected object adds it (so a drag
+            // can move the whole selection); clicking an already selected object
+            // starts a constrained drag and only removes it if the press turns
+            // out to be a plain click (handled on release).
+            if (!_vm.IsObjectSelected(hit))
             {
                 _vm.ToggleObjectSelection(hit);
             }
-            else if (hit is not null)
+            else
             {
                 _shiftToggleCandidate = hit;
             }
 
             BeginObjectMoveTargets(model);
+            return;
+        }
+
+        if (hit is null)
+        {
+            // Rubber-band marquee on empty space; the old selection survives
+            // until the marquee is released.
+            BeginMarquee(model);
             return;
         }
 
@@ -507,6 +549,19 @@ public sealed class CanvasWorkspace : Control
 
     private void SelectDrag(Point2D model)
     {
+        if (_marqueeActive)
+        {
+            _marqueeCurrent = model;
+            InvalidateVisual();
+            return;
+        }
+
+        if (_resizeActive)
+        {
+            ResizeUpdate(model);
+            return;
+        }
+
         if (_dragPaths.Count == 0)
         {
             return;
@@ -528,11 +583,24 @@ public sealed class CanvasWorkspace : Control
             path.TranslateGeometryBy(delta);
         }
 
+        _vm!.RaiseTransformChanged();
         InvalidateVisual();
     }
 
     private void SelectRelease(Point2D model)
     {
+        if (_marqueeActive)
+        {
+            FinishMarquee();
+            return;
+        }
+
+        if (_resizeActive)
+        {
+            CommitResize();
+            return;
+        }
+
         if (_selectMoved)
         {
             CommitMultiPathEdit("Move objects");
@@ -547,6 +615,201 @@ public sealed class CanvasWorkspace : Control
         _dragOriginals.Clear();
         _shiftToggleCandidate = null;
         _selectMoved = false;
+    }
+
+    // ---- marquee ---------------------------------------------------------
+
+    private void BeginMarquee(Point2D model)
+    {
+        _marqueeActive = true;
+        _marqueeStart = model;
+        _marqueeCurrent = model;
+        InvalidateVisual();
+    }
+
+    private void FinishMarquee()
+    {
+        _marqueeActive = false;
+        Rect2D rect = Rect2D.FromPoints(_marqueeStart, _marqueeCurrent);
+        if (!rect.IsEmpty)
+        {
+            List<LayerItem> hits = ItemsIntersectingRect(rect);
+            _vm!.SelectRange(hits, additive: _shiftHeld);
+        }
+
+        InvalidateVisual();
+    }
+
+    private List<LayerItem> ItemsIntersectingRect(Rect2D rect)
+    {
+        var result = new List<LayerItem>();
+        if (_document is null)
+        {
+            return result;
+        }
+
+        foreach (Artboard artboard in _document.Artboards)
+        {
+            foreach (Layer layer in artboard.Layers)
+            {
+                if (!layer.IsVisible)
+                {
+                    continue;
+                }
+
+                foreach (LayerItem item in layer.Children)
+                {
+                    Rect2D bounds = ItemBounds(item);
+                    if (!bounds.IsEmpty && bounds.Intersects(rect))
+                    {
+                        result.Add(item);
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static Rect2D ItemBounds(LayerItem item)
+    {
+        switch (item)
+        {
+            case PathItem path:
+                return path.BoundingBox();
+            case ArtGroup group:
+                return group.Transform.Transform(group.BoundingBox());
+            default:
+                return Rect2D.Empty;
+        }
+    }
+
+    // ---- bounding-box resize handles ------------------------------------
+
+    /// <summary>Reference point for a 3×3 cell (row-major 0..8).</summary>
+    private Point2D CellPoint(Rect2D bounds, int index)
+    {
+        double x = (index % 3) switch { 0 => bounds.Left, 1 => bounds.Center.X, _ => bounds.Right };
+        double y = (index / 3) switch { 0 => bounds.Top, 1 => bounds.Center.Y, _ => bounds.Bottom };
+        return new Point2D(x, y);
+    }
+
+    private bool HitResizeHandle(Point2D model)
+    {
+        if (_vm is null || !_vm.HasTransformableSelection)
+        {
+            return false;
+        }
+
+        Rect2D bounds = _vm.SelectionBounds();
+        if (bounds.IsEmpty)
+        {
+            return false;
+        }
+
+        double tol = PickTolerance * 2.0;
+        for (int i = 0; i < 9; i++)
+        {
+            if (i == 4)
+            {
+                continue; // centre is not a handle
+            }
+
+            if (model.DistanceTo(CellPoint(bounds, i)) <= tol)
+            {
+                _resizeHandle = i;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void BeginResize(Point2D model)
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        _resizeActive = true;
+        _resizeRect0 = _vm.SelectionBounds();
+        _resizePivot = CellPoint(_resizeRect0, 8 - _resizeHandle); // opposite cell stays fixed
+
+        _resizePaths.Clear();
+        _resizeOriginals.Clear();
+        foreach (PathItem path in _vm.SelectedPaths())
+        {
+            _resizePaths.Add(path);
+            _resizeOriginals[path] = path.GeometrySnapshot();
+        }
+
+        _dragStartModel = model;
+        InvalidateVisual();
+    }
+
+    private void ResizeUpdate(Point2D model)
+    {
+        if (_resizePaths.Count == 0 || _resizeRect0.IsEmpty)
+        {
+            return;
+        }
+
+        // Which side does this handle pull? 1 = right/bottom, −1 = left/top, 0 = fixed.
+        int signX = _resizeHandle % 3 == 2 ? 1 : _resizeHandle % 3 == 0 ? -1 : 0;
+        int signY = _resizeHandle / 3 == 2 ? 1 : _resizeHandle / 3 == 0 ? -1 : 0;
+
+        double left = _resizeRect0.Left;
+        double top = _resizeRect0.Top;
+        double right = _resizeRect0.Right;
+        double bottom = _resizeRect0.Bottom;
+
+        const double minSize = 0.5;
+        if (signX < 0)
+        {
+            left = Math.Min(model.X, _resizePivot.X - minSize);
+        }
+        else if (signX > 0)
+        {
+            right = Math.Max(model.X, _resizePivot.X + minSize);
+        }
+
+        if (signY < 0)
+        {
+            top = Math.Min(model.Y, _resizePivot.Y - minSize);
+        }
+        else if (signY > 0)
+        {
+            bottom = Math.Max(model.Y, _resizePivot.Y + minSize);
+        }
+
+        double sx = Math.Max(minSize / Math.Max(1e-6, _resizeRect0.Width), (right - left) / _resizeRect0.Width);
+        double sy = Math.Max(minSize / Math.Max(1e-6, _resizeRect0.Height), (bottom - top) / _resizeRect0.Height);
+        if (_shiftHeld && (signX != 0) && (signY != 0))
+        {
+            sy = sx; // Shift + corner drag keeps the aspect ratio
+        }
+
+        foreach (PathItem path in _resizePaths)
+        {
+            path.RestoreGeometryFrom(_resizeOriginals[path]);
+            path.ScaleGeometryAbout(_resizePivot, sx, sy);
+        }
+
+        _vm!.RaiseTransformChanged();
+        InvalidateVisual();
+    }
+
+    private void CommitResize()
+    {
+        if (_resizePaths.Count > 0)
+        {
+            CommitPaths("Resize objects", _resizePaths, _resizeOriginals);
+        }
+
+        _resizeActive = false;
+        _resizePaths.Clear();
+        _resizeOriginals.Clear();
     }
 
     /// <summary>Locks a translation to the horizontal or vertical axis, whichever
@@ -632,6 +895,7 @@ public sealed class CanvasWorkspace : Control
             path.RotateGeometryAbout(_rotateCenter, angle);
         }
 
+        _vm!.RaiseTransformChanged();
         InvalidateVisual();
     }
 
@@ -850,6 +1114,7 @@ public sealed class CanvasWorkspace : Control
                 node.OutHandle = _nodeOutStart + delta;
             }
 
+            _vm!.RaiseTransformChanged();
             InvalidateVisual();
             return;
         }
@@ -886,6 +1151,7 @@ public sealed class CanvasWorkspace : Control
             _gestureMoved = true;
             _segmentNodeA.OutHandle = a0 + h;
             _segmentNodeB.InHandle = b0 + h;
+            _vm!.RaiseTransformChanged();
             InvalidateVisual();
         }
     }
@@ -1209,16 +1475,31 @@ public sealed class CanvasWorkspace : Control
         }
 
         EditorTool tool = _vm.Tool;
-        foreach (PathItem path in _vm.SelectedPaths())
+
+        if (tool == EditorTool.Select && _vm.SelectedPaths().Any())
         {
-            bool editNodes = tool == EditorTool.Node;
-            bool hasSegments = _vm.SelectedSegments().Any(s => s.Path == path);
-            PaintObjectChrome(context, path, showNodes: editNodes, showSegments: editNodes || hasSegments);
+            Rect2D selection = _vm.SelectionBounds();
+            if (!selection.IsEmpty)
+            {
+                PaintSelectChrome(context, selection);
+            }
+        }
+        else if (tool == EditorTool.Node)
+        {
+            foreach (PathItem path in _vm.SelectedPaths())
+            {
+                PaintNodeChrome(context, path);
+            }
         }
 
         if (_vm.HasSegmentSelection)
         {
             PaintSegmentHighlights(context);
+        }
+
+        if (_marqueeActive)
+        {
+            PaintMarquee(context);
         }
 
         if ((tool is EditorTool.Rectangle or EditorTool.Ellipse) && _shapeStart is { } start)
@@ -1232,25 +1513,47 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
-    private void PaintObjectChrome(DrawingContext context, PathItem path, bool showNodes, bool showSegments)
+    /// <summary>Selection chrome in the Select tool: a DASHED outline (no fill) with
+    /// draggable resize handles and a rotation handle above the top edge.</summary>
+    private void PaintSelectChrome(DrawingContext context, Rect2D bounds)
+    {
+        IBrush accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
+        var pen = new Pen(accent, 1.0) { DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0) };
+        double half = Math.Max(3.0 / _layout.Zoom, 0.75);
+
+        Point tl = ModelToScreen(new Point2D(bounds.Left, bounds.Top));
+        var screen = new Rect(tl.X, tl.Y, bounds.Width * _layout.Zoom, bounds.Height * _layout.Zoom);
+        context.DrawRectangle(null, pen, screen);
+
+        // Eight resize handles (all 3×3 cells except the centre).
+        var handlePen = new Pen(accent, 1.0);
+        for (int i = 0; i < 9; i++)
+        {
+            if (i == 4)
+            {
+                continue;
+            }
+
+            Point center = ModelToScreen(CellPoint(bounds, i));
+            context.DrawRectangle(Brushes.White, handlePen,
+                new Rect(center.X - half, center.Y - half, half * 2, half * 2));
+        }
+
+        // Rotation handle above the top-centre.
+        Point2D top = CellPoint(bounds, 1);
+        double lift = Math.Max(14.0 / _layout.Zoom, 3.0);
+        Point rot = ModelToScreen(new Point2D(top.X, top.Y - lift));
+        double r = Math.Max(4.0 / _layout.Zoom, 1.5);
+        context.DrawLine(handlePen, ModelToScreen(top), rot);
+        context.DrawEllipse(Brushes.White, new Pen(accent, 1.2), rot, r, r);
+    }
+
+    /// <summary>Node tool chrome: anchors and handles only — no bounding rectangle.</summary>
+    private void PaintNodeChrome(DrawingContext context, PathItem path)
     {
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
         var pen = new Pen(accent, 1.0);
         double half = Math.Max(2.0 / _layout.Zoom, 0.5);
-
-        Rect2D box = path.BoundingBox();
-        if (!box.IsEmpty)
-        {
-            Point tl = ModelToScreen(new Point2D(box.Left, box.Top));
-            var screen = new Rect(tl.X, tl.Y, box.Width * _layout.Zoom, box.Height * _layout.Zoom);
-            var selBrush = new SolidColorBrush(Color.FromArgb(45, 0x19, 0x76, 0xD2));
-            context.DrawRectangle(selBrush, pen, screen);
-        }
-
-        if (!showNodes)
-        {
-            return;
-        }
 
         foreach (SubPath sub in path.SubPaths)
         {
@@ -1287,6 +1590,18 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
+    private void PaintMarquee(DrawingContext context)
+    {
+        Rect2D rect = Rect2D.FromPoints(_marqueeStart, _marqueeCurrent);
+        Point tl = ModelToScreen(new Point2D(rect.Left, rect.Top));
+        var screen = new Rect(tl.X, tl.Y, rect.Width * _layout.Zoom, rect.Height * _layout.Zoom);
+
+        var accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
+        var pen = new Pen(accent, 1.0) { DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0) };
+        var fill = new SolidColorBrush(Color.FromArgb(18, 0x19, 0x76, 0xD2));
+        context.DrawRectangle(fill, pen, screen);
+    }
+
     private void DrawHandleLine(DrawingContext context, Point from, Point to)
     {
         var lineBrush = new SolidColorBrush(Color.FromArgb(210, 0x76, 0x76, 0x76));
@@ -1295,9 +1610,8 @@ public sealed class CanvasWorkspace : Control
 
     private void PaintSegmentHighlights(DrawingContext context)
     {
-        var accent = new SolidColorBrush(Color.FromRgb(0xE6, 0x6A, 0x00));
-        var pen = new Pen(accent, Math.Max(2.5, 3.0 * _layout.Zoom));
-        var handlePen = new Pen(new SolidColorBrush(Color.FromRgb(0xC6, 0x4A, 0x00)), 1.0);
+        IBrush accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
+        var handlePen = new Pen(accent, 1.0);
         double half = Math.Max(2.0 / _layout.Zoom, 0.5);
 
         foreach ((PathItem path, int sub, int seg) in _vm!.SelectedSegments())
@@ -1310,7 +1624,16 @@ public sealed class CanvasWorkspace : Control
             SubPath sp = path.SubPaths[sub];
             CubicBezier curve = sp.GetSegment(seg);
 
-            // 1) The segment itself, highlighted.
+            // Restroke the segment with ITS OWN colour, just heavier — the pen
+            // colour must not change for selected segments.
+            IBrush segmentBrush = path.Stroke.HasVisibleOutline
+                ? ToBrush(path.Stroke.Color, 1.0)
+                : new SolidColorBrush(Color.FromRgb(0x50, 0x50, 0x50));
+            double baseWidth = path.Stroke.HasVisibleOutline
+                ? Math.Max(0.5, path.Stroke.Width * _layout.Zoom)
+                : 1.0;
+            var segmentPen = new Pen(segmentBrush, baseWidth + Math.Max(2.5, 2.0 * _layout.Zoom));
+
             var geometry = new StreamGeometry();
             using (StreamGeometryContext g = geometry.Open())
             {
@@ -1328,12 +1651,9 @@ public sealed class CanvasWorkspace : Control
                 g.EndFigure(false);
             }
 
-            context.DrawGeometry(null, pen, geometry);
+            context.DrawGeometry(null, segmentPen, geometry);
 
-            // 2) For a Bézier segment also reveal its two control handles so the
-            //    curve can be reshaped directly (Illustrator behaviour). The start
-            //    node's outgoing handle and the end node's incoming handle define
-            //    this segment's shape.
+            // Control handles of a selected Bézier segment remain visible/editable.
             (int startNode, int endNode) = sp.SegmentEndNodes(seg);
             PathNode start = sp.Nodes[startNode];
             PathNode end = sp.Nodes[endNode];

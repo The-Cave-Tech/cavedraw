@@ -30,6 +30,7 @@ public partial class EditorView : UserControl
         DataContext = _viewModel;
         _viewModel.DocumentChanged += OnDocumentChanged;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        _viewModel.TransformChanged += (_, _) => RefreshTransformFields();
 
         Workspace.AttachEditor(_viewModel);
 

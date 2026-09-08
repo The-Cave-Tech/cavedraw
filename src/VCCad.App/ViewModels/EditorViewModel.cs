@@ -55,6 +55,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// tree refresh (document edits, selection changes, tool switches).</summary>
     public event EventHandler? DocumentChanged;
 
+    /// <summary>Raised while a pointer gesture mutates geometry (move/node/segment/
+    /// resize drags) so the numeric Transform panel updates live, without the cost
+    /// of a full document/tree refresh on every mouse move.</summary>
+    public event EventHandler? TransformChanged;
+
+    internal void RaiseTransformChanged() => TransformChanged?.Invoke(this, EventArgs.Empty);
+
     public CadDocument Document
     {
         get => _document;
@@ -229,7 +236,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// <summary>Clears object and segment selections.</summary>
     public void ClearSelection()
     {
-        if (_selectedObjects.Count == 0 && _selectedSegments.Count == 0)
+        if (_selectedObjects.Count == 0 && _selectedSegments.Count == 0 && _point is null)
         {
             return;
         }
@@ -237,6 +244,30 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         _selectedObjects.Clear();
         _selectedSegments.Clear();
         _point = null;
+        NotifySelectionChanged();
+    }
+
+    /// <summary>Sets the object selection to a set (marquee): replaces it unless
+    /// <paramref name="additive"/>, in which case items are added to the current
+    /// selection (Shift-marquee).</summary>
+    public void SelectRange(IEnumerable<LayerItem> items, bool additive)
+    {
+        var materialised = items.Where(i => i is PathItem or ArtGroup).ToArray();
+        if (!additive)
+        {
+            _selectedObjects.Clear();
+            _selectedSegments.Clear();
+            _point = null;
+        }
+
+        foreach (LayerItem item in materialised)
+        {
+            if (!_selectedObjects.Contains(item))
+            {
+                _selectedObjects.Add(item);
+            }
+        }
+
         NotifySelectionChanged();
     }
 
