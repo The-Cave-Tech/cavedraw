@@ -82,6 +82,13 @@ public sealed class CanvasWorkspace : Control
     private Point2D _nodeOutStart;
     private bool _nodeWasSmooth;
 
+    // Colinear handle snap: while dragging a handle near the line through the
+    // anchor and the neighbouring segment's control point, arm a snap (feedback
+    // = heavier handle). Releasing inside the epsilon snaps the handle to the
+    // mirror position so the shared endpoint becomes smooth.
+    private bool _handleSnapArmed;
+    private Point2D _handleSnapPos;
+
     // Segment drag (Node tool).
     private PathItem? _segmentPath;
     private SubPath? _segmentSub;
@@ -1010,6 +1017,7 @@ public sealed class CanvasWorkspace : Control
         _nodeOutStart = node.OutHandle;
         _nodeBefore = path.GeometrySnapshot();
         _nodeWasSmooth = HandlesAntiParallel(_nodeAnchorStart, _nodeInStart, _nodeOutStart);
+        _handleSnapArmed = false;
         _dragStartModel = pressModel; // grab point — handle deltas are measured from here
         _gestureMoved = false;
         InvalidateVisual();
@@ -1106,6 +1114,8 @@ public sealed class CanvasWorkspace : Control
                         node.InHandle = _nodeAnchorStart + (_nodeAnchorStart - target);
                     }
                 }
+
+                UpdateHandleSnap(target);
             }
             else
             {
@@ -1163,8 +1173,57 @@ public sealed class CanvasWorkspace : Control
         node.OutHandle = original.O + delta;
     }
 
+    /// <summary>
+    /// Arms a colinear snap when the dragged handle comes within an epsilon of the
+    /// line through the anchor and the opposite (neighbouring) control point.
+    /// Smooth nodes already mirror their handles, so no snap is needed there; a
+    /// collapsed opposite handle offers no line to snap to.
+    /// </summary>
+    private void UpdateHandleSnap(Point2D draggedTarget)
+    {
+        _handleSnapArmed = false;
+        if (_nodePath is null || _nodeSub is null || _nodeWasSmooth)
+        {
+            return;
+        }
+
+        // The neighbouring segment's control point on the other side of this node.
+        Point2D opposite = _nodeIsIn ? _nodeOutStart : _nodeInStart;
+        if (opposite.NearlyEquals(_nodeAnchorStart, 1e-6))
+        {
+            return; // no real neighbouring handle → nothing to be colinear with
+        }
+
+        Vector2D line = opposite - _nodeAnchorStart;
+        double distance = Math.Abs(line.Cross(draggedTarget - _nodeAnchorStart)) / line.Length;
+        if (distance <= PickTolerance)
+        {
+            // Mirror the opposite handle about the anchor: equal length, exactly
+            // colinear — the smooth-node geometry we snap to on release.
+            _handleSnapArmed = true;
+            _handleSnapPos = _nodeAnchorStart + (_nodeAnchorStart - opposite);
+        }
+    }
+
     private void NodeRelease()
     {
+        if (_handleSnapArmed && _nodePath is not null && _nodeSub is not null && _nodeGrabHandle)
+        {
+            // Release inside the snap epsilon: land the handle exactly on the
+            // mirrored (colinear, smooth) position before committing.
+            PathNode snappedNode = _nodeSub.Nodes[_nodeIndex];
+            if (_nodeIsIn)
+            {
+                snappedNode.InHandle = _handleSnapPos;
+            }
+            else
+            {
+                snappedNode.OutHandle = _handleSnapPos;
+            }
+
+            InvalidateVisual();
+        }
+
         if (_nodePath is not null && _nodeBefore is not null && _gestureMoved)
         {
             _vm!.Execute(new GeometryReplaceCommand(
@@ -1188,6 +1247,7 @@ public sealed class CanvasWorkspace : Control
         _segmentNodeA = null;
         _segmentNodeB = null;
         _segmentBendMode = false;
+        _handleSnapArmed = false;
         _gestureMoved = false;
     }
 
@@ -1490,6 +1550,11 @@ public sealed class CanvasWorkspace : Control
             {
                 PaintNodeChrome(context, path);
             }
+
+            if (_handleSnapArmed)
+            {
+                PaintSnapIndicator(context);
+            }
         }
 
         if (_vm.HasSegmentSelection)
@@ -1588,6 +1653,31 @@ public sealed class CanvasWorkspace : Control
                     new Rect(anchor.X - half, anchor.Y - half, half * 2, half * 2));
             }
         }
+    }
+
+    /// <summary>The heavier-weight feedback on a handle that will snap on release.</summary>
+    private void PaintSnapIndicator(DrawingContext context)
+    {
+        if (_nodePath is null || _nodeSub is null)
+        {
+            return;
+        }
+
+        PathNode node = _nodeSub.Nodes[_nodeIndex];
+        Point2D dragged = _nodeIsIn ? node.InHandle : node.OutHandle;
+        Point anchor = ModelToScreen(_nodeAnchorStart);
+        Point handle = ModelToScreen(dragged);
+
+        IBrush accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
+
+        // Faint line from the anchor to the (future) mirrored position.
+        context.DrawLine(new Pen(accent, 1.0) { DashStyle = new DashStyle(new[] { 3.0, 3.0 }, 0) },
+            anchor, ModelToScreen(_handleSnapPos));
+
+        // Heavier control handle to signal "release to snap".
+        double big = Math.Max(3.6 / _layout.Zoom, 1.4);
+        var ring = new Pen(new SolidColorBrush(Color.FromRgb(0x0E, 0x5A, 0xA8)), Math.Max(1.8, 2.0 * _layout.Zoom));
+        context.DrawEllipse(Brushes.White, ring, handle, big, big);
     }
 
     private void PaintMarquee(DrawingContext context)
