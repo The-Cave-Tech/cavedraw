@@ -459,6 +459,15 @@ public sealed class CanvasWorkspace : Control
     // Select tool: multi-object move + rotate handle
     // ------------------------------------------------------------------
 
+    /// <summary>The rotation handle's model position: above the top-centre of the
+    /// selection. Both the hit test and the renderer use this one definition.</summary>
+    private Point2D RotationHandlePoint(Rect2D bounds)
+    {
+        Point2D topCentre = CellPoint(bounds, 1);
+        double lift = Math.Max(14.0 / _layout.Zoom, 3.0);
+        return new Point2D(topCentre.X, topCentre.Y - lift);
+    }
+
     private bool HitRotationHandle(Point2D model)
     {
         if (_vm is null || !_vm.SelectedPaths().Any() || _shiftHeld)
@@ -472,8 +481,7 @@ public sealed class CanvasWorkspace : Control
             return false;
         }
 
-        Point2D handle = new((bounds.Left + bounds.Right) / 2, bounds.Top);
-        return model.DistanceTo(handle) <= PickTolerance * 2.0;
+        return model.DistanceTo(RotationHandlePoint(bounds)) <= PickTolerance * 2.5;
     }
 
     private void SelectPress(Point2D model)
@@ -1606,8 +1614,7 @@ public sealed class CanvasWorkspace : Control
 
         // Rotation handle above the top-centre.
         Point2D top = CellPoint(bounds, 1);
-        double lift = Math.Max(14.0 / _layout.Zoom, 3.0);
-        Point rot = ModelToScreen(new Point2D(top.X, top.Y - lift));
+        Point rot = ModelToScreen(RotationHandlePoint(bounds));
         double r = Math.Max(4.0 / _layout.Zoom, 1.5);
         context.DrawLine(handlePen, ModelToScreen(top), rot);
         context.DrawEllipse(Brushes.White, new Pen(accent, 1.2), rot, r, r);
