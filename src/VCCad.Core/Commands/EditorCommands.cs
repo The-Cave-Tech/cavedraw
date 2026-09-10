@@ -23,6 +23,16 @@ public sealed class AddArtboardCommand : IUndoableCommand
         _name = name;
     }
 
+    /// <summary>Adds an already-constructed artboard (used when the caller wants to
+    /// pre-populate layers before inserting).</summary>
+    public AddArtboardCommand(CadDocument document, Artboard artboard)
+    {
+        _document = document;
+        _size = artboard.Bounds.Size;
+        _name = artboard.Name;
+        _created = artboard;
+    }
+
     public void Do()
     {
         // Re-running after an Undo must restore the *same* artboard instance so

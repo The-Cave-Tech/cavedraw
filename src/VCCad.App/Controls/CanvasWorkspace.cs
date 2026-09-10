@@ -65,6 +65,19 @@ public sealed class CanvasWorkspace : Control
     private readonly List<PathItem> _resizePaths = new();
     private readonly Dictionary<PathItem, PathItem> _resizeOriginals = new();
 
+    // Oriented selection chrome: a base (unrotated) rectangle plus an angle, so
+    // the selection box rotates with the object instead of turning into a
+    // growing axis-aligned bounding box.
+    private Rect2D? _chromeRect;
+    private double _chromeAngle;
+
+    // Artboard tool gesture state.
+    private enum ArtboardGesture { None, Move, Resize, Create }
+    private ArtboardGesture _artboardGesture;
+    private Artboard? _artboard;
+    private Rect2D _artboardBefore;
+    private int _artboardHandle;
+
     // Whole-object move / rotate targets (Select tool).
     private readonly List<PathItem> _dragPaths = new();
     private readonly Dictionary<PathItem, PathItem> _dragOriginals = new();
@@ -152,6 +165,12 @@ public sealed class CanvasWorkspace : Control
             {
                 FinalizePen();
             }
+        };
+        viewModel.SelectionChanged += (_, _) =>
+        {
+            // A new selection starts with an axis-aligned chrome box.
+            _chromeRect = null;
+            _chromeAngle = 0;
         };
         InvalidateVisual();
     }
@@ -1024,6 +1043,8 @@ public sealed class CanvasWorkspace : Control
         _nodeInStart = node.InHandle;
         _nodeOutStart = node.OutHandle;
         _nodeBefore = path.GeometrySnapshot();
+        _chromeRect = null;
+        _chromeAngle = 0;
         _nodeWasSmooth = HandlesAntiParallel(_nodeAnchorStart, _nodeInStart, _nodeOutStart);
         _handleSnapArmed = false;
         _dragStartModel = pressModel; // grab point — handle deltas are measured from here
@@ -1055,6 +1076,8 @@ public sealed class CanvasWorkspace : Control
         _segmentSub = sub;
         _segmentIndex = segmentIndex;
         _segmentBefore = path.GeometrySnapshot();
+        _chromeRect = null;
+        _chromeAngle = 0;
         _segmentNodeA = sub.Nodes[a];
         _segmentNodeB = sub.Nodes[b];
         _segmentOrigA = (sub.Nodes[a].Anchor, sub.Nodes[a].InHandle, sub.Nodes[a].OutHandle);
@@ -1294,6 +1317,8 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        _chromeRect = null;
+        _chromeAngle = 0;
         if (_penPath is null)
         {
             _penPath = new PathItem { Name = "Path", Stroke = StrokeSpec.Hairline(ColorRgb.Black) };
@@ -1307,8 +1332,17 @@ public sealed class CanvasWorkspace : Control
         }
 
         SubPath sub = _penPath.SubPaths[0];
-        _penNode = sub.AppendNode(model);
-        _dragStartModel = model;
+
+        // Shift constrains the new anchor to be orthogonal to the previous one.
+        Point2D placed = model;
+        if (_shiftHeld && sub.Nodes.Count > 0)
+        {
+            Point2D previous = sub.Nodes[^1].Anchor;
+            placed = previous + SnapTranslation(model - previous);
+        }
+
+        _penNode = sub.AppendNode(placed);
+        _dragStartModel = placed;
         InvalidateVisual();
     }
 
@@ -1319,12 +1353,14 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        if ((model - _dragStartModel).IsZero)
+        Point2D anchor = _penNode.Anchor;
+        Point2D target = _shiftHeld ? anchor + SnapTranslation(model - anchor) : model;
+        if ((target - anchor).IsZero)
         {
             return;
         }
 
-        _penNode.OutHandle = model;
+        _penNode.OutHandle = target;
         InvalidateVisual();
     }
 
@@ -1815,10 +1851,12 @@ public sealed class CanvasWorkspace : Control
         var previewPen = new Pen(new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2)), 1.0);
         previewPen.DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0);
 
-        Point last = ModelToScreen(sub.Nodes[^1].Anchor);
+        Point2D lastModel = sub.Nodes[^1].Anchor;
+        Point last = ModelToScreen(lastModel);
         if (_hoverModel is { } hover)
         {
-            context.DrawLine(previewPen, last, ModelToScreen(hover));
+            Point2D preview = _shiftHeld ? lastModel + SnapTranslation(hover - lastModel) : hover;
+            context.DrawLine(previewPen, last, ModelToScreen(preview));
         }
 
         if (sub.Nodes.Count >= 2)

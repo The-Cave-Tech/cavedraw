@@ -29,6 +29,9 @@ public enum EditorTool
 
     /// <summary>Drag out a closed ellipse between two bounding-box corners.</summary>
     Ellipse,
+
+    /// <summary>Select/move/resize artboards (and create new ones).</summary>
+    Artboard,
 }
 
 /// <summary>
@@ -54,6 +57,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// <summary>Raised after any change that must trigger a workspace repaint or a
     /// tree refresh (document edits, selection changes, tool switches).</summary>
     public event EventHandler? DocumentChanged;
+
+    /// <summary>Raised when the selection set changes (used to reset selection
+    /// chrome such as the oriented bounding box).</summary>
+    public event EventHandler? SelectionChanged;
 
     /// <summary>Raised while a pointer gesture mutates geometry (move/node/segment/
     /// resize drags) so the numeric Transform panel updates live, without the cost
@@ -107,6 +114,53 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     // Selection model
     // ------------------------------------------------------------------
 
+    private Artboard? _selectedArtboard;
+
+    /// <summary>The selected artboard (Artboard tool / tree), or null.</summary>
+    public Artboard? SelectedArtboard => _selectedArtboard;
+
+    /// <summary>Selects an artboard (clearing object/point/segment selections).</summary>
+    public void SelectArtboard(Artboard? artboard)
+    {
+        _selectedArtboard = artboard;
+        _selectedObjects.Clear();
+        _selectedSegments.Clear();
+        _point = null;
+        NotifySelectionChanged();
+        OnPropertyChanged(nameof(SelectedArtboard));
+    }
+
+    /// <summary>Creates a new A4-landscape artboard offset to the right of the last
+    /// one, with a fresh layer, and selects it (one undo step).</summary>
+    public void AddNewArtboard()
+    {
+        double offsetX = 0;
+        foreach (Artboard existing in Document.Artboards)
+        {
+            offsetX = Math.Max(offsetX, existing.X + existing.Width + 40);
+        }
+
+        var artboard = new Artboard(PageSizes.A4Landscape, new Point2D(offsetX, 0))
+        {
+            Name = $"Artboard {Document.Artboards.Count + 1}",
+        };
+        artboard.AddLayer("Layer 1");
+        Execute(new AddArtboardCommand(Document, artboard));
+        SelectArtboard(artboard);
+        Status = $"Added {artboard.Name}";
+    }
+
+    /// <summary>Sets an artboard's rectangle (position/size) as one undo step.</summary>
+    public void SetArtboardBounds(Artboard artboard, Rect2D before, Rect2D after)
+    {
+        if (before.Equals(after))
+        {
+            return;
+        }
+
+        Execute(new SetArtboardBoundsCommand(artboard, before, after));
+    }
+
     /// <summary>Selected objects (paths and groups), in picking order.</summary>
     public IReadOnlyList<LayerItem> SelectedObjects => _selectedObjects;
 
@@ -139,6 +193,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// <summary>Replaces the whole selection with a single object (or clears it).</summary>
     public void SelectObject(LayerItem? item)
     {
+        _selectedArtboard = null;
         _selectedObjects.Clear();
         _selectedSegments.Clear();
         _point = null;
@@ -197,6 +252,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     {
         if (!additive)
         {
+            _selectedArtboard = null;
             _selectedObjects.Clear();
             _selectedSegments.Clear();
             _point = null;
@@ -241,6 +297,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             return;
         }
 
+        _selectedArtboard = null;
         _selectedObjects.Clear();
         _selectedSegments.Clear();
         _point = null;
@@ -255,6 +312,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         var materialised = items.Where(i => i is PathItem or ArtGroup).ToArray();
         if (!additive)
         {
+            _selectedArtboard = null;
             _selectedObjects.Clear();
             _selectedSegments.Clear();
             _point = null;
@@ -312,6 +370,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// overlays show it).</summary>
     public void SelectPoint(PathItem path, int sub, int node)
     {
+        _selectedArtboard = null;
         // Ensure the path is part of the object selection WITHOUT clearing the
         // point we are about to set (SelectObject would wipe it).
         if (!_selectedObjects.Contains(path))
@@ -604,6 +663,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
         string label = remove.Count == 1 ? "Delete object" : $"Delete {remove.Count} objects";
         Execute(new CompositeCommand(label, remove));
+        _selectedArtboard = null;
         _selectedObjects.Clear();
         _selectedSegments.Clear();
         _point = null;
@@ -737,6 +797,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     private void NotifySelectionChanged()
     {
         PruneSegmentSelection();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
         OnPropertyChanged(nameof(SelectedObjects));
         OnPropertyChanged(nameof(PrimarySelection));
         OnPropertyChanged(nameof(HasMultiSelection));

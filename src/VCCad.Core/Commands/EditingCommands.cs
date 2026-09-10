@@ -34,6 +34,40 @@ public sealed class GeometryReplaceCommand : IUndoableCommand
 }
 
 /// <summary>
+/// Changes an artboard's rectangle (position and/or size) as one undo step.
+/// Used by the Artboard tool's move and resize gestures.
+/// </summary>
+public sealed class SetArtboardBoundsCommand : IUndoableCommand
+{
+    private readonly Artboard _artboard;
+    private readonly Geometry.Rect2D _before;
+    private readonly Geometry.Rect2D _after;
+
+    public string Description { get; }
+
+    public SetArtboardBoundsCommand(Artboard artboard, Geometry.Rect2D before, Geometry.Rect2D after,
+        string? description = null)
+    {
+        _artboard = artboard;
+        _before = before;
+        _after = after;
+        Description = description ?? "Edit artboard";
+    }
+
+    public void Do() => Apply(_after);
+
+    public void Undo() => Apply(_before);
+
+    private void Apply(Geometry.Rect2D rect)
+    {
+        _artboard.X = rect.X;
+        _artboard.Y = rect.Y;
+        _artboard.Width = rect.Width;
+        _artboard.Height = rect.Height;
+    }
+}
+
+/// <summary>
 /// Removes an item (path or group) from whatever container holds it. Undo
 /// re-inserts the item at its original z-index.
 /// </summary>
