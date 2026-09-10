@@ -646,11 +646,11 @@ public sealed class CanvasWorkspace : Control
     {
         _marqueeActive = false;
         Rect2D rect = Rect2D.FromPoints(_marqueeStart, _marqueeCurrent);
-        if (!rect.IsEmpty)
-        {
-            List<LayerItem> hits = ItemsIntersectingRect(rect);
-            _vm!.SelectRange(hits, additive: _shiftHeld);
-        }
+
+        // Even a click (zero-area rectangle) resolves the selection: without
+        // Shift it clears it, with Shift it leaves the existing selection alone.
+        List<LayerItem> hits = rect.IsEmpty ? new List<LayerItem>() : ItemsIntersectingRect(rect);
+        _vm!.SelectRange(hits, additive: _shiftHeld);
 
         InvalidateVisual();
     }
