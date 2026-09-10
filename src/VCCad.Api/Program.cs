@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using Microsoft.AspNetCore.StaticFiles;
 using System.Text;
 using System.Text.Json;
 using VCCad.Api.JsonRpc;
@@ -157,7 +158,18 @@ bool hasEditor = Directory.Exists(webRoot) && File.Exists(Path.Combine(webRoot, 
 if (hasEditor)
 {
     app.UseDefaultFiles();
-    app.UseStaticFiles();
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        // The editor shell (index.html / main.js / _framework) must never be
+        // served stale after a redeploy, or a browser reload silently keeps the
+        // old build. Disable caching for the app assets; the API is dynamic.
+        OnPrepareResponse = ctx =>
+        {
+            ctx.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+            ctx.Context.Response.Headers.Pragma = "no-cache";
+            ctx.Context.Response.Headers.Expires = "0";
+        },
+    });
 
     // Some wasm runtime assets (e.g. icudt_*.dat, *.wasm) are requested with
     // byte-exact paths that the static-file content-type pipeline does not
@@ -188,6 +200,7 @@ if (hasEditor)
 
         context.Response.Clear();
         context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
         await context.Response.SendFileAsync(fullPath);
     });
 
