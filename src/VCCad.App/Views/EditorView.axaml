@@ -82,54 +82,115 @@
 
       <DockPanel Grid.Column="4">
         <TextBlock DockPanel.Dock="Top" Text="Properties" FontWeight="Bold" Margin="8,6"/>
-        <ScrollViewer>
-        <StackPanel Margin="8,4" Spacing="6">
-          <TextBlock x:Name="SelectionInfo" Text="(no selection)" TextWrapping="Wrap"/>
+        <TabControl Name="PropertiesTabs" Margin="4">
+          <TabItem Header="Transform">
+            <ScrollViewer>
+              <StackPanel Margin="6" Spacing="6">
+                <TextBlock x:Name="SelectionInfo" Text="(no selection)" TextWrapping="Wrap"/>
+                <TextBlock Text="Transform" FontWeight="Bold"/>
+                <TextBlock x:Name="TransformModeNote" FontSize="11" Foreground="#777777"
+                           Text="Position / size / rotation of the selection"/>
+                <TextBlock Text="Reference point" FontSize="11" Foreground="#555555"/>
+                <Grid ColumnDefinitions="*,*,*" HorizontalAlignment="Left">
+                  <Button x:Name="Pivot0" Content="┌" Tag="0" Click="OnPivot" MinWidth="26" Margin="0,0,2,2"/>
+                  <Button x:Name="Pivot1" Content="┬" Tag="1" Click="OnPivot" MinWidth="26" Margin="0,0,2,2" Grid.Column="1"/>
+                  <Button x:Name="Pivot2" Content="┐" Tag="2" Click="OnPivot" MinWidth="26" Margin="0,0,0,2" Grid.Column="2"/>
+                  <Button x:Name="Pivot3" Content="├" Tag="3" Click="OnPivot" MinWidth="26" Margin="0,0,2,2" Grid.Row="1"/>
+                  <Button x:Name="Pivot4" Content="┼" Tag="4" Click="OnPivot" MinWidth="26" Margin="0,0,2,2" Grid.Row="1" Grid.Column="1"/>
+                  <Button x:Name="Pivot5" Content="┤" Tag="5" Click="OnPivot" MinWidth="26" Margin="0,0,0,2" Grid.Row="1" Grid.Column="2"/>
+                  <Button x:Name="Pivot6" Content="└" Tag="6" Click="OnPivot" MinWidth="26" Margin="0,0,2,0" Grid.Row="2"/>
+                  <Button x:Name="Pivot7" Content="┴" Tag="7" Click="OnPivot" MinWidth="26" Margin="0,0,2,0" Grid.Row="2" Grid.Column="1"/>
+                  <Button x:Name="Pivot8" Content="┘" Tag="8" Click="OnPivot" MinWidth="26" Margin="0,0,0,0" Grid.Row="2" Grid.Column="2"/>
+                </Grid>
+                <Grid ColumnDefinitions="Auto,*,10,Auto,*">
+                  <TextBlock Text="X" VerticalAlignment="Center"/>
+                  <TextBox x:Name="XBox" Grid.Column="1" KeyDown="OnFieldKeyDown"/>
+                  <TextBlock Text="Y" Grid.Column="3" VerticalAlignment="Center"/>
+                  <TextBox x:Name="YBox" Grid.Column="4" KeyDown="OnFieldKeyDown"/>
+                </Grid>
+                <Grid ColumnDefinitions="Auto,*,10,Auto,*">
+                  <TextBlock Text="W" VerticalAlignment="Center"/>
+                  <TextBox x:Name="WBox" Grid.Column="1" KeyDown="OnFieldKeyDown"/>
+                  <TextBlock Text="H" Grid.Column="3" VerticalAlignment="Center"/>
+                  <TextBox x:Name="HBox" Grid.Column="4" KeyDown="OnFieldKeyDown"/>
+                </Grid>
+                <Grid ColumnDefinitions="Auto,*,10,Auto,*">
+                  <TextBlock Text="Rot" VerticalAlignment="Center"/>
+                  <TextBox x:Name="AngleBox" Grid.Column="1" KeyDown="OnFieldKeyDown"/>
+                  <TextBlock Text="deg" Grid.Column="3" VerticalAlignment="Center" Foreground="#777777"/>
+                </Grid>
+                <TextBlock Text="Hints:" FontWeight="SemiBold" Margin="0,6,0,0"/>
+                <TextBlock x:Name="HintText" TextWrapping="Wrap" Foreground="#666666"
+                          Text="V — select/move · Shift adds · A — nodes, segments, handles&#10;P — pen · drag Rectangle/Ellipse to draw&#10;Middle/right drag pans · Ctrl+wheel zooms"/>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
 
-          <Border BorderBrush="#CCCCCC" BorderThickness="0,1,0,0" Margin="0,4,0,0" Padding="0,4,0,0">
-            <StackPanel Spacing="5">
-              <TextBlock Text="Transform" FontWeight="Bold"/>
-              <TextBlock x:Name="TransformModeNote" FontSize="11" Foreground="#777777"
-                         Text="Position / size / rotation of the selection"/>
-              <TextBlock Text="Reference point" FontSize="11" Foreground="#555555"/>
+          <TabItem Header="Color">
+            <ScrollViewer>
+              <StackPanel Margin="6" Spacing="6">
+                <TextBlock Text="Fill" FontWeight="Bold"/>
+                <Grid ColumnDefinitions="Auto,*,8,Auto,*,8,Auto,*">
+                  <TextBlock Text="R" VerticalAlignment="Center"/>
+                  <TextBox x:Name="FillR" Grid.Column="1"/>
+                  <TextBlock Text="G" Grid.Column="3" VerticalAlignment="Center"/>
+                  <TextBox x:Name="FillG" Grid.Column="4"/>
+                  <TextBlock Text="B" Grid.Column="6" VerticalAlignment="Center"/>
+                  <TextBox x:Name="FillB" Grid.Column="7"/>
+                </Grid>
+                <Grid ColumnDefinitions="Auto,*">
+                  <TextBlock Text="Rule" VerticalAlignment="Center"/>
+                  <ComboBox x:Name="FillRuleBox" Grid.Column="1" SelectedIndex="0">
+                    <ComboBoxItem Content="NonZero"/>
+                    <ComboBoxItem Content="EvenOdd"/>
+                  </ComboBox>
+                </Grid>
+                <Button Content="Apply Fill" Click="OnApplyFill"/>
 
-              <Grid ColumnDefinitions="*,*,*" HorizontalAlignment="Left">
-                <Button x:Name="Pivot0" Content="┌" Tag="0" Click="OnPivot" MinWidth="26" Margin="0,0,2,2"/>
-                <Button x:Name="Pivot1" Content="┬" Tag="1" Click="OnPivot" MinWidth="26" Margin="0,0,2,2" Grid.Column="1"/>
-                <Button x:Name="Pivot2" Content="┐" Tag="2" Click="OnPivot" MinWidth="26" Margin="0,0,0,2" Grid.Column="2"/>
-                <Button x:Name="Pivot3" Content="├" Tag="3" Click="OnPivot" MinWidth="26" Margin="0,0,2,2" Grid.Row="1"/>
-                <Button x:Name="Pivot4" Content="┼" Tag="4" Click="OnPivot" MinWidth="26" Margin="0,0,2,2" Grid.Row="1" Grid.Column="1"/>
-                <Button x:Name="Pivot5" Content="┤" Tag="5" Click="OnPivot" MinWidth="26" Margin="0,0,0,2" Grid.Row="1" Grid.Column="2"/>
-                <Button x:Name="Pivot6" Content="└" Tag="6" Click="OnPivot" MinWidth="26" Margin="0,0,2,0" Grid.Row="2"/>
-                <Button x:Name="Pivot7" Content="┴" Tag="7" Click="OnPivot" MinWidth="26" Margin="0,0,2,0" Grid.Row="2" Grid.Column="1"/>
-                <Button x:Name="Pivot8" Content="┘" Tag="8" Click="OnPivot" MinWidth="26" Margin="0,0,0,0" Grid.Row="2" Grid.Column="2"/>
-              </Grid>
+                <TextBlock Text="Stroke colour" FontWeight="Bold" Margin="0,6,0,0"/>
+                <Grid ColumnDefinitions="Auto,*,8,Auto,*,8,Auto,*">
+                  <TextBlock Text="R" VerticalAlignment="Center"/>
+                  <TextBox x:Name="StrokeR" Grid.Column="1"/>
+                  <TextBlock Text="G" Grid.Column="3" VerticalAlignment="Center"/>
+                  <TextBox x:Name="StrokeG" Grid.Column="4"/>
+                  <TextBlock Text="B" Grid.Column="6" VerticalAlignment="Center"/>
+                  <TextBox x:Name="StrokeB" Grid.Column="7"/>
+                </Grid>
+                <Button Content="Apply Stroke Colour" Click="OnApplyStrokeColor"/>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
 
-              <Grid ColumnDefinitions="Auto,*,10,Auto,*">
-                <TextBlock Text="X" VerticalAlignment="Center"/>
-                <TextBox x:Name="XBox" Grid.Column="1" KeyDown="OnFieldKeyDown"/>
-                <TextBlock Text="Y" Grid.Column="3" VerticalAlignment="Center"/>
-                <TextBox x:Name="YBox" Grid.Column="4" KeyDown="OnFieldKeyDown"/>
-              </Grid>
-              <Grid ColumnDefinitions="Auto,*,10,Auto,*">
-                <TextBlock Text="W" VerticalAlignment="Center"/>
-                <TextBox x:Name="WBox" Grid.Column="1" KeyDown="OnFieldKeyDown"/>
-                <TextBlock Text="H" Grid.Column="3" VerticalAlignment="Center"/>
-                <TextBox x:Name="HBox" Grid.Column="4" KeyDown="OnFieldKeyDown"/>
-              </Grid>
-              <Grid ColumnDefinitions="Auto,*,10,Auto,*">
-                <TextBlock Text="Rot" VerticalAlignment="Center"/>
-                <TextBox x:Name="AngleBox" Grid.Column="1" KeyDown="OnFieldKeyDown"/>
-                <TextBlock Text="deg" Grid.Column="3" VerticalAlignment="Center" Foreground="#777777"/>
-              </Grid>
-            </StackPanel>
-          </Border>
-
-          <TextBlock Text="Hints:" FontWeight="SemiBold"/>
-          <TextBlock x:Name="HintText" TextWrapping="Wrap" Foreground="#666666"
-                    Text="V — select/move · Shift adds · A — nodes, segments, handles&#10;P — pen · drag Rectangle/Ellipse to draw&#10;Middle/right drag pans · Ctrl+wheel zooms"/>
-        </StackPanel>
-        </ScrollViewer>
+          <TabItem Header="Stroke">
+            <ScrollViewer>
+              <StackPanel Margin="6" Spacing="6">
+                <Grid ColumnDefinitions="Auto,*,10,Auto,*">
+                  <TextBlock Text="Width" VerticalAlignment="Center"/>
+                  <TextBox x:Name="StrokeWidthBox" Grid.Column="1"/>
+                  <TextBlock Text="Miter" Grid.Column="3" VerticalAlignment="Center"/>
+                  <TextBox x:Name="MiterBox" Grid.Column="4"/>
+                </Grid>
+                <Grid ColumnDefinitions="Auto,*">
+                  <TextBlock Text="Cap" VerticalAlignment="Center"/>
+                  <ComboBox x:Name="StrokeCapBox" Grid.Column="1" SelectedIndex="0">
+                    <ComboBoxItem Content="Butt"/>
+                    <ComboBoxItem Content="Round"/>
+                    <ComboBoxItem Content="Square"/>
+                  </ComboBox>
+                </Grid>
+                <Grid ColumnDefinitions="Auto,*">
+                  <TextBlock Text="Join" VerticalAlignment="Center"/>
+                  <ComboBox x:Name="StrokeJoinBox" Grid.Column="1" SelectedIndex="0">
+                    <ComboBoxItem Content="Miter"/>
+                    <ComboBoxItem Content="Round"/>
+                    <ComboBoxItem Content="Bevel"/>
+                  </ComboBox>
+                </Grid>
+                <Button Content="Apply Stroke" Click="OnApplyStroke"/>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+        </TabControl>
       </DockPanel>
     </Grid>
 

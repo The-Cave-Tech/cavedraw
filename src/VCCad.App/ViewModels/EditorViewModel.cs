@@ -378,6 +378,55 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     }
 
     // ------------------------------------------------------------------
+    // Style (colour / stroke) application for the Color & Stroke tabs
+    // ------------------------------------------------------------------
+
+    /// <summary>Applies a fill (colour + rule) to every selected path, one undo step.</summary>
+    public void ApplyFill(ColorRgb color, FillRule rule)
+    {
+        var edits = SelectedPaths()
+            .Select(p => (IUndoableCommand)new SetFillCommand(p, FillSpec.Solid(color, rule)))
+            .ToList();
+        ExecuteIfAny(edits, "Fill");
+    }
+
+    /// <summary>Applies a stroke colour to every selected path, keeping each path's
+    /// existing width/caps/joins.</summary>
+    public void ApplyStrokeColor(ColorRgb color)
+    {
+        var edits = SelectedPaths().Select(p =>
+        {
+            double width = p.Stroke.Width > 0 ? p.Stroke.Width : 1.0;
+            return (IUndoableCommand)new SetStrokeCommand(p,
+                new StrokeSpec(true, color, width, p.Stroke.Cap, p.Stroke.Join, p.Stroke.MiterLimit));
+        }).ToList();
+        ExecuteIfAny(edits, "Stroke colour");
+    }
+
+    /// <summary>Applies stroke geometry (width/cap/join/miter) to selected paths,
+    /// keeping each path's existing colour.</summary>
+    public void ApplyStroke(double width, StrokeCap cap, StrokeJoin join, double miterLimit)
+    {
+        var edits = SelectedPaths().Select(p =>
+        {
+            ColorRgb color = p.Stroke.IsVisible ? p.Stroke.Color : ColorRgb.Black;
+            return (IUndoableCommand)new SetStrokeCommand(p,
+                new StrokeSpec(true, color, Math.Max(0, width), cap, join, Math.Max(1, miterLimit)));
+        }).ToList();
+        ExecuteIfAny(edits, "Stroke");
+    }
+
+    private void ExecuteIfAny(List<IUndoableCommand> edits, string label)
+    {
+        if (edits.Count == 0)
+        {
+            return;
+        }
+
+        Execute(edits.Count == 1 ? edits[0] : new CompositeCommand(label, edits));
+    }
+
+    // ------------------------------------------------------------------
     // Object numeric transform (X / Y / W / H / rotation + 9-point pivot)
     // ------------------------------------------------------------------
 

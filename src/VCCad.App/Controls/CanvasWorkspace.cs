@@ -1108,10 +1108,16 @@ public sealed class CanvasWorkspace : Control
                 if (_nodeIsIn)
                 {
                     node.InHandle = target;
-                    // Keep the shared endpoint smooth: mirror the opposite handle.
+                    // Keep the shared endpoint colinear while preserving the
+                    // opposite handle's LENGTH (only its direction changes).
                     if (_nodeWasSmooth)
                     {
-                        node.OutHandle = _nodeAnchorStart + (_nodeAnchorStart - target);
+                        Vector2D dir = (target - _nodeAnchorStart).Normalized;
+                        double outLen = (_nodeOutStart - _nodeAnchorStart).Length;
+                        if (!dir.IsZero)
+                        {
+                            node.OutHandle = _nodeAnchorStart - dir * outLen;
+                        }
                     }
                 }
                 else
@@ -1119,7 +1125,12 @@ public sealed class CanvasWorkspace : Control
                     node.OutHandle = target;
                     if (_nodeWasSmooth)
                     {
-                        node.InHandle = _nodeAnchorStart + (_nodeAnchorStart - target);
+                        Vector2D dir = (target - _nodeAnchorStart).Normalized;
+                        double inLen = (_nodeInStart - _nodeAnchorStart).Length;
+                        if (!dir.IsZero)
+                        {
+                            node.InHandle = _nodeAnchorStart - dir * inLen;
+                        }
                     }
                 }
 
@@ -1206,10 +1217,12 @@ public sealed class CanvasWorkspace : Control
         double distance = Math.Abs(line.Cross(draggedTarget - _nodeAnchorStart)) / line.Length;
         if (distance <= PickTolerance)
         {
-            // Mirror the opposite handle about the anchor: equal length, exactly
-            // colinear — the smooth-node geometry we snap to on release.
+            // Point the dragged handle along the line (opposite side of the
+            // anchor) while KEEPING ITS CURRENT LENGTH.
+            double draggedLength = (draggedTarget - _nodeAnchorStart).Length;
+            Vector2D direction = (_nodeAnchorStart - opposite).Normalized;
             _handleSnapArmed = true;
-            _handleSnapPos = _nodeAnchorStart + (_nodeAnchorStart - opposite);
+            _handleSnapPos = _nodeAnchorStart + direction * draggedLength;
         }
     }
 
@@ -1699,10 +1712,14 @@ public sealed class CanvasWorkspace : Control
         context.DrawRectangle(fill, pen, screen);
     }
 
+    /// <summary>The neutral grey used for control-handle lines (and, dashed, for
+    /// selected-segment overlays).</summary>
+    private static IBrush HandleLineBrush { get; } =
+        new SolidColorBrush(Color.FromArgb(210, 0x76, 0x76, 0x76));
+
     private void DrawHandleLine(DrawingContext context, Point from, Point to)
     {
-        var lineBrush = new SolidColorBrush(Color.FromArgb(210, 0x76, 0x76, 0x76));
-        context.DrawLine(new Pen(lineBrush, 1.0), from, to);
+        context.DrawLine(new Pen(HandleLineBrush, 1.0), from, to);
     }
 
     private void PaintSegmentHighlights(DrawingContext context)
@@ -1721,15 +1738,12 @@ public sealed class CanvasWorkspace : Control
             SubPath sp = path.SubPaths[sub];
             CubicBezier curve = sp.GetSegment(seg);
 
-            // Restroke the segment with ITS OWN colour, just heavier — the pen
-            // colour must not change for selected segments.
-            IBrush segmentBrush = path.Stroke.HasVisibleOutline
-                ? ToBrush(path.Stroke.Color, 1.0)
-                : new SolidColorBrush(Color.FromRgb(0x50, 0x50, 0x50));
-            double baseWidth = path.Stroke.HasVisibleOutline
-                ? Math.Max(0.5, path.Stroke.Width * _layout.Zoom)
-                : 1.0;
-            var segmentPen = new Pen(segmentBrush, baseWidth + Math.Max(2.5, 2.0 * _layout.Zoom));
+            // Overlay a dashed 1-pixel line in the same colour used for control
+            // handle lines — the underlying pen colour/weight is untouched.
+            var segmentPen = new Pen(HandleLineBrush, 1.0)
+            {
+                DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0),
+            };
 
             var geometry = new StreamGeometry();
             using (StreamGeometryContext g = geometry.Open())

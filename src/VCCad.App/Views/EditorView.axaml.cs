@@ -7,6 +7,7 @@ using Avalonia.Media;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
 using VCCad.Geometry;
+using ModelFillRule = VCCad.Core.Model.FillRule;
 
 namespace VCCad.App.Views;
 
@@ -73,6 +74,84 @@ public partial class EditorView : UserControl
         ZoomLabel.Text = $"{Workspace.Zoom * 100:0.##}%";
         SelectionInfo.Text = DescribeSelection();
         RefreshTransformFields();
+        RefreshStyleFields();
+    }
+
+    // ------------------------------------------------------------------
+    // Color & Stroke tabs
+    // ------------------------------------------------------------------
+
+    private void RefreshStyleFields()
+    {
+        if (_viewModel.PrimarySelection is not PathItem path)
+        {
+            foreach (TextBox box in new[] { FillR, FillG, FillB, StrokeR, StrokeG, StrokeB, StrokeWidthBox, MiterBox })
+            {
+                SetBoxText(box, null);
+            }
+
+            return;
+        }
+
+        SetBoxText(FillR, Math.Round(path.Fill.Color.R * 255));
+        SetBoxText(FillG, Math.Round(path.Fill.Color.G * 255));
+        SetBoxText(FillB, Math.Round(path.Fill.Color.B * 255));
+        FillRuleBox.SelectedIndex = path.Fill.Rule == ModelFillRule.EvenOdd ? 1 : 0;
+
+        SetBoxText(StrokeR, Math.Round(path.Stroke.Color.R * 255));
+        SetBoxText(StrokeG, Math.Round(path.Stroke.Color.G * 255));
+        SetBoxText(StrokeB, Math.Round(path.Stroke.Color.B * 255));
+
+        SetBoxText(StrokeWidthBox, path.Stroke.Width);
+        SetBoxText(MiterBox, path.Stroke.MiterLimit);
+        StrokeCapBox.SelectedIndex = path.Stroke.Cap switch
+        {
+            StrokeCap.Round => 1,
+            StrokeCap.Square => 2,
+            _ => 0,
+        };
+        StrokeJoinBox.SelectedIndex = path.Stroke.Join switch
+        {
+            StrokeJoin.Round => 1,
+            StrokeJoin.Bevel => 2,
+            _ => 0,
+        };
+    }
+
+    private static ColorRgb ReadColor(TextBox r, TextBox g, TextBox b)
+    {
+        byte Channel(TextBox box)
+        {
+            return double.TryParse(box.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double v)
+                ? (byte)Math.Clamp(Math.Round(v), 0, 255)
+                : (byte)0;
+        }
+
+        return ColorRgb.FromBytes(Channel(r), Channel(g), Channel(b));
+    }
+
+    private void OnApplyFill(object? sender, RoutedEventArgs e)
+    {
+        ColorRgb color = ReadColor(FillR, FillG, FillB);
+        ModelFillRule rule = FillRuleBox.SelectedIndex == 1 ? ModelFillRule.EvenOdd : ModelFillRule.NonZero;
+        _viewModel.ApplyFill(color, rule);
+        UpdateStatusAndZoom();
+    }
+
+    private void OnApplyStrokeColor(object? sender, RoutedEventArgs e)
+    {
+        _viewModel.ApplyStrokeColor(ReadColor(StrokeR, StrokeG, StrokeB));
+        UpdateStatusAndZoom();
+    }
+
+    private void OnApplyStroke(object? sender, RoutedEventArgs e)
+    {
+        double width = TryRead(StrokeWidthBox, out double w) ? w : 1.0;
+        double miter = TryRead(MiterBox, out double m) ? m : 4.0;
+        StrokeCap cap = StrokeCapBox.SelectedIndex switch { 1 => StrokeCap.Round, 2 => StrokeCap.Square, _ => StrokeCap.Butt };
+        StrokeJoin join = StrokeJoinBox.SelectedIndex switch { 1 => StrokeJoin.Round, 2 => StrokeJoin.Bevel, _ => StrokeJoin.Miter };
+        _viewModel.ApplyStroke(width, cap, join, miter);
+        UpdateStatusAndZoom();
     }
 
     // ------------------------------------------------------------------
