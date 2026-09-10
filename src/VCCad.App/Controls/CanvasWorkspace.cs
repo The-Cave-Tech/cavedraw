@@ -117,6 +117,13 @@ public sealed class CanvasWorkspace : Control
     private bool _segmentBendMode;
     private double _bendGrabU;
 
+    // Click (no drag) on an ALREADY-selected segment inserts a new node there.
+    private bool _pendingInsertArmed;
+    private PathItem? _pendingInsertPath;
+    private int _pendingInsertSub;
+    private int _pendingInsertSeg;
+    private Point2D _pendingInsertPoint;
+
     // Whether the current gesture actually displaced anything (commit gating).
     private bool _gestureMoved;
 
@@ -943,6 +950,8 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        _pendingInsertArmed = false;
+
         // 1) Grabbing a node or handle takes priority over segment selection.
         PathItem? pickPath = null;
         NodePick? pick = null;
@@ -1007,15 +1016,29 @@ public sealed class CanvasWorkspace : Control
         {
             _vm.ClearPointSelection(); // a segment isn't a point
             int subIndex = segmentPath.SubPaths.IndexOf(segment.Value.SubPath);
+            bool wasSelected = _vm.IsSegmentSelected(segmentPath, subIndex, segment.Value.SegmentIndex);
+
             _vm.SelectSegment(segmentPath, subIndex, segment.Value.SegmentIndex, additive: _shiftHeld);
             InvalidateVisual();
 
-            // Drag the segment only when it is still selected after the toggle.
-            if (_vm.IsSegmentSelected(segmentPath, subIndex, segment.Value.SegmentIndex))
+            if (!_vm.IsSegmentSelected(segmentPath, subIndex, segment.Value.SegmentIndex))
             {
-                BeginSegmentDrag(segmentPath, subIndex, segment.Value.SegmentIndex, model);
+                return; // Shift toggled it off
             }
 
+            // A plain click on a segment that was ALREADY selected inserts a point
+            // there; a drag instead bends/moves the segment. Arm the insertion and
+            // cancel it if the pointer actually moves.
+            if (wasSelected && !_shiftHeld)
+            {
+                _pendingInsertArmed = true;
+                _pendingInsertPath = segmentPath;
+                _pendingInsertSub = subIndex;
+                _pendingInsertSeg = segment.Value.SegmentIndex;
+                _pendingInsertPoint = model;
+            }
+
+            BeginSegmentDrag(segmentPath, subIndex, segment.Value.SegmentIndex, model);
             return;
         }
 
@@ -1251,6 +1274,20 @@ public sealed class CanvasWorkspace : Control
 
     private void NodeRelease()
     {
+        if (_pendingInsertArmed && !_gestureMoved && _pendingInsertPath is not null)
+        {
+            _vm!.InsertPointOnSegment(_pendingInsertPath, _pendingInsertSub, _pendingInsertSeg, _pendingInsertPoint);
+            _pendingInsertArmed = false;
+            _segmentPath = null;
+            _segmentSub = null;
+            _segmentBefore = null;
+            _segmentNodeA = null;
+            _segmentNodeB = null;
+            _segmentBendMode = false;
+            _gestureMoved = false;
+            return;
+        }
+
         if (_handleSnapArmed && _nodePath is not null && _nodeSub is not null && _nodeGrabHandle)
         {
             // Release inside the snap epsilon: land the handle exactly on the

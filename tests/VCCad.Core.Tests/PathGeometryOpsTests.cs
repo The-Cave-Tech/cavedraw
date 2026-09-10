@@ -66,6 +66,46 @@ public class PathGeometryOpsTests
     }
 
     [Fact]
+    public void InsertNodeOnStraightSegmentSplitsWithoutChangingShape()
+    {
+        PathItem rect = PathFactory.CreateRectangle("r", new Rect2D(0, 0, 100, 50));
+        SubPath sub = rect.SubPaths[0];
+        Rect2D before = rect.BoundingBox();
+
+        PathNode inserted = sub.InsertNodeOnSegment(0, 0.5);
+
+        Assert.Equal(5, sub.Nodes.Count);
+        Assert.Equal(5, sub.SegmentCount);
+        Assert.True(inserted.Anchor.NearlyEquals(new Point2D(50, 0), 1e-9));
+        // Splitting a straight line leaves the outline unchanged.
+        Assert.True(rect.BoundingBox().NearlyEquals(before, 1e-9));
+    }
+
+    [Fact]
+    public void InsertNodeOnBezierSplicesExactly()
+    {
+        var curve = new PathItem();
+        SubPath sub = curve.AddSubPath(closed: false);
+        var a = sub.AppendNode(new Point2D(0, 0));
+        var b = sub.AppendNode(new Point2D(200, 0));
+        a.OutHandle = new Point2D(60, 160);
+        b.InHandle = new Point2D(140, -160);
+
+        CubicBezier original = sub.GetSegment(0);
+        PathNode inserted = sub.InsertNodeOnSegment(0, 0.4);
+
+        // The new node lies exactly on the original curve…
+        Point2D expected = original.PointAt(0.4);
+        Assert.True(inserted.Anchor.NearlyEquals(expected, 1e-9));
+
+        // …and the two replacement segments reproduce it (sample mid-points).
+        CubicBezier left = sub.GetSegment(0);
+        CubicBezier right = sub.GetSegment(1);
+        Assert.True(left.PointAt(0.5).NearlyEquals(original.PointAt(0.2), 1e-6));
+        Assert.True(right.PointAt(0.5).NearlyEquals(original.PointAt(0.7), 1e-6));
+    }
+
+    [Fact]
     public void ClosestSegmentFindsThePickedSegment()
     {
         // Path of two collinear runs: horizontal from (0,0) and a vertical tail.

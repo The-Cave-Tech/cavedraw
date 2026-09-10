@@ -101,6 +101,41 @@ public sealed class SubPath
     }
 
     /// <summary>
+    /// Inserts a new node on an existing segment at parameter
+    /// <paramref name="t"/> ∈ (0,1), splicing the cubic exactly using de Casteljau
+    /// so the path's shape is unchanged. The start node's outgoing handle and the
+    /// end node's incoming handle are updated, and the new node carries the
+    /// interior control points of the two sub-curves.
+    /// </summary>
+    public PathNode InsertNodeOnSegment(int segmentIndex, double t)
+    {
+        t = MathUtils.Clamp(t, 1e-6, 1.0 - 1e-6);
+        CubicBezier curve = GetSegment(segmentIndex);
+        (CubicBezier left, CubicBezier right) = curve.SplitAt(t);
+
+        (int startIndex, int endIndex) = SegmentEndNodes(segmentIndex);
+        PathNode start = Nodes[startIndex];
+        PathNode end = Nodes[endIndex];
+
+        start.OutHandle = left.P1;
+        end.InHandle = right.P2;
+
+        var inserted = new PathNode(left.P3, left.P2, right.P1);
+
+        // For a normal segment insert right after the start node; for the closing
+        // segment (start = last node, end = node 0) append so the loop order stays
+        // last → new → first.
+        int insertAt = startIndex + 1;
+        if (insertAt > Nodes.Count)
+        {
+            insertAt = Nodes.Count;
+        }
+
+        Nodes.Insert(insertAt, inserted);
+        return inserted;
+    }
+
+    /// <summary>
     /// The tight bounding box of this subpath: the union of every segment's own
     /// tight box. Empty subpaths yield <see cref="Rect2D.Empty"/>.
     ///

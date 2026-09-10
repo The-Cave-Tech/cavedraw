@@ -304,6 +304,47 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         NotifySelectionChanged();
     }
 
+    /// <summary>Clears only the segment/point sub-selection, keeping objects selected.</summary>
+    public void ClearSegmentSelection()
+    {
+        if (_selectedSegments.Count == 0 && _point is null)
+        {
+            return;
+        }
+
+        _selectedSegments.Clear();
+        _point = null;
+        NotifySelectionChanged();
+    }
+
+    /// <summary>
+    /// Inserts a new node on a segment at the location nearest
+    /// <paramref name="near"/> (one undo step). Bézier segments are spliced with
+    /// de Casteljau so the curve's shape is preserved exactly.
+    /// </summary>
+    public void InsertPointOnSegment(PathItem path, int subIndex, int segmentIndex, Point2D near)
+    {
+        if (subIndex < 0 || subIndex >= path.SubPaths.Count)
+        {
+            return;
+        }
+
+        SubPath sub = path.SubPaths[subIndex];
+        if (segmentIndex < 0 || segmentIndex >= sub.SegmentCount)
+        {
+            return;
+        }
+
+        sub.GetSegment(segmentIndex).NearestPoint(near, out double t, out _);
+
+        PathItem before = path.GeometrySnapshot();
+        sub.InsertNodeOnSegment(segmentIndex, t);
+        PathItem after = path.GeometrySnapshot();
+        Execute(new GeometryReplaceCommand(path, before, after, "Add point"));
+        ClearSegmentSelection();
+        Status = "Point added";
+    }
+
     /// <summary>Sets the object selection to a set (marquee): replaces it unless
     /// <paramref name="additive"/>, in which case items are added to the current
     /// selection (Shift-marquee).</summary>

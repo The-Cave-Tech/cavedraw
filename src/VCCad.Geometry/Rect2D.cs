@@ -135,4 +135,11 @@ public readonly record struct Rect2D(double X, double Y, double Width, double He
 
         return new Rect2D(minX, minY, maxX - minX, maxY - minY);
     }
+
+    /// <summary>True when all four components are within tolerance of the other rect.</summary>
+    public bool NearlyEquals(Rect2D other, double epsilon = MathUtils.Epsilon)
+        => MathUtils.NearlyEquals(X, other.X, epsilon)
+           && MathUtils.NearlyEquals(Y, other.Y, epsilon)
+           && MathUtils.NearlyEquals(Width, other.Width, epsilon)
+           && MathUtils.NearlyEquals(Height, other.Height, epsilon);
 }
