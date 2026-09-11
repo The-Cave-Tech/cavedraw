@@ -9,12 +9,13 @@
              Name="Root"
              Background="{DynamicResource VcBackground}">
 
-  <Grid RowDefinitions="Auto,Auto,*,Auto" Background="{DynamicResource VcBackground}">
+  <Grid RowDefinitions="Auto,*,Auto" Background="{DynamicResource VcBackground}">
 
-    <!-- Menu strip -->
+    <!-- Menu strip (Windows menu is populated in code) -->
     <Menu Grid.Row="0">
       <MenuItem Header="_File">
         <MenuItem Header="_New" Click="OnNew"/>
+        <MenuItem Header="New _Artboard" Click="OnNewArtboard"/>
         <MenuItem Header="_Open from Server…" Click="OnOpen"/>
         <MenuItem Header="_Save to Server" Click="OnSave"/>
         <Separator/>
@@ -28,189 +29,37 @@
         <Separator/>
         <MenuItem Header="_Delete" Click="OnDelete"/>
       </MenuItem>
-      <MenuItem Header="_Tools">
-        <MenuItem Header="Selection (_V)" Click="OnToolSelect"/>
-        <MenuItem Header="Direct Selection / _Nodes (A)" Click="OnToolNode"/>
-        <MenuItem Header="_Pen (P)" Click="OnToolPen"/>
-        <Separator/>
-        <MenuItem Header="_Rectangle (M)" Click="OnToolRectangle"/>
-        <MenuItem Header="_Ellipse (L)" Click="OnToolEllipse"/>
-      </MenuItem>
       <MenuItem Header="_View">
         <MenuItem Header="_Zoom In" Click="OnZoomIn"/>
         <MenuItem Header="Zoom _Out" Click="OnZoomOut"/>
         <MenuItem Header="_Actual Size" Click="OnActualSize"/>
         <MenuItem Header="_Fit in Window" Click="OnFitInWindow"/>
       </MenuItem>
+      <MenuItem Header="_Windows" Name="WindowsMenu"/>
     </Menu>
 
-    <!-- Toolbar -->
-    <Border Grid.Row="1" Classes="toolbar">
-      <StackPanel Orientation="Horizontal" Spacing="2">
-        <TextBlock Classes="brand" Text="VCCad"/>
-        <Border Classes="sep"/>
-        <Button Classes="tool" Content="＋" ToolTip.Tip="New document" Click="OnNew"/>
-        <Button Classes="tool" Content="▤" ToolTip.Tip="Open from server" Click="OnOpen"/>
-        <Button Classes="tool" Content="▣" ToolTip.Tip="Save to server" Click="OnSave"/>
-        <Border Classes="sep"/>
-        <Button Classes="tool" Content="↶" ToolTip.Tip="Undo" Click="OnUndo"/>
-        <Button Classes="tool" Content="↷" ToolTip.Tip="Redo" Click="OnRedo"/>
-        <Border Classes="sep"/>
-        <Button x:Name="ToolSelectButton" Classes="tool" Content="⬈" ToolTip.Tip="Selection (V)" Click="OnToolSelect"/>
-        <Button x:Name="ToolNodeButton" Classes="tool" Content="◇" ToolTip.Tip="Nodes / direct selection (A)" Click="OnToolNode"/>
-        <Button x:Name="ToolPenButton" Classes="tool" Content="✎" ToolTip.Tip="Pen (P)" Click="OnToolPen"/>
-        <Border Classes="sep"/>
-        <Button x:Name="ToolRectButton" Classes="tool" Content="▭" ToolTip.Tip="Rectangle (M)" Click="OnToolRectangle"/>
-        <Button x:Name="ToolEllipseButton" Classes="tool" Content="◯" ToolTip.Tip="Ellipse (L)" Click="OnToolEllipse"/>
-        <Border Classes="sep"/>
-        <Button Classes="tool" Content="−" ToolTip.Tip="Zoom out" Click="OnZoomOut"/>
-        <Button Classes="tool" Content="＋" ToolTip.Tip="Zoom in" Click="OnZoomIn"/>
-        <Button Classes="tool" Content="⤢" ToolTip.Tip="Fit in window" Click="OnFitInWindow"/>
-      </StackPanel>
-    </Border>
-
-    <!-- Workspace + dock panes -->
-    <Grid Grid.Row="2" ColumnDefinitions="248,1,*,1,272">
-      <Border Grid.Column="0" Classes="pane" BorderThickness="0,0,1,0">
-        <DockPanel>
-          <TextBlock DockPanel.Dock="Top" Classes="panelHeader" Text="OBJECTS"/>
-          <TreeView x:Name="ObjectTree" Margin="6,0,6,6" SelectionChanged="OnTreeSelectionChanged"/>
-        </DockPanel>
-      </Border>
-
-      <Border Grid.Column="1" Background="{DynamicResource VcBorder}"/>
-
-      <Border Grid.Column="2" Background="{DynamicResource VcBackground}">
+    <!-- Docking area -->
+    <Grid Grid.Row="1" Name="DockArea" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,*,Auto">
+      <StackPanel Name="TopHost" Grid.Row="0" Grid.Column="1" Orientation="Horizontal"/>
+      <StackPanel Name="LeftHost" Grid.Row="1" Grid.Column="0" Orientation="Vertical"/>
+      <Border Grid.Row="1" Grid.Column="1" Background="{DynamicResource VcBackground}">
         <controls:CanvasWorkspace x:Name="Workspace" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
       </Border>
+      <StackPanel Name="RightHost" Grid.Row="1" Grid.Column="2" Orientation="Vertical"/>
+      <StackPanel Name="BottomHost" Grid.Row="2" Grid.Column="1" Orientation="Horizontal"/>
 
-      <Border Grid.Column="3" Background="{DynamicResource VcBorder}"/>
-
-      <Border Grid.Column="4" Classes="pane" BorderThickness="1,0,0,0">
-        <DockPanel>
-          <TextBlock DockPanel.Dock="Top" Classes="panelHeader" Text="PROPERTIES"/>
-          <TabControl Name="PropertiesTabs" Margin="6,0,6,6">
-            <TabItem Header="Transform">
-              <ScrollViewer>
-                <StackPanel Margin="8,6" Spacing="8">
-                  <TextBlock x:Name="SelectionInfo" Text="(no selection)" TextWrapping="Wrap"
-                             Foreground="{DynamicResource VcText}"/>
-                  <TextBlock x:Name="TransformModeNote" FontSize="11" TextWrapping="Wrap"
-                             Foreground="{DynamicResource VcTextDim}"
-                             Text="Position / size / rotation of the selection"/>
-                  <TextBlock Text="TRANSFORM" FontWeight="SemiBold" FontSize="11"
-                             Foreground="{DynamicResource VcTextDim}"/>
-                  <CheckBox x:Name="OrthoSnapCheck" Content="Snap point to neighbour H/V on release"
-                            IsChecked="True" Click="OnOrthoSnapChanged"/>
-                  <TextBlock Text="Reference point" FontSize="11" Foreground="{DynamicResource VcTextDim}"/>
-                  <Grid ColumnDefinitions="*,*,*" HorizontalAlignment="Left">
-                    <Button x:Name="Pivot0" Classes="tool" Content="┌" Tag="0" Click="OnPivot" MinWidth="30" Margin="0,0,2,2"/>
-                    <Button x:Name="Pivot1" Classes="tool" Content="┬" Tag="1" Click="OnPivot" MinWidth="30" Margin="0,0,2,2" Grid.Column="1"/>
-                    <Button x:Name="Pivot2" Classes="tool" Content="┐" Tag="2" Click="OnPivot" MinWidth="30" Margin="0,0,0,2" Grid.Column="2"/>
-                    <Button x:Name="Pivot3" Classes="tool" Content="├" Tag="3" Click="OnPivot" MinWidth="30" Margin="0,0,2,2" Grid.Row="1"/>
-                    <Button x:Name="Pivot4" Classes="tool" Content="┼" Tag="4" Click="OnPivot" MinWidth="30" Margin="0,0,2,2" Grid.Row="1" Grid.Column="1"/>
-                    <Button x:Name="Pivot5" Classes="tool" Content="┤" Tag="5" Click="OnPivot" MinWidth="30" Margin="0,0,0,2" Grid.Row="1" Grid.Column="2"/>
-                    <Button x:Name="Pivot6" Classes="tool" Content="└" Tag="6" Click="OnPivot" MinWidth="30" Margin="0,0,2,0" Grid.Row="2"/>
-                    <Button x:Name="Pivot7" Classes="tool" Content="┴" Tag="7" Click="OnPivot" MinWidth="30" Margin="0,0,2,0" Grid.Row="2" Grid.Column="1"/>
-                    <Button x:Name="Pivot8" Classes="tool" Content="┘" Tag="8" Click="OnPivot" MinWidth="30" Margin="0,0,0,0" Grid.Row="2" Grid.Column="2"/>
-                  </Grid>
-                  <Grid ColumnDefinitions="Auto,*,10,Auto,*">
-                    <TextBlock Text="X" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <TextBox x:Name="XBox" Grid.Column="1" KeyDown="OnFieldKeyDown"/>
-                    <TextBlock Text="Y" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <TextBox x:Name="YBox" Grid.Column="4" KeyDown="OnFieldKeyDown"/>
-                  </Grid>
-                  <Grid ColumnDefinitions="Auto,*,10,Auto,*">
-                    <TextBlock Text="W" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <TextBox x:Name="WBox" Grid.Column="1" KeyDown="OnFieldKeyDown"/>
-                    <TextBlock Text="H" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <TextBox x:Name="HBox" Grid.Column="4" KeyDown="OnFieldKeyDown"/>
-                  </Grid>
-                  <Grid ColumnDefinitions="Auto,*,10,Auto,*">
-                    <TextBlock Text="Rot" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <TextBox x:Name="AngleBox" Grid.Column="1" KeyDown="OnFieldKeyDown"/>
-                    <TextBlock Text="deg" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                  </Grid>
-                  <TextBlock Text="HINTS" FontWeight="SemiBold" FontSize="11"
-                             Foreground="{DynamicResource VcTextDim}" Margin="0,6,0,0"/>
-                  <TextBlock x:Name="HintText" TextWrapping="Wrap" Foreground="{DynamicResource VcTextDim}"
-                             Text="V — select/move · Shift adds · A — nodes, segments, handles&#10;P — pen · drag Rectangle/Ellipse to draw&#10;Middle/right drag pans · Ctrl+wheel zooms"/>
-                </StackPanel>
-              </ScrollViewer>
-            </TabItem>
-
-            <TabItem Header="Color">
-              <ScrollViewer>
-                <StackPanel Margin="8,6" Spacing="8">
-                  <TextBlock Text="FILL" FontWeight="SemiBold" FontSize="11" Foreground="{DynamicResource VcTextDim}"/>
-                  <Grid ColumnDefinitions="Auto,*,8,Auto,*,8,Auto,*">
-                    <TextBlock Text="R" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <TextBox x:Name="FillR" Grid.Column="1"/>
-                    <TextBlock Text="G" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <TextBox x:Name="FillG" Grid.Column="4"/>
-                    <TextBlock Text="B" Grid.Column="6" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <TextBox x:Name="FillB" Grid.Column="7"/>
-                  </Grid>
-                  <Grid ColumnDefinitions="Auto,*">
-                    <TextBlock Text="Rule" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <ComboBox x:Name="FillRuleBox" Grid.Column="1" SelectedIndex="0" HorizontalAlignment="Stretch">
-                      <ComboBoxItem Content="NonZero"/>
-                      <ComboBoxItem Content="EvenOdd"/>
-                    </ComboBox>
-                  </Grid>
-                  <Button Content="Apply Fill" Click="OnApplyFill"/>
-
-                  <TextBlock Text="STROKE COLOUR" FontWeight="SemiBold" FontSize="11"
-                             Foreground="{DynamicResource VcTextDim}" Margin="0,6,0,0"/>
-                  <Grid ColumnDefinitions="Auto,*,8,Auto,*,8,Auto,*">
-                    <TextBlock Text="R" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <TextBox x:Name="StrokeR" Grid.Column="1"/>
-                    <TextBlock Text="G" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <TextBox x:Name="StrokeG" Grid.Column="4"/>
-                    <TextBlock Text="B" Grid.Column="6" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <TextBox x:Name="StrokeB" Grid.Column="7"/>
-                  </Grid>
-                  <Button Content="Apply Stroke Colour" Click="OnApplyStrokeColor"/>
-                </StackPanel>
-              </ScrollViewer>
-            </TabItem>
-
-            <TabItem Header="Stroke">
-              <ScrollViewer>
-                <StackPanel Margin="8,6" Spacing="8">
-                  <Grid ColumnDefinitions="Auto,*,10,Auto,*">
-                    <TextBlock Text="Width" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <TextBox x:Name="StrokeWidthBox" Grid.Column="1"/>
-                    <TextBlock Text="Miter" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <TextBox x:Name="MiterBox" Grid.Column="4"/>
-                  </Grid>
-                  <Grid ColumnDefinitions="Auto,*">
-                    <TextBlock Text="Cap" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <ComboBox x:Name="StrokeCapBox" Grid.Column="1" SelectedIndex="0" HorizontalAlignment="Stretch">
-                      <ComboBoxItem Content="Butt"/>
-                      <ComboBoxItem Content="Round"/>
-                      <ComboBoxItem Content="Square"/>
-                    </ComboBox>
-                  </Grid>
-                  <Grid ColumnDefinitions="Auto,*">
-                    <TextBlock Text="Join" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-                    <ComboBox x:Name="StrokeJoinBox" Grid.Column="1" SelectedIndex="0" HorizontalAlignment="Stretch">
-                      <ComboBoxItem Content="Miter"/>
-                      <ComboBoxItem Content="Round"/>
-                      <ComboBoxItem Content="Bevel"/>
-                    </ComboBox>
-                  </Grid>
-                  <Button Content="Apply Stroke" Click="OnApplyStroke"/>
-                </StackPanel>
-              </ScrollViewer>
-            </TabItem>
-          </TabControl>
-        </DockPanel>
-      </Border>
+      <!-- Drop-zone highlight while dragging a panel/toolbar -->
+      <Canvas Name="DropOverlay" Grid.Row="0" Grid.RowSpan="3" Grid.Column="0" Grid.ColumnSpan="3"
+              IsHitTestVisible="False">
+        <Border Name="DropLeft" Background="#552B4C7E" BorderBrush="#4C9AFF" BorderThickness="2" IsVisible="False"/>
+        <Border Name="DropRight" Background="#552B4C7E" BorderBrush="#4C9AFF" BorderThickness="2" IsVisible="False"/>
+        <Border Name="DropTop" Background="#552B4C7E" BorderBrush="#4C9AFF" BorderThickness="2" IsVisible="False"/>
+        <Border Name="DropBottom" Background="#552B4C7E" BorderBrush="#4C9AFF" BorderThickness="2" IsVisible="False"/>
+      </Canvas>
     </Grid>
 
     <!-- Status bar -->
-    <Border Grid.Row="3" Classes="statusBar">
+    <Border Grid.Row="2" Classes="statusBar">
       <DockPanel>
         <TextBlock DockPanel.Dock="Right" x:Name="ZoomLabel" Text="100%"
                    Foreground="{DynamicResource VcTextDim}" Margin="10,0"/>
