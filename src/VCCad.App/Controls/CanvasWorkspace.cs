@@ -72,6 +72,7 @@ public sealed class CanvasWorkspace : Control
     // growing axis-aligned bounding box.
     private Rect2D? _chromeRect;
     private double _chromeAngle;
+    private Rect2D _chromeRect0; // chrome box captured at the start of a move gesture
 
     // Artboard tool gesture state.
     private enum ArtboardGesture { None, Move, Resize, Create }
@@ -690,6 +691,9 @@ public sealed class CanvasWorkspace : Control
             _dragOriginals[path] = path.GeometrySnapshot();
         }
 
+        // Snapshot the chrome box BEFORE any translation so each move can place
+        // it absolutely (incrementing it would make it drift ahead of the object).
+        _chromeRect0 = ChromeRect();
         _dragStartModel = model;
     }
 
@@ -729,9 +733,13 @@ public sealed class CanvasWorkspace : Control
             path.TranslateGeometryBy(delta);
         }
 
-        if (_chromeRect is { } chrome)
+        if (!_chromeRect0.IsEmpty)
         {
-            _chromeRect = new Rect2D(chrome.X + delta.X, chrome.Y + delta.Y, chrome.Width, chrome.Height);
+            _chromeRect = new Rect2D(
+                _chromeRect0.X + delta.X,
+                _chromeRect0.Y + delta.Y,
+                _chromeRect0.Width,
+                _chromeRect0.Height);
         }
 
         _vm!.RaiseTransformChanged();
