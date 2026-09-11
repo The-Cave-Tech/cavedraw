@@ -54,6 +54,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// from window.location; the desktop default targets a local host.</summary>
     public static string ServerBase { get; set; } = "http://127.0.0.1:5099";
 
+    /// <summary>When true, releasing a moved point near the horizontal/vertical
+    /// line of a neighbouring point snaps it into alignment (UI toggle).</summary>
+    public bool OrthogonalSnapEnabled { get; set; } = true;
+
     /// <summary>Raised after any change that must trigger a workspace repaint or a
     /// tree refresh (document edits, selection changes, tool switches).</summary>
     public event EventHandler? DocumentChanged;

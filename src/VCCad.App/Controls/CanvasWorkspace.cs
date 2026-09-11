@@ -1272,8 +1272,133 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
+    /// <summary>
+    /// On release, snaps the moved point to a neighbouring point's horizontal or
+    /// vertical line when it is within an epsilon of being orthogonal with it.
+    /// Anchors align to adjacent anchors; a dragged handle aligns to its anchor.
+    /// Toggleable from the UI (Transform tab).
+    /// </summary>
+    private void ApplyOrthogonalSnap()
+    {
+        if (_vm is null || !_vm.OrthogonalSnapEnabled || !_gestureMoved ||
+            _nodePath is null || _nodeSub is null)
+        {
+            return;
+        }
+
+        double eps = PickTolerance * 1.2;
+        PathNode node = _nodeSub.Nodes[_nodeIndex];
+
+        if (_nodeGrabHandle)
+        {
+            Point2D anchor = node.Anchor;
+            Point2D handle = _nodeIsIn ? node.InHandle : node.OutHandle;
+            double hx = handle.X;
+            double hy = handle.Y;
+            bool changed = false;
+            if (Math.Abs(handle.X - anchor.X) <= eps)
+            {
+                hx = anchor.X;
+                changed = true;
+            }
+
+            if (Math.Abs(handle.Y - anchor.Y) <= eps)
+            {
+                hy = anchor.Y;
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+
+            Point2D snapped = new(hx, hy);
+            if (_nodeIsIn)
+            {
+                node.InHandle = snapped;
+            }
+            else
+            {
+                node.OutHandle = snapped;
+            }
+
+            if (_nodeWasSmooth)
+            {
+                // Keep the shared endpoint colinear (length-preserving).
+                Vector2D dir = (snapped - anchor).Normalized;
+                double otherLen = _nodeIsIn
+                    ? (_nodeOutStart - anchor).Length
+                    : (_nodeInStart - anchor).Length;
+                if (!dir.IsZero)
+                {
+                    Point2D other = anchor - dir * otherLen;
+                    if (_nodeIsIn)
+                    {
+                        node.OutHandle = other;
+                    }
+                    else
+                    {
+                        node.InHandle = other;
+                    }
+                }
+            }
+
+            return;
+        }
+
+        // Anchor drag: align to the adjacent anchors (previous/next in the subpath).
+        int count = _nodeSub.Nodes.Count;
+        if (count < 2)
+        {
+            return;
+        }
+
+        var neighbours = new List<Point2D>();
+        bool closed = _nodeSub.IsClosed;
+        if (_nodeIndex > 0 || closed)
+        {
+            neighbours.Add(_nodeSub.Nodes[(_nodeIndex - 1 + count) % count].Anchor);
+        }
+
+        if (_nodeIndex < count - 1 || closed)
+        {
+            neighbours.Add(_nodeSub.Nodes[(_nodeIndex + 1) % count].Anchor);
+        }
+
+        double x = node.Anchor.X;
+        double y = node.Anchor.Y;
+        bool moved = false;
+        foreach (Point2D neighbour in neighbours)
+        {
+            if (Math.Abs(x - neighbour.X) <= eps)
+            {
+                x = neighbour.X;
+                moved = true;
+            }
+
+            if (Math.Abs(y - neighbour.Y) <= eps)
+            {
+                y = neighbour.Y;
+                moved = true;
+            }
+        }
+
+        if (!moved)
+        {
+            return;
+        }
+
+        Vector2D delta = new Point2D(x, y) - node.Anchor;
+        node.Anchor += delta;
+        node.InHandle += delta;
+        node.OutHandle += delta;
+    }
+
     private void NodeRelease()
     {
+        ApplyOrthogonalSnap();
+
         if (_pendingInsertArmed && !_gestureMoved && _pendingInsertPath is not null)
         {
             _vm!.InsertPointOnSegment(_pendingInsertPath, _pendingInsertSub, _pendingInsertSeg, _pendingInsertPoint);
@@ -1677,8 +1802,8 @@ public sealed class CanvasWorkspace : Control
     private void PaintSelectChrome(DrawingContext context, Rect2D bounds)
     {
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
-        var pen = new Pen(accent, 1.0) { DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0) };
-        double half = Math.Max(3.0 / _layout.Zoom, 0.75);
+        var pen = new Pen(accent, 1.2) { DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0) };
+        double half = Math.Max(4.0 / _layout.Zoom, 1.0);
 
         Point tl = ModelToScreen(new Point2D(bounds.Left, bounds.Top));
         var screen = new Rect(tl.X, tl.Y, bounds.Width * _layout.Zoom, bounds.Height * _layout.Zoom);
@@ -1710,8 +1835,8 @@ public sealed class CanvasWorkspace : Control
     private void PaintNodeChrome(DrawingContext context, PathItem path)
     {
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
-        var pen = new Pen(accent, 1.0);
-        double half = Math.Max(2.0 / _layout.Zoom, 0.5);
+        var pen = new Pen(accent, 1.4);
+        double half = Math.Max(4.0 / _layout.Zoom, 1.0);
 
         foreach (SubPath sub in path.SubPaths)
         {
@@ -1798,8 +1923,8 @@ public sealed class CanvasWorkspace : Control
     private void PaintSegmentHighlights(DrawingContext context)
     {
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
-        var handlePen = new Pen(accent, 1.0);
-        double half = Math.Max(2.0 / _layout.Zoom, 0.5);
+        var handlePen = new Pen(accent, 1.4);
+        double half = Math.Max(4.0 / _layout.Zoom, 1.0);
 
         foreach ((PathItem path, int sub, int seg) in _vm!.SelectedSegments())
         {
@@ -1811,11 +1936,15 @@ public sealed class CanvasWorkspace : Control
             SubPath sp = path.SubPaths[sub];
             CubicBezier curve = sp.GetSegment(seg);
 
-            // Overlay a dashed 1-pixel line in the same colour used for control
-            // handle lines — the underlying pen colour/weight is untouched.
-            var segmentPen = new Pen(HandleLineBrush, 1.0)
+            // Overlay a dashed line in the same colour used for control handle
+            // lines, at 90% of the segment's own rendered width (so it reads as a
+            // selection highlight without changing the underlying pen).
+            double overlayWidth = path.Stroke.HasVisibleOutline
+                ? Math.Max(1.0, path.Stroke.Width * _layout.Zoom * 0.9)
+                : 1.5;
+            var segmentPen = new Pen(HandleLineBrush, overlayWidth)
             {
-                DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0),
+                DashStyle = new DashStyle(new[] { 5.0, 3.5 }, 0),
             };
 
             var geometry = new StreamGeometry();

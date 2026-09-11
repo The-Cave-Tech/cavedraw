@@ -90,6 +90,8 @@
                 <TextBlock Text="Transform" FontWeight="Bold"/>
                 <TextBlock x:Name="TransformModeNote" FontSize="11" Foreground="#777777"
                            Text="Position / size / rotation of the selection"/>
+                <CheckBox x:Name="OrthoSnapCheck" Content="Snap point to neighbour H/V on release"
+                          IsChecked="True" Click="OnOrthoSnapChanged"/>
                 <TextBlock Text="Reference point" FontSize="11" Foreground="#555555"/>
                 <Grid ColumnDefinitions="*,*,*" HorizontalAlignment="Left">
                   <Button x:Name="Pivot0" Content="┌" Tag="0" Click="OnPivot" MinWidth="26" Margin="0,0,2,2"/>

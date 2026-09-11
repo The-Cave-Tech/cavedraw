@@ -171,6 +171,11 @@ public partial class EditorView : UserControl
         }
     }
 
+    private void OnOrthoSnapChanged(object? sender, RoutedEventArgs e)
+    {
+        _viewModel.OrthogonalSnapEnabled = OrthoSnapCheck.IsChecked == true;
+    }
+
     private void OnPivot(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: int index })
