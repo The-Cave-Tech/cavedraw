@@ -62,6 +62,8 @@ public sealed class CanvasWorkspace : Control
     private int _resizeHandle;
     private Point2D _resizePivot;
     private Rect2D _resizeRect0;
+    private double _resizeAngle0;
+    private Point2D _resizeCenter0;
     private readonly List<PathItem> _resizePaths = new();
     private readonly Dictionary<PathItem, PathItem> _resizeOriginals = new();
 
@@ -130,6 +132,7 @@ public sealed class CanvasWorkspace : Control
     // Rotation handle drag (Select tool).
     private Point2D _rotateCenter;
     private double _rotateStartAngle;
+    private double _rotateAngle0;
     private readonly List<PathItem> _rotatePaths = new();
     private readonly Dictionary<PathItem, PathItem> _rotateOriginals = new();
 
@@ -161,6 +164,15 @@ public sealed class CanvasWorkspace : Control
             _document = viewModel.Document;
             _layout = new PasteboardLayout(ComputeExtent()) { Zoom = zoom };
             _offset = _layout.ClampTopLeft(offset, ViewportPixels);
+
+            // Undo/redo/open/style changes should rebuild the chrome; live
+            // gestures manage it themselves and must not lose the orientation.
+            if (!AnyGestureActive())
+            {
+                _chromeRect = null;
+                _chromeAngle = 0;
+            }
+
             InvalidateVisual();
         };
         viewModel.PropertyChanged += (_, args) =>
@@ -485,13 +497,105 @@ public sealed class CanvasWorkspace : Control
     // Select tool: multi-object move + rotate handle
     // ------------------------------------------------------------------
 
-    /// <summary>The rotation handle's model position: above the top-centre of the
-    /// selection. Both the hit test and the renderer use this one definition.</summary>
-    private Point2D RotationHandlePoint(Rect2D bounds)
+    private bool AnyGestureActive()
+        => _marqueeActive || _resizeActive || _rotatePaths.Count > 0 || _dragPaths.Count > 0
+           || _nodePath is not null || _segmentPath is not null || _penPath is not null
+           || _shapeStart is not null;
+
+    /// <summary>The oriented selection box (base rectangle + angle). Initialised
+    /// from the geometry's principal axis so it matches an already-rotated object;
+    /// then preserved through move/scale/rotate gestures.</summary>
+    private Rect2D ChromeRect()
     {
-        Point2D topCentre = CellPoint(bounds, 1);
-        double lift = Math.Max(14.0 / _layout.Zoom, 3.0);
-        return new Point2D(topCentre.X, topCentre.Y - lift);
+        if (_chromeRect is { } cached)
+        {
+            return cached;
+        }
+
+        if (_vm is null)
+        {
+            return Rect2D.Empty;
+        }
+
+        var anchors = new List<Point2D>();
+        foreach (PathItem path in _vm.SelectedPaths())
+        {
+            foreach (SubPath sub in path.SubPaths)
+            {
+                foreach (PathNode node in sub.Nodes)
+                {
+                    anchors.Add(node.Anchor);
+                }
+            }
+        }
+
+        if (anchors.Count == 0)
+        {
+            return Rect2D.Empty;
+        }
+
+        double angle = anchors.Count >= 2
+            ? _vm.TransformReadout().AngleDeg * Math.PI / 180.0
+            : 0.0;
+
+        double cx = 0, cy = 0;
+        foreach (Point2D p in anchors)
+        {
+            cx += p.X;
+            cy += p.Y;
+        }
+
+        var centroid = new Point2D(cx / anchors.Count, cy / anchors.Count);
+
+        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+        foreach (Point2D p in anchors)
+        {
+            Point2D local = RotatePoint(p, centroid, -angle);
+            minX = Math.Min(minX, local.X);
+            minY = Math.Min(minY, local.Y);
+            maxX = Math.Max(maxX, local.X);
+            maxY = Math.Max(maxY, local.Y);
+        }
+
+        double width = maxX - minX;
+        double height = maxY - minY;
+        var localCenter = new Point2D((minX + maxX) / 2, (minY + maxY) / 2);
+        Point2D worldCenter = RotatePoint(localCenter, centroid, angle);
+
+        var rect = new Rect2D(worldCenter.X - width / 2, worldCenter.Y - height / 2, width, height);
+        _chromeAngle = angle;
+        _chromeRect = rect;
+        return rect;
+    }
+
+    private static Point2D RotatePoint(Point2D p, Point2D center, double radians)
+    {
+        double cos = Math.Cos(radians);
+        double sin = Math.Sin(radians);
+        double dx = p.X - center.X;
+        double dy = p.Y - center.Y;
+        return new Point2D(center.X + dx * cos - dy * sin, center.Y + dx * sin + dy * cos);
+    }
+
+    private static Vector2D RotateVector(Vector2D v, double radians)
+    {
+        double cos = Math.Cos(radians);
+        double sin = Math.Sin(radians);
+        return new Vector2D(v.X * cos - v.Y * sin, v.X * sin + v.Y * cos);
+    }
+
+    /// <summary>A 3×3 cell of the oriented selection box, in model space.</summary>
+    private Point2D OrientedCell(Rect2D baseRect, int index)
+        => RotatePoint(CellPoint(baseRect, index), baseRect.Center, _chromeAngle);
+
+    /// <summary>The rotation knob: above the oriented top edge, along its normal.</summary>
+    private Point2D RotationHandlePoint(Rect2D baseRect)
+    {
+        Point2D topCentre = OrientedCell(baseRect, 1);
+        Vector2D normal = RotateVector(new Vector2D(0, -1), _chromeAngle);
+        double lift = Math.Max(22.0 / _layout.Zoom, 4.0);
+        return topCentre + normal * lift;
     }
 
     private bool HitRotationHandle(Point2D model)
@@ -501,7 +605,7 @@ public sealed class CanvasWorkspace : Control
             return false;
         }
 
-        Rect2D bounds = _vm.SelectionBounds();
+        Rect2D bounds = ChromeRect();
         if (bounds.IsEmpty)
         {
             return false;
@@ -624,6 +728,11 @@ public sealed class CanvasWorkspace : Control
             path.TranslateGeometryBy(delta);
         }
 
+        if (_chromeRect is { } chrome)
+        {
+            _chromeRect = new Rect2D(chrome.X + delta.X, chrome.Y + delta.Y, chrome.Width, chrome.Height);
+        }
+
         _vm!.RaiseTransformChanged();
         InvalidateVisual();
     }
@@ -742,7 +851,7 @@ public sealed class CanvasWorkspace : Control
             return false;
         }
 
-        Rect2D bounds = _vm.SelectionBounds();
+        Rect2D bounds = ChromeRect();
         if (bounds.IsEmpty)
         {
             return false;
@@ -756,7 +865,7 @@ public sealed class CanvasWorkspace : Control
                 continue; // centre is not a handle
             }
 
-            if (model.DistanceTo(CellPoint(bounds, i)) <= tol)
+            if (model.DistanceTo(OrientedCell(bounds, i)) <= tol)
             {
                 _resizeHandle = i;
                 return true;
@@ -774,8 +883,10 @@ public sealed class CanvasWorkspace : Control
         }
 
         _resizeActive = true;
-        _resizeRect0 = _vm.SelectionBounds();
-        _resizePivot = CellPoint(_resizeRect0, 8 - _resizeHandle); // opposite cell stays fixed
+        _resizeRect0 = ChromeRect();
+        _resizeAngle0 = _chromeAngle;
+        _resizeCenter0 = _resizeRect0.Center;
+        _resizePivot = CellPoint(_resizeRect0, 8 - _resizeHandle); // opposite cell stays fixed (local frame)
 
         _resizePaths.Clear();
         _resizeOriginals.Clear();
@@ -796,6 +907,9 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        // Work in the box's LOCAL frame: rotate the pointer back by the box angle.
+        Point2D local = RotatePoint(model, _resizeCenter0, -_resizeAngle0);
+
         // Which side does this handle pull? 1 = right/bottom, −1 = left/top, 0 = fixed.
         int signX = _resizeHandle % 3 == 2 ? 1 : _resizeHandle % 3 == 0 ? -1 : 0;
         int signY = _resizeHandle / 3 == 2 ? 1 : _resizeHandle / 3 == 0 ? -1 : 0;
@@ -808,20 +922,20 @@ public sealed class CanvasWorkspace : Control
         const double minSize = 0.5;
         if (signX < 0)
         {
-            left = Math.Min(model.X, _resizePivot.X - minSize);
+            left = Math.Min(local.X, _resizePivot.X - minSize);
         }
         else if (signX > 0)
         {
-            right = Math.Max(model.X, _resizePivot.X + minSize);
+            right = Math.Max(local.X, _resizePivot.X + minSize);
         }
 
         if (signY < 0)
         {
-            top = Math.Min(model.Y, _resizePivot.Y - minSize);
+            top = Math.Min(local.Y, _resizePivot.Y - minSize);
         }
         else if (signY > 0)
         {
-            bottom = Math.Max(model.Y, _resizePivot.Y + minSize);
+            bottom = Math.Max(local.Y, _resizePivot.Y + minSize);
         }
 
         double sx = Math.Max(minSize / Math.Max(1e-6, _resizeRect0.Width), (right - left) / _resizeRect0.Width);
@@ -834,8 +948,15 @@ public sealed class CanvasWorkspace : Control
         foreach (PathItem path in _resizePaths)
         {
             path.RestoreGeometryFrom(_resizeOriginals[path]);
-            path.ScaleGeometryAbout(_resizePivot, sx, sy);
+            ApplyRotatedScale(path, _resizeCenter0, _resizeAngle0, _resizePivot, sx, sy);
         }
+
+        // Keep the chrome box glued to the new (still oriented) rectangle.
+        var localRect = new Rect2D(left, top, right - left, bottom - top);
+        Point2D worldCenter = RotatePoint(localRect.Center, _resizeCenter0, _resizeAngle0);
+        _chromeRect = new Rect2D(worldCenter.X - localRect.Width / 2,
+            worldCenter.Y - localRect.Height / 2, localRect.Width, localRect.Height);
+        _chromeAngle = _resizeAngle0;
 
         _vm!.RaiseTransformChanged();
         InvalidateVisual();
@@ -851,6 +972,32 @@ public sealed class CanvasWorkspace : Control
         _resizeActive = false;
         _resizePaths.Clear();
         _resizeOriginals.Clear();
+    }
+
+    /// <summary>Scales a path about <paramref name="pivotLocal"/> along axes rotated
+    /// by <paramref name="angle"/> around <paramref name="center"/> (used when the
+    /// selection box is oriented).</summary>
+    private static void ApplyRotatedScale(PathItem path, Point2D center, double angle,
+        Point2D pivotLocal, double sx, double sy)
+    {
+        Point2D Map(Point2D p)
+        {
+            Point2D local = RotatePoint(p, center, -angle);
+            var scaled = new Point2D(
+                pivotLocal.X + (local.X - pivotLocal.X) * sx,
+                pivotLocal.Y + (local.Y - pivotLocal.Y) * sy);
+            return RotatePoint(scaled, center, angle);
+        }
+
+        foreach (SubPath sub in path.SubPaths)
+        {
+            foreach (PathNode node in sub.Nodes)
+            {
+                node.Anchor = Map(node.Anchor);
+                node.InHandle = Map(node.InHandle);
+                node.OutHandle = Map(node.OutHandle);
+            }
+        }
     }
 
     /// <summary>Locks a translation to the horizontal or vertical axis, whichever
@@ -907,8 +1054,9 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        Rect2D bounds = _vm.SelectionBounds();
+        Rect2D bounds = ChromeRect();
         _rotateCenter = bounds.Center;
+        _rotateAngle0 = _chromeAngle;
         Vector2D fromCenter = model - _rotateCenter;
         _rotateStartAngle = Math.Atan2(fromCenter.Y, fromCenter.X);
 
@@ -935,6 +1083,8 @@ public sealed class CanvasWorkspace : Control
             path.RestoreGeometryFrom(_rotateOriginals[path]);
             path.RotateGeometryAbout(_rotateCenter, angle);
         }
+
+        _chromeAngle = _rotateAngle0 + angle; // selection box rotates with the objects
 
         _vm!.RaiseTransformChanged();
         InvalidateVisual();
@@ -1757,10 +1907,10 @@ public sealed class CanvasWorkspace : Control
 
         if (tool == EditorTool.Select && _vm.SelectedPaths().Any())
         {
-            Rect2D selection = _vm.SelectionBounds();
+            Rect2D selection = ChromeRect();
             if (!selection.IsEmpty)
             {
-                PaintSelectChrome(context, selection);
+                PaintSelectChrome(context);
             }
         }
         else if (tool == EditorTool.Node)
@@ -1797,20 +1947,36 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
-    /// <summary>Selection chrome in the Select tool: a DASHED outline (no fill) with
-    /// draggable resize handles and a rotation handle above the top edge.</summary>
-    private void PaintSelectChrome(DrawingContext context, Rect2D bounds)
+    /// <summary>Selection chrome in the Select tool: an ORIENTED dashed outline (no
+    /// fill) that rotates with the objects, with draggable resize handles and a
+    /// rotation knob above its top edge.</summary>
+    private void PaintSelectChrome(DrawingContext context)
     {
+        Rect2D bounds = ChromeRect();
+        if (bounds.IsEmpty)
+        {
+            return;
+        }
+
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
         var pen = new Pen(accent, 1.2) { DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0) };
         double half = Math.Max(4.0 / _layout.Zoom, 1.0);
 
-        Point tl = ModelToScreen(new Point2D(bounds.Left, bounds.Top));
-        var screen = new Rect(tl.X, tl.Y, bounds.Width * _layout.Zoom, bounds.Height * _layout.Zoom);
-        context.DrawRectangle(null, pen, screen);
+        // Oriented outline through the four corners (TL → TR → BR → BL).
+        var outline = new StreamGeometry();
+        using (StreamGeometryContext g = outline.Open())
+        {
+            g.BeginFigure(ModelToScreen(OrientedCell(bounds, 0)), true);
+            g.LineTo(ModelToScreen(OrientedCell(bounds, 2)));
+            g.LineTo(ModelToScreen(OrientedCell(bounds, 8)));
+            g.LineTo(ModelToScreen(OrientedCell(bounds, 6)));
+            g.EndFigure(true);
+        }
+
+        context.DrawGeometry(null, pen, outline);
 
         // Eight resize handles (all 3×3 cells except the centre).
-        var handlePen = new Pen(accent, 1.0);
+        var handlePen = new Pen(accent, 1.2);
         for (int i = 0; i < 9; i++)
         {
             if (i == 4)
@@ -1818,17 +1984,17 @@ public sealed class CanvasWorkspace : Control
                 continue;
             }
 
-            Point center = ModelToScreen(CellPoint(bounds, i));
+            Point center = ModelToScreen(OrientedCell(bounds, i));
             context.DrawRectangle(Brushes.White, handlePen,
                 new Rect(center.X - half, center.Y - half, half * 2, half * 2));
         }
 
-        // Rotation handle above the top-centre.
-        Point2D top = CellPoint(bounds, 1);
+        // Rotation knob above the oriented top-centre.
+        Point2D top = OrientedCell(bounds, 1);
         Point rot = ModelToScreen(RotationHandlePoint(bounds));
-        double r = Math.Max(4.0 / _layout.Zoom, 1.5);
+        double r = Math.Max(4.5 / _layout.Zoom, 1.6);
         context.DrawLine(handlePen, ModelToScreen(top), rot);
-        context.DrawEllipse(Brushes.White, new Pen(accent, 1.2), rot, r, r);
+        context.DrawEllipse(Brushes.White, new Pen(accent, 1.4), rot, r, r);
     }
 
     /// <summary>Node tool chrome: anchors and handles only — no bounding rectangle.</summary>
