@@ -1793,12 +1793,12 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        context.FillRectangle(new SolidColorBrush(Colors.White), new Rect(Bounds.Size));
+        context.FillRectangle(new SolidColorBrush(Color.FromRgb(0x1B, 0x1B, 0x1F)), new Rect(Bounds.Size));
 
         Rect2D extent = _layout.Extent;
         Point topLeft = ModelToScreen(new Point2D(extent.Left, extent.Top));
         context.FillRectangle(
-            new SolidColorBrush(Color.FromArgb(40, 180, 180, 180)),
+            new SolidColorBrush(Color.FromRgb(0x23, 0x23, 0x27)),
             new Rect(topLeft.X, topLeft.Y, extent.Width * _layout.Zoom, extent.Height * _layout.Zoom));
 
         foreach (Artboard artboard in _document.Artboards)
@@ -1813,8 +1813,11 @@ public sealed class CanvasWorkspace : Control
     {
         Point p = ModelToScreen(new Point2D(artboard.X, artboard.Y));
         var rect = new Rect(p.X, p.Y, artboard.Width * _layout.Zoom, artboard.Height * _layout.Zoom);
+        // Soft drop shadow so the page lifts off the dark pasteboard.
+        context.FillRectangle(new SolidColorBrush(Color.FromArgb(110, 0, 0, 0)),
+            new Rect(rect.X + 3, rect.Y + 3, rect.Width, rect.Height));
         context.FillRectangle(new SolidColorBrush(Colors.White), rect);
-        context.DrawRectangle(new Pen(new SolidColorBrush(Colors.Gray), 1.0), rect);
+        context.DrawRectangle(new Pen(new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)), 1.0), rect);
 
         foreach (Layer layer in artboard.Layers)
         {
@@ -1968,7 +1971,7 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        IBrush accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
+        IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
         var pen = new Pen(accent, 1.2) { DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0) };
         double half = Math.Max(4.0 / _layout.Zoom, 1.0);
 
@@ -2010,7 +2013,7 @@ public sealed class CanvasWorkspace : Control
     /// <summary>Node tool chrome: anchors and handles only — no bounding rectangle.</summary>
     private void PaintNodeChrome(DrawingContext context, PathItem path)
     {
-        IBrush accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
+        IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
         var pen = new Pen(accent, 1.4);
         double half = Math.Max(4.0 / _layout.Zoom, 1.0);
 
@@ -2062,7 +2065,7 @@ public sealed class CanvasWorkspace : Control
         Point anchor = ModelToScreen(_nodeAnchorStart);
         Point handle = ModelToScreen(dragged);
 
-        IBrush accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
+        IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
 
         // Faint line from the anchor to the (future) mirrored position.
         context.DrawLine(new Pen(accent, 1.0) { DashStyle = new DashStyle(new[] { 3.0, 3.0 }, 0) },
@@ -2070,7 +2073,7 @@ public sealed class CanvasWorkspace : Control
 
         // Heavier control handle to signal "release to snap".
         double big = Math.Max(3.6 / _layout.Zoom, 1.4);
-        var ring = new Pen(new SolidColorBrush(Color.FromRgb(0x0E, 0x5A, 0xA8)), Math.Max(1.8, 2.0 * _layout.Zoom));
+        var ring = new Pen(new SolidColorBrush(Color.FromRgb(0x2B, 0x6C, 0xB0)), Math.Max(1.8, 2.0 * _layout.Zoom));
         context.DrawEllipse(Brushes.White, ring, handle, big, big);
     }
 
@@ -2080,16 +2083,16 @@ public sealed class CanvasWorkspace : Control
         Point tl = ModelToScreen(new Point2D(rect.Left, rect.Top));
         var screen = new Rect(tl.X, tl.Y, rect.Width * _layout.Zoom, rect.Height * _layout.Zoom);
 
-        var accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
+        var accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
         var pen = new Pen(accent, 1.0) { DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0) };
-        var fill = new SolidColorBrush(Color.FromArgb(18, 0x19, 0x76, 0xD2));
+        var fill = new SolidColorBrush(Color.FromArgb(26, 0x4C, 0x9A, 0xFF));
         context.DrawRectangle(fill, pen, screen);
     }
 
     /// <summary>The neutral grey used for control-handle lines (and, dashed, for
     /// selected-segment overlays).</summary>
     private static IBrush HandleLineBrush { get; } =
-        new SolidColorBrush(Color.FromArgb(210, 0x76, 0x76, 0x76));
+        new SolidColorBrush(Color.FromArgb(225, 0xB0, 0xB0, 0xB5));
 
     private void DrawHandleLine(DrawingContext context, Point from, Point to)
     {
@@ -2098,7 +2101,7 @@ public sealed class CanvasWorkspace : Control
 
     private void PaintSegmentHighlights(DrawingContext context)
     {
-        IBrush accent = new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2));
+        IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
         var handlePen = new Pen(accent, 1.4);
         double half = Math.Max(4.0 / _layout.Zoom, 1.0);
 
@@ -2168,7 +2171,7 @@ public sealed class CanvasWorkspace : Control
 
     private void PaintShapePreview(DrawingContext context, Point2D a, Point2D b, bool rect)
     {
-        var previewPen = new Pen(new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2)), 1.0);
+        var previewPen = new Pen(new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF)), 1.0);
         previewPen.DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0);
         Rect2D box = Rect2D.FromPoints(a, b);
         Point tl = ModelToScreen(new Point2D(box.Left, box.Top));
@@ -2190,7 +2193,7 @@ public sealed class CanvasWorkspace : Control
     private void PaintPenOverlay(DrawingContext context)
     {
         SubPath sub = _penPath!.SubPaths[0];
-        var previewPen = new Pen(new SolidColorBrush(Color.FromRgb(0x19, 0x76, 0xD2)), 1.0);
+        var previewPen = new Pen(new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF)), 1.0);
         previewPen.DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0);
 
         Point2D lastModel = sub.Nodes[^1].Anchor;

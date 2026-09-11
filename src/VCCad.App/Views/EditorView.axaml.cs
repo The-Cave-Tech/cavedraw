@@ -22,7 +22,7 @@ public partial class EditorView : UserControl
     private readonly EditorViewModel _viewModel = new();
     private bool _syncingTreeSelection;
 
-    private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.FromRgb(0xBD, 0xDD, 0xF7));
+    private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.FromRgb(0x2B, 0x4C, 0x7E));
 
     public EditorView()
     {

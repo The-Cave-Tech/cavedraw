@@ -1,10 +1,141 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="VCCad.App.App"
-             RequestedThemeVariant="Light">
+             RequestedThemeVariant="Dark">
+
+  <Application.Resources>
+    <!-- VCCad dark palette -->
+    <SolidColorBrush x:Key="VcBackground" Color="#1B1B1F"/>
+    <SolidColorBrush x:Key="VcPanel" Color="#232327"/>
+    <SolidColorBrush x:Key="VcPanelAlt" Color="#2A2A2F"/>
+    <SolidColorBrush x:Key="VcToolbar" Color="#232327"/>
+    <SolidColorBrush x:Key="VcBorder" Color="#3A3A42"/>
+    <SolidColorBrush x:Key="VcBorderSoft" Color="#313138"/>
+    <SolidColorBrush x:Key="VcText" Color="#E6E6E9"/>
+    <SolidColorBrush x:Key="VcTextDim" Color="#9A9AA3"/>
+    <SolidColorBrush x:Key="VcAccent" Color="#4C9AFF"/>
+    <SolidColorBrush x:Key="VcAccentSoft" Color="#2B4C7E"/>
+    <SolidColorBrush x:Key="VcHover" Color="#33333A"/>
+    <SolidColorBrush x:Key="VcPressed" Color="#3D3D46"/>
+    <SolidColorBrush x:Key="VcSelected" Color="#2B4C7E"/>
+  </Application.Resources>
 
   <Application.Styles>
     <FluentTheme />
+
+    <!-- Panels -->
+    <Style Selector="Border.pane">
+      <Setter Property="Background" Value="{DynamicResource VcPanel}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource VcBorder}"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+
+    <Style Selector="Border.toolbar">
+      <Setter Property="Background" Value="{DynamicResource VcToolbar}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource VcBorder}"/>
+      <Setter Property="BorderThickness" Value="0,0,0,1"/>
+      <Setter Property="Padding" Value="6,3"/>
+    </Style>
+
+    <Style Selector="Border.statusBar">
+      <Setter Property="Background" Value="{DynamicResource VcPanelAlt}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource VcBorder}"/>
+      <Setter Property="BorderThickness" Value="0,1,0,0"/>
+      <Setter Property="Padding" Value="10,4"/>
+    </Style>
+
+    <Style Selector="Border.sep">
+      <Setter Property="Width" Value="1"/>
+      <Setter Property="Background" Value="{DynamicResource VcBorder}"/>
+      <Setter Property="Margin" Value="6,4"/>
+    </Style>
+
+    <Style Selector="TextBlock.brand">
+      <Setter Property="Foreground" Value="{DynamicResource VcAccent}"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="Margin" Value="6,0,4,0"/>
+    </Style>
+
+    <Style Selector="TextBlock.panelHeader">
+      <Setter Property="Foreground" Value="{DynamicResource VcTextDim}"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Margin" Value="10,8,10,6"/>
+    </Style>
+
+    <!-- Toolbar buttons -->
+    <Style Selector="Button.tool">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="{DynamicResource VcText}"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="9,5"/>
+      <Setter Property="MinWidth" Value="32"/>
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="CornerRadius" Value="6"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.tool:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource VcHover}"/>
+    </Style>
+    <Style Selector="Button.tool:pressed /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource VcPressed}"/>
+    </Style>
+
+    <!-- Menu -->
+    <Style Selector="Menu">
+      <Setter Property="Background" Value="{DynamicResource VcPanelAlt}"/>
+      <Setter Property="Foreground" Value="{DynamicResource VcText}"/>
+      <Setter Property="Padding" Value="4,0"/>
+    </Style>
+    <Style Selector="MenuItem">
+      <Setter Property="Foreground" Value="{DynamicResource VcText}"/>
+    </Style>
+
+    <!-- Trees -->
+    <Style Selector="TreeView">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="{DynamicResource VcText}"/>
+    </Style>
+    <Style Selector="TreeViewItem">
+      <Setter Property="Foreground" Value="{DynamicResource VcText}"/>
+    </Style>
+
+    <!-- Tabs -->
+    <Style Selector="TabControl">
+      <Setter Property="Background" Value="Transparent"/>
+    </Style>
+    <Style Selector="TabItem">
+      <Setter Property="Foreground" Value="{DynamicResource VcTextDim}"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Padding" Value="10,6"/>
+    </Style>
+    <Style Selector="TabItem:selected">
+      <Setter Property="Foreground" Value="{DynamicResource VcText}"/>
+    </Style>
+
+    <!-- Text entry -->
+    <Style Selector="TextBox">
+      <Setter Property="Background" Value="{DynamicResource VcBackground}"/>
+      <Setter Property="Foreground" Value="{DynamicResource VcText}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource VcBorder}"/>
+      <Setter Property="CornerRadius" Value="4"/>
+      <Setter Property="MinHeight" Value="26"/>
+    </Style>
+
+    <Style Selector="CheckBox">
+      <Setter Property="Foreground" Value="{DynamicResource VcText}"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+
+    <Style Selector="ComboBox">
+      <Setter Property="Background" Value="{DynamicResource VcBackground}"/>
+      <Setter Property="Foreground" Value="{DynamicResource VcText}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource VcBorder}"/>
+    </Style>
   </Application.Styles>
 
 </Application>
