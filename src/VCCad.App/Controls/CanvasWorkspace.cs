@@ -534,9 +534,10 @@ public sealed class CanvasWorkspace : Control
             return Rect2D.Empty;
         }
 
-        double angle = anchors.Count >= 2
-            ? _vm.TransformReadout().AngleDeg * Math.PI / 180.0
-            : 0.0;
+        // Rotation is an explicit property (0 until the user rotates); the box is
+        // projected onto that angle to stay tight without inventing an angle from
+        // the geometry.
+        double angle = _vm.SelectionRotationRadians;
 
         double cx = 0, cy = 0;
         foreach (Point2D p in anchors)
@@ -1056,7 +1057,7 @@ public sealed class CanvasWorkspace : Control
 
         Rect2D bounds = ChromeRect();
         _rotateCenter = bounds.Center;
-        _rotateAngle0 = _chromeAngle;
+        _rotateAngle0 = _vm.SelectionRotationRadians;
         Vector2D fromCenter = model - _rotateCenter;
         _rotateStartAngle = Math.Atan2(fromCenter.Y, fromCenter.X);
 
@@ -1085,8 +1086,9 @@ public sealed class CanvasWorkspace : Control
         }
 
         _chromeAngle = _rotateAngle0 + angle; // selection box rotates with the objects
+        _vm!.SetSelectionRotationRadians(_chromeAngle);
 
-        _vm!.RaiseTransformChanged();
+        _vm.RaiseTransformChanged();
         InvalidateVisual();
     }
 

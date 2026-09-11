@@ -120,6 +120,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     private Artboard? _selectedArtboard;
 
+    // Explicit selection rotation (radians). 0 until the user rotates; preserved
+    // through move/scale; reset when the selection changes.
+    private double _selectionRotationRadians;
+
     /// <summary>The selected artboard (Artboard tool / tree), or null.</summary>
     public Artboard? SelectedArtboard => _selectedArtboard;
 
@@ -164,6 +168,14 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
         Execute(new SetArtboardBoundsCommand(artboard, before, after));
     }
+
+    /// <summary>Explicit rotation of the current selection, in radians (0 until
+    /// the user rotates something).</summary>
+    public double SelectionRotationRadians => _selectionRotationRadians;
+
+    /// <summary>Updates the selection rotation (called by the canvas rotate gesture
+    /// and the numeric rotation field).</summary>
+    internal void SetSelectionRotationRadians(double radians) => _selectionRotationRadians = radians;
 
     /// <summary>Selected objects (paths and groups), in picking order.</summary>
     public IReadOnlyList<LayerItem> SelectedObjects => _selectedObjects;
@@ -542,21 +554,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// selected objects — the basis the numeric fields display.</summary>
     public (Rect2D Bounds, double AngleDeg) TransformReadout()
     {
-        var anchors = new List<Point2D>();
         Rect2D box = Rect2D.Empty;
         foreach (PathItem path in SelectedPaths())
         {
             box = box.Union(path.BoundingBox());
-            foreach (SubPath sub in path.SubPaths)
-            {
-                foreach (PathNode node in sub.Nodes)
-                {
-                    anchors.Add(node.Anchor);
-                }
-            }
         }
 
-        return (box, PrincipalAngleDeg(anchors));
+        return (box, _selectionRotationRadians * 180.0 / Math.PI);
     }
 
     /// <summary>
@@ -601,55 +605,16 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot()));
         }
 
+        if (anyRotation)
+        {
+            _selectionRotationRadians += rotationDegrees * Math.PI / 180.0;
+        }
+
         Execute(edits.Count == 1
             ? edits[0]
             : new CompositeCommand("Transform objects", edits));
     }
 
-
-    /// <summary>
-    /// Principal-axis angle of a point cloud via the 2D covariance matrix:
-    /// θ = ½·atan2(2·ΣΔxΔy, ΣΔx² − ΣΔy²), normalised to [0°, 180°). This is the
-    /// rotation readout for arbitrary geometry (stable under translation/uniform
-    /// scale; mirrors flip it 180°, which is harmless in a 0..180 display).
-    /// </summary>
-    private static double PrincipalAngleDeg(IReadOnlyList<Point2D> points)
-    {
-        if (points.Count < 2)
-        {
-            return 0.0;
-        }
-
-        double meanX = 0, meanY = 0;
-        foreach (Point2D p in points)
-        {
-            meanX += p.X;
-            meanY += p.Y;
-        }
-
-        meanX /= points.Count;
-        meanY /= points.Count;
-
-        double xx = 0, yy = 0, xy = 0;
-        foreach (Point2D p in points)
-        {
-            double dx = p.X - meanX;
-            double dy = p.Y - meanY;
-            xx += dx * dx;
-            yy += dy * dy;
-            xy += dx * dy;
-        }
-
-        double degrees = 0.5 * Math.Atan2(2.0 * xy, xx - yy) * 180.0 / Math.PI;
-        if (degrees < 0)
-        {
-            degrees += 180.0;
-        }
-
-        // A rotationally symmetric point set has no principal axis worth showing.
-        double variance = (xx + yy) / points.Count;
-        return variance < 1e-9 ? 0.0 : degrees;
-    }
 
     // ------------------------------------------------------------------
     // Commands / undo / actions
@@ -841,6 +806,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     private void NotifySelectionChanged()
     {
+        _selectionRotationRadians = 0;
         PruneSegmentSelection();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
         OnPropertyChanged(nameof(SelectedObjects));
