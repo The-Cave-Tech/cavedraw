@@ -20,7 +20,7 @@ public static class EditorTheme
                 return size;
             }
 
-            return 13.0;
+            return 10.4;
         }
     }
 }

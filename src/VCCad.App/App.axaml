@@ -20,7 +20,7 @@
     <SolidColorBrush x:Key="VcSelected" Color="#2B4C7E"/>
 
     <!-- Single global font-size setting (change here to rescale the whole UI) -->
-    <x:Double x:Key="VcFontSize">13</x:Double>
+    <x:Double x:Key="VcFontSize">10.4</x:Double>
   </Application.Resources>
 
   <Application.Styles>
