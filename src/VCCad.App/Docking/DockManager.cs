@@ -14,6 +14,8 @@ public sealed class DockManager
     private readonly Dictionary<string, ToolbarModel> _toolbars = new();
     private readonly Dictionary<string, DockTab> _tabs = new();
     private readonly Dictionary<string, DockTabPanelView> _panelViews = new();
+    private readonly Dictionary<string, DockToolbarView> _toolbarViews = new();
+    private readonly Dictionary<string, DockSide> _toolbarSides = new();
 
     public DockManager(StackPanel leftHost, StackPanel rightHost, StackPanel topHost, StackPanel bottomHost)
     {
@@ -112,6 +114,28 @@ public sealed class DockManager
         }
     }
 
+    /// <summary>Removes a panel/toolbar view from its host so the caller can drag
+    /// it (the view is re-added by the next <see cref="Build"/> on drop).</summary>
+    public Control? Detach(string id, bool isPanel)
+    {
+        Control? view = null;
+        if (isPanel && _panelViews.TryGetValue(id, out DockTabPanelView? panelView))
+        {
+            view = panelView;
+        }
+        else if (!isPanel && _toolbarViews.TryGetValue(id, out DockToolbarView? toolbarView))
+        {
+            view = toolbarView;
+        }
+
+        if (view?.Parent is Panel parent)
+        {
+            parent.Children.Remove(view);
+        }
+
+        return view;
+    }
+
     /// <summary>Recreates the host contents from the current model.</summary>
     public void Build()
     {
@@ -148,8 +172,17 @@ public sealed class DockManager
                 DockSide.Bottom => BottomHost,
                 _ => TopHost,
             };
-            var view = new DockToolbarView(toolbar);
-            view.DragRequested += (_, id) => ToolbarDragRequested?.Invoke(this, id);
+
+            // Reuse the view unless the side changed (orientation differs).
+            if (!_toolbarViews.TryGetValue(toolbar.Id, out DockToolbarView? view)
+                || _toolbarSides[toolbar.Id] != toolbar.Side)
+            {
+                view = new DockToolbarView(toolbar);
+                view.DragRequested += (_, id) => ToolbarDragRequested?.Invoke(this, id);
+                _toolbarViews[toolbar.Id] = view;
+                _toolbarSides[toolbar.Id] = toolbar.Side;
+            }
+
             host.Children.Add(view);
         }
 

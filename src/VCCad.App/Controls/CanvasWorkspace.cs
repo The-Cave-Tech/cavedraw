@@ -2225,6 +2225,28 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.Z)
+        {
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+            {
+                _vm.Redo();
+            }
+            else
+            {
+                _vm.Undo();
+            }
+
+            e.Handled = true;
+            return;
+        }
+
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.Y)
+        {
+            _vm.Redo();
+            e.Handled = true;
+            return;
+        }
+
         switch (e.Key)
         {
             case Key.V:

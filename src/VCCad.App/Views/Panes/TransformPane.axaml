@@ -2,28 +2,12 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="VCCad.App.Views.Panes.TransformPane">
   <ScrollViewer>
-    <StackPanel Margin="10,8" Spacing="8">
-      <TextBlock x:Name="SelectionInfo" Text="(no selection)" TextWrapping="Wrap"
-                 Foreground="{DynamicResource VcText}"/>
-      <TextBlock x:Name="ModeNote" FontSize="{DynamicResource VcFontSize}" TextWrapping="Wrap"
-                 Foreground="{DynamicResource VcTextDim}"
-                 Text="Position / size / rotation of the selection"/>
-      <CheckBox x:Name="OrthoSnapCheck" Content="Snap point to neighbour H/V on release"
-                IsChecked="True" Click="OnOrthoSnapChanged"/>
-      <TextBlock Text="REFERENCE POINT" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
+    <StackPanel Margin="10,8" Spacing="10">
+      <TextBlock Text="REFERENCE POINT" FontWeight="SemiBold"
                  Foreground="{DynamicResource VcTextDim}"/>
-      <Grid ColumnDefinitions="*,*,*" HorizontalAlignment="Left">
-        <Button x:Name="Pivot0" Classes="tool" Content="┌" Tag="0" Click="OnPivot" MinWidth="30" Margin="0,0,2,2"/>
-        <Button x:Name="Pivot1" Classes="tool" Content="┬" Tag="1" Click="OnPivot" MinWidth="30" Margin="0,0,2,2" Grid.Column="1"/>
-        <Button x:Name="Pivot2" Classes="tool" Content="┐" Tag="2" Click="OnPivot" MinWidth="30" Margin="0,0,0,2" Grid.Column="2"/>
-        <Button x:Name="Pivot3" Classes="tool" Content="├" Tag="3" Click="OnPivot" MinWidth="30" Margin="0,0,2,2" Grid.Row="1"/>
-        <Button x:Name="Pivot4" Classes="tool" Content="┼" Tag="4" Click="OnPivot" MinWidth="30" Margin="0,0,2,2" Grid.Row="1" Grid.Column="1"/>
-        <Button x:Name="Pivot5" Classes="tool" Content="┤" Tag="5" Click="OnPivot" MinWidth="30" Margin="0,0,0,2" Grid.Row="1" Grid.Column="2"/>
-        <Button x:Name="Pivot6" Classes="tool" Content="└" Tag="6" Click="OnPivot" MinWidth="30" Margin="0,0,2,0" Grid.Row="2"/>
-        <Button x:Name="Pivot7" Classes="tool" Content="┴" Tag="7" Click="OnPivot" MinWidth="30" Margin="0,0,2,0" Grid.Row="2" Grid.Column="1"/>
-        <Button x:Name="Pivot8" Classes="tool" Content="┘" Tag="8" Click="OnPivot" MinWidth="30" Margin="0,0,0,0" Grid.Row="2" Grid.Column="2"/>
-      </Grid>
-      <Grid ColumnDefinitions="Auto,*,16,Auto,*" RowDefinitions="Auto,Auto" >
+      <ContentControl x:Name="PivotHost" HorizontalAlignment="Left"/>
+
+      <Grid ColumnDefinitions="Auto,*,16,Auto,*" RowDefinitions="Auto,Auto">
         <TextBlock Text="X" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="XBox" Grid.Column="1" KeyDown="OnFieldKeyDown"/>
         <TextBlock Text="W" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
@@ -34,6 +18,7 @@
         <TextBlock Text="H" Grid.Row="1" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" KeyDown="OnFieldKeyDown"/>
       </Grid>
+
       <Grid ColumnDefinitions="Auto,*,10,Auto,*">
         <TextBlock Text="Rot" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="AngleBox" Grid.Column="1" KeyDown="OnFieldKeyDown"/>

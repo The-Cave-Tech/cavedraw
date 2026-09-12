@@ -1,7 +1,9 @@
 using System.Globalization;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Media;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
@@ -10,19 +12,20 @@ using ModelFillRule = VCCad.Core.Model.FillRule;
 
 namespace VCCad.App.Views.Panes;
 
-/// <summary>Transform tab: position/size/rotation fields with a 9-point pivot and
-/// a live readout while dragging. Point selections show position only.</summary>
+/// <summary>Transform tab: position/size/rotation fields with a 3×3 circle
+/// reference-point picker. Point selections show position only.</summary>
 public partial class TransformPane : UserControl
 {
     private EditorViewModel? _vm;
     private int _pivot = 4;
-    private Button[] _pivotButtons = Array.Empty<Button>();
-    private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.FromRgb(0x2B, 0x4C, 0x7E));
+    private readonly List<Button> _pivotButtons = new();
+    private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
+    private static readonly IBrush IdleBrush = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x52));
 
     public TransformPane()
     {
         InitializeComponent();
-        _pivotButtons = new[] { Pivot0, Pivot1, Pivot2, Pivot3, Pivot4, Pivot5, Pivot6, Pivot7, Pivot8 };
+        BuildPivotPicker();
         foreach (TextBox box in new[] { XBox, YBox, WBox, HBox, AngleBox })
         {
             box.LostFocus += (_, _) => CommitFromField(box);
@@ -37,6 +40,61 @@ public partial class TransformPane : UserControl
         Refresh();
     }
 
+    /// <summary>A 3×3 grid of small circles over cross-hair guide lines.</summary>
+    private void BuildPivotPicker()
+    {
+        var grid = new Grid
+        {
+            Width = 66,
+            Height = 66,
+            ColumnDefinitions = new ColumnDefinitions("*,*,*"),
+            RowDefinitions = new RowDefinitions("*,*,*"),
+        };
+
+        // Guide lines through the centre.
+        var horizontal = new Border
+        {
+            Height = 1,
+            Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var vertical = new Border
+        {
+            Width = 1,
+            Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)),
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        Grid.SetColumnSpan(horizontal, 3);
+        Grid.SetRowSpan(vertical, 3);
+        grid.Children.Add(horizontal);
+        grid.Children.Add(vertical);
+
+        for (int i = 0; i < 9; i++)
+        {
+            int index = i;
+            var dot = new Button
+            {
+                Width = 14,
+                Height = 14,
+                Padding = new Thickness(0),
+                CornerRadius = new CornerRadius(7),
+                BorderThickness = new Thickness(1.5),
+                Background = new SolidColorBrush(Color.FromRgb(0x23, 0x23, 0x27)),
+                BorderBrush = IdleBrush,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            ToolTip.SetTip(dot, $"Reference point {index + 1}");
+            dot.Click += (_, _) => { _pivot = index; Refresh(); };
+            Grid.SetColumn(dot, i % 3);
+            Grid.SetRow(dot, i / 3);
+            grid.Children.Add(dot);
+            _pivotButtons.Add(dot);
+        }
+
+        PivotHost.Content = grid;
+    }
+
     private void Refresh()
     {
         if (_vm is null)
@@ -44,14 +102,19 @@ public partial class TransformPane : UserControl
             return;
         }
 
-        HighlightPivot();
+        for (int i = 0; i < _pivotButtons.Count; i++)
+        {
+            _pivotButtons[i].BorderBrush = i == _pivot ? ActiveBrush : IdleBrush;
+            _pivotButtons[i].Background = i == _pivot
+                ? new SolidColorBrush(Color.FromRgb(0x2B, 0x4C, 0x7E))
+                : new SolidColorBrush(Color.FromRgb(0x23, 0x23, 0x27));
+        }
+
         SetBoxText(XBox, null);
         SetBoxText(YBox, null);
         SetBoxText(WBox, null);
         SetBoxText(HBox, null);
         SetBoxText(AngleBox, null);
-
-        SelectionInfo.Text = Describe();
 
         bool pointMode = _vm.HasPointSelection;
         bool objectMode = _vm.HasTransformableSelection;
@@ -59,7 +122,6 @@ public partial class TransformPane : UserControl
         {
             SetBoxText(XBox, pos.X);
             SetBoxText(YBox, pos.Y);
-            ModeNote.Text = "Point — position only (no width/height/rotation)";
         }
         else if (objectMode)
         {
@@ -73,17 +135,11 @@ public partial class TransformPane : UserControl
                 SetBoxText(HBox, bounds.Height);
                 SetBoxText(AngleBox, Math.Round(angle, 3));
             }
-
-            ModeNote.Text = "Object — position/size/rotation";
-        }
-        else
-        {
-            ModeNote.Text = "Select an object to edit its transform";
         }
 
-        foreach (Button b in _pivotButtons)
+        foreach (Button dot in _pivotButtons)
         {
-            b.IsEnabled = objectMode;
+            dot.IsEnabled = objectMode;
         }
 
         XBox.IsEnabled = pointMode || objectMode;
@@ -91,54 +147,6 @@ public partial class TransformPane : UserControl
         WBox.IsEnabled = objectMode;
         HBox.IsEnabled = objectMode;
         AngleBox.IsEnabled = objectMode;
-    }
-
-    private string Describe()
-    {
-        if (_vm is null || _vm.SelectedObjects.Count == 0)
-        {
-            return "(no selection)";
-        }
-
-        if (_vm.SelectedObjects.Count > 1)
-        {
-            Rect2D b = _vm.SelectionBounds();
-            return $"{_vm.SelectedObjects.Count} objects\n{b.Width:0.##} × {b.Height:0.##} pt";
-        }
-
-        LayerItem item = _vm.SelectedObjects[0];
-        if (item is PathItem path)
-        {
-            Rect2D b = path.BoundingBox();
-            return $"{item.Name}\n{b.Width:0.##} × {b.Height:0.##} pt";
-        }
-
-        return item.Name;
-    }
-
-    private void HighlightPivot()
-    {
-        for (int i = 0; i < _pivotButtons.Length; i++)
-        {
-            _pivotButtons[i].Background = i == _pivot ? ActiveBrush : Brushes.Transparent;
-        }
-    }
-
-    private void OnOrthoSnapChanged(object? sender, RoutedEventArgs e)
-    {
-        if (_vm is not null)
-        {
-            _vm.OrthogonalSnapEnabled = OrthoSnapCheck.IsChecked == true;
-        }
-    }
-
-    private void OnPivot(object? sender, RoutedEventArgs e)
-    {
-        if (sender is Button { Tag: int index })
-        {
-            _pivot = index;
-            Refresh();
-        }
     }
 
     private void OnFieldKeyDown(object? sender, KeyEventArgs e)

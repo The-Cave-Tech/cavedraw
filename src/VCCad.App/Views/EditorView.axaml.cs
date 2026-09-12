@@ -31,6 +31,7 @@ public partial class EditorView : UserControl
     private string? _dragId;
     private bool _dragIsPanel;
     private DockSide _dropSide = DockSide.Left;
+    private Control? _dragView;
 
     private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.FromRgb(0x2B, 0x4C, 0x7E));
 
@@ -129,6 +130,21 @@ public partial class EditorView : UserControl
         bar.Children.Add(IconButton("zoom-out", "Zoom out", OnZoomOut));
         bar.Children.Add(IconButton("zoom-in", "Zoom in", OnZoomIn));
         bar.Children.Add(IconButton("fit", "Fit in window", OnFitInWindow));
+        bar.Children.Add(new Border { Width = 1, Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)), Margin = new Thickness(6, 4) });
+
+        var snap = new ToggleButton
+        {
+            Content = "Snap",
+            IsChecked = _viewModel.OrthogonalSnapEnabled,
+            Padding = new Thickness(10, 4),
+            CornerRadius = new CornerRadius(6),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+        };
+        ToolTip.SetTip(snap, "Snap moved points to neighbouring H/V lines on release");
+        snap.Checked += (_, _) => _viewModel.OrthogonalSnapEnabled = true;
+        snap.Unchecked += (_, _) => _viewModel.OrthogonalSnapEnabled = false;
+        bar.Children.Add(snap);
         return bar;
     }
 
@@ -216,6 +232,17 @@ public partial class EditorView : UserControl
         _dragId = id;
         _dragIsPanel = isPanel;
         DropOverlay.IsVisible = true;
+
+        // Pull the actual view out of its host and let it follow the pointer.
+        _dragView = _manager.Detach(id, isPanel);
+        if (_dragView is not null)
+        {
+            _dragView.Opacity = 0.9;
+            _dragView.IsHitTestVisible = false;
+            Canvas.SetLeft(_dragView, 0);
+            Canvas.SetTop(_dragView, 0);
+            DropOverlay.Children.Add(_dragView);
+        }
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
@@ -252,6 +279,12 @@ public partial class EditorView : UserControl
 
         _dropSide = side;
         ShowDropZone(side, w, h);
+
+        if (_dragView is not null)
+        {
+            Canvas.SetLeft(_dragView, p.X - 24);
+            Canvas.SetTop(_dragView, p.Y - 14);
+        }
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -260,6 +293,14 @@ public partial class EditorView : UserControl
         if (!_dragging)
         {
             return;
+        }
+
+        if (_dragView is not null)
+        {
+            DropOverlay.Children.Remove(_dragView);
+            _dragView.Opacity = 1.0;
+            _dragView.IsHitTestVisible = true;
+            _dragView = null;
         }
 
         if (_dragId is not null)
