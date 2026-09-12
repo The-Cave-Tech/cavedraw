@@ -80,6 +80,9 @@ public sealed class GroupItemsCommand : IUndoableCommand
 
     public string Description => "Group";
 
+    /// <summary>The group created by <see cref="Do"/> (available after execution).</summary>
+    public ArtGroup? Group => _group;
+
     public GroupItemsCommand(IItemContainer container, IEnumerable<LayerItem> items)
     {
         _container = container;

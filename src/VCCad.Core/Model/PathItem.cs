@@ -59,6 +59,27 @@ public sealed class PathItem : LayerItem
         return sp;
     }
 
+    /// <summary>The owning artboard's origin. Path coordinates are stored relative
+    /// to it; add this to reach document/world space.</summary>
+    public Vector2D ArtboardOffset()
+    {
+        Artboard? artboard = OwningLayer()?.Artboard;
+        return artboard is null ? default : new Vector2D(artboard.X, artboard.Y);
+    }
+
+    /// <summary>Bounding box in document/world space (local bounds + artboard origin).</summary>
+    public Rect2D WorldBounds()
+    {
+        Rect2D box = BoundingBox();
+        if (box.IsEmpty)
+        {
+            return box;
+        }
+
+        Vector2D offset = ArtboardOffset();
+        return new Rect2D(box.X + offset.X, box.Y + offset.Y, box.Width, box.Height);
+    }
+
     /// <summary>
     /// Tight bounding box of the whole path in its own coordinate space. For an
     /// empty path (no subpaths) the box is empty.

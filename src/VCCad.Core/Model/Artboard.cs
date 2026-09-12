@@ -86,6 +86,7 @@ public sealed class Artboard : CadObject
             return;
         }
 
+        layer.Artboard = this;
         _layers.Add(layer);
         StructureChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -96,6 +97,7 @@ public sealed class Artboard : CadObject
         bool removed = _layers.Remove(layer);
         if (removed)
         {
+            layer.Artboard = null;
             StructureChanged?.Invoke(this, EventArgs.Empty);
         }
 

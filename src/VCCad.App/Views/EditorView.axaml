@@ -28,6 +28,9 @@
         <MenuItem Header="_Redo" Click="OnRedo"/>
         <Separator/>
         <MenuItem Header="_Delete" Click="OnDelete"/>
+        <Separator/>
+        <MenuItem Header="_Group" Click="OnGroup"/>
+        <MenuItem Header="_Ungroup" Click="OnUngroup"/>
       </MenuItem>
       <MenuItem Header="_View">
         <MenuItem Header="_Zoom In" Click="OnZoomIn"/>

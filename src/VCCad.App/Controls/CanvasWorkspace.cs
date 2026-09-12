@@ -76,13 +76,6 @@ public sealed class CanvasWorkspace : Control
     private double _chromeAngle;
     private Rect2D _chromeRect0; // chrome box captured at the start of a move gesture
 
-    // Artboard tool gesture state.
-    private enum ArtboardGesture { None, Move, Resize, Create }
-    private ArtboardGesture _artboardGesture;
-    private Artboard? _artboard;
-    private Rect2D _artboardBefore;
-    private int _artboardHandle;
-
     // Whole-object move / rotate targets (Select tool).
     private readonly List<PathItem> _dragPaths = new();
     private readonly Dictionary<PathItem, PathItem> _dragOriginals = new();
@@ -112,6 +105,7 @@ public sealed class CanvasWorkspace : Control
     private SubPath? _segmentSub;
     private int _segmentIndex;
     private PathItem? _segmentBefore;
+    private Vector2D _segmentOffset;
     private PathNode? _segmentNodeA;
     private PathNode? _segmentNodeB;
     private (Point2D A, Point2D I, Point2D O) _segmentOrigA;
@@ -143,8 +137,19 @@ public sealed class CanvasWorkspace : Control
     private Point2D? _shapeStart;
     private Point2D _shapeCurrent;
 
+    // Artboard tool gesture state.
+    private enum ArtboardGesture { None, Move, Resize, Create }
+    private ArtboardGesture _artboardGesture;
+    private Artboard? _artboard;
+    private Rect2D _artboardBefore;
+    private int _artboardHandle;
+    private Point2D _artboardCreateStart;
+    private Point2D _artboardCreateCurrent;
+    private readonly List<(PathItem Path, PathItem Before)> _artboardChildren = new();
+
     // Pen tool.
     private PathItem? _penPath;
+    private Vector2D _penOffset;
     private PathNode? _penNode;
     private PathItem? _penBefore;
     private bool _penClosePending;
@@ -254,6 +259,13 @@ public sealed class CanvasWorkspace : Control
 
     private double PickTolerance => Math.Max(0.05, 5.0 / Math.Max(_layout.Zoom, 1e-6));
 
+    /// <summary>Converts a world point into a path's artboard-local frame.</summary>
+    private static Point2D LocalFor(PathItem path, Point2D world) => world - path.ArtboardOffset();
+
+    /// <summary>Artboard origin of the current target layer (for new geometry).</summary>
+    private Vector2D TargetOffset()
+        => _vm?.TargetLayer().Artboard is { } ab ? new Vector2D(ab.X, ab.Y) : default;
+
     private Rect2D ComputeExtent()
     {
         if (_document is null)
@@ -271,17 +283,44 @@ public sealed class CanvasWorkspace : Control
         return extent;
     }
 
-    private PathItem? HitTestTopPath(Point2D model)
+    private PathItem? HitTestTopPath(Point2D model) => HitTestTopItem(model) switch
+    {
+        PathItem path => path,
+        ArtGroup group => FirstPath(group),
+        _ => null,
+    };
+
+    private static PathItem? FirstPath(ArtGroup group)
+    {
+        foreach (LayerItem child in group.Children)
+        {
+            if (child is PathItem p)
+            {
+                return p;
+            }
+
+            if (child is ArtGroup nested && FirstPath(nested) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Top-most container-level item (group or path) under the point.</summary>
+    private LayerItem? HitTestTopItem(Point2D model)
     {
         if (_document is null)
         {
             return null;
         }
 
-        PathItem? topmost = null;
+        LayerItem? topmost = null;
         double tolerance = PickTolerance;
         foreach (Artboard artboard in _document.Artboards)
         {
+            Point2D local = model - new Vector2D(artboard.X, artboard.Y);
             foreach (Layer layer in artboard.Layers)
             {
                 if (!layer.IsVisible)
@@ -291,12 +330,31 @@ public sealed class CanvasWorkspace : Control
 
                 foreach (LayerItem item in layer.Children)
                 {
-                    PathItem? hit = HitTestItem(item, model, tolerance);
-                    if (hit is not null)
+                    if (HitTestItem(item, local, tolerance) is not null)
                     {
-                        topmost = hit;
+                        topmost = item;
                     }
                 }
+            }
+        }
+
+        return topmost;
+    }
+
+    /// <summary>Top-most descendant of a group under the point (to enter a group).</summary>
+    private LayerItem? HitTestChildOf(ArtGroup group, Point2D model)
+    {
+        Vector2D offset = group.OwningLayer()?.Artboard is { } ab
+            ? new Vector2D(ab.X, ab.Y)
+            : default;
+        Point2D local = model - offset;
+
+        LayerItem? topmost = null;
+        foreach (LayerItem child in group.Children)
+        {
+            if (HitTestItem(child, local, PickTolerance) is not null)
+            {
+                topmost = child;
             }
         }
 
@@ -376,6 +434,10 @@ public sealed class CanvasWorkspace : Control
                 _vm!.ClearSelection();
                 _vm.ClearPointSelection();
                 break;
+
+            case EditorTool.Artboard:
+                ArtboardPress(model);
+                break;
         }
     }
 
@@ -422,6 +484,10 @@ public sealed class CanvasWorkspace : Control
                     }
 
                     break;
+
+                case EditorTool.Artboard:
+                    ArtboardDrag(model);
+                    break;
             }
         }
         else if (_vm?.Tool == EditorTool.Pen && _penPath is not null)
@@ -467,6 +533,7 @@ public sealed class CanvasWorkspace : Control
             case EditorTool.Pen: PenRelease(model); break;
             case EditorTool.Rectangle: CreateShape(rect: true); break;
             case EditorTool.Ellipse: CreateShape(rect: false); break;
+            case EditorTool.Artboard: ArtboardRelease(model); break;
         }
     }
 
@@ -542,18 +609,23 @@ public sealed class CanvasWorkspace : Control
 
         foreach (PathItem path in _vm.SelectedPaths())
         {
+            Vector2D offset = path.ArtboardOffset();
             foreach (SubPath sub in path.SubPaths)
             {
                 foreach (CubicBezier segment in sub.Segments())
                 {
-                    (double sMinU, double sMaxU, double sMinV, double sMaxV) = segment.ExtentsAlong(u, v);
+                    // Project the curve (shifted into world space) onto the frame.
+                    CubicBezier world = new(
+                        segment.P0 + offset, segment.P1 + offset,
+                        segment.P2 + offset, segment.P3 + offset);
+                    (double sMinU, double sMaxU, double sMinV, double sMaxV) = world.ExtentsAlong(u, v);
                     Include(sMinU, sMinV);
                     Include(sMaxU, sMaxV);
                 }
 
                 if (sub.Nodes.Count == 1)
                 {
-                    Point2D p = sub.Nodes[0].Anchor;
+                    Point2D p = sub.Nodes[0].Anchor + offset;
                     Include(p.X * u.X + p.Y * u.Y, p.X * v.X + p.Y * v.Y);
                 }
             }
@@ -647,7 +719,13 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        PathItem? hit = HitTestTopPath(model);
+        LayerItem? hit = HitTestTopItem(model);
+        if (hit is ArtGroup selectedGroup && _vm.IsObjectSelected(selectedGroup)
+            && HitTestChildOf(selectedGroup, model) is { } child)
+        {
+            hit = child; // second click enters the already-selected group
+        }
+
         if (_shiftHeld)
         {
             if (hit is null)
@@ -838,12 +916,18 @@ public sealed class CanvasWorkspace : Control
 
     private static Rect2D ItemBounds(LayerItem item)
     {
+        Vector2D offset = item.OwningLayer()?.Artboard is { } artboard
+            ? new Vector2D(artboard.X, artboard.Y)
+            : default;
+
         switch (item)
         {
             case PathItem path:
-                return path.BoundingBox();
+                Rect2D b = path.BoundingBox();
+                return b.IsEmpty ? b : new Rect2D(b.X + offset.X, b.Y + offset.Y, b.Width, b.Height);
             case ArtGroup group:
-                return group.Transform.Transform(group.BoundingBox());
+                Rect2D g = group.Transform.Transform(group.BoundingBox());
+                return g.IsEmpty ? g : new Rect2D(g.X + offset.X, g.Y + offset.Y, g.Width, g.Height);
             default:
                 return Rect2D.Empty;
         }
@@ -960,10 +1044,22 @@ public sealed class CanvasWorkspace : Control
             sy = sx; // Shift + corner drag keeps the aspect ratio
         }
 
+        // Shift + a group selection scales each object in place (about its own
+        // centre) instead of translating it to match the group scale.
+        bool groupInPlace = _shiftHeld && _vm!.SelectedObjects.Any(o => o is ArtGroup);
         foreach (PathItem path in _resizePaths)
         {
+            Vector2D offset = path.ArtboardOffset();
             path.RestoreGeometryFrom(_resizeOriginals[path]);
-            ApplyRotatedScale(path, _resizeCenter0, _resizeAngle0, _resizePivot, sx, sy);
+            if (groupInPlace)
+            {
+                Point2D center = path.BoundingBox().Center;
+                path.ScaleGeometryAbout(center, sx, sx);
+            }
+            else
+            {
+                ApplyRotatedScale(path, _resizeCenter0 - offset, _resizeAngle0, _resizePivot - offset, sx, sy);
+            }
         }
 
         // Keep the chrome box glued to the new (still oriented) rectangle.
@@ -1096,7 +1192,7 @@ public sealed class CanvasWorkspace : Control
         foreach (PathItem path in _rotatePaths)
         {
             path.RestoreGeometryFrom(_rotateOriginals[path]);
-            path.RotateGeometryAbout(_rotateCenter, angle);
+            path.RotateGeometryAbout(_rotateCenter - path.ArtboardOffset(), angle);
         }
 
         _chromeAngle = _rotateAngle0 + angle; // selection box rotates with the objects
@@ -1123,7 +1219,7 @@ public sealed class CanvasWorkspace : Control
         NodePick? pick = null;
         foreach (PathItem candidate in _vm.SelectedPaths())
         {
-            NodePick? candidatePick = PathPicking.PickNode(candidate, model, PickTolerance * 1.6);
+            NodePick? candidatePick = PathPicking.PickNode(candidate, LocalFor(candidate, model), PickTolerance * 1.6);
             if (candidatePick is not null)
             {
                 pick = candidatePick;
@@ -1137,7 +1233,7 @@ public sealed class CanvasWorkspace : Control
             pickPath = HitTestTopPath(model);
             if (pickPath is not null)
             {
-                pick = PathPicking.PickNode(pickPath, model, PickTolerance * 1.6);
+                pick = PathPicking.PickNode(pickPath, LocalFor(pickPath, model), PickTolerance * 1.6);
             }
         }
 
@@ -1148,7 +1244,7 @@ public sealed class CanvasWorkspace : Control
                 _vm.SelectObject(pickPath); // select the path whose node we grab
             }
 
-            BeginNodeDrag(pickPath, pick.Value, model);
+            BeginNodeDrag(pickPath, pick.Value, LocalFor(pickPath, model));
 
             // Anchor grabs become "point" selections (position-only editing);
             // handle grabs edit the curve, so they drop any point selection.
@@ -1169,13 +1265,13 @@ public sealed class CanvasWorkspace : Control
         PathItem? segmentPath = pickPath;
         SegmentPick? segment = segmentPath is null
             ? null
-            : PathPicking.ClosestSegment(segmentPath, model, PickTolerance * 1.6);
+            : PathPicking.ClosestSegment(segmentPath, LocalFor(segmentPath, model), PickTolerance * 1.6);
         if (segment is null)
         {
             segmentPath = HitTestTopPath(model);
             segment = segmentPath is null
                 ? null
-                : PathPicking.ClosestSegment(segmentPath, model, PickTolerance * 1.6);
+                : PathPicking.ClosestSegment(segmentPath, LocalFor(segmentPath, model), PickTolerance * 1.6);
         }
 
         if (segment is not null && segmentPath is not null)
@@ -1201,10 +1297,10 @@ public sealed class CanvasWorkspace : Control
                 _pendingInsertPath = segmentPath;
                 _pendingInsertSub = subIndex;
                 _pendingInsertSeg = segment.Value.SegmentIndex;
-                _pendingInsertPoint = model;
+                _pendingInsertPoint = LocalFor(segmentPath, model);
             }
 
-            BeginSegmentDrag(segmentPath, subIndex, segment.Value.SegmentIndex, model);
+            BeginSegmentDrag(segmentPath, subIndex, segment.Value.SegmentIndex, LocalFor(segmentPath, model));
             return;
         }
 
@@ -1265,6 +1361,7 @@ public sealed class CanvasWorkspace : Control
         _segmentSub = sub;
         _segmentIndex = segmentIndex;
         _segmentBefore = path.GeometrySnapshot();
+        _segmentOffset = path.ArtboardOffset();
         _chromeRect = null;
         _chromeAngle = 0;
         _segmentNodeA = sub.Nodes[a];
@@ -1379,9 +1476,10 @@ public sealed class CanvasWorkspace : Control
                 return;
             }
 
-            Point2D target = _shiftHeld
+            Point2D targetWorld = _shiftHeld
                 ? _dragStartModel + SnapTranslation(model - _dragStartModel)
                 : model;
+            Point2D target = targetWorld - _segmentOffset;
             Point2D baseline = a0 + (b0 - a0) * u;
             Vector2D h = (target - baseline) / spread;
             if (h.LengthSquared < 1e-12)
@@ -1640,14 +1738,16 @@ public sealed class CanvasWorkspace : Control
         _vm.ClearPointSelection();
 
         // Clicking the start anchor of the active path closes (and finalises) it.
+        Point2D penLocal = model - _penOffset;
         if (_penPath is not null && _penPath.SubPaths[0].Nodes.Count >= 2 &&
-            _penPath.SubPaths[0].Nodes[0].Anchor.DistanceTo(model) <= PickTolerance * 2.5)
+            _penPath.SubPaths[0].Nodes[0].Anchor.DistanceTo(penLocal) <= PickTolerance * 2.5)
         {
             _penClosePending = true;
             _penBefore = _penPath.GeometrySnapshot();
             return;
         }
 
+        _penOffset = TargetOffset();
         _chromeRect = null;
         _chromeAngle = 0;
         if (_penPath is null)
@@ -1665,11 +1765,11 @@ public sealed class CanvasWorkspace : Control
         SubPath sub = _penPath.SubPaths[0];
 
         // Shift constrains the new anchor to be orthogonal to the previous one.
-        Point2D placed = model;
+        Point2D placed = penLocal;
         if (_shiftHeld && sub.Nodes.Count > 0)
         {
             Point2D previous = sub.Nodes[^1].Anchor;
-            placed = previous + SnapTranslation(model - previous);
+            placed = previous + SnapTranslation(penLocal - previous);
         }
 
         _penNode = sub.AppendNode(placed);
@@ -1684,8 +1784,9 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        Point2D local = model - _penOffset;
         Point2D anchor = _penNode.Anchor;
-        Point2D target = _shiftHeld ? anchor + SnapTranslation(model - anchor) : model;
+        Point2D target = _shiftHeld ? anchor + SnapTranslation(local - anchor) : local;
         if ((target - anchor).IsZero)
         {
             return;
@@ -1754,6 +1855,191 @@ public sealed class CanvasWorkspace : Control
     }
 
     // ------------------------------------------------------------------
+    // Artboard tool
+    // ------------------------------------------------------------------
+
+    private Artboard? HitTestArtboard(Point2D model)
+    {
+        if (_document is null)
+        {
+            return null;
+        }
+
+        for (int i = _document.Artboards.Count - 1; i >= 0; i--)
+        {
+            if (_document.Artboards[i].Bounds.Contains(model))
+            {
+                return _document.Artboards[i];
+            }
+        }
+
+        return null;
+    }
+
+    private bool TryHitArtboardHandle(Artboard artboard, Point2D model, out int handle)
+    {
+        handle = -1;
+        Rect2D r = artboard.Bounds;
+        Point2D[] corners =
+        {
+            new(r.Left, r.Top), new(r.Right, r.Top),
+            new(r.Right, r.Bottom), new(r.Left, r.Bottom),
+        };
+        for (int i = 0; i < 4; i++)
+        {
+            if (model.DistanceTo(corners[i]) <= PickTolerance * 2)
+            {
+                handle = i;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void ArtboardPress(Point2D model)
+    {
+        Artboard? artboard = HitTestArtboard(model);
+        _artboardChildren.Clear();
+        _dragStartModel = model;
+
+        if (artboard is not null)
+        {
+            _vm!.SelectArtboard(artboard);
+            _artboard = artboard;
+            _artboardBefore = artboard.Bounds;
+            if (TryHitArtboardHandle(artboard, model, out int handle))
+            {
+                _artboardGesture = ArtboardGesture.Resize;
+                _artboardHandle = handle;
+            }
+            else
+            {
+                _artboardGesture = ArtboardGesture.Move;
+                foreach (Layer layer in artboard.Layers)
+                {
+                    foreach (LayerItem item in layer.Children)
+                    {
+                        CollectPaths(item, _artboardChildren);
+                    }
+                }
+            }
+        }
+        else
+        {
+            _vm!.SelectArtboard(null);
+            _artboardGesture = ArtboardGesture.Create;
+            _artboardCreateStart = model;
+            _artboardCreateCurrent = model;
+        }
+
+        InvalidateVisual();
+    }
+
+    private void CollectPaths(LayerItem item, List<(PathItem Path, PathItem Before)> sink)
+    {
+        switch (item)
+        {
+            case PathItem path:
+                sink.Add((path, path.GeometrySnapshot()));
+                break;
+            case ArtGroup group:
+                foreach (LayerItem child in group.Children)
+                {
+                    CollectPaths(child, sink);
+                }
+
+                break;
+        }
+    }
+
+    private void ArtboardDrag(Point2D model)
+    {
+        switch (_artboardGesture)
+        {
+            case ArtboardGesture.Create:
+                _artboardCreateCurrent = model;
+                break;
+
+            case ArtboardGesture.Move when _artboard is not null:
+                Vector2D delta = model - _dragStartModel;
+                _artboard.X = _artboardBefore.X + delta.X;
+                _artboard.Y = _artboardBefore.Y + delta.Y;
+                foreach ((PathItem path, PathItem before) in _artboardChildren)
+                {
+                    path.RestoreGeometryFrom(before);
+                    path.TranslateGeometryBy(delta);
+                }
+
+                _vm!.RaiseTransformChanged();
+                break;
+
+            case ArtboardGesture.Resize when _artboard is not null:
+                Rect2D r = _artboardBefore;
+                Point2D fixedCorner = _artboardHandle switch
+                {
+                    0 => new Point2D(r.Right, r.Bottom),
+                    1 => new Point2D(r.Left, r.Bottom),
+                    2 => new Point2D(r.Left, r.Top),
+                    _ => new Point2D(r.Right, r.Top),
+                };
+                Rect2D resized = Rect2D.FromPoints(fixedCorner, model);
+                _artboard.X = resized.X;
+                _artboard.Y = resized.Y;
+                _artboard.Width = Math.Max(1, resized.Width);
+                _artboard.Height = Math.Max(1, resized.Height);
+                _vm!.RaiseTransformChanged();
+                break;
+        }
+
+        InvalidateVisual();
+    }
+
+    private void ArtboardRelease(Point2D model)
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        switch (_artboardGesture)
+        {
+            case ArtboardGesture.Move when _artboard is not null:
+                var edits = new List<IUndoableCommand>
+                {
+                    new SetArtboardBoundsCommand(_artboard, _artboardBefore, _artboard.Bounds, "Move artboard"),
+                };
+                foreach ((PathItem path, PathItem before) in _artboardChildren)
+                {
+                    edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot()));
+                }
+
+                _vm.Execute(new CompositeCommand("Move artboard", edits));
+                break;
+
+            case ArtboardGesture.Resize when _artboard is not null:
+                _vm.SetArtboardBounds(_artboard, _artboardBefore, _artboard.Bounds);
+                break;
+
+            case ArtboardGesture.Create:
+                Rect2D rect = Rect2D.FromPoints(_artboardCreateStart, _artboardCreateCurrent);
+                if (rect.Width < 4 || rect.Height < 4)
+                {
+                    rect = new Rect2D(_artboardCreateStart.X, _artboardCreateStart.Y,
+                        PageSizes.A4Landscape.Width, PageSizes.A4Landscape.Height);
+                }
+
+                _vm.AddArtboardFromRect(rect);
+                break;
+        }
+
+        _artboardGesture = ArtboardGesture.None;
+        _artboard = null;
+        _artboardChildren.Clear();
+        InvalidateVisual();
+    }
+
+    // ------------------------------------------------------------------
     // Shape tools
     // ------------------------------------------------------------------
 
@@ -1775,11 +2061,14 @@ public sealed class CanvasWorkspace : Control
             return; // a click, not a drag — no shape
         }
 
-        Rect2D box = Rect2D.FromPoints(a, b);
+        Vector2D offset = TargetOffset();
+        Point2D la = a - offset;
+        Point2D lb = b - offset;
+        Rect2D box = Rect2D.FromPoints(la, lb);
         PathItem shape = rect
             ? PathFactory.CreateRectangle("Rectangle", box)
             : PathFactory.CreateEllipse("Ellipse",
-                new Point2D((a.X + b.X) / 2, (a.Y + b.Y) / 2),
+                new Point2D((la.X + lb.X) / 2, (la.Y + lb.Y) / 2),
                 Math.Abs(box.Width) / 2,
                 Math.Abs(box.Height) / 2);
         shape.Stroke = StrokeSpec.Hairline(ColorRgb.Black);
@@ -1917,6 +2206,10 @@ public sealed class CanvasWorkspace : Control
             ? MediaFillRule.EvenOdd
             : MediaFillRule.NonZero;
 
+        // Path coordinates are artboard-local; shift into world space.
+        Vector2D offset = path.ArtboardOffset();
+        Point Map(Point2D local) => ModelToScreen(local + offset);
+
         using (StreamGeometryContext g = geometry.Open())
         {
             g.SetFillRule(rule);
@@ -1942,16 +2235,16 @@ public sealed class CanvasWorkspace : Control
                     continue;
                 }
 
-                g.BeginFigure(ModelToScreen(sub.Nodes[0].Anchor), sub.IsClosed);
+                g.BeginFigure(Map(sub.Nodes[0].Anchor), sub.IsClosed);
                 int segmentCount = sub.SegmentCount;
                 for (int i = 0; i < segmentCount; i++)
                 {
                     PathNode from = sub.Nodes[i];
                     PathNode to = sub.Nodes[(i + 1) % sub.Nodes.Count];
-                    Point fromAnchor = ModelToScreen(from.Anchor);
-                    Point p1 = ModelToScreen(from.OutHandle);
-                    Point p2 = ModelToScreen(to.InHandle);
-                    Point p3 = ModelToScreen(to.Anchor);
+                    Point fromAnchor = Map(from.Anchor);
+                    Point p1 = Map(from.OutHandle);
+                    Point p2 = Map(to.InHandle);
+                    Point p3 = Map(to.Anchor);
 
                     if (Near(p1, fromAnchor) && Near(p2, p3))
                     {
@@ -2010,6 +2303,11 @@ public sealed class CanvasWorkspace : Control
         if (_marqueeActive)
         {
             PaintMarquee(context);
+        }
+
+        if (tool == EditorTool.Artboard)
+        {
+            PaintArtboardChrome(context);
         }
 
         if ((tool is EditorTool.Rectangle or EditorTool.Ellipse) && _shapeStart is { } start)
@@ -2232,6 +2530,43 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
+    private void PaintArtboardChrome(DrawingContext context)
+    {
+        IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
+        var pen = new Pen(accent, 1.4) { DashStyle = new DashStyle(new[] { 5.0, 3.0 }, 0) };
+
+        if (_artboardGesture == ArtboardGesture.Create)
+        {
+            Rect2D preview = Rect2D.FromPoints(_artboardCreateStart, _artboardCreateCurrent);
+            Point ptl = ModelToScreen(new Point2D(preview.Left, preview.Top));
+            context.DrawRectangle(null, pen,
+                new Rect(ptl.X, ptl.Y, preview.Width * _layout.Zoom, preview.Height * _layout.Zoom));
+            return;
+        }
+
+        if (_vm?.SelectedArtboard is not { } artboard)
+        {
+            return;
+        }
+
+        Rect2D r = artboard.Bounds;
+        Point tl = ModelToScreen(new Point2D(r.Left, r.Top));
+        context.DrawRectangle(null, pen, new Rect(tl.X, tl.Y, r.Width * _layout.Zoom, r.Height * _layout.Zoom));
+
+        double half = Math.Max(4.0 / _layout.Zoom, 1.0);
+        var handlePen = new Pen(accent, 1.4);
+        Point2D[] corners =
+        {
+            new(r.Left, r.Top), new(r.Right, r.Top), new(r.Right, r.Bottom), new(r.Left, r.Bottom),
+        };
+        foreach (Point2D corner in corners)
+        {
+            Point p = ModelToScreen(corner);
+            context.DrawRectangle(Brushes.White, handlePen,
+                new Rect(p.X - half, p.Y - half, half * 2, half * 2));
+        }
+    }
+
     private void PaintShapePreview(DrawingContext context, Point2D a, Point2D b, bool rect)
     {
         var previewPen = new Pen(new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF)), 1.0);
@@ -2259,12 +2594,14 @@ public sealed class CanvasWorkspace : Control
         var previewPen = new Pen(new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF)), 1.0);
         previewPen.DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0);
 
-        Point2D lastModel = sub.Nodes[^1].Anchor;
-        Point last = ModelToScreen(lastModel);
+        Point2D lastLocal = sub.Nodes[^1].Anchor;
+        Point2D lastWorld = lastLocal + _penOffset;
+        Point last = ModelToScreen(lastWorld);
         if (_hoverModel is { } hover)
         {
-            Point2D preview = _shiftHeld ? lastModel + SnapTranslation(hover - lastModel) : hover;
-            context.DrawLine(previewPen, last, ModelToScreen(preview));
+            Point2D hoverLocal = hover - _penOffset;
+            Point2D previewLocal = _shiftHeld ? lastLocal + SnapTranslation(hoverLocal - lastLocal) : hoverLocal;
+            context.DrawLine(previewPen, last, ModelToScreen(previewLocal + _penOffset));
         }
 
         if (sub.Nodes.Count >= 2)
@@ -2310,6 +2647,21 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.G)
+        {
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+            {
+                _vm.UngroupSelection();
+            }
+            else
+            {
+                _vm.GroupSelection();
+            }
+
+            e.Handled = true;
+            return;
+        }
+
         switch (e.Key)
         {
             case Key.V:
@@ -2326,6 +2678,12 @@ public sealed class CanvasWorkspace : Control
 
             case Key.P:
                 _vm.Tool = EditorTool.Pen;
+                e.Handled = true;
+                break;
+
+            case Key.O:
+                _vm.Tool = EditorTool.Artboard;
+                FinalizePen();
                 e.Handled = true;
                 break;
 

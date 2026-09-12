@@ -9,19 +9,19 @@
 
       <Grid ColumnDefinitions="Auto,*,16,Auto,*" RowDefinitions="Auto,Auto">
         <TextBlock Text="X" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="XBox" Grid.Column="1" KeyDown="OnFieldKeyDown"/>
+        <TextBox x:Name="XBox" Grid.Column="1" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="0"/>
         <TextBlock Text="W" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="WBox" Grid.Column="4" KeyDown="OnFieldKeyDown"/>
+        <TextBox x:Name="WBox" Grid.Column="4" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="2"/>
 
         <TextBlock Text="Y" Grid.Row="1" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="YBox" Grid.Row="1" Grid.Column="1" KeyDown="OnFieldKeyDown"/>
+        <TextBox x:Name="YBox" Grid.Row="1" Grid.Column="1" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="1"/>
         <TextBlock Text="H" Grid.Row="1" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" KeyDown="OnFieldKeyDown"/>
+        <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="3"/>
       </Grid>
 
       <Grid ColumnDefinitions="Auto,*,10,Auto,*">
         <TextBlock Text="Rot" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="AngleBox" Grid.Column="1" KeyDown="OnFieldKeyDown"/>
+        <TextBox x:Name="AngleBox" Grid.Column="1" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="4"/>
         <TextBlock Text="deg" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
       </Grid>
     </StackPanel>

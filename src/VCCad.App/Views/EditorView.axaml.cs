@@ -381,6 +381,8 @@ public partial class EditorView : UserControl
     private void OnUndo(object? sender, RoutedEventArgs e) => _viewModel.Undo();
     private void OnRedo(object? sender, RoutedEventArgs e) => _viewModel.Redo();
     private void OnDelete(object? sender, RoutedEventArgs e) => _viewModel.DeleteSelection();
+    private void OnGroup(object? sender, RoutedEventArgs e) => _viewModel.GroupSelection();
+    private void OnUngroup(object? sender, RoutedEventArgs e) => _viewModel.UngroupSelection();
 
     private void OnZoomIn(object? sender, RoutedEventArgs e) { Workspace.ZoomIn(); UpdateStatus(); }
     private void OnZoomOut(object? sender, RoutedEventArgs e) { Workspace.ZoomOut(); UpdateStatus(); }

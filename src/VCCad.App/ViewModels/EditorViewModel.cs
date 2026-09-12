@@ -177,6 +177,71 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// and the numeric rotation field).</summary>
     internal void SetSelectionRotationRadians(double radians) => _selectionRotationRadians = radians;
 
+    /// <summary>Groups the selected sibling objects (Edit → Group).</summary>
+    public void GroupSelection()
+    {
+        var items = _selectedObjects.Where(i => i.Container is not null).ToList();
+        if (items.Count < 2)
+        {
+            Status = "Select two or more objects to group";
+            return;
+        }
+
+        IItemContainer container = items[0].Container!;
+        var command = new GroupItemsCommand(container, items);
+        Execute(command);
+        if (command.Group is { } group)
+        {
+            SelectObject(group);
+            Status = "Grouped";
+        }
+    }
+
+    /// <summary>Dissolves the selected groups (Edit → Ungroup).</summary>
+    public void UngroupSelection()
+    {
+        var groups = _selectedObjects.OfType<ArtGroup>().ToList();
+        if (groups.Count == 0)
+        {
+            Status = "Select a group to ungroup";
+            return;
+        }
+
+        var freed = new List<LayerItem>();
+        foreach (ArtGroup group in groups)
+        {
+            LayerItem[] children = group.Children.ToArray();
+            Execute(new UngroupItemsCommand(group));
+            freed.AddRange(children);
+        }
+
+        _selectedObjects.Clear();
+        _selectedSegments.Clear();
+        _point = null;
+        foreach (LayerItem item in freed)
+        {
+            _selectedObjects.Add(item);
+        }
+
+        NotifySelectionChanged();
+        Status = "Ungrouped";
+    }
+
+    /// <summary>Creates an artboard covering <paramref name="rect"/> (document space).</summary>
+    public void AddArtboardFromRect(Rect2D rect)
+    {
+        double w = Math.Max(1, rect.Width);
+        double h = Math.Max(1, rect.Height);
+        var artboard = new Artboard(new Size2D(w, h), new Point2D(rect.X, rect.Y))
+        {
+            Name = $"Artboard {Document.Artboards.Count + 1}",
+        };
+        artboard.AddLayer("Layer 1");
+        Execute(new AddArtboardCommand(Document, artboard));
+        SelectArtboard(artboard);
+        Status = $"Added {artboard.Name}";
+    }
+
     /// <summary>Selected objects (paths and groups), in picking order.</summary>
     public IReadOnlyList<LayerItem> SelectedObjects => _selectedObjects;
 
@@ -395,16 +460,55 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>Selected paths whose geometry can be edited (identity hierarchies).</summary>
-    public IEnumerable<PathItem> SelectedPaths() => _selectedObjects.OfType<PathItem>();
+    /// <summary>Selected paths whose geometry can be edited. Selecting a group
+    /// expands to every path inside it (groups have no coordinates of their own).</summary>
+    public IEnumerable<PathItem> SelectedPaths()
+    {
+        foreach (LayerItem item in _selectedObjects)
+        {
+            switch (item)
+            {
+                case PathItem path:
+                    yield return path;
+                    break;
+                case ArtGroup group:
+                    foreach (PathItem nested in DescendantPaths(group))
+                    {
+                        yield return nested;
+                    }
 
-    /// <summary>The combined model-space bounds of the selected objects.</summary>
+                    break;
+            }
+        }
+    }
+
+    private static IEnumerable<PathItem> DescendantPaths(ArtGroup group)
+    {
+        foreach (LayerItem child in group.Children)
+        {
+            switch (child)
+            {
+                case PathItem path:
+                    yield return path;
+                    break;
+                case ArtGroup nested:
+                    foreach (PathItem p in DescendantPaths(nested))
+                    {
+                        yield return p;
+                    }
+
+                    break;
+            }
+        }
+    }
+
+    /// <summary>The combined world-space bounds of the selected objects.</summary>
     public Rect2D SelectionBounds()
     {
         Rect2D box = Rect2D.Empty;
         foreach (PathItem path in SelectedPaths())
         {
-            box = box.Union(path.BoundingBox());
+            box = box.Union(path.WorldBounds());
         }
 
         return box;
@@ -558,7 +662,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         Rect2D box = Rect2D.Empty;
         foreach (PathItem path in SelectedPaths())
         {
-            box = box.Union(path.BoundingBox());
+            box = box.Union(path.WorldBounds());
         }
 
         return (box, _selectionRotationRadians * 180.0 / Math.PI);
@@ -588,6 +692,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         foreach (PathItem path in SelectedPaths())
         {
             PathItem before = path.GeometrySnapshot();
+
+            // Paths store artboard-local coordinates; convert the world pivot.
+            Point2D localPivot = pivot - path.ArtboardOffset();
+
             if (anyTranslation)
             {
                 path.TranslateGeometryBy(translation);
@@ -595,12 +703,12 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
             if (anyScale)
             {
-                path.ScaleGeometryAbout(pivot, scaleX, scaleY);
+                path.ScaleGeometryAbout(localPivot, scaleX, scaleY);
             }
 
             if (anyRotation)
             {
-                path.RotateGeometryAbout(pivot, rotationDegrees * Math.PI / 180.0);
+                path.RotateGeometryAbout(localPivot, rotationDegrees * Math.PI / 180.0);
             }
 
             edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot()));

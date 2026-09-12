@@ -38,6 +38,11 @@ public sealed class Layer : CadObject, IItemContainer
     /// <summary>Group opacity multiplier applied to all children during render.</summary>
     public double Opacity { get; set; } = 1.0;
 
+    /// <summary>The artboard that owns this layer. Object coordinates are stored
+    /// relative to the artboard's top-left; the artboard origin is added when
+    /// mapping to document/world space. Maintained by <see cref="Artboard"/>.</summary>
+    public Artboard? Artboard { get; internal set; }
+
     /// <inheritdoc/>
     public event EventHandler? StructureChanged;
 

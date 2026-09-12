@@ -134,10 +134,10 @@ public static class PdfDocumentExporter
     {
         var ops = new List<string>();
 
-        // Model (top-left origin, +Y down) → PDF user space (bottom-left origin,
-        // +Y up) for this page:  px = x − X ; py = (Y + Height) − y.
-        double e = -artboard.X;
-        double f = artboard.Y + artboard.Height;
+        // Path coordinates are stored relative to the artboard's top-left, so the
+        // page flip is simply  px = x ; py = Height − y  (no artboard offset).
+        double e = 0;
+        double f = artboard.Height;
         ops.Add($"{Num(1)} 0 0 {Num(-1)} {Num(e)} {Num(f)} cm");
 
         foreach (Layer layer in artboard.Layers)

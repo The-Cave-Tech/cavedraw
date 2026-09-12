@@ -65,6 +65,41 @@ public class EditingCommandsTests
     }
 
     [Fact]
+    public void GroupAndUngroupRoundTrip()
+    {
+        CadDocument doc = CadDocument.CreateDefault();
+        Layer layer = doc.Artboards[0].Layers[0];
+        PathItem a = PathFactory.CreateRectangle("a", new Rect2D(0, 0, 10, 10));
+        PathItem b = PathFactory.CreateRectangle("b", new Rect2D(20, 0, 10, 10));
+        PathItem c = PathFactory.CreateRectangle("c", new Rect2D(40, 0, 10, 10));
+        layer.AddItem(a);
+        layer.AddItem(b);
+        layer.AddItem(c);
+
+        var stack = new CommandStack();
+        var groupCommand = new GroupItemsCommand(layer, new[] { a, b });
+        stack.Execute(groupCommand);
+
+        ArtGroup group = groupCommand.Group!;
+        Assert.Equal(new LayerItem[] { group, c }, layer.Children);
+        Assert.Equal(new LayerItem[] { a, b }, group.Children);
+
+        stack.Undo();
+        Assert.Equal(new LayerItem[] { a, b, c }, layer.Children);
+
+        stack.Redo();
+        Assert.Equal(new LayerItem[] { group, c }, layer.Children);
+
+        stack.Execute(new UngroupItemsCommand(group));
+        Assert.Equal(new LayerItem[] { a, b, c }, layer.Children);
+        Assert.Empty(group.Children);
+
+        stack.Undo();
+        Assert.Equal(new LayerItem[] { group, c }, layer.Children);
+        Assert.Equal(new LayerItem[] { a, b }, group.Children);
+    }
+
+    [Fact]
     public void CompositeCommandUndoesInReverseOrderAsOneStep()
     {
         CadDocument doc = CadDocument.CreateDefault();
