@@ -5,6 +5,8 @@ using Avalonia.Media;
 using VCCad.App.ViewModels;
 using VCCad.Core.Commands;
 using VCCad.Core.Model;
+using ModelFillRule = VCCad.Core.Model.FillRule;
+using MediaFillRule = Avalonia.Media.FillRule;
 using VCCad.Core.Picking;
 using VCCad.Core.Viewport;
 using VCCad.Geometry;
@@ -1868,9 +1870,71 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        StreamGeometry geometry = BuildGeometry(path, outsideClip: false);
+        double width = Math.Max(0.1, path.Stroke.Width * _layout.Zoom);
+        Pen StrokePen(double thickness) => new(
+            ToBrush(path.Stroke.Color, opacity),
+            thickness: Math.Max(0.1, thickness),
+            lineCap: ToLineCap(path.Stroke.Cap),
+            lineJoin: ToLineJoin(path.Stroke.Join),
+            miterLimit: path.Stroke.MiterLimit);
+
+        if (fillVisible)
+        {
+            context.DrawGeometry(ToBrush(path.Fill.Color, opacity), null, geometry);
+        }
+
+        if (!strokeVisible)
+        {
+            return;
+        }
+
+        bool aligned = path.Stroke.Alignment != StrokeAlignment.Center && anyClosed;
+        if (!aligned)
+        {
+            context.DrawGeometry(null, StrokePen(width), geometry);
+            return;
+        }
+
+        // Inside/Outside: clip to the region, then stroke at double width.
+        Avalonia.Media.Geometry clip = path.Stroke.Alignment == StrokeAlignment.Inside
+            ? geometry
+            : BuildGeometry(path, outsideClip: true);
+        using (context.PushGeometryClip(clip))
+        {
+            context.DrawGeometry(null, StrokePen(width * 2), geometry);
+        }
+    }
+
+    /// <summary>Builds the on-screen geometry for a path. When
+    /// <paramref name="outsideClip"/> is true a huge surrounding rectangle is
+    /// prepended with the even-odd rule, giving the complement region (used to
+    /// clip an "outside" stroke).</summary>
+    private StreamGeometry BuildGeometry(PathItem path, bool outsideClip)
+    {
         var geometry = new StreamGeometry();
+        MediaFillRule rule = outsideClip || path.Fill.Rule == ModelFillRule.EvenOdd
+            ? MediaFillRule.EvenOdd
+            : MediaFillRule.NonZero;
+
         using (StreamGeometryContext g = geometry.Open())
         {
+            g.SetFillRule(rule);
+
+            if (outsideClip)
+            {
+                Rect2D huge = _layout.Extent.Inflated(10000);
+                Point tl = ModelToScreen(new Point2D(huge.Left, huge.Top));
+                Point tr = ModelToScreen(new Point2D(huge.Right, huge.Top));
+                Point br = ModelToScreen(new Point2D(huge.Right, huge.Bottom));
+                Point bl = ModelToScreen(new Point2D(huge.Left, huge.Bottom));
+                g.BeginFigure(tl, true);
+                g.LineTo(tr);
+                g.LineTo(br);
+                g.LineTo(bl);
+                g.EndFigure(true);
+            }
+
             foreach (SubPath sub in path.SubPaths)
             {
                 if (sub.Nodes.Count < 2)
@@ -1903,15 +1967,7 @@ public sealed class CanvasWorkspace : Control
             }
         }
 
-        var fillBrush = ToBrush(path.Fill.Color, opacity);
-        var strokePen = new Pen(
-            ToBrush(path.Stroke.Color, opacity),
-            thickness: Math.Max(0.1, path.Stroke.Width * _layout.Zoom),
-            lineCap: ToLineCap(path.Stroke.Cap),
-            lineJoin: ToLineJoin(path.Stroke.Join),
-            miterLimit: path.Stroke.MiterLimit);
-
-        context.DrawGeometry(fillVisible ? fillBrush : null, strokeVisible ? strokePen : null, geometry);
+        return geometry;
     }
 
     /// <summary>Everything drawn above the artwork: selection chrome, node/segment

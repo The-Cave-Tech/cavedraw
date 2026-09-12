@@ -248,7 +248,6 @@ public static class PdfDocumentExporter
         if (strokeVisible)
         {
             ops.Add($"{Num(path.Stroke.Color.R)} {Num(path.Stroke.Color.G)} {Num(path.Stroke.Color.B)} RG");
-            ops.Add($"{Num(width)} w");
             ops.Add($"{CapToPdf(path.Stroke.Cap)} J");
             ops.Add($"{JoinToPdf(path.Stroke.Join)} j");
             if (path.Stroke.Join == StrokeJoin.Miter)
@@ -257,29 +256,61 @@ public static class PdfDocumentExporter
             }
         }
 
-        // --- Closed contours: fill, possibly also stroked ------------------
         var closed = contours.Where(c => c.IsClosed).ToList();
-        if (closed.Count > 0)
+        var open = contours.Where(c => !c.IsClosed).ToList();
+
+        // --- Fill (closed contours only) -----------------------------------
+        if (fillVisible && closed.Count > 0)
         {
             WriteContours(ops, closed);
-            if (fillVisible && strokeVisible)
+            ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "f*" : "f");
+        }
+
+        if (!strokeVisible)
+        {
+            return;
+        }
+
+        // --- Stroke: honour Inside/Outside by clipping ---------------------
+        // PDF has no stroke alignment, so an aligned stroke is drawn at double
+        // width and clipped to the inside or outside of the path.
+        bool aligned = path.Stroke.Alignment != StrokeAlignment.Center && closed.Count > 0;
+        if (closed.Count > 0)
+        {
+            if (!aligned)
             {
-                ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "B*" : "B");
-            }
-            else if (fillVisible)
-            {
-                ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "f*" : "f");
+                ops.Add($"{Num(width)} w");
+                WriteContours(ops, closed);
+                ops.Add("S");
             }
             else
             {
+                ops.Add("q");
+                if (path.Stroke.Alignment == StrokeAlignment.Inside)
+                {
+                    WriteContours(ops, closed);
+                    ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "W* n" : "W n");
+                }
+                else
+                {
+                    // Outside = everything except the path interior (even-odd).
+                    ops.Add($"{Num(-10000)} {Num(-10000)} m {Num(20000)} {Num(-10000)} l " +
+                            $"{Num(20000)} {Num(20000)} l {Num(-10000)} {Num(20000)} l h");
+                    WriteContours(ops, closed);
+                    ops.Add("W* n");
+                }
+
+                ops.Add($"{Num(width * 2)} w");
+                WriteContours(ops, closed);
                 ops.Add("S");
+                ops.Add("Q");
             }
         }
 
-        // --- Open contours: stroke only ------------------------------------
-        var open = contours.Where(c => !c.IsClosed).ToList();
-        if (open.Count > 0 && strokeVisible)
+        // --- Open contours: always centre-stroked --------------------------
+        if (open.Count > 0)
         {
+            ops.Add($"{Num(width)} w");
             WriteContours(ops, open);
             ops.Add("S");
         }

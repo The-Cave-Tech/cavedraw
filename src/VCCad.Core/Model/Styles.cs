@@ -102,9 +102,25 @@ public sealed record FillSpec(bool IsVisible, ColorRgb Color, FillRule Rule)
         => new(true, color, rule);
 }
 
+/// <summary>Which side of the path outline the stroke is drawn on (Illustrator's
+/// Align Stroke). PDF has no native notion of this, so the exporter/renderer
+/// realise Inside/Outside by clipping.</summary>
+public enum StrokeAlignment
+{
+    /// <summary>Stroke straddles the outline (default).</summary>
+    Center,
+
+    /// <summary>Stroke lies inside the filled region.</summary>
+    Inside,
+
+    /// <summary>Stroke lies outside the filled region.</summary>
+    Outside,
+}
+
 /// <summary>
 /// Immutable stroke specification for a path: visibility, colour, geometric width
-/// (in points, unscaled by any group transform), end caps, joins and miter limit.
+/// (in points, unscaled by any group transform), end caps, joins, miter limit and
+/// alignment (centre/inside/outside).
 /// Dash patterns are deferred to a later sprint (plan M2 task 2 marks them a
 /// stretch item); the record is shaped so a <c>DashPattern</c> can be added
 /// without breaking callers.
@@ -115,7 +131,8 @@ public sealed record StrokeSpec(
     double Width,
     StrokeCap Cap,
     StrokeJoin Join,
-    double MiterLimit)
+    double MiterLimit,
+    StrokeAlignment Alignment = StrokeAlignment.Center)
 {
     /// <summary>Convenience: no visible stroke.</summary>
     public static StrokeSpec None { get; } =

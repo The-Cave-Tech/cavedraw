@@ -23,7 +23,7 @@ internal sealed record ColorDto(double R, double G, double B);
 
 internal sealed record FillDto(bool Visible, ColorDto? Color, FillRule Rule);
 
-internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, StrokeCap Cap, StrokeJoin Join, double MiterLimit);
+internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, StrokeCap Cap, StrokeJoin Join, double MiterLimit, StrokeAlignment Alignment);
 
 internal sealed record NodeDto(Point2D Anchor, Point2D InHandle, Point2D OutHandle);
 
@@ -90,7 +90,7 @@ internal abstract record ItemDto
 
     private static StrokeDto ToStroke(StrokeSpec s)
         => new(s.IsVisible, s.IsVisible ? new ColorDto(s.Color.R, s.Color.G, s.Color.B) : null,
-            s.Width, s.Cap, s.Join, s.MiterLimit);
+            s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment);
 }
 
 /// <summary>Explicit restoration from DTO back into a live model graph.</summary>
@@ -154,7 +154,7 @@ internal static class ItemDtoExtensions
     private static StrokeSpec ToModel(this StrokeDto s)
         => s.Visible && s.Color is not null
             ? new StrokeSpec(true, new ColorRgb(s.Color.R, s.Color.G, s.Color.B),
-                s.Width, s.Cap, s.Join, s.MiterLimit)
+                s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment)
             : StrokeSpec.None;
 }
 

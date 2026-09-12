@@ -514,20 +514,21 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         {
             double width = p.Stroke.Width > 0 ? p.Stroke.Width : 1.0;
             return (IUndoableCommand)new SetStrokeCommand(p,
-                new StrokeSpec(true, color, width, p.Stroke.Cap, p.Stroke.Join, p.Stroke.MiterLimit));
+                new StrokeSpec(true, color, width, p.Stroke.Cap, p.Stroke.Join, p.Stroke.MiterLimit, p.Stroke.Alignment));
         }).ToList();
         ExecuteIfAny(edits, "Stroke colour");
     }
 
     /// <summary>Applies stroke geometry (width/cap/join/miter) to selected paths,
     /// keeping each path's existing colour.</summary>
-    public void ApplyStroke(double width, StrokeCap cap, StrokeJoin join, double miterLimit)
+    public void ApplyStroke(double width, StrokeCap cap, StrokeJoin join, double miterLimit,
+        StrokeAlignment alignment)
     {
         var edits = SelectedPaths().Select(p =>
         {
             ColorRgb color = p.Stroke.IsVisible ? p.Stroke.Color : ColorRgb.Black;
             return (IUndoableCommand)new SetStrokeCommand(p,
-                new StrokeSpec(true, color, Math.Max(0, width), cap, join, Math.Max(1, miterLimit)));
+                new StrokeSpec(true, color, Math.Max(0, width), cap, join, Math.Max(1, miterLimit), alignment));
         }).ToList();
         ExecuteIfAny(edits, "Stroke");
     }

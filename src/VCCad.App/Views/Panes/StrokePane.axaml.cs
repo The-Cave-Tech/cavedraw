@@ -54,6 +54,12 @@ public partial class StrokePane : UserControl
             StrokeJoin.Bevel => 2,
             _ => 0,
         };
+        StrokeAlignBox.SelectedIndex = path.Stroke.Alignment switch
+        {
+            StrokeAlignment.Inside => 1,
+            StrokeAlignment.Outside => 2,
+            _ => 0,
+        };
     }
 
     private void OnApplyStroke(object? sender, RoutedEventArgs e)
@@ -67,6 +73,7 @@ public partial class StrokePane : UserControl
         double miter = double.TryParse(MiterBox.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double m) ? m : 4.0;
         StrokeCap cap = StrokeCapBox.SelectedIndex switch { 1 => StrokeCap.Round, 2 => StrokeCap.Square, _ => StrokeCap.Butt };
         StrokeJoin join = StrokeJoinBox.SelectedIndex switch { 1 => StrokeJoin.Round, 2 => StrokeJoin.Bevel, _ => StrokeJoin.Miter };
-        _vm.ApplyStroke(width, cap, join, miter);
+        StrokeAlignment align = StrokeAlignBox.SelectedIndex switch { 1 => StrokeAlignment.Inside, 2 => StrokeAlignment.Outside, _ => StrokeAlignment.Center };
+        _vm.ApplyStroke(width, cap, join, miter, align);
     }
 }

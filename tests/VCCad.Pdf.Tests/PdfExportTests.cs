@@ -67,8 +67,8 @@ public class PdfExportTests
         Assert.Contains("l", tokens);
         Assert.Contains("c", tokens);
         Assert.Contains("cm", tokens); // model→PDF y-flip matrix
-        Assert.Contains("B", tokens);  // fill + stroke, closed contour
-        Assert.Contains("S", tokens);  // stroke only, open contour
+        Assert.Contains("f", tokens);  // fill, closed contour
+        Assert.Contains("S", tokens);  // stroke
     }
 
     [Fact]

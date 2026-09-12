@@ -26,6 +26,14 @@
           <ComboBoxItem Content="Bevel"/>
         </ComboBox>
       </Grid>
+      <Grid ColumnDefinitions="Auto,*">
+        <TextBlock Text="Align" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <ComboBox x:Name="StrokeAlignBox" Grid.Column="1" SelectedIndex="0" HorizontalAlignment="Stretch">
+          <ComboBoxItem Content="Center"/>
+          <ComboBoxItem Content="Inside"/>
+          <ComboBoxItem Content="Outside"/>
+        </ComboBox>
+      </Grid>
       <Button Content="Apply Stroke" Click="OnApplyStroke"/>
     </StackPanel>
   </ScrollViewer>
