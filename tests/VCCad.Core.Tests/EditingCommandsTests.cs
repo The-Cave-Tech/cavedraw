@@ -100,6 +100,45 @@ public class EditingCommandsTests
     }
 
     [Fact]
+    public void DeleteArtboardKeepChildrenOrphansThemAndUndoRestores()
+    {
+        CadDocument doc = CadDocument.CreateDefault();
+        Artboard artboard = doc.Artboards[0];
+        PathItem path = PathFactory.CreateRectangle("r", new Rect2D(10, 10, 20, 20));
+        artboard.Layers[0].AddItem(path);
+
+        var stack = new CommandStack();
+        stack.Execute(new DeleteArtboardCommand(doc, artboard, keepChildren: true));
+
+        Assert.Empty(doc.Artboards);
+        Assert.Single(doc.Orphans.Children);
+        Assert.Equal(path, doc.Orphans.Children[0]);
+
+        stack.Undo();
+        Assert.Single(doc.Artboards);
+        Assert.Empty(doc.Orphans.Children);
+        Assert.Single(artboard.Layers[0].Children);
+    }
+
+    [Fact]
+    public void DeleteArtboardWithoutKeepingChildrenRemovesThem()
+    {
+        CadDocument doc = CadDocument.CreateDefault();
+        Artboard artboard = doc.Artboards[0];
+        artboard.Layers[0].AddItem(PathFactory.CreateRectangle("r", new Rect2D(10, 10, 20, 20)));
+
+        var stack = new CommandStack();
+        stack.Execute(new DeleteArtboardCommand(doc, artboard, keepChildren: false));
+
+        Assert.Empty(doc.Artboards);
+        Assert.Empty(doc.Orphans.Children);
+
+        stack.Undo();
+        Assert.Single(doc.Artboards);
+        Assert.Single(doc.Artboards[0].Layers[0].Children);
+    }
+
+    [Fact]
     public void CompositeCommandUndoesInReverseOrderAsOneStep()
     {
         CadDocument doc = CadDocument.CreateDefault();

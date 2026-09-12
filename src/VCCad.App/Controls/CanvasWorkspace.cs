@@ -1914,13 +1914,26 @@ public sealed class CanvasWorkspace : Control
 
     private void ArtboardPress(Point2D model)
     {
-        Artboard? artboard = HitTestArtboard(model);
         _artboardChildren.Clear();
         _dragStartModel = model;
 
+        // 1) A handle of the selected artboard takes priority — the handle sits on
+        //    (and slightly outside) the corner, so containment alone would miss it.
+        if (_vm!.SelectedArtboard is { } selected && TryHitArtboardHandle(selected, model, out int selectedHandle))
+        {
+            _artboard = selected;
+            _artboardBefore = selected.Bounds;
+            _artboardGesture = ArtboardGesture.Resize;
+            _artboardHandle = selectedHandle;
+            InvalidateVisual();
+            return;
+        }
+
+        // 2) Otherwise select the artboard under the point (handle or move).
+        Artboard? artboard = HitTestArtboard(model);
         if (artboard is not null)
         {
-            _vm!.SelectArtboard(artboard);
+            _vm.SelectArtboard(artboard);
             _artboard = artboard;
             _artboardBefore = artboard.Bounds;
             if (TryHitArtboardHandle(artboard, model, out int handle))
@@ -1942,7 +1955,7 @@ public sealed class CanvasWorkspace : Control
         }
         else
         {
-            _vm!.SelectArtboard(null);
+            _vm.SelectArtboard(null);
             _artboardGesture = ArtboardGesture.Create;
             _artboardCreateStart = model;
             _artboardCreateCurrent = model;
@@ -2033,7 +2046,7 @@ public sealed class CanvasWorkspace : Control
                 break;
 
             case ArtboardGesture.Resize when _artboard is not null:
-                _vm.SetArtboardBounds(_artboard, _artboardBefore, _artboard.Bounds);
+                _vm.ApplyArtboardBounds(_artboard, _artboardBefore, _artboard.Bounds);
                 break;
 
             case ArtboardGesture.Create:
@@ -2730,7 +2743,7 @@ public sealed class CanvasWorkspace : Control
                 }
                 else
                 {
-                    _vm.DeleteSelection();
+                    _vm.RequestDeleteSelection();
                 }
 
                 e.Handled = true;

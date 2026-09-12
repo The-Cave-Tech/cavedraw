@@ -263,3 +263,166 @@ public sealed class RemoveItemCommand : IUndoableCommand
         }
     }
 }
+
+/// <summary>
+/// Deletes an artboard. When <c>keepChildren</c> is true its objects are moved to
+/// the document's orphan/pasteboard layer at their current world position;
+/// otherwise the objects are deleted with it. Undo restores everything.
+/// </summary>
+public sealed class DeleteArtboardCommand : IUndoableCommand
+{
+    private readonly CadDocument _document;
+    private readonly Artboard _artboard;
+    private readonly bool _keepChildren;
+    private bool _captured;
+    private int _artboardIndex;
+    private Vector2D _offset;
+    private readonly List<(Layer Layer, int Index, LayerItem Item)> _direct = new();
+
+    public string Description => "Delete artboard";
+
+    public DeleteArtboardCommand(CadDocument document, Artboard artboard, bool keepChildren)
+    {
+        _document = document;
+        _artboard = artboard;
+        _keepChildren = keepChildren;
+    }
+
+    public void Do()
+    {
+        if (!_captured)
+        {
+            _artboardIndex = _document.Artboards.ToList().IndexOf(_artboard);
+            _offset = new Vector2D(_artboard.X, _artboard.Y);
+            foreach (Layer layer in _artboard.Layers)
+            {
+                for (int i = 0; i < layer.Children.Count; i++)
+                {
+                    _direct.Add((layer, i, layer.Children[i]));
+                }
+            }
+
+            _captured = true;
+        }
+
+        foreach ((Layer layer, _, LayerItem item) in _direct)
+        {
+            layer.RemoveItem(item);
+            if (_keepChildren)
+            {
+                TranslateDescendants(item, _offset);
+                _document.Orphans.AddItem(item);
+            }
+        }
+
+        _document.RemoveArtboard(_artboard);
+    }
+
+    public void Undo()
+    {
+        foreach ((Layer layer, int index, LayerItem item) in _direct)
+        {
+            if (_keepChildren)
+            {
+                _document.Orphans.RemoveItem(item);
+                TranslateDescendants(item, _offset.Negated);
+            }
+
+            layer.AddItem(item, index);
+        }
+
+        _document.InsertArtboard(_artboard, _artboardIndex);
+    }
+
+    private static void TranslateDescendants(LayerItem item, Vector2D delta)
+    {
+        switch (item)
+        {
+            case PathItem path:
+                path.TranslateGeometryBy(delta);
+                break;
+            case ArtGroup group:
+                foreach (LayerItem child in group.Children)
+                {
+                    TranslateDescendants(child, delta);
+                }
+
+                break;
+        }
+    }
+}
+
+/// <summary>
+/// Moves a set of items from one container to another, translating their geometry
+/// by <paramref name="deltaAtDo"/> (computed from the target artboard at Do time).
+/// Used to reparent orphan objects that fall inside an artboard.
+/// </summary>
+public sealed class ReparentItemsCommand : IUndoableCommand
+{
+    private readonly CadDocument _document;
+    private readonly Artboard _targetArtboard;
+    private readonly IReadOnlyList<LayerItem> _items;
+    private readonly IItemContainer _from;
+    private Vector2D _delta;
+    private IItemContainer? _to;
+
+    public string Description => "Reparent objects";
+
+    public ReparentItemsCommand(CadDocument document, Artboard targetArtboard,
+        IReadOnlyList<LayerItem> items, IItemContainer from)
+    {
+        _document = document;
+        _targetArtboard = targetArtboard;
+        _items = items;
+        _from = from;
+    }
+
+    public void Do()
+    {
+        _to = _targetArtboard.Layers.Count > 0
+            ? _targetArtboard.Layers[^1]
+            : _targetArtboard.AddLayer("Layer 1");
+
+        // World → artboard-local translation for the items being reparented.
+        _delta = new Vector2D(-_targetArtboard.X, -_targetArtboard.Y);
+
+        foreach (LayerItem item in _items)
+        {
+            _from.RemoveItem(item);
+            TranslateDescendants(item, _delta);
+            _to.AddItem(item);
+        }
+    }
+
+    public void Undo()
+    {
+        if (_to is null)
+        {
+            return;
+        }
+
+        foreach (LayerItem item in _items)
+        {
+            _to.RemoveItem(item);
+            TranslateDescendants(item, _delta.Negated);
+            _from.AddItem(item);
+        }
+    }
+
+    private static void TranslateDescendants(LayerItem item, Vector2D delta)
+    {
+        switch (item)
+        {
+            case PathItem path:
+                path.TranslateGeometryBy(delta);
+                break;
+            case ArtGroup group:
+                foreach (LayerItem child in group.Children)
+                {
+                    TranslateDescendants(child, delta);
+                }
+
+                break;
+        }
+    }
+}

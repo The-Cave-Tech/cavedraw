@@ -10,6 +10,17 @@ using VCCad.Geometry;
 
 namespace VCCad.App.ViewModels;
 
+/// <summary>What to do with an artboard's children when it is deleted.</summary>
+public enum ArtboardDeletionChoice
+{
+    KeepObjects,
+    DeleteObjects,
+    Cancel,
+}
+
+/// <summary>Prompt payload: an artboard with children is being deleted.</summary>
+public sealed record ArtboardDeletionRequest(Artboard Artboard, int ChildCount);
+
 /// <summary>The active editing tool.</summary>
 public enum EditorTool
 {
@@ -65,6 +76,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// <summary>Raised when the selection set changes (used to reset selection
     /// chrome such as the oriented bounding box).</summary>
     public event EventHandler? SelectionChanged;
+
+    /// <summary>Raised when deleting an artboard that still has children, so the
+    /// UI can ask whether to keep (orphan), delete, or cancel.</summary>
+    public event EventHandler<ArtboardDeletionRequest>? ArtboardDeletionRequested;
 
     /// <summary>Raised while a pointer gesture mutates geometry (move/node/segment/
     /// resize drags) so the numeric Transform panel updates live, without the cost
@@ -169,6 +184,95 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         Execute(new SetArtboardBoundsCommand(artboard, before, after));
     }
 
+    /// <summary>
+    /// Resizes/moves an artboard and reparents any orphan objects that now fall
+    /// inside it (their coordinates are converted to artboard-local). One undo.
+    /// </summary>
+    public void ApplyArtboardBounds(Artboard artboard, Rect2D before, Rect2D after)
+    {
+        var commands = new List<IUndoableCommand>();
+        if (!before.Equals(after))
+        {
+            commands.Add(new SetArtboardBoundsCommand(artboard, before, after));
+        }
+
+        List<LayerItem> orphans = OrphansIntersecting(after);
+        if (orphans.Count > 0)
+        {
+            commands.Add(new ReparentItemsCommand(Document, artboard, orphans, Document.Orphans));
+        }
+
+        if (commands.Count == 0)
+        {
+            return;
+        }
+
+        Execute(commands.Count == 1 ? commands[0] : new CompositeCommand("Edit artboard", commands));
+    }
+
+    private List<LayerItem> OrphansIntersecting(Rect2D rect)
+    {
+        var hits = new List<LayerItem>();
+        foreach (LayerItem item in Document.Orphans.Children)
+        {
+            Rect2D bounds = item switch
+            {
+                PathItem path => path.WorldBounds(),
+                ArtGroup group => group.BoundingBox(),
+                _ => Rect2D.Empty,
+            };
+
+            if (!bounds.IsEmpty && bounds.Intersects(rect))
+            {
+                hits.Add(item);
+            }
+        }
+
+        return hits;
+    }
+
+    /// <summary>True when the artboard has any content.</summary>
+    public static bool ArtboardHasChildren(Artboard artboard)
+        => artboard.Layers.Any(l => l.Children.Count > 0);
+
+    /// <summary>Deletes the selected artboard, applying the user's choice about
+    /// its children.</summary>
+    public void DeleteArtboard(Artboard artboard, ArtboardDeletionChoice choice)
+    {
+        if (choice == ArtboardDeletionChoice.Cancel)
+        {
+            return;
+        }
+
+        Execute(new DeleteArtboardCommand(Document, artboard, choice == ArtboardDeletionChoice.KeepObjects));
+        SelectArtboard(null);
+        Status = choice == ArtboardDeletionChoice.KeepObjects
+            ? "Artboard deleted; objects kept as orphans"
+            : "Artboard and objects deleted";
+    }
+
+    /// <summary>Requests deletion of the current selection (object or artboard).
+    /// For an artboard with children this raises a prompt event instead.</summary>
+    public void RequestDeleteSelection()
+    {
+        if (_selectedArtboard is { } artboard)
+        {
+            if (ArtboardHasChildren(artboard))
+            {
+                int count = artboard.Layers.Sum(l => l.Children.Count);
+                ArtboardDeletionRequested?.Invoke(this, new ArtboardDeletionRequest(artboard, count));
+            }
+            else
+            {
+                DeleteArtboard(artboard, ArtboardDeletionChoice.DeleteObjects);
+            }
+
+            return;
+        }
+
+        DeleteSelection();
+    }
+
     /// <summary>Explicit rotation of the current selection, in radians (0 until
     /// the user rotates something).</summary>
     public double SelectionRotationRadians => _selectionRotationRadians;
@@ -237,7 +341,15 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             Name = $"Artboard {Document.Artboards.Count + 1}",
         };
         artboard.AddLayer("Layer 1");
-        Execute(new AddArtboardCommand(Document, artboard));
+
+        var commands = new List<IUndoableCommand> { new AddArtboardCommand(Document, artboard) };
+        List<LayerItem> orphans = OrphansIntersecting(rect);
+        if (orphans.Count > 0)
+        {
+            commands.Add(new ReparentItemsCommand(Document, artboard, orphans, Document.Orphans));
+        }
+
+        Execute(commands.Count == 1 ? commands[0] : new CompositeCommand("Add artboard", commands));
         SelectArtboard(artboard);
         Status = $"Added {artboard.Name}";
     }

@@ -61,6 +61,24 @@
       </Canvas>
     </Grid>
 
+    <!-- Modal prompt overlay (in-app so it works in the browser) -->
+    <Grid Name="ModalOverlay" Grid.Row="0" Grid.RowSpan="3" IsVisible="False"
+          Background="#99000000">
+      <Border Background="{DynamicResource VcPanel}" BorderBrush="{DynamicResource VcBorder}"
+              BorderThickness="1" CornerRadius="8" Padding="18" MaxWidth="420"
+              HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel Spacing="14">
+          <TextBlock Name="ModalMessage" TextWrapping="Wrap"
+                     Foreground="{DynamicResource VcText}"/>
+          <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+            <Button Content="Keep objects" Click="OnDeleteKeepObjects"/>
+            <Button Content="Delete objects" Click="OnDeleteAllObjects"/>
+            <Button Content="Cancel" Click="OnDeleteCancel"/>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+    </Grid>
+
     <!-- Status bar -->
     <Border Grid.Row="2" Classes="statusBar">
       <DockPanel>

@@ -139,6 +139,18 @@ public sealed class CadDocument
         }
     }
 
+    /// <summary>Re-inserts an artboard at a specific index (undo/redo).</summary>
+    public void InsertArtboard(Artboard artboard, int index)
+    {
+        if (_artboards.Contains(artboard))
+        {
+            return;
+        }
+
+        _artboards.Insert(Math.Clamp(index, 0, _artboards.Count), artboard);
+        StructureChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     /// <summary>Removes an artboard and all of its content.</summary>
     public bool RemoveArtboard(Artboard artboard)
     {

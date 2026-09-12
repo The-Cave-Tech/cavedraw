@@ -116,6 +116,24 @@ public partial class TransformPane : UserControl
         SetBoxText(HBox, null);
         SetBoxText(AngleBox, null);
 
+        // Artboards have a document rectangle; transform them like objects
+        // (position + size; rotation not applicable).
+        if (_vm.SelectedArtboard is { } artboard)
+        {
+            SetBoxText(XBox, artboard.X);
+            SetBoxText(YBox, artboard.Y);
+            SetBoxText(WBox, artboard.Width);
+            SetBoxText(HBox, artboard.Height);
+            XBox.IsEnabled = YBox.IsEnabled = WBox.IsEnabled = HBox.IsEnabled = true;
+            AngleBox.IsEnabled = false;
+            foreach (Button dot in _pivotButtons)
+            {
+                dot.IsEnabled = false;
+            }
+
+            return;
+        }
+
         bool pointMode = _vm.HasPointSelection;
         bool objectMode = _vm.HasTransformableSelection;
         if (pointMode && _vm.PointPosition is { } pos)
@@ -162,6 +180,19 @@ public partial class TransformPane : UserControl
     {
         if (_vm is null)
         {
+            return;
+        }
+
+        if (_vm.SelectedArtboard is { } artboard)
+        {
+            Rect2D before = artboard.Bounds;
+            double x = TryRead(XBox, out double ax) ? ax : artboard.X;
+            double y = TryRead(YBox, out double ay) ? ay : artboard.Y;
+            double aw = TryRead(WBox, out double wv) ? wv : artboard.Width;
+            double ah = TryRead(HBox, out double hv) ? hv : artboard.Height;
+            _vm.ApplyArtboardBounds(artboard, before,
+                new Rect2D(x, y, Math.Max(1, aw), Math.Max(1, ah)));
+            Refresh();
             return;
         }
 

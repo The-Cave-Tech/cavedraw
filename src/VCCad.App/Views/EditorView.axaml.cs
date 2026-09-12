@@ -11,6 +11,7 @@ using Avalonia.Platform;
 using VCCad.App.Docking;
 using VCCad.App.ViewModels;
 using VCCad.App.Views.Panes;
+using VCCad.Core.Model;
 
 namespace VCCad.App.Views;
 
@@ -54,6 +55,7 @@ public partial class EditorView : UserControl
 
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         _viewModel.DocumentChanged += (_, _) => UpdateStatus();
+        _viewModel.ArtboardDeletionRequested += OnArtboardDeletionRequested;
         UpdateStatus();
     }
 
@@ -381,7 +383,38 @@ public partial class EditorView : UserControl
     private void OnSave(object? sender, RoutedEventArgs e) => FireAndForget(_viewModel.SaveToServerAsync(), "Saving…");
     private void OnUndo(object? sender, RoutedEventArgs e) => _viewModel.Undo();
     private void OnRedo(object? sender, RoutedEventArgs e) => _viewModel.Redo();
-    private void OnDelete(object? sender, RoutedEventArgs e) => _viewModel.DeleteSelection();
+    private void OnDelete(object? sender, RoutedEventArgs e) => _viewModel.RequestDeleteSelection();
+
+    private Artboard? _pendingArtboard;
+
+    private void OnArtboardDeletionRequested(object? sender, ArtboardDeletionRequest e)
+    {
+        _pendingArtboard = e.Artboard;
+        ModalMessage.Text = $"\"{e.Artboard.Name}\" contains {e.ChildCount} object(s). " +
+                            "Keep them (orphaned at their current position), delete them, or cancel?";
+        ModalOverlay.IsVisible = true;
+    }
+
+    private void OnDeleteKeepObjects(object? sender, RoutedEventArgs e)
+        => ResolveArtboardDeletion(ArtboardDeletionChoice.KeepObjects);
+
+    private void OnDeleteAllObjects(object? sender, RoutedEventArgs e)
+        => ResolveArtboardDeletion(ArtboardDeletionChoice.DeleteObjects);
+
+    private void OnDeleteCancel(object? sender, RoutedEventArgs e)
+        => ResolveArtboardDeletion(ArtboardDeletionChoice.Cancel);
+
+    private void ResolveArtboardDeletion(ArtboardDeletionChoice choice)
+    {
+        ModalOverlay.IsVisible = false;
+        if (_pendingArtboard is { } artboard)
+        {
+            _viewModel.DeleteArtboard(artboard, choice);
+            _pendingArtboard = null;
+        }
+
+        UpdateStatus();
+    }
     private void OnGroup(object? sender, RoutedEventArgs e) => _viewModel.GroupSelection();
     private void OnUngroup(object? sender, RoutedEventArgs e) => _viewModel.UngroupSelection();
 
