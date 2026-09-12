@@ -78,6 +78,62 @@ public sealed class CadDocument
         StructureChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// The document's content origin, recomputed on the fly: the topmost/leftmost
+    /// extent across artboards and every object. Parentless content (artboards and
+    /// off-artboard objects) therefore defines the origin dynamically — as the
+    /// extremes change, this property reflects it without mutating coordinates.
+    /// </summary>
+    public Point2D ContentOrigin()
+    {
+        double minX = double.PositiveInfinity;
+        double minY = double.PositiveInfinity;
+        bool any = false;
+
+        void Include(double x, double y)
+        {
+            minX = Math.Min(minX, x);
+            minY = Math.Min(minY, y);
+            any = true;
+        }
+
+        foreach (Artboard artboard in _artboards)
+        {
+            Include(artboard.X, artboard.Y);
+            foreach (Layer layer in artboard.Layers)
+            {
+                foreach (LayerItem item in layer.Children)
+                {
+                    IncludeItem(item, Include);
+                }
+            }
+        }
+
+        return any ? new Point2D(minX, minY) : default;
+    }
+
+    private static void IncludeItem(LayerItem item, Action<double, double> include)
+    {
+        switch (item)
+        {
+            case PathItem path:
+                Rect2D b = path.WorldBounds();
+                if (!b.IsEmpty)
+                {
+                    include(b.Left, b.Top);
+                }
+
+                break;
+            case ArtGroup group:
+                foreach (LayerItem child in group.Children)
+                {
+                    IncludeItem(child, include);
+                }
+
+                break;
+        }
+    }
+
     /// <summary>Removes an artboard and all of its content.</summary>
     public bool RemoveArtboard(Artboard artboard)
     {

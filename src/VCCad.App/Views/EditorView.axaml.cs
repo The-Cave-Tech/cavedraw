@@ -370,7 +370,8 @@ public partial class EditorView : UserControl
     private void UpdateStatus()
     {
         StatusText.Text = _viewModel.Status;
-        ZoomLabel.Text = $"{Workspace.Zoom * 100:0.##}%";
+        var origin = _viewModel.Document.ContentOrigin();
+        ZoomLabel.Text = $"origin {origin.X:0.#}, {origin.Y:0.#}   ·   {Workspace.Zoom * 100:0.##}%";
     }
 
     private void OnNew(object? sender, RoutedEventArgs e) => _viewModel.NewDocument();
