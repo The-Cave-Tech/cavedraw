@@ -1619,6 +1619,9 @@ public sealed class CanvasWorkspace : Control
         _segmentBendMode = false;
         _handleSnapArmed = false;
         _gestureMoved = false;
+
+        // Node/segment edits change the true extents; rebuild the box next paint.
+        _chromeRect = null;
     }
 
     // ------------------------------------------------------------------
