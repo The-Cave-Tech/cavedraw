@@ -34,24 +34,14 @@ public sealed class DockTabPanelView : Border
         Margin = new Thickness(6, 6, 6, 0);
         ClipToBounds = true;
 
+        // No title text — the tab strip is the identity (saves vertical space).
         var header = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*,Auto"),
+            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
             Background = new SolidColorBrush(Color.FromRgb(0x2A, 0x2A, 0x2F)),
         };
 
         header.Children.Add(BuildDragHandle());
-        var title = new TextBlock
-        {
-            Text = _panel.Title,
-            FontSize = 11,
-            FontWeight = FontWeight.SemiBold,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x9A, 0x9A, 0xA3)),
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(6, 0, 8, 0),
-        };
-        Grid.SetColumn(title, 1);
-        header.Children.Add(title);
 
         var tabScroll = new ScrollViewer
         {
@@ -59,7 +49,7 @@ public sealed class DockTabPanelView : Border
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
         };
         tabScroll.Content = _tabStrip;
-        Grid.SetColumn(tabScroll, 2);
+        Grid.SetColumn(tabScroll, 1);
         header.Children.Add(tabScroll);
 
         header.Children.Add(BuildOverflow());
@@ -109,7 +99,7 @@ public sealed class DockTabPanelView : Border
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             Foreground = new SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xE9)),
-            FontSize = 14,
+            FontSize = EditorTheme.FontSize + 1,
             Padding = new Thickness(8, 0),
             VerticalAlignment = VerticalAlignment.Stretch,
         };
@@ -158,7 +148,7 @@ public sealed class DockTabPanelView : Border
             var button = new Button
             {
                 Content = tab.Title,
-                FontSize = 12,
+                FontSize = EditorTheme.FontSize,
                 Padding = new Thickness(10, 5),
                 Background = active
                     ? new SolidColorBrush(Color.FromRgb(0x2B, 0x4C, 0x7E))

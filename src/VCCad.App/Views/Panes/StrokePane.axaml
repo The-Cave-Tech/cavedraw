@@ -3,7 +3,7 @@
              x:Class="VCCad.App.Views.Panes.StrokePane">
   <ScrollViewer>
     <StackPanel Margin="10,8" Spacing="8">
-      <TextBlock Text="STROKE" FontWeight="SemiBold" FontSize="11" Foreground="{DynamicResource VcTextDim}"/>
+      <TextBlock Text="STROKE" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
       <Grid ColumnDefinitions="Auto,*,10,Auto,*">
         <TextBlock Text="Width" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="StrokeWidthBox" Grid.Column="1"/>

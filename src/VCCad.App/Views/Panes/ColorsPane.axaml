@@ -3,7 +3,7 @@
              x:Class="VCCad.App.Views.Panes.ColorsPane">
   <ScrollViewer>
     <StackPanel Margin="10,8" Spacing="8">
-      <TextBlock Text="FILL" FontWeight="SemiBold" FontSize="11" Foreground="{DynamicResource VcTextDim}"/>
+      <TextBlock Text="FILL" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
       <Grid ColumnDefinitions="Auto,*,8,Auto,*,8,Auto,*">
         <TextBlock Text="R" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="FillR" Grid.Column="1"/>
@@ -21,7 +21,7 @@
       </Grid>
       <Button Content="Apply Fill" Click="OnApplyFill"/>
 
-      <TextBlock Text="STROKE COLOUR" FontWeight="SemiBold" FontSize="11"
+      <TextBlock Text="STROKE COLOUR" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
                  Foreground="{DynamicResource VcTextDim}" Margin="0,6,0,0"/>
       <Grid ColumnDefinitions="Auto,*,8,Auto,*,8,Auto,*">
         <TextBlock Text="R" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>

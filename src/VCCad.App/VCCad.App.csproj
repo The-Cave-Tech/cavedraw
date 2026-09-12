@@ -17,6 +17,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\VCCad.Core\VCCad.Core.csproj" />
     <ProjectReference Include="..\VCCad.Geometry\VCCad.Geometry.csproj" />
     <ProjectReference Include="..\VCCad.Pdf\VCCad.Pdf.csproj" />

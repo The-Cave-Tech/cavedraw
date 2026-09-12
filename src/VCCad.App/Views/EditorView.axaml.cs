@@ -6,6 +6,8 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using VCCad.App.Docking;
 using VCCad.App.ViewModels;
 using VCCad.App.Views.Panes;
@@ -71,18 +73,18 @@ public partial class EditorView : UserControl
         var objects = new ObjectsPane();
         objects.Attach(_viewModel);
 
-        var appearance = new DockPanelModel { Id = "appearance", Title = "Appearance", Side = DockSide.Left };
-        appearance.Tabs.Add(new DockTab { Id = "colors", Title = "Color", PanelId = "appearance", DefaultSide = DockSide.Left, ContentFactory = () => colors, IsOpen = true });
-        appearance.Tabs.Add(new DockTab { Id = "swatches", Title = "Swatches", PanelId = "appearance", DefaultSide = DockSide.Left, ContentFactory = () => swatches });
-        appearance.Tabs.Add(new DockTab { Id = "stroke", Title = "Stroke", PanelId = "appearance", DefaultSide = DockSide.Left, ContentFactory = () => stroke });
+        var appearance = new DockPanelModel { Id = "appearance", Title = "Appearance", Side = DockSide.Right };
+        appearance.Tabs.Add(new DockTab { Id = "colors", Title = "Color", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => colors, IsOpen = true });
+        appearance.Tabs.Add(new DockTab { Id = "swatches", Title = "Swatches", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => swatches });
+        appearance.Tabs.Add(new DockTab { Id = "stroke", Title = "Stroke", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => stroke, IsOpen = true });
         appearance.ActiveTabId = "colors";
 
-        var objectsPanel = new DockPanelModel { Id = "objects", Title = "Objects", Side = DockSide.Left };
-        objectsPanel.Tabs.Add(new DockTab { Id = "objects", Title = "Objects", PanelId = "objects", DefaultSide = DockSide.Left, ContentFactory = () => objects, IsOpen = true });
+        var objectsPanel = new DockPanelModel { Id = "objects", Title = "Objects", Side = DockSide.Right };
+        objectsPanel.Tabs.Add(new DockTab { Id = "objects", Title = "Objects", PanelId = "objects", DefaultSide = DockSide.Right, ContentFactory = () => objects, IsOpen = true });
         objectsPanel.ActiveTabId = "objects";
 
-        var transformPanel = new DockPanelModel { Id = "transform", Title = "Transform", Side = DockSide.Left };
-        transformPanel.Tabs.Add(new DockTab { Id = "transform", Title = "Transform", PanelId = "transform", DefaultSide = DockSide.Left, ContentFactory = () => transform, IsOpen = true });
+        var transformPanel = new DockPanelModel { Id = "transform", Title = "Transform", Side = DockSide.Right };
+        transformPanel.Tabs.Add(new DockTab { Id = "transform", Title = "Transform", PanelId = "transform", DefaultSide = DockSide.Right, ContentFactory = () => transform, IsOpen = true });
         transformPanel.ActiveTabId = "transform";
 
         foreach (DockPanelModel panel in new[] { appearance, objectsPanel, transformPanel })
@@ -109,7 +111,7 @@ public partial class EditorView : UserControl
         {
             Id = "tools",
             Title = "Tools",
-            Side = DockSide.Right,
+            Side = DockSide.Left,
             ContentFactory = BuildToolsToolbar,
         });
     }
@@ -117,16 +119,16 @@ public partial class EditorView : UserControl
     private Control BuildMainToolbar()
     {
         var bar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
-        bar.Children.Add(GlyphButton("＋", "New document", OnNew));
-        bar.Children.Add(GlyphButton("▤", "Open from server", OnOpen));
-        bar.Children.Add(GlyphButton("▣", "Save to server", OnSave));
+        bar.Children.Add(IconButton("new", "New document", OnNew));
+        bar.Children.Add(IconButton("open", "Open from server", OnOpen));
+        bar.Children.Add(IconButton("save", "Save to server", OnSave));
         bar.Children.Add(new Border { Width = 1, Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)), Margin = new Thickness(6, 4) });
-        bar.Children.Add(GlyphButton("↶", "Undo", OnUndo));
-        bar.Children.Add(GlyphButton("↷", "Redo", OnRedo));
+        bar.Children.Add(IconButton("undo", "Undo", OnUndo));
+        bar.Children.Add(IconButton("redo", "Redo", OnRedo));
         bar.Children.Add(new Border { Width = 1, Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)), Margin = new Thickness(6, 4) });
-        bar.Children.Add(GlyphButton("−", "Zoom out", OnZoomOut));
-        bar.Children.Add(GlyphButton("＋", "Zoom in", OnZoomIn));
-        bar.Children.Add(GlyphButton("⤢", "Fit in window", OnFitInWindow));
+        bar.Children.Add(IconButton("zoom-out", "Zoom out", OnZoomOut));
+        bar.Children.Add(IconButton("zoom-in", "Zoom in", OnZoomIn));
+        bar.Children.Add(IconButton("fit", "Fit in window", OnFitInWindow));
         return bar;
     }
 
@@ -134,28 +136,38 @@ public partial class EditorView : UserControl
     {
         _toolButtons.Clear();
         var bar = new StackPanel { Orientation = Orientation.Vertical, Spacing = 2 };
-        bar.Children.Add(ToolButton(EditorTool.Select, "⬈", "Selection (V)"));
-        bar.Children.Add(ToolButton(EditorTool.Node, "◇", "Nodes / direct selection (A)"));
-        bar.Children.Add(ToolButton(EditorTool.Pen, "✎", "Pen (P)"));
+        bar.Children.Add(ToolButton(EditorTool.Select, "select", "Selection (V)"));
+        bar.Children.Add(ToolButton(EditorTool.Node, "node", "Nodes / direct selection (A)"));
+        bar.Children.Add(ToolButton(EditorTool.Pen, "pen", "Pen (P)"));
         bar.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)), Margin = new Thickness(4, 6) });
-        bar.Children.Add(ToolButton(EditorTool.Rectangle, "▭", "Rectangle (M)"));
-        bar.Children.Add(ToolButton(EditorTool.Ellipse, "◯", "Ellipse (L)"));
-        bar.Children.Add(ToolButton(EditorTool.Artboard, "▦", "Artboard (O)"));
+        bar.Children.Add(ToolButton(EditorTool.Rectangle, "rectangle", "Rectangle (M)"));
+        bar.Children.Add(ToolButton(EditorTool.Ellipse, "ellipse", "Ellipse (L)"));
+        bar.Children.Add(ToolButton(EditorTool.Artboard, "artboard", "Artboard (O)"));
         HighlightActiveTool();
         return bar;
     }
 
-    private Button GlyphButton(string glyph, string tip, EventHandler<RoutedEventArgs> handler)
+    private static Image Icon(string name, double size = 20)
+    {
+        var bitmap = new Bitmap(AssetLoader.Open(new Uri($"avares://VCCad.App/Assets/Icons/{name}.png")));
+        return new Image
+        {
+            Source = bitmap,
+            Width = size,
+            Height = size,
+            Stretch = Stretch.Uniform,
+        };
+    }
+
+    private Button IconButton(string icon, string tip, EventHandler<RoutedEventArgs> handler)
     {
         var button = new Button
         {
-            Content = glyph,
-            FontSize = 15,
-            MinWidth = 32,
-            Padding = new Thickness(9, 5),
+            Content = Icon(icon),
+            MinWidth = 34,
+            Padding = new Thickness(7, 4),
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
-            Foreground = new SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xE9)),
             CornerRadius = new CornerRadius(6),
         };
         ToolTip.SetTip(button, tip);
@@ -163,9 +175,9 @@ public partial class EditorView : UserControl
         return button;
     }
 
-    private Button ToolButton(EditorTool tool, string glyph, string tip)
+    private Button ToolButton(EditorTool tool, string icon, string tip)
     {
-        Button button = GlyphButton(glyph, tip, (_, _) => _viewModel.Tool = tool);
+        Button button = IconButton(icon, tip, (_, _) => _viewModel.Tool = tool);
         _toolButtons[tool] = button;
         return button;
     }

@@ -5,12 +5,12 @@
     <StackPanel Margin="10,8" Spacing="8">
       <TextBlock x:Name="SelectionInfo" Text="(no selection)" TextWrapping="Wrap"
                  Foreground="{DynamicResource VcText}"/>
-      <TextBlock x:Name="ModeNote" FontSize="11" TextWrapping="Wrap"
+      <TextBlock x:Name="ModeNote" FontSize="{DynamicResource VcFontSize}" TextWrapping="Wrap"
                  Foreground="{DynamicResource VcTextDim}"
                  Text="Position / size / rotation of the selection"/>
       <CheckBox x:Name="OrthoSnapCheck" Content="Snap point to neighbour H/V on release"
                 IsChecked="True" Click="OnOrthoSnapChanged"/>
-      <TextBlock Text="REFERENCE POINT" FontWeight="SemiBold" FontSize="11"
+      <TextBlock Text="REFERENCE POINT" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
                  Foreground="{DynamicResource VcTextDim}"/>
       <Grid ColumnDefinitions="*,*,*" HorizontalAlignment="Left">
         <Button x:Name="Pivot0" Classes="tool" Content="┌" Tag="0" Click="OnPivot" MinWidth="30" Margin="0,0,2,2"/>

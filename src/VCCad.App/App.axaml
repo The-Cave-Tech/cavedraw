@@ -18,6 +18,9 @@
     <SolidColorBrush x:Key="VcHover" Color="#33333A"/>
     <SolidColorBrush x:Key="VcPressed" Color="#3D3D46"/>
     <SolidColorBrush x:Key="VcSelected" Color="#2B4C7E"/>
+
+    <!-- Single global font-size setting (change here to rescale the whole UI) -->
+    <x:Double x:Key="VcFontSize">13</x:Double>
   </Application.Resources>
 
   <Application.Styles>
@@ -110,11 +113,22 @@
     </Style>
     <Style Selector="TabItem">
       <Setter Property="Foreground" Value="{DynamicResource VcTextDim}"/>
-      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="FontSize" Value="{DynamicResource VcFontSize}"/>
       <Setter Property="Padding" Value="10,6"/>
     </Style>
     <Style Selector="TabItem:selected">
       <Setter Property="Foreground" Value="{DynamicResource VcText}"/>
+    </Style>
+
+    <!-- Global font size -->
+    <Style Selector="TextBlock">
+      <Setter Property="FontSize" Value="{DynamicResource VcFontSize}"/>
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="FontSize" Value="{DynamicResource VcFontSize}"/>
+    </Style>
+    <Style Selector="MenuItem">
+      <Setter Property="FontSize" Value="{DynamicResource VcFontSize}"/>
     </Style>
 
     <!-- Text entry -->
@@ -128,7 +142,6 @@
 
     <Style Selector="CheckBox">
       <Setter Property="Foreground" Value="{DynamicResource VcText}"/>
-      <Setter Property="FontSize" Value="12"/>
     </Style>
 
     <Style Selector="ComboBox">
