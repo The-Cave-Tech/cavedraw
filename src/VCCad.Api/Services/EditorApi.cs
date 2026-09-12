@@ -98,6 +98,26 @@ public sealed class EditorApi
         return new { removed = true, id };
     }
 
+    /// <summary>Imports a PDF (base64) as a new document. Pages become artboards.</summary>
+    public object ImportPdf(JsonElement p)
+    {
+        string base64 = p.GetString("pdfBase64")
+            ?? throw new RpcException(-32602, "Parameter 'pdfBase64' is required.");
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(base64);
+        }
+        catch (FormatException)
+        {
+            throw new RpcException(-32602, "Parameter 'pdfBase64' is not valid base64.");
+        }
+
+        CadDocument imported = VCCad.Pdf.PdfImporter.Import(bytes);
+        _store.Add(new DocumentSession { Document = imported, Stack = new CommandStack() });
+        return new { id = imported.Id, name = imported.Name, artboards = imported.Artboards.Count };
+    }
+
     /// <summary>Exports a document to lossless PDF bytes (base64 in the result).</summary>
     public object GetPdf(JsonElement p)
     {

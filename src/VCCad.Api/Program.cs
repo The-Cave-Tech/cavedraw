@@ -71,6 +71,44 @@ api.MapGet("/documents/{id:guid}/pdf", (Guid id, IDocumentStore store) =>
     })
     .WithName("GetPdf");
 
+// Import a PDF (multipage → artboards). Accepts application/pdf or a JSON
+// body {"pdfBase64":"..."}; returns the created document id.
+api.MapPost("/documents/import", async (HttpRequest request, IDocumentStore store) =>
+    {
+        byte[] bytes;
+        if (request.ContentType?.Contains("application/pdf", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            using var buffer = new MemoryStream();
+            await request.Body.CopyToAsync(buffer);
+            bytes = buffer.ToArray();
+        }
+        else
+        {
+            using var reader = new StreamReader(request.Body);
+            string body = await reader.ReadToEndAsync();
+            try
+            {
+                using JsonDocument json = JsonDocument.Parse(body);
+                bytes = Convert.FromBase64String(json.RootElement.GetProperty("pdfBase64").GetString() ?? string.Empty);
+            }
+            catch (Exception ex) when (ex is JsonException or FormatException or KeyNotFoundException)
+            {
+                return Results.BadRequest(new { error = $"Invalid import payload: {ex.Message}" });
+            }
+        }
+
+        if (bytes.Length == 0)
+        {
+            return Results.BadRequest(new { error = "Empty PDF payload." });
+        }
+
+        CadDocument imported = PdfImporter.Import(bytes);
+        store.Add(new DocumentSession { Document = imported, Stack = new VCCad.Core.Commands.CommandStack() });
+        return Results.Created($"/api/v1/documents/{imported.Id}",
+            new { id = imported.Id, name = imported.Name, artboards = imported.Artboards.Count });
+    })
+    .WithName("ImportPdf");
+
 api.MapDelete("/documents/{id:guid}", (Guid id, IDocumentStore store) =>
     {
         if (store.Remove(id) is null)

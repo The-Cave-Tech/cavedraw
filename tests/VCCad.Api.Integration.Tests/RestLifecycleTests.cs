@@ -106,6 +106,26 @@ public class RestLifecycleTests : ApiTestBase
     }
 
     [Fact]
+    public async Task ImportPdfCreatesArtboardsPerPage()
+    {
+        // Two artboards (different sizes) → two pages → import back to two artboards.
+        CadDocument original = CadDocument.CreateDefault("multipage");
+        original.AddArtboard(PageSizes.A4Portrait, "Second", new Geometry.Point2D(1200, 0));
+        byte[] pdf = VCCad.Pdf.PdfDocumentExporter.Export(original);
+        string base64 = Convert.ToBase64String(pdf);
+
+        using HttpClient client = Factory.CreateClient();
+        using var content = new StringContent(
+            JsonSerializer.Serialize(new { pdfBase64 = base64 }),
+            System.Text.Encoding.UTF8, "application/json");
+        using HttpResponseMessage response = await client.PostAsync("/api/v1/documents/import", content);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        using JsonDocument body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(2, body.RootElement.GetProperty("artboards").GetInt32());
+    }
+
+    [Fact]
     public async Task MissingDocumentReturns404Json()
     {
         using HttpClient client = Factory.CreateClient();

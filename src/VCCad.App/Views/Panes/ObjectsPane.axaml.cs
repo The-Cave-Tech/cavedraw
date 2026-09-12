@@ -59,9 +59,13 @@ public partial class ObjectsPane : UserControl
             ObjectTree.Items.Add(board);
         }
 
+        // Document-level orphans (objects that belong to no artboard) plus any
+        // items that have drifted off their artboard are shown as pasteboard.
+        pasteboard.AddRange(_vm.Document.Orphans.Children);
+
         if (pasteboard.Count > 0)
         {
-            var paste = MakeNode("Pasteboard (off-artboard)", null, header: true);
+            var paste = MakeNode("Pasteboard", null, header: true);
             foreach (LayerItem item in pasteboard)
             {
                 AddItemNode(paste, item);

@@ -100,6 +100,18 @@ public class SerializerRoundTripTests
     }
 
     [Fact]
+    public void OrphanObjectsRoundTrip()
+    {
+        var doc = new CadDocument { Name = "with-orphans" };
+        doc.Orphans.AddItem(PathFactory.CreateRectangle("pasteboard-rect", new Rect2D(5, 7, 30, 20)));
+
+        CadDocument revived = VccadDocumentSerializer.Deserialize(VccadDocumentSerializer.Serialize(doc));
+
+        Assert.Single(revived.Orphans.Children);
+        Assert.Equal("pasteboard-rect", revived.Orphans.Children[0].Name);
+    }
+
+    [Fact]
     public void EmptyDocumentRoundTrips()
     {
         var doc = new CadDocument { Name = "blank" };

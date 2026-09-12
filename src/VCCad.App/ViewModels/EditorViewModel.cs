@@ -811,6 +811,27 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         return pdf;
     }
 
+    /// <summary>
+    /// The container new geometry should go into for a world point: the artboard
+    /// under the point (its top layer) with that artboard's origin as offset, or
+    /// the document's orphan/pasteboard layer when the point is off all artboards.
+    /// </summary>
+    public (Layer Layer, Vector2D Offset) TargetFor(Point2D world)
+    {
+        foreach (Artboard artboard in Document.Artboards)
+        {
+            if (artboard.Bounds.Contains(world))
+            {
+                Layer layer = artboard.Layers.Count > 0
+                    ? artboard.Layers[^1]
+                    : artboard.AddLayer("Layer 1");
+                return (layer, new Vector2D(artboard.X, artboard.Y));
+            }
+        }
+
+        return (Document.Orphans, default);
+    }
+
     /// <summary>The default target layer for tool-created items.</summary>
     public Layer TargetLayer()
     {

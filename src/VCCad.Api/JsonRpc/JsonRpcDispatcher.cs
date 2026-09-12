@@ -35,6 +35,7 @@ public sealed class JsonRpcDispatcher
             ["documents.get"] = p => _api.GetDocument(p),
             ["documents.remove"] = p => _api.RemoveDocument(p),
             ["documents.pdf"] = p => _api.GetPdf(p),
+            ["documents.importPdf"] = p => _api.ImportPdf(p),
             ["document.addArtboard"] = p => _api.AddArtboard(p),
             ["document.addLayer"] = p => _api.AddLayer(p),
             ["document.addRectangle"] = p => _api.AddRectangle(p),

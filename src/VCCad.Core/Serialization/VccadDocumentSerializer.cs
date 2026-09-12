@@ -179,7 +179,8 @@ internal sealed record DocumentDto(
     int Version,
     Guid Id,
     string Name,
-    ArtboardDto[] Artboards);
+    ArtboardDto[] Artboards,
+    ItemDto[] Orphans);
 
 /// <summary>
 /// Lossless, deterministic serializer for <see cref="CadDocument"/>.
@@ -262,7 +263,8 @@ public static class VccadDocumentSerializer
                     l.IsVisible,
                     l.IsLocked,
                     l.Opacity,
-                    l.Children.Select(ItemDto.From).ToArray())).ToArray())).ToArray());
+                    l.Children.Select(ItemDto.From).ToArray())).ToArray())).ToArray(),
+            d.Orphans.Children.Select(ItemDto.From).ToArray());
 
     private static CadDocument ToModel(DocumentDto dto)
     {
@@ -297,6 +299,11 @@ public static class VccadDocumentSerializer
             }
 
             document.AddArtboard(artboard);
+        }
+
+        foreach (ItemDto orphan in dto.Orphans ?? Array.Empty<ItemDto>())
+        {
+            document.Orphans.AddItem(orphan.ToModel());
         }
 
         return document;

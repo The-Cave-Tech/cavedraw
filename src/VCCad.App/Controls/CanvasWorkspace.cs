@@ -262,10 +262,6 @@ public sealed class CanvasWorkspace : Control
     /// <summary>Converts a world point into a path's artboard-local frame.</summary>
     private static Point2D LocalFor(PathItem path, Point2D world) => world - path.ArtboardOffset();
 
-    /// <summary>Artboard origin of the current target layer (for new geometry).</summary>
-    private Vector2D TargetOffset()
-        => _vm?.TargetLayer().Artboard is { } ab ? new Vector2D(ab.X, ab.Y) : default;
-
     private Rect2D ComputeExtent()
     {
         if (_document is null)
@@ -335,6 +331,15 @@ public sealed class CanvasWorkspace : Control
                         topmost = item;
                     }
                 }
+            }
+        }
+
+        // Pasteboard/orphan objects live in world coordinates.
+        foreach (LayerItem item in _document.Orphans.Children)
+        {
+            if (HitTestItem(item, model, tolerance) is not null)
+            {
+                topmost = item;
             }
         }
 
@@ -908,6 +913,15 @@ public sealed class CanvasWorkspace : Control
                         result.Add(item);
                     }
                 }
+            }
+        }
+
+        foreach (LayerItem item in _document.Orphans.Children)
+        {
+            Rect2D bounds = ItemBounds(item);
+            if (!bounds.IsEmpty && bounds.Intersects(rect))
+            {
+                result.Add(item);
             }
         }
 
@@ -1747,14 +1761,15 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        _penOffset = TargetOffset();
+        (Layer penLayer, Vector2D penOffset) = _vm.TargetFor(model);
+        _penOffset = penOffset;
         _chromeRect = null;
         _chromeAngle = 0;
         if (_penPath is null)
         {
             _penPath = new PathItem { Name = "Path", Stroke = StrokeSpec.Hairline(ColorRgb.Black) };
             _penPath.AddSubPath(closed: false);
-            _vm.Execute(new AddItemCommand(_vm.TargetLayer(), _penPath));
+            _vm.Execute(new AddItemCommand(penLayer, _penPath));
             _penBefore = _penPath.GeometrySnapshot();
         }
         else
@@ -2061,7 +2076,7 @@ public sealed class CanvasWorkspace : Control
             return; // a click, not a drag — no shape
         }
 
-        Vector2D offset = TargetOffset();
+        (Layer shapeLayer, Vector2D offset) = _vm!.TargetFor(a);
         Point2D la = a - offset;
         Point2D lb = b - offset;
         Rect2D box = Rect2D.FromPoints(la, lb);
@@ -2074,7 +2089,7 @@ public sealed class CanvasWorkspace : Control
         shape.Stroke = StrokeSpec.Hairline(ColorRgb.Black);
         shape.Fill = FillSpec.None;
 
-        _vm.Execute(new AddItemCommand(_vm.TargetLayer(), shape));
+        _vm.Execute(new AddItemCommand(shapeLayer, shape));
         _vm.SelectObject(shape);
         _vm.Status = rect ? "Rectangle created" : "Ellipse created";
     }
@@ -2102,6 +2117,15 @@ public sealed class CanvasWorkspace : Control
         foreach (Artboard artboard in _document.Artboards)
         {
             PaintArtboard(context, artboard);
+        }
+
+        // Orphaned (pasteboard) objects, drawn in world coordinates.
+        if (_document.Orphans.IsVisible)
+        {
+            foreach (LayerItem item in _document.Orphans.Children)
+            {
+                PaintItem(context, item, _document.Orphans.Opacity);
+            }
         }
 
         PaintOverlays(context);

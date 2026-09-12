@@ -21,6 +21,11 @@ public sealed class CadDocument
 {
     private readonly List<Artboard> _artboards = new();
 
+    /// <summary>Document-level container for objects that belong to no artboard
+    /// (the pasteboard / orphans). These are "parentless" in the sense that no
+    /// artboard owns them; their coordinates are document/world coordinates.</summary>
+    public Layer Orphans { get; } = new() { Name = "Pasteboard" };
+
     private string _name = "Untitled";
 
     /// <summary>Document identity — the key used by the automation API and the
