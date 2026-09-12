@@ -176,6 +176,39 @@ public class CubicBezierTests
         Assert.Equal(1.0 / r, curvature, 3); // circle → constant κ = 1/r
     }
 
+    [Fact]
+    public void ExtentsAlongAxesMatchTightBounds()
+    {
+        Rect2D box = Unit.BoundingBox();
+        (double minU, double maxU, double minV, double maxV) =
+            Unit.ExtentsAlong(Vector2D.UnitX, Vector2D.UnitY);
+        Assert.Equal(box.Left, minU, 9);
+        Assert.Equal(box.Right, maxU, 9);
+        Assert.Equal(box.Top, minV, 9);
+        Assert.Equal(box.Bottom, maxV, 9);
+    }
+
+    [Fact]
+    public void ExtentsIncludeCurveBulgeBeyondAnchors()
+    {
+        // A curve whose middle bulges well above the chord between its endpoints.
+        CubicBezier curve = CubicBezier.FromHandles(
+            new Point2D(0, 0), new Point2D(50, -200), new Point2D(150, -200), new Point2D(200, 0));
+
+        // Anchors alone would give a box with top = 0; the true curve reaches higher.
+        (_, _, double minV, _) = curve.ExtentsAlong(Vector2D.UnitX, Vector2D.UnitY);
+        Assert.True(minV < -50.0, $"Expected the curve to extend above the anchors (got {minV}).");
+
+        // Cross-check against a dense sampling oracle.
+        double sampleMin = double.PositiveInfinity;
+        for (int i = 0; i <= 20000; i++)
+        {
+            sampleMin = Math.Min(sampleMin, curve.PointAt(i / 20000.0).Y);
+        }
+
+        Assert.Equal(sampleMin, minV, 3);
+    }
+
     private static void AssertPoint(Point2D expected, Point2D actual, double epsilon = 1e-6)
     {
         Assert.True(expected.NearlyEquals(actual, epsilon),

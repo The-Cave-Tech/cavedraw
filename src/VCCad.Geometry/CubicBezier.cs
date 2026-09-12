@@ -274,6 +274,67 @@ public readonly record struct CubicBezier(Point2D P0, Point2D P1, Point2D P2, Po
     }
 
     /// <summary>
+    /// Exact extents of the curve along an orthonormal frame (u, v). This is the
+    /// tight bounding box of the curve expressed in that rotated frame — used by
+    /// the oriented selection box so Bézier bulges are contained precisely.
+    ///
+    /// For each axis the projection of the cubic is itself a cubic scalar
+    /// function whose extrema occur at the endpoints or where its derivative
+    /// (a quadratic) vanishes; both are solved exactly.
+    /// </summary>
+    public (double MinU, double MaxU, double MinV, double MaxV) ExtentsAlong(Vector2D u, Vector2D v)
+    {
+        static double Project(Point2D p, Vector2D axis) => p.X * axis.X + p.Y * axis.Y;
+
+        (double minU, double maxU) = ScalarExtents(
+            Project(P0, u), Project(P1, u), Project(P2, u), Project(P3, u));
+        (double minV, double maxV) = ScalarExtents(
+            Project(P0, v), Project(P1, v), Project(P2, v), Project(P3, v));
+        return (minU, maxU, minV, maxV);
+    }
+
+    /// <summary>Exact min/max of the scalar cubic with control values c0..c3 on
+    /// t ∈ [0,1].</summary>
+    private static (double Min, double Max) ScalarExtents(double c0, double c1, double c2, double c3)
+    {
+        double min = Math.Min(c0, c3);
+        double max = Math.Max(c0, c3);
+
+        // Derivative control values (the ×3 factor is irrelevant for roots).
+        double d0 = c1 - c0;
+        double d1 = c2 - c1;
+        double d2 = c3 - c2;
+
+        // Quadratic in power basis: A t² + B t + C.
+        double a = d0 - 2.0 * d1 + d2;
+        double b = -2.0 * d0 + 2.0 * d1;
+        double c = d0;
+
+        int count = MathUtils.SolveQuadratic(a, b, c, out double t0, out double t1);
+        if (count >= 1 && t0 is > 0.0 and < 1.0)
+        {
+            double value = ScalarAt(t0, c0, c1, c2, c3);
+            min = Math.Min(min, value);
+            max = Math.Max(max, value);
+        }
+
+        if (count >= 2 && t1 is > 0.0 and < 1.0)
+        {
+            double value = ScalarAt(t1, c0, c1, c2, c3);
+            min = Math.Min(min, value);
+            max = Math.Max(max, value);
+        }
+
+        return (min, max);
+    }
+
+    private static double ScalarAt(double t, double c0, double c1, double c2, double c3)
+    {
+        double u = 1.0 - t;
+        return u * u * u * c0 + 3.0 * u * u * t * c1 + 3.0 * u * t * t * c2 + t * t * t * c3;
+    }
+
+    /// <summary>
     /// The parameter values t ∈ [0,1] at which x(t) or y(t) attains a local extremum.
     ///
     /// The derivative of a cubic is a quadratic Bézier with control points

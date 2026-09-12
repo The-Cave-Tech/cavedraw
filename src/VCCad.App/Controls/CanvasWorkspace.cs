@@ -518,54 +518,58 @@ public sealed class CanvasWorkspace : Control
             return Rect2D.Empty;
         }
 
-        var anchors = new List<Point2D>();
+        // Rotation is explicit state (0 until the user rotates). Bounds are the
+        // EXACT extents of the curve geometry along that frame — anchors alone
+        // would let Bézier bulges escape the box.
+        double angle = _vm.SelectionRotationRadians;
+        var u = new Vector2D(Math.Cos(angle), Math.Sin(angle));
+        var v = new Vector2D(-Math.Sin(angle), Math.Cos(angle));
+
+        double minU = double.PositiveInfinity, minV = double.PositiveInfinity;
+        double maxU = double.NegativeInfinity, maxV = double.NegativeInfinity;
+        bool any = false;
+
+        void Include(double cu, double cv)
+        {
+            minU = Math.Min(minU, cu);
+            maxU = Math.Max(maxU, cu);
+            minV = Math.Min(minV, cv);
+            maxV = Math.Max(maxV, cv);
+            any = true;
+        }
+
         foreach (PathItem path in _vm.SelectedPaths())
         {
             foreach (SubPath sub in path.SubPaths)
             {
-                foreach (PathNode node in sub.Nodes)
+                foreach (CubicBezier segment in sub.Segments())
                 {
-                    anchors.Add(node.Anchor);
+                    (double sMinU, double sMaxU, double sMinV, double sMaxV) = segment.ExtentsAlong(u, v);
+                    Include(sMinU, sMinV);
+                    Include(sMaxU, sMaxV);
+                }
+
+                if (sub.Nodes.Count == 1)
+                {
+                    Point2D p = sub.Nodes[0].Anchor;
+                    Include(p.X * u.X + p.Y * u.Y, p.X * v.X + p.Y * v.Y);
                 }
             }
         }
 
-        if (anchors.Count == 0)
+        if (!any)
         {
             return Rect2D.Empty;
         }
 
-        // Rotation is an explicit property (0 until the user rotates); the box is
-        // projected onto that angle to stay tight without inventing an angle from
-        // the geometry.
-        double angle = _vm.SelectionRotationRadians;
+        double width = maxU - minU;
+        double height = maxV - minV;
+        double centerU = (minU + maxU) / 2.0;
+        double centerV = (minV + maxV) / 2.0;
 
-        double cx = 0, cy = 0;
-        foreach (Point2D p in anchors)
-        {
-            cx += p.X;
-            cy += p.Y;
-        }
-
-        var centroid = new Point2D(cx / anchors.Count, cy / anchors.Count);
-
-        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
-        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
-        foreach (Point2D p in anchors)
-        {
-            Point2D local = RotatePoint(p, centroid, -angle);
-            minX = Math.Min(minX, local.X);
-            minY = Math.Min(minY, local.Y);
-            maxX = Math.Max(maxX, local.X);
-            maxY = Math.Max(maxY, local.Y);
-        }
-
-        double width = maxX - minX;
-        double height = maxY - minY;
-        var localCenter = new Point2D((minX + maxX) / 2, (minY + maxY) / 2);
-        Point2D worldCenter = RotatePoint(localCenter, centroid, angle);
-
-        var rect = new Rect2D(worldCenter.X - width / 2, worldCenter.Y - height / 2, width, height);
+        // Reconstruct the world centre from the orthonormal frame.
+        var center = new Point2D(u.X * centerU + v.X * centerV, u.Y * centerU + v.Y * centerV);
+        var rect = new Rect2D(center.X - width / 2, center.Y - height / 2, width, height);
         _chromeAngle = angle;
         _chromeRect = rect;
         return rect;
