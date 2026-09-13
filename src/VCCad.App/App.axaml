@@ -114,7 +114,7 @@
     <Style Selector="TabItem">
       <Setter Property="Foreground" Value="{DynamicResource VcTextDim}"/>
       <Setter Property="FontSize" Value="{DynamicResource VcFontSize}"/>
-      <Setter Property="Padding" Value="10,6"/>
+      <Setter Property="Padding" Value="9,2"/>
     </Style>
     <Style Selector="TabItem:selected">
       <Setter Property="Foreground" Value="{DynamicResource VcText}"/>
@@ -126,6 +126,8 @@
     </Style>
     <Style Selector="Button">
       <Setter Property="FontSize" Value="{DynamicResource VcFontSize}"/>
+      <Setter Property="Padding" Value="8,2"/>
+      <Setter Property="MinHeight" Value="0"/>
     </Style>
     <Style Selector="MenuItem">
       <Setter Property="FontSize" Value="{DynamicResource VcFontSize}"/>
@@ -137,7 +139,7 @@
       <Setter Property="Foreground" Value="{DynamicResource VcText}"/>
       <Setter Property="BorderBrush" Value="{DynamicResource VcBorder}"/>
       <Setter Property="CornerRadius" Value="4"/>
-      <Setter Property="MinHeight" Value="26"/>
+      <Setter Property="MinHeight" Value="21"/>
     </Style>
 
     <Style Selector="CheckBox">

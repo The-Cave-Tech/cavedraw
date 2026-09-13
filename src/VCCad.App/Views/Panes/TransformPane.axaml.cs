@@ -45,8 +45,8 @@ public partial class TransformPane : UserControl
     {
         var grid = new Grid
         {
-            Width = 66,
-            Height = 66,
+            Width = 50,
+            Height = 50,
             ColumnDefinitions = new ColumnDefinitions("*,*,*"),
             RowDefinitions = new RowDefinitions("*,*,*"),
         };
@@ -74,11 +74,11 @@ public partial class TransformPane : UserControl
             int index = i;
             var dot = new Button
             {
-                Width = 14,
-                Height = 14,
+                Width = 10,
+                Height = 10,
                 Padding = new Thickness(0),
-                CornerRadius = new CornerRadius(7),
-                BorderThickness = new Thickness(1.5),
+                CornerRadius = new CornerRadius(5),
+                BorderThickness = new Thickness(1.2),
                 Background = new SolidColorBrush(Color.FromRgb(0x23, 0x23, 0x27)),
                 BorderBrush = IdleBrush,
                 HorizontalAlignment = HorizontalAlignment.Center,

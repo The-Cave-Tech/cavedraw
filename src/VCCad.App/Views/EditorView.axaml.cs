@@ -36,6 +36,56 @@ public partial class EditorView : UserControl
 
     private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.FromRgb(0x2B, 0x4C, 0x7E));
 
+    private double _leftWidth = 240;
+    private double _rightWidth = 272;
+
+    /// <summary>Collapses a docking column (and its splitter) when it has no
+    /// panels/toolbars, restoring its last width when content returns.</summary>
+    private void UpdateColumnVisibility()
+    {
+        var columns = DockArea.ColumnDefinitions;
+
+        if (LeftHost.Children.Count == 0)
+        {
+            if (columns[0].Width.IsAbsolute && columns[0].Width.Value > 0)
+            {
+                _leftWidth = columns[0].Width.Value;
+            }
+
+            columns[0].Width = new GridLength(0);
+            LeftSplitter.IsVisible = false;
+        }
+        else
+        {
+            if (columns[0].Width.Value <= 0)
+            {
+                columns[0].Width = new GridLength(_leftWidth > 0 ? _leftWidth : 240);
+            }
+
+            LeftSplitter.IsVisible = true;
+        }
+
+        if (RightHost.Children.Count == 0)
+        {
+            if (columns[4].Width.IsAbsolute && columns[4].Width.Value > 0)
+            {
+                _rightWidth = columns[4].Width.Value;
+            }
+
+            columns[4].Width = new GridLength(0);
+            RightSplitter.IsVisible = false;
+        }
+        else
+        {
+            if (columns[4].Width.Value <= 0)
+            {
+                columns[4].Width = new GridLength(_rightWidth > 0 ? _rightWidth : 272);
+            }
+
+            RightSplitter.IsVisible = true;
+        }
+    }
+
     public EditorView()
     {
         InitializeComponent();
@@ -44,7 +94,12 @@ public partial class EditorView : UserControl
         Workspace.AttachEditor(_viewModel);
 
         _manager = new DockManager(LeftHost, RightHost, TopHost, BottomHost);
-        _manager.LayoutChanged += (_, _) => { RefreshWindowMenu(); UpdateStatus(); };
+        _manager.LayoutChanged += (_, _) =>
+        {
+            RefreshWindowMenu();
+            UpdateStatus();
+            UpdateColumnVisibility();
+        };
         _manager.PanelDragRequested += (_, id) => StartDrag(id, isPanel: true);
         _manager.ToolbarDragRequested += (_, id) => StartDrag(id, isPanel: false);
 
@@ -182,8 +237,8 @@ public partial class EditorView : UserControl
         var button = new Button
         {
             Content = Icon(icon),
-            MinWidth = 34,
-            Padding = new Thickness(7, 4),
+            MinWidth = 30,
+            Padding = new Thickness(6, 2),
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             CornerRadius = new CornerRadius(6),

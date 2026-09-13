@@ -42,17 +42,24 @@
     </Menu>
 
     <!-- Docking area -->
-    <Grid Grid.Row="1" Name="DockArea" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,*,Auto">
-      <StackPanel Name="TopHost" Grid.Row="0" Grid.Column="1" Orientation="Horizontal"/>
+    <Grid Grid.Row="1" Name="DockArea" ColumnDefinitions="240,4,*,4,272" RowDefinitions="Auto,*,Auto">
+      <!-- Horizontal toolbars span the full row -->
+      <StackPanel Name="TopHost" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="5" Orientation="Vertical"/>
       <StackPanel Name="LeftHost" Grid.Row="1" Grid.Column="0" Orientation="Vertical"/>
-      <Border Grid.Row="1" Grid.Column="1" Background="{DynamicResource VcBackground}">
+      <GridSplitter Name="LeftSplitter" Grid.Row="1" Grid.Column="1"
+                    ResizeDirection="Columns" Background="{DynamicResource VcBorder}"
+                    HorizontalAlignment="Stretch"/>
+      <Border Grid.Row="1" Grid.Column="2" Background="{DynamicResource VcBackground}">
         <controls:CanvasWorkspace x:Name="Workspace" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
       </Border>
-      <StackPanel Name="RightHost" Grid.Row="1" Grid.Column="2" Orientation="Vertical"/>
-      <StackPanel Name="BottomHost" Grid.Row="2" Grid.Column="1" Orientation="Horizontal"/>
+      <GridSplitter Name="RightSplitter" Grid.Row="1" Grid.Column="3"
+                    ResizeDirection="Columns" Background="{DynamicResource VcBorder}"
+                    HorizontalAlignment="Stretch"/>
+      <StackPanel Name="RightHost" Grid.Row="1" Grid.Column="4" Orientation="Vertical"/>
+      <StackPanel Name="BottomHost" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="5" Orientation="Vertical"/>
 
       <!-- Drop-zone highlight while dragging a panel/toolbar -->
-      <Canvas Name="DropOverlay" Grid.Row="0" Grid.RowSpan="3" Grid.Column="0" Grid.ColumnSpan="3"
+      <Canvas Name="DropOverlay" Grid.Row="0" Grid.RowSpan="3" Grid.Column="0" Grid.ColumnSpan="5"
               IsHitTestVisible="False">
         <Border Name="DropLeft" Background="#552B4C7E" BorderBrush="#4C9AFF" BorderThickness="2" IsVisible="False"/>
         <Border Name="DropRight" Background="#552B4C7E" BorderBrush="#4C9AFF" BorderThickness="2" IsVisible="False"/>

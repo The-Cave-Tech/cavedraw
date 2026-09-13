@@ -53,7 +53,7 @@ public sealed class DockTabPanelView : Border
         header.Children.Add(tabScroll);
 
         header.Children.Add(BuildOverflow());
-        header.Height = 30;
+        header.Height = 24;
 
         var root = new DockPanel();
         DockPanel.SetDock(header, Dock.Top);
@@ -149,7 +149,7 @@ public sealed class DockTabPanelView : Border
             {
                 Content = tab.Title,
                 FontSize = EditorTheme.FontSize,
-                Padding = new Thickness(10, 5),
+                Padding = new Thickness(8, 2),
                 Background = active
                     ? new SolidColorBrush(Color.FromRgb(0x2B, 0x4C, 0x7E))
                     : Brushes.Transparent,

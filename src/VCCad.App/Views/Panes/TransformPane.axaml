@@ -2,27 +2,30 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="VCCad.App.Views.Panes.TransformPane">
   <ScrollViewer>
-    <StackPanel Margin="10,8" Spacing="10">
-      <TextBlock Text="REFERENCE POINT" FontWeight="SemiBold"
-                 Foreground="{DynamicResource VcTextDim}"/>
-      <ContentControl x:Name="PivotHost" HorizontalAlignment="Left"/>
+    <StackPanel Margin="10,8" Spacing="8">
+      <!-- Reference point picker sits left of the fields to save space. -->
+      <Grid ColumnDefinitions="Auto,10,*">
+        <ContentControl x:Name="PivotHost" Grid.Column="0" VerticalAlignment="Top"/>
+        <StackPanel Grid.Column="2" Spacing="4">
+          <Grid ColumnDefinitions="Auto,*,8,Auto,*" RowDefinitions="Auto,Auto"
+                ColumnSpacing="2" RowSpacing="3">
+            <TextBlock Text="X" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+            <TextBox x:Name="XBox" Grid.Column="1" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="0"/>
+            <TextBlock Text="W" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+            <TextBox x:Name="WBox" Grid.Column="4" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="2"/>
 
-      <Grid ColumnDefinitions="Auto,*,16,Auto,*" RowDefinitions="Auto,Auto">
-        <TextBlock Text="X" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="XBox" Grid.Column="1" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="0"/>
-        <TextBlock Text="W" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="WBox" Grid.Column="4" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="2"/>
+            <TextBlock Text="Y" Grid.Row="1" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+            <TextBox x:Name="YBox" Grid.Row="1" Grid.Column="1" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="1"/>
+            <TextBlock Text="H" Grid.Row="1" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+            <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="3"/>
+          </Grid>
 
-        <TextBlock Text="Y" Grid.Row="1" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="YBox" Grid.Row="1" Grid.Column="1" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="1"/>
-        <TextBlock Text="H" Grid.Row="1" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="3"/>
-      </Grid>
-
-      <Grid ColumnDefinitions="Auto,*,10,Auto,*">
-        <TextBlock Text="Rot" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="AngleBox" Grid.Column="1" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="4"/>
-        <TextBlock Text="deg" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+          <Grid ColumnDefinitions="Auto,*,10,Auto,*" ColumnSpacing="2">
+            <TextBlock Text="Rot" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+            <TextBox x:Name="AngleBox" Grid.Column="1" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="4"/>
+            <TextBlock Text="deg" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+          </Grid>
+        </StackPanel>
       </Grid>
     </StackPanel>
   </ScrollViewer>
