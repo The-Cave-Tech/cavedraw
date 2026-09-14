@@ -59,10 +59,13 @@ public partial class ColorsPane : UserControl
         {
             if (e.Property == Slider.ValueProperty && !_syncing)
             {
-                ApplyLive();
-                CommitLive();
+                ApplyLive(); // instant feedback; committed on release
             }
         };
+        AlphaSlider.PointerReleased += (_, _) => CommitLive();
+        AlphaSlider.LostFocus += (_, _) => CommitLive();
+        ValueSlider.PointerReleased += (_, _) => CommitLive();
+        ValueSlider.LostFocus += (_, _) => CommitLive();
         foreach (TextBox box in new[] { FillR, FillG, FillB, AlphaBox })
         {
             box.KeyDown += (_, e) =>
@@ -191,6 +194,16 @@ public partial class ColorsPane : UserControl
             {
                 path.Fill = FillSpec.Solid(color, rule);
             }
+        }
+
+        // Keep the "current style" in sync so new objects inherit these colours.
+        if (_strokeTarget)
+        {
+            _vm.CurrentStroke = _vm.PrimarySelection is PathItem sp ? sp.Stroke : _vm.CurrentStroke;
+        }
+        else
+        {
+            _vm.CurrentFill = _vm.PrimarySelection is PathItem fp ? fp.Fill : _vm.CurrentFill;
         }
 
         _vm.RaiseTransformChanged(); // repaint without a full refresh

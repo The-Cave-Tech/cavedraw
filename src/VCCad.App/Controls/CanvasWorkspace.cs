@@ -571,7 +571,9 @@ public sealed class CanvasWorkspace : Control
                 break;
 
             case EditorTool.Text:
-                EnterTextEdit(_vm!.CreateTextAt(model, "DejaVu Sans", 12));
+                TextItem created = _vm!.CreateTextAt(model, "DejaVu Sans", 12);
+                created.Color = _vm.CurrentFill.IsVisible ? _vm.CurrentFill.Color : ColorRgb.Black;
+                EnterTextEdit(created);
                 break;
         }
     }
@@ -614,7 +616,7 @@ public sealed class CanvasWorkspace : Control
                 case EditorTool.Ellipse:
                     if (_shapeStart is not null)
                     {
-                        _shapeCurrent = model;
+                        _shapeCurrent = _shiftHeld ? ConstrainSquare(_shapeStart.Value, model) : model;
                         InvalidateVisual();
                     }
 
@@ -2080,7 +2082,7 @@ public sealed class CanvasWorkspace : Control
         _chromeAngle = 0;
         if (_penPath is null)
         {
-            _penPath = new PathItem { Name = "Path", Stroke = StrokeSpec.Hairline(ColorRgb.Black) };
+            _penPath = new PathItem { Name = "Path", Stroke = _vm.CurrentStroke.HasVisibleOutline ? _vm.CurrentStroke : StrokeSpec.Hairline(ColorRgb.Black) };
             _penPath.AddSubPath(closed: false);
             _vm.Execute(new AddItemCommand(penLayer, _penPath));
             _penBefore = _penPath.GeometrySnapshot();
@@ -2388,6 +2390,16 @@ public sealed class CanvasWorkspace : Control
     // Shape tools
     // ------------------------------------------------------------------
 
+    /// <summary>Constrains a drag to a square/circle (equal extents) when Shift.</summary>
+    private static Point2D ConstrainSquare(Point2D start, Point2D current)
+    {
+        double dx = current.X - start.X;
+        double dy = current.Y - start.Y;
+        double size = Math.Max(Math.Abs(dx), Math.Abs(dy));
+        return new Point2D(start.X + Math.Sign(dx == 0 ? 1 : dx) * size,
+                           start.Y + Math.Sign(dy == 0 ? 1 : dy) * size);
+    }
+
     private void CreateShape(bool rect)
     {
         if (_vm is null || _shapeStart is null)
@@ -2416,8 +2428,12 @@ public sealed class CanvasWorkspace : Control
                 new Point2D((la.X + lb.X) / 2, (la.Y + lb.Y) / 2),
                 Math.Abs(box.Width) / 2,
                 Math.Abs(box.Height) / 2);
-        shape.Stroke = StrokeSpec.Hairline(ColorRgb.Black);
-        shape.Fill = FillSpec.None;
+        shape.Fill = _vm!.CurrentFill;
+        shape.Stroke = _vm.CurrentStroke;
+        if (!shape.Fill.IsVisible && !shape.Stroke.HasVisibleOutline)
+        {
+            shape.Stroke = StrokeSpec.Hairline(ColorRgb.Black);
+        }
 
         _vm.Execute(new AddItemCommand(shapeLayer, shape));
         _vm.SelectObject(shape);

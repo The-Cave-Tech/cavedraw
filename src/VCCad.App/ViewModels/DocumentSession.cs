@@ -68,6 +68,12 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// <summary>Run index under the text caret (for run-aware styling).</summary>
     public int TextCaretRunIndex { get; set; }
 
+    /// <summary>Fill used for newly drawn objects (adopted from the selection).</summary>
+    public FillSpec CurrentFill { get; set; } = FillSpec.None;
+
+    /// <summary>Stroke used for newly drawn objects (adopted from the selection).</summary>
+    public StrokeSpec CurrentStroke { get; set; } = StrokeSpec.Hairline(ColorRgb.Black);
+
     private void SetStatus(string message) => StatusSink?.Invoke(message);
 
     /// <summary>Raised after any change that must trigger a workspace repaint or a
@@ -867,6 +873,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// <summary>Applies a fill (colour + rule) to every selected path, one undo step.</summary>
     public void ApplyFill(ColorRgb color, FillRule rule)
     {
+        CurrentFill = FillSpec.Solid(color, rule);
         var edits = SelectedPaths()
             .Select(p => (IUndoableCommand)new SetFillCommand(p, FillSpec.Solid(color, rule)))
             .ToList();
@@ -895,6 +902,9 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// existing width/caps/joins.</summary>
     public void ApplyStrokeColor(ColorRgb color)
     {
+        CurrentStroke = new StrokeSpec(true, color,
+            CurrentStroke.Width > 0 ? CurrentStroke.Width : 1.0,
+            CurrentStroke.Cap, CurrentStroke.Join, CurrentStroke.MiterLimit, CurrentStroke.Alignment);
         var edits = SelectedPaths().Select(p =>
         {
             double width = p.Stroke.Width > 0 ? p.Stroke.Width : 1.0;
@@ -1115,6 +1125,13 @@ public sealed class DocumentSession : INotifyPropertyChanged
 
     private void NotifySelectionChanged()
     {
+        // New objects inherit the selected object's style (or the last used one).
+        if (PrimarySelection is PathItem primary)
+        {
+            CurrentFill = primary.Fill;
+            CurrentStroke = primary.Stroke;
+        }
+
         _selectionRotationRadians = 0;
         PruneSegmentSelection();
         SelectionChanged?.Invoke(this, EventArgs.Empty);

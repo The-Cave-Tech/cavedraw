@@ -247,6 +247,18 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         set => _active.TextCaretRunIndex = value;
     }
 
+    public FillSpec CurrentFill
+    {
+        get => _active.CurrentFill;
+        set => _active.CurrentFill = value;
+    }
+
+    public StrokeSpec CurrentStroke
+    {
+        get => _active.CurrentStroke;
+        set => _active.CurrentStroke = value;
+    }
+
     public IEnumerable<PathItem> SelectedPaths() => _active.SelectedPaths();
     public IEnumerable<TextItem> SelectedTextItems() => _active.SelectedTextItems();
     public IEnumerable<(PathItem Path, int Sub, int Seg)> SelectedSegments() => _active.SelectedSegments();

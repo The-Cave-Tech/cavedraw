@@ -41,7 +41,6 @@ public sealed class ColorWheel : Control
             _value = Math.Clamp(value, 0, 1);
             InvalidateVisual();
             ColorChanged?.Invoke(this, EventArgs.Empty);
-            ColorCommitted?.Invoke(this, EventArgs.Empty);
         }
     }
 
