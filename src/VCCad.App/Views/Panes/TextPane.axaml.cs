@@ -53,6 +53,7 @@ public partial class TextPane : UserControl
         ColorR.Text = Math.Round(text.Color.R * 255).ToString("0", CultureInfo.InvariantCulture);
         ColorG.Text = Math.Round(text.Color.G * 255).ToString("0", CultureInfo.InvariantCulture);
         ColorB.Text = Math.Round(text.Color.B * 255).ToString("0", CultureInfo.InvariantCulture);
+        ColorA.Text = Math.Round(text.Color.A * 255).ToString("0", CultureInfo.InvariantCulture);
     }
 
     private void OnApply(object? sender, RoutedEventArgs e)
@@ -72,7 +73,7 @@ public partial class TextPane : UserControl
                 ? (byte)Math.Clamp(Math.Round(v), 0, 255)
                 : (byte)0;
 
-        var color = ColorRgb.FromBytes(Channel(ColorR), Channel(ColorG), Channel(ColorB));
+        var color = ColorRgb.FromBytes(Channel(ColorR), Channel(ColorG), Channel(ColorB), Channel(ColorA));
         int? runIndex = _vm.IsEditingText ? _vm.TextCaretRunIndex : null;
         _vm.UpdateSelectedText(ContentBox.Text ?? string.Empty, family, size,
             BoldBox.IsChecked == true, ItalicBox.IsChecked == true, color, runIndex);

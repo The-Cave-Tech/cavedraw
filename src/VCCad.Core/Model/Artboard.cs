@@ -63,6 +63,15 @@ public sealed class Artboard : CadObject
     /// <summary>The artboard rectangle in document space.</summary>
     public Rect2D Bounds => new(X, Y, Width, Height);
 
+    private bool _isVisible = true;
+
+    /// <summary>Whether the artboard (and everything on it) is displayed.</summary>
+    public bool IsVisible
+    {
+        get => _isVisible;
+        set => SetField(ref _isVisible, value);
+    }
+
     /// <summary>Layers bottom-to-top: index 0 paints below index 1.</summary>
     public IReadOnlyList<Layer> Layers => _layers;
 

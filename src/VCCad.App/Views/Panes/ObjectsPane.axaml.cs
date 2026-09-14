@@ -1,3 +1,4 @@
+using Avalonia;
 using System.Collections;
 using Avalonia.Controls;
 using VCCad.App.ViewModels;
@@ -37,10 +38,12 @@ public partial class ObjectsPane : UserControl
 
         foreach (Artboard artboard in _vm.Document.Artboards)
         {
-            var board = MakeNode(artboard.Name, artboard, header: true);
+            var board = MakeNode(artboard.Name, artboard, header: true, artboard.IsVisible,
+                () => artboard.IsVisible = !artboard.IsVisible);
             foreach (Layer layer in artboard.Layers)
             {
-                var layerNode = MakeNode(FormatLayer(layer), layer, header: true);
+                var layerNode = MakeNode(FormatLayer(layer), layer, header: true, layer.IsVisible,
+                    () => layer.IsVisible = !layer.IsVisible);
                 foreach (LayerItem child in layer.Children)
                 {
                     if (IntersectsArtboard(child, artboard))
@@ -65,7 +68,7 @@ public partial class ObjectsPane : UserControl
 
         if (pasteboard.Count > 0)
         {
-            var paste = MakeNode("Pasteboard", null, header: true);
+            var paste = MakeNode("Pasteboard", null, header: true, true, () => { });
             foreach (LayerItem item in pasteboard)
             {
                 AddItemNode(paste, item);
@@ -90,7 +93,8 @@ public partial class ObjectsPane : UserControl
 
     private void AddItemNode(TreeViewItem parent, LayerItem item)
     {
-        var node = MakeNode(DescribeItem(item), item);
+        var node = MakeNode(DescribeItem(item), item, header: false, item.IsVisible,
+            () => item.IsVisible = !item.IsVisible);
         if (item is ArtGroup group)
         {
             foreach (LayerItem child in group.Children)
@@ -109,8 +113,42 @@ public partial class ObjectsPane : UserControl
         _ => item.Name,
     };
 
-    private static TreeViewItem MakeNode(string text, object? tag, bool header = false)
-        => new() { Header = text, Tag = tag, IsExpanded = header };
+    private TreeViewItem MakeNode(string text, object? tag, bool header, bool isVisible, Action toggle)
+    {
+        var eye = new Button
+        {
+            Content = isVisible ? "◉" : "○",
+            FontSize = EditorTheme.FontSize,
+            Padding = new Thickness(4, 0),
+            Background = Avalonia.Media.Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Foreground = new Avalonia.Media.SolidColorBrush(
+                isVisible ? Avalonia.Media.Color.FromRgb(0xE6, 0xE6, 0xE9)
+                          : Avalonia.Media.Color.FromRgb(0x6A, 0x6A, 0x72)),
+        };
+        ToolTip.SetTip(eye, isVisible ? "Hide" : "Show");
+        eye.Click += (_, e) =>
+        {
+            toggle();
+            RefreshTree();
+            e.Handled = true;
+        };
+
+        var label = new TextBlock
+        {
+            Text = text,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            Foreground = new Avalonia.Media.SolidColorBrush(
+                isVisible ? Avalonia.Media.Color.FromRgb(0xE6, 0xE6, 0xE9)
+                          : Avalonia.Media.Color.FromRgb(0x6A, 0x6A, 0x72)),
+        };
+
+        var headerPanel = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 2 };
+        headerPanel.Children.Add(eye);
+        headerPanel.Children.Add(label);
+
+        return new TreeViewItem { Header = headerPanel, Tag = tag, IsExpanded = header };
+    }
 
     private static Rect2D BoundsOf(LayerItem item) => item switch
     {

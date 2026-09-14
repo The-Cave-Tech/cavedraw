@@ -38,6 +38,9 @@ public sealed class Layer : CadObject, IItemContainer
     /// <summary>Group opacity multiplier applied to all children during render.</summary>
     public double Opacity { get; set; } = 1.0;
 
+    /// <summary>Layer visibility combined with its artboard's visibility.</summary>
+    public bool IsEffectivelyVisible => IsVisible && (Artboard?.IsVisible ?? true);
+
     /// <summary>The artboard that owns this layer. Object coordinates are stored
     /// relative to the artboard's top-left; the artboard origin is added when
     /// mapping to document/world space. Maintained by <see cref="Artboard"/>.</summary>

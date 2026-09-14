@@ -60,14 +60,37 @@ public abstract class LayerItem : CadObject
         set => SetField(ref _isLocked, value);
     }
 
-    /// <summary>True when this item (and any ancestor group) is visible.</summary>
+    /// <summary>
+    /// Effective visibility: true only when this item AND every ancestor
+    /// (groups, its layer, and the artboard) are visible. Hiding a parent
+    /// therefore hides its whole subtree for display/selection/export without
+    /// altering the children's own flags; showing the parent leaves hidden
+    /// children hidden.
+    /// </summary>
     public bool IsEffectivelyVisible()
     {
-        for (LayerItem? current = this; current is not null; current = (current.Container as LayerItem))
+        if (!IsVisible)
         {
-            if (!current.IsVisible)
+            return false;
+        }
+
+        IItemContainer? container = Container;
+        while (container is not null)
+        {
+            switch (container)
             {
-                return false;
+                case LayerItem ancestor:
+                    if (!ancestor.IsVisible)
+                    {
+                        return false;
+                    }
+
+                    container = ancestor.Container;
+                    break;
+                case Layer layer:
+                    return layer.IsEffectivelyVisible;
+                default:
+                    return true;
             }
         }
 

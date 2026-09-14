@@ -18,14 +18,17 @@
 
       <controls:ColorWheel x:Name="Wheel" Width="112" Height="112" HorizontalAlignment="Left"/>
 
-      <Grid ColumnDefinitions="Auto,*,8,Auto,*,8,Auto,*" ColumnSpacing="2">
+      <Grid ColumnDefinitions="Auto,*,6,Auto,*,6,Auto,*,6,Auto,*" ColumnSpacing="2">
         <TextBlock Text="R" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="FillR" Grid.Column="1"/>
         <TextBlock Text="G" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="FillG" Grid.Column="4"/>
         <TextBlock Text="B" Grid.Column="6" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="FillB" Grid.Column="7"/>
+        <TextBlock Text="A" Grid.Column="9" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="AlphaBox" Grid.Column="10"/>
       </Grid>
+      <Slider x:Name="AlphaSlider" Minimum="0" Maximum="100" Value="100"/>
 
       <Grid ColumnDefinitions="Auto,*">
         <TextBlock Text="Rule" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>

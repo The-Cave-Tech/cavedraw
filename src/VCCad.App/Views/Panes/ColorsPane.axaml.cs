@@ -5,26 +5,81 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
+using VCCad.Core.Commands;
 using ModelFillRule = VCCad.Core.Model.FillRule;
 
 namespace VCCad.App.Views.Panes;
 
-/// <summary>Colour tab: a circular spectrum picker (hue ring + saturation +
-/// value), hex/RGB entry, and apply-to-fill/stroke actions.</summary>
+/// <summary>
+/// Colour tab: a circular spectrum picker (hue ring + saturation + value) and a
+/// fill/stroke target diagram. There are no Apply buttons — the active target is
+/// chosen on the diagram, and colour changes apply immediately. Live dragging
+/// mutates the model directly for instant feedback and commits a single undo step
+/// when the interaction finishes.
+/// </summary>
 public partial class ColorsPane : UserControl
 {
     private EditorViewModel? _vm;
     private bool _syncing;
     private bool _strokeTarget;
 
+    private List<(PathItem Path, FillSpec Before)>? _fillBefore;
+    private List<(PathItem Path, StrokeSpec Before)>? _strokeBefore;
+
     public ColorsPane()
     {
         InitializeComponent();
         Wheel.ColorChanged += (_, _) => OnWheelChanged();
-        Wheel.ColorCommitted += (_, _) => CommitWheelColor();
+        Wheel.ColorCommitted += (_, _) => CommitLive();
+        ValueSlider.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == Slider.ValueProperty && !_syncing)
+            {
+                Wheel.Value = ValueSlider.Value / 100.0;
+            }
+        };
+        FillRuleBox.SelectionChanged += (_, _) =>
+        {
+            if (!_syncing)
+            {
+                ApplyLive();
+                CommitLive();
+            }
+        };
+        HexBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                ApplyHex();
+                e.Handled = true;
+            }
+        };
+        HexBox.LostFocus += (_, _) => ApplyHex();
+        AlphaSlider.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == Slider.ValueProperty && !_syncing)
+            {
+                ApplyLive();
+                CommitLive();
+            }
+        };
+        foreach (TextBox box in new[] { FillR, FillG, FillB, AlphaBox })
+        {
+            box.KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Enter)
+                {
+                    ApplyRgb();
+                    e.Handled = true;
+                }
+            };
+            box.LostFocus += (_, _) => ApplyRgb();
+        }
+
         TargetSelector.TargetChanged += (_, stroke) =>
         {
             _strokeTarget = stroke;
+            ResetBefore();
             LoadTargetColor();
         };
         TargetSelector.ClearRequested += (_, stroke) =>
@@ -40,46 +95,19 @@ public partial class ColorsPane : UserControl
 
             Refresh();
         };
-        ValueSlider.PropertyChanged += (_, e) =>
-        {
-            if (e.Property == Slider.ValueProperty && !_syncing)
-            {
-                Wheel.Value = ValueSlider.Value / 100.0;
-                OnWheelChanged();
-            }
-        };
-        HexBox.KeyDown += (_, e) =>
-        {
-            if (e.Key == Key.Enter)
-            {
-                ApplyHex();
-                e.Handled = true;
-            }
-        };
-        HexBox.LostFocus += (_, _) => ApplyHex();
-        foreach (TextBox box in new[] { FillR, FillG, FillB })
-        {
-            box.KeyDown += (_, e) =>
-            {
-                if (e.Key == Key.Enter)
-                {
-                    ApplyRgb();
-                    e.Handled = true;
-                }
-            };
-            box.LostFocus += (_, _) => ApplyRgb();
-        }
     }
 
     public void Attach(EditorViewModel vm)
     {
         _vm = vm;
         vm.DocumentChanged += (_, _) => Refresh();
+        vm.SelectionChanged += (_, _) => Refresh();
         Refresh();
     }
 
     private void Refresh()
     {
+        ResetBefore();
         if (_vm?.PrimarySelection is not PathItem path)
         {
             return;
@@ -90,7 +118,12 @@ public partial class ColorsPane : UserControl
         LoadTargetColor();
     }
 
-    /// <summary>Points the wheel at the active target's colour.</summary>
+    private void ResetBefore()
+    {
+        _fillBefore = null;
+        _strokeBefore = null;
+    }
+
     private void LoadTargetColor()
     {
         if (_vm?.PrimarySelection is not PathItem path)
@@ -101,47 +134,103 @@ public partial class ColorsPane : UserControl
         TargetSelector.SetState(path.Fill.Color, path.Fill.IsVisible,
             path.Stroke.Color, path.Stroke.IsVisible, _strokeTarget);
 
+        ColorRgb targetColor = _strokeTarget ? path.Stroke.Color : path.Fill.Color;
+        bool visible = _strokeTarget ? path.Stroke.IsVisible : path.Fill.IsVisible;
+
         _syncing = true;
-        Wheel.SetColor(_strokeTarget ? path.Stroke.Color : path.Fill.Color);
+        Wheel.SetColor(targetColor);
+        if (!visible)
+        {
+            Wheel.Value = 1.0; // keep the spectrum visible for a "none" target
+        }
+
         ValueSlider.Value = Wheel.Value * 100;
+        AlphaSlider.Value = Math.Round(targetColor.A * 100);
         _syncing = false;
         UpdateReadouts();
     }
 
-    /// <summary>Applies the chosen colour to the active target (one undo step).</summary>
-    private void CommitWheelColor()
+    private void OnWheelChanged()
+    {
+        if (_syncing)
+        {
+            return;
+        }
+
+        UpdateReadouts();
+        ApplyLive();
+    }
+
+    /// <summary>Mutates the selection immediately (no command) for live feedback.</summary>
+    private void ApplyLive()
     {
         if (_vm is null || _syncing || _vm.PrimarySelection is not PathItem)
         {
             return;
         }
 
+        ModelFillRule rule = FillRuleBox.SelectedIndex == 1 ? ModelFillRule.EvenOdd : ModelFillRule.NonZero;
+        ColorRgb color = Wheel.Color.WithAlpha(AlphaSlider.Value / 100.0);
+
         if (_strokeTarget)
         {
-            _vm.ApplyStrokeColor(Wheel.Color);
+            _strokeBefore ??= _vm.SelectedPaths()
+                .Select(p => (p, p.Stroke)).ToList();
+            foreach ((PathItem path, _) in _strokeBefore)
+            {
+                double width = path.Stroke.Width > 0 ? path.Stroke.Width : 1.0;
+                path.Stroke = new StrokeSpec(true, color, width, path.Stroke.Cap, path.Stroke.Join,
+                    path.Stroke.MiterLimit, path.Stroke.Alignment);
+            }
         }
         else
         {
-            ModelFillRule rule = FillRuleBox.SelectedIndex == 1 ? ModelFillRule.EvenOdd : ModelFillRule.NonZero;
-            _vm.ApplyFill(Wheel.Color, rule);
+            _fillBefore ??= _vm.SelectedPaths()
+                .Select(p => (p, p.Fill)).ToList();
+            foreach ((PathItem path, _) in _fillBefore)
+            {
+                path.Fill = FillSpec.Solid(color, rule);
+            }
         }
+
+        _vm.RaiseTransformChanged(); // repaint without a full refresh
     }
 
-    private void OnWheelChanged()
+    /// <summary>Commits the live change as one undo step.</summary>
+    private void CommitLive()
     {
-        if (!_syncing)
+        if (_vm is null || _syncing)
         {
-            UpdateReadouts();
+            return;
         }
+
+        if (_strokeTarget && _strokeBefore is { Count: > 0 })
+        {
+            var edits = _strokeBefore
+                .Select(t => (IUndoableCommand)new SetStrokeCommand(t.Path, t.Path.Stroke))
+                .ToList();
+            _vm.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Stroke colour", edits));
+        }
+        else if (!_strokeTarget && _fillBefore is { Count: > 0 })
+        {
+            var edits = _fillBefore
+                .Select(t => (IUndoableCommand)new SetFillCommand(t.Path, t.Path.Fill))
+                .ToList();
+            _vm.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Fill", edits));
+        }
+
+        ResetBefore();
+        Refresh();
     }
 
     private void UpdateReadouts()
     {
-        ColorRgb color = Wheel.Color;
+        ColorRgb color = Wheel.Color.WithAlpha(AlphaSlider.Value / 100.0);
         _syncing = true;
         SetBox(FillR, Math.Round(color.R * 255));
         SetBox(FillG, Math.Round(color.G * 255));
         SetBox(FillB, Math.Round(color.B * 255));
+        SetBox(AlphaBox, Math.Round(color.A * 255));
         if (!HexBox.IsFocused)
         {
             HexBox.Text = $"#{(byte)Math.Round(color.R * 255):X2}" +
@@ -150,7 +239,8 @@ public partial class ColorsPane : UserControl
         }
 
         _syncing = false;
-        Preview.Background = new SolidColorBrush(Color.FromRgb(
+        Preview.Background = new SolidColorBrush(Color.FromArgb(
+            (byte)Math.Round(color.A * 255),
             (byte)Math.Round(color.R * 255),
             (byte)Math.Round(color.G * 255),
             (byte)Math.Round(color.B * 255)));
@@ -169,12 +259,14 @@ public partial class ColorsPane : UserControl
         string text = (HexBox.Text ?? string.Empty).Trim().TrimStart('#');
         if (text.Length == 6 && uint.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint value))
         {
-            var color = ColorRgb.FromBytes((byte)(value >> 16), (byte)(value >> 8), (byte)value);
+            var color = ColorRgb.FromBytes((byte)(value >> 16), (byte)(value >> 8), (byte)value, ParseByte(AlphaBox));
             _syncing = true;
             Wheel.SetColor(color);
             ValueSlider.Value = Wheel.Value * 100;
             _syncing = false;
             UpdateReadouts();
+            ApplyLive();
+            CommitLive();
         }
     }
 
@@ -185,33 +277,19 @@ public partial class ColorsPane : UserControl
             return;
         }
 
-        var color = ColorRgb.FromBytes(
-            ParseByte(FillR), ParseByte(FillG), ParseByte(FillB));
+        var color = ColorRgb.FromBytes(ParseByte(FillR), ParseByte(FillG), ParseByte(FillB), ParseByte(AlphaBox));
         _syncing = true;
         Wheel.SetColor(color);
         ValueSlider.Value = Wheel.Value * 100;
+        AlphaSlider.Value = Math.Round(color.A * 100);
         _syncing = false;
         UpdateReadouts();
+        ApplyLive();
+        CommitLive();
     }
 
     private static byte ParseByte(TextBox box)
         => double.TryParse(box.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double v)
             ? (byte)Math.Clamp(Math.Round(v), 0, 255)
             : (byte)0;
-
-    private void OnApplyFill(object? sender, RoutedEventArgs e)
-    {
-        if (_vm is null)
-        {
-            return;
-        }
-
-        ModelFillRule rule = FillRuleBox.SelectedIndex == 1 ? ModelFillRule.EvenOdd : ModelFillRule.NonZero;
-        _vm.ApplyFill(Wheel.Color, rule);
-    }
-
-    private void OnApplyStrokeColor(object? sender, RoutedEventArgs e)
-    {
-        _vm?.ApplyStrokeColor(Wheel.Color);
-    }
 }

@@ -57,21 +57,21 @@ internal sealed class PdfFontEmbedder
     /// <summary>The parsed font for metrics/glyph lookup.</summary>
     public TrueTypeFont FontFor(FontKey key) => _fonts[key].Font;
 
-    /// <summary>Page /Resources dictionary exposing every embedded font.</summary>
-    public string ResourcesDict()
+    /// <summary>The <c>/Font</c> resource dictionary entry (or empty).</summary>
+    public string FontDict()
     {
         if (_fonts.Count == 0)
         {
-            return "/Resources << >>";
+            return string.Empty;
         }
 
-        var sb = new StringBuilder("/Resources << /Font << ");
+        var sb = new StringBuilder("/Font << ");
         foreach (Entry entry in _fonts.Values)
         {
             sb.Append(entry.Name).Append(' ').Append(entry.Type0Object).Append(" 0 R ");
         }
 
-        sb.Append(">> >>");
+        sb.Append(">> ");
         return sb.ToString();
     }
 

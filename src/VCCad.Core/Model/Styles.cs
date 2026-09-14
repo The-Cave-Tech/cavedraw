@@ -13,11 +13,11 @@ namespace VCCad.Core.Model;
 /// would corrupt lossless round-tripping when documents travel between displays.
 /// The PDF exporter may convert RGB → CMYK only when the user asks for it.
 /// </summary>
-public readonly record struct ColorRgb(double R, double G, double B)
+public readonly record struct ColorRgb(double R, double G, double B, double A = 1.0)
 {
     /// <summary>Builds a colour from 0..255 byte channels (the UI "picker" representation).</summary>
-    public static ColorRgb FromBytes(byte r, byte g, byte b)
-        => new(r / 255.0, g / 255.0, b / 255.0);
+    public static ColorRgb FromBytes(byte r, byte g, byte b, byte a = 255)
+        => new(r / 255.0, g / 255.0, b / 255.0, a / 255.0);
 
     /// <summary>Pure black.</summary>
     public static ColorRgb Black { get; } = new(0.0, 0.0, 0.0);
@@ -39,7 +39,11 @@ public readonly record struct ColorRgb(double R, double G, double B)
 
     /// <summary>Channel values, each clamped defensively into [0,1].</summary>
     public ColorRgb Clamped()
-        => new(MathUtils.Clamp(R, 0.0, 1.0), MathUtils.Clamp(G, 0.0, 1.0), MathUtils.Clamp(B, 0.0, 1.0));
+        => new(MathUtils.Clamp(R, 0.0, 1.0), MathUtils.Clamp(G, 0.0, 1.0), MathUtils.Clamp(B, 0.0, 1.0),
+            MathUtils.Clamp(A, 0.0, 1.0));
+
+    /// <summary>A copy with a different alpha channel.</summary>
+    public ColorRgb WithAlpha(double alpha) => this with { A = MathUtils.Clamp(alpha, 0.0, 1.0) };
 }
 
 /// <summary>

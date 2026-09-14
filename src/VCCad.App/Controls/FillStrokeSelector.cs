@@ -119,7 +119,8 @@ public sealed class FillStrokeSelector : Control
         context.DrawLine(pen, new Point(center.X + d, center.Y - d), new Point(center.X - d, center.Y + d));
     }
 
-    private static Color ToColor(ColorRgb c) => Color.FromRgb(
+    private static Color ToColor(ColorRgb c) => Color.FromArgb(
+        (byte)Math.Round(Math.Clamp(c.A, 0, 1) * 255),
         (byte)Math.Round(Math.Clamp(c.R, 0, 1) * 255),
         (byte)Math.Round(Math.Clamp(c.G, 0, 1) * 255),
         (byte)Math.Round(Math.Clamp(c.B, 0, 1) * 255));

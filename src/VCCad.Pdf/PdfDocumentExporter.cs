@@ -83,7 +83,15 @@ public static class PdfDocumentExporter
         }
 
         var embedder = new PdfFontEmbedder(assembler, usage);
-        string resources = embedder.ResourcesDict();
+
+        var alphas = new List<double>();
+        foreach (Artboard artboard in document.Artboards)
+        {
+            CollectAlphas(artboard, 1.0, alphas);
+        }
+
+        var alphaStates = new PdfAlphaStates(assembler, alphas);
+        string resources = $"/Resources << {embedder.FontDict()}{alphaStates.Dict()}>>";
 
         // ------------------------------------------------------------------
         // Sidecar: lossless model JSON, zlib (RFC 1950) compressed — the PDF
@@ -106,7 +114,7 @@ public static class PdfDocumentExporter
         for (int i = 0; i < document.Artboards.Count; i++)
         {
             Artboard artboard = document.Artboards[i];
-            byte[] content = BuildArtboardContent(artboard, embedder);
+            byte[] content = BuildArtboardContent(artboard, embedder, alphaStates);
             // Content streams are FlateDecode-filtered like the sidecar; the raw
             // operator text is compressed here before being wrapped.
             assembler.SetBody(contentNumbers[i], MakeStreamObject(Compress(content)));
@@ -143,7 +151,7 @@ public static class PdfDocumentExporter
     /// mapping rules. The returned bytes are the plain content (uncompressed);
     /// callers wrap them via <see cref="MakeStreamObject"/>.
     /// </summary>
-    private static byte[] BuildArtboardContent(Artboard artboard, PdfFontEmbedder embedder)
+    private static byte[] BuildArtboardContent(Artboard artboard, PdfFontEmbedder embedder, PdfAlphaStates alphaStates)
     {
         var ops = new List<string>();
 
@@ -153,16 +161,19 @@ public static class PdfDocumentExporter
         double f = artboard.Height;
         ops.Add($"{Num(1)} 0 0 {Num(-1)} {Num(e)} {Num(f)} cm");
 
-        foreach (Layer layer in artboard.Layers)
+        if (artboard.IsVisible)
         {
-            if (!layer.IsVisible)
+            foreach (Layer layer in artboard.Layers)
             {
-                continue;
-            }
+                if (!layer.IsEffectivelyVisible)
+                {
+                    continue;
+                }
 
-            foreach (LayerItem item in layer.Children)
-            {
-                PaintItem(ops, item, AffineTransform.Identity, 1.0);
+                foreach (LayerItem item in layer.Children)
+                {
+                    PaintItem(ops, item, AffineTransform.Identity, 1.0, alphaStates);
+                }
             }
         }
 
@@ -171,7 +182,7 @@ public static class PdfDocumentExporter
         {
             if (text.IsVisible)
             {
-                WriteText(ops, text, embedder);
+                WriteText(ops, text, embedder, alphaStates);
             }
         }
 
@@ -190,21 +201,26 @@ public static class PdfDocumentExporter
     /// product of ancestor opacities (reserved: emitted in a later sprint when the
     /// ExtGState task lands, see project plan M4).
     /// </summary>
-    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity)
+    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates)
     {
+        if (!item.IsEffectivelyVisible())
+        {
+            return;
+        }
+
         switch (item)
         {
-            case PathItem path when path.IsVisible:
-                PaintPath(ops, path, toDoc);
+            case PathItem path:
+                PaintPath(ops, path, toDoc, opacity, alphaStates);
                 break;
 
-            case ArtGroup group when group.IsVisible:
+            case ArtGroup group:
                 // Compose is defined as "apply argument first, then this", which is
                 // exactly local→parent→doc as the walk descends.
                 AffineTransform childToDoc = toDoc.Compose(group.Transform);
                 foreach (LayerItem child in group.Children)
                 {
-                    PaintItem(ops, child, childToDoc, opacity * group.Opacity);
+                    PaintItem(ops, child, childToDoc, opacity * group.Opacity, alphaStates);
                 }
 
                 break;
@@ -216,7 +232,7 @@ public static class PdfDocumentExporter
     /// closed (fillable) and open (stroke-only), so the renderer never fills an
     /// open path as PDF would implicitly do.
     /// </summary>
-    private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc)
+    private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates)
     {
         // Bake geometry into artboard space: anchors and both handles per node.
         var contours = new List<Contour>();
@@ -284,6 +300,11 @@ public static class PdfDocumentExporter
         // --- Fill (closed contours only) -----------------------------------
         if (fillVisible && closed.Count > 0)
         {
+            if (alphaStates.HasTransparency)
+            {
+                ops.Add($"{alphaStates.NameFor(path.Fill.Color.A * opacity)} gs");
+            }
+
             WriteContours(ops, closed);
             ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "f*" : "f");
         }
@@ -296,6 +317,11 @@ public static class PdfDocumentExporter
         // --- Stroke: honour Inside/Outside by clipping ---------------------
         // PDF has no stroke alignment, so an aligned stroke is drawn at double
         // width and clipped to the inside or outside of the path.
+        if (alphaStates.HasTransparency)
+        {
+            ops.Add($"{alphaStates.NameFor(path.Stroke.Color.A * opacity)} gs");
+        }
+
         bool aligned = path.Stroke.Alignment != StrokeAlignment.Center && closed.Count > 0;
         if (closed.Count > 0)
         {
@@ -335,6 +361,53 @@ public static class PdfDocumentExporter
             ops.Add($"{Num(width)} w");
             WriteContours(ops, open);
             ops.Add("S");
+        }
+    }
+
+    private static void CollectAlphas(Artboard artboard, double opacity, List<double> alphas)
+    {
+        if (!artboard.IsVisible)
+        {
+            return;
+        }
+
+        foreach (Layer layer in artboard.Layers)
+        {
+            if (!layer.IsEffectivelyVisible)
+            {
+                continue;
+            }
+
+            foreach (LayerItem item in layer.Children)
+            {
+                CollectItemAlphas(item, opacity * layer.Opacity, alphas);
+            }
+        }
+    }
+
+    private static void CollectItemAlphas(LayerItem item, double opacity, List<double> alphas)
+    {
+        if (!item.IsEffectivelyVisible())
+        {
+            return;
+        }
+
+        switch (item)
+        {
+            case PathItem path:
+                alphas.Add(path.Fill.Color.A * opacity * path.Opacity);
+                alphas.Add(path.Stroke.Color.A * opacity * path.Opacity);
+                break;
+            case TextItem text:
+                alphas.Add(text.Color.A * opacity);
+                break;
+            case ArtGroup group:
+                foreach (LayerItem child in group.Children)
+                {
+                    CollectItemAlphas(child, opacity * group.Opacity, alphas);
+                }
+
+                break;
         }
     }
 
@@ -398,7 +471,7 @@ public static class PdfDocumentExporter
     /// <summary>Emits a text object as BT/Tf/Tm/Tj/ET, advancing manually across
     /// runs and newlines. The Tm flips Y so glyphs are upright despite the page's
     /// global coordinate flip.</summary>
-    private static void WriteText(List<string> ops, TextItem text, PdfFontEmbedder embedder)
+    private static void WriteText(List<string> ops, TextItem text, PdfFontEmbedder embedder, PdfAlphaStates alphaStates)
     {
         double originX = text.Origin.X;
         double x = originX;
@@ -422,6 +495,11 @@ public static class PdfDocumentExporter
                 }
 
                 ops.Add($"{Num(text.Color.R)} {Num(text.Color.G)} {Num(text.Color.B)} rg");
+                if (alphaStates.HasTransparency)
+                {
+                    ops.Add($"{alphaStates.NameFor(text.Color.A)} gs");
+                }
+
                 ops.Add("BT");
                 ops.Add($"{resource} {Num(run.FontSize)} Tf");
                 ops.Add($"1 0 0 -1 {Num(lineStartX)} {Num(lineY)} Tm");

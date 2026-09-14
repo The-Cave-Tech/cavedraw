@@ -411,10 +411,15 @@ public sealed class CanvasWorkspace : Control
         double tolerance = PickTolerance;
         foreach (Artboard artboard in _document.Artboards)
         {
+            if (!artboard.IsVisible)
+            {
+                continue;
+            }
+
             Point2D local = model - new Vector2D(artboard.X, artboard.Y);
             foreach (Layer layer in artboard.Layers)
             {
-                if (!layer.IsVisible)
+                if (!layer.IsEffectivelyVisible)
                 {
                     continue;
                 }
@@ -463,7 +468,7 @@ public sealed class CanvasWorkspace : Control
 
     private static LayerItem? HitTestItem(LayerItem item, Point2D model, double tolerance)
     {
-        if (!item.IsVisible)
+        if (!item.IsEffectivelyVisible())
         {
             return null;
         }
@@ -1079,9 +1084,14 @@ public sealed class CanvasWorkspace : Control
 
         foreach (Artboard artboard in _document.Artboards)
         {
+            if (!artboard.IsVisible)
+            {
+                continue;
+            }
+
             foreach (Layer layer in artboard.Layers)
             {
-                if (!layer.IsVisible)
+                if (!layer.IsEffectivelyVisible)
                 {
                     continue;
                 }
@@ -2436,7 +2446,10 @@ public sealed class CanvasWorkspace : Control
 
         foreach (Artboard artboard in _document.Artboards)
         {
-            PaintArtboard(context, artboard);
+            if (artboard.IsVisible)
+            {
+                PaintArtboard(context, artboard);
+            }
         }
 
         // Orphaned (pasteboard) objects, drawn in world coordinates.
@@ -2464,7 +2477,7 @@ public sealed class CanvasWorkspace : Control
 
         foreach (Layer layer in artboard.Layers)
         {
-            if (!layer.IsVisible)
+            if (!layer.IsEffectivelyVisible)
             {
                 continue;
             }
@@ -2478,6 +2491,11 @@ public sealed class CanvasWorkspace : Control
 
     private void PaintItem(DrawingContext context, LayerItem item, double opacity)
     {
+        if (!item.IsEffectivelyVisible())
+        {
+            return;
+        }
+
         switch (item)
         {
             case PathItem path when path.IsVisible:
@@ -3483,7 +3501,7 @@ public sealed class CanvasWorkspace : Control
 
     private static IBrush ToBrush(ColorRgb color, double opacity)
     {
-        byte alpha = (byte)Math.Round(MathUtils.Clamp(opacity, 0.0, 1.0) * 255.0);
+        byte alpha = (byte)Math.Round(MathUtils.Clamp(opacity * color.A, 0.0, 1.0) * 255.0);
         byte r = (byte)Math.Round(MathUtils.Clamp(color.R, 0.0, 1.0) * 255.0);
         byte g = (byte)Math.Round(MathUtils.Clamp(color.G, 0.0, 1.0) * 255.0);
         byte b = (byte)Math.Round(MathUtils.Clamp(color.B, 0.0, 1.0) * 255.0);

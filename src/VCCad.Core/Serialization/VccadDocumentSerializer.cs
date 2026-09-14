@@ -19,7 +19,7 @@ namespace VCCad.Core.Serialization;
 //   3. No attributes/polymorphism metadata leaking into the pure model.
 // ---------------------------------------------------------------------------
 
-internal sealed record ColorDto(double R, double G, double B);
+internal sealed record ColorDto(double R, double G, double B, double A = 1.0);
 
 internal sealed record FillDto(bool Visible, ColorDto? Color, FillRule Rule);
 
@@ -84,7 +84,7 @@ internal abstract record ItemDto
         t.IsVisible,
         t.IsLocked,
         t.Origin,
-        new ColorDto(t.Color.R, t.Color.G, t.Color.B),
+        new ColorDto(t.Color.R, t.Color.G, t.Color.B, t.Color.A),
         t.RotationRadians,
         t.Runs.Select(r => new TextRunDto(r.Text, r.FontFamily, r.FontSize, r.Bold, r.Italic)).ToArray());
 
@@ -110,10 +110,10 @@ internal abstract record ItemDto
         g.Children.Select(From).ToArray());
 
     private static FillDto ToFill(FillSpec f)
-        => new(f.IsVisible, f.IsVisible ? new ColorDto(f.Color.R, f.Color.G, f.Color.B) : null, f.Rule);
+        => new(f.IsVisible, f.IsVisible ? new ColorDto(f.Color.R, f.Color.G, f.Color.B, f.Color.A) : null, f.Rule);
 
     private static StrokeDto ToStroke(StrokeSpec s)
-        => new(s.IsVisible, s.IsVisible ? new ColorDto(s.Color.R, s.Color.G, s.Color.B) : null,
+        => new(s.IsVisible, s.IsVisible ? new ColorDto(s.Color.R, s.Color.G, s.Color.B, s.Color.A) : null,
             s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment);
 }
 
@@ -136,7 +136,7 @@ internal static class ItemDtoExtensions
             IsVisible = t.IsVisible,
             IsLocked = t.IsLocked,
             Origin = t.Origin,
-            Color = new ColorRgb(t.Color.R, t.Color.G, t.Color.B),
+            Color = new ColorRgb(t.Color.R, t.Color.G, t.Color.B, t.Color.A),
             RotationRadians = t.RotationRadians,
         };
         item.RestoreIdentity(t.Id);
@@ -200,12 +200,12 @@ internal static class ItemDtoExtensions
 
     private static FillSpec ToModel(this FillDto f)
         => f.Visible && f.Color is not null
-            ? FillSpec.Solid(new ColorRgb(f.Color.R, f.Color.G, f.Color.B), f.Rule)
+            ? FillSpec.Solid(new ColorRgb(f.Color.R, f.Color.G, f.Color.B, f.Color.A), f.Rule)
             : FillSpec.None;
 
     private static StrokeSpec ToModel(this StrokeDto s)
         => s.Visible && s.Color is not null
-            ? new StrokeSpec(true, new ColorRgb(s.Color.R, s.Color.G, s.Color.B),
+            ? new StrokeSpec(true, new ColorRgb(s.Color.R, s.Color.G, s.Color.B, s.Color.A),
                 s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment)
             : StrokeSpec.None;
 }
