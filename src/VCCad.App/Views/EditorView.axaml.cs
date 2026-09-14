@@ -108,8 +108,10 @@ public partial class EditorView : UserControl
         BuildToolbars();
         _manager.Build();
         RefreshWindowMenu();
+        RebuildDocumentTabs();
 
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        _viewModel.Sessions.CollectionChanged += (_, _) => RebuildDocumentTabs();
         _viewModel.DocumentChanged += (_, _) => UpdateStatus();
         _viewModel.ArtboardDeletionRequested += OnArtboardDeletionRequested;
         UpdateStatus();
@@ -419,7 +421,11 @@ public partial class EditorView : UserControl
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(EditorViewModel.Tool))
+        if (e.PropertyName == nameof(EditorViewModel.ActiveSession))
+        {
+            RebuildDocumentTabs();
+        }
+        else if (e.PropertyName == nameof(EditorViewModel.Tool))
         {
             HighlightActiveTool();
         }
@@ -437,6 +443,52 @@ public partial class EditorView : UserControl
     }
 
     private void OnNew(object? sender, RoutedEventArgs e) => _viewModel.NewDocument();
+    private void OnNewTab(object? sender, RoutedEventArgs e) => _viewModel.NewDocument();
+
+    /// <summary>Rebuilds the document tab strip from the open sessions.</summary>
+    private void RebuildDocumentTabs()
+    {
+        var items = new List<Control>();
+        foreach (DocumentSession session in _viewModel.Sessions)
+        {
+            bool active = ReferenceEquals(session, _viewModel.ActiveSession);
+            DocumentSession captured = session;
+
+            var title = new Button
+            {
+                Content = session.Document.Name,
+                FontSize = EditorTheme.FontSize,
+                Padding = new Thickness(10, 2),
+                Background = active
+                    ? new SolidColorBrush(Color.FromRgb(0x2B, 0x4C, 0x7E))
+                    : Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                CornerRadius = new CornerRadius(5),
+                Foreground = new SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xE9)),
+            };
+            title.Click += (_, _) => _viewModel.ActiveSession = captured;
+
+            var close = new Button
+            {
+                Content = "✕",
+                FontSize = EditorTheme.FontSize - 1,
+                Padding = new Thickness(5, 2),
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                CornerRadius = new CornerRadius(5),
+                Foreground = new SolidColorBrush(Color.FromRgb(0x9A, 0x9A, 0xA3)),
+                IsVisible = _viewModel.Sessions.Count > 1,
+            };
+            close.Click += (_, _) => _viewModel.CloseSession(captured);
+
+            var tab = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0 };
+            tab.Children.Add(title);
+            tab.Children.Add(close);
+            items.Add(tab);
+        }
+
+        DocTabsHost.ItemsSource = items;
+    }
     private void OnNewArtboard(object? sender, RoutedEventArgs e) { _viewModel.AddNewArtboard(); UpdateStatus(); }
 
     private void OnOpen(object? sender, RoutedEventArgs e) => FireAndForget(_viewModel.LoadFromServerAsync(), "Opening…");

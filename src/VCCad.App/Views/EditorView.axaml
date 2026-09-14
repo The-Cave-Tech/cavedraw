@@ -58,7 +58,23 @@
                     ResizeDirection="Columns" Background="{DynamicResource VcBorder}"
                     HorizontalAlignment="Stretch"/>
       <Border Grid.Row="1" Grid.Column="3" Background="{DynamicResource VcBackground}">
-        <controls:CanvasWorkspace x:Name="Workspace" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+        <DockPanel>
+          <!-- Document tabs (MDI): one tab per open document -->
+          <Border DockPanel.Dock="Top" Background="{DynamicResource VcPanelAlt}"
+                  BorderBrush="{DynamicResource VcBorder}" BorderThickness="0,0,0,1" Padding="4,2">
+            <StackPanel Orientation="Horizontal" Spacing="2">
+              <ItemsControl Name="DocTabsHost">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <StackPanel Orientation="Horizontal" Spacing="2"/>
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+              </ItemsControl>
+              <Button Name="NewTabButton" Content="+" Click="OnNewTab" ToolTip.Tip="New document"/>
+            </StackPanel>
+          </Border>
+          <controls:CanvasWorkspace x:Name="Workspace" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+        </DockPanel>
       </Border>
       <GridSplitter Name="RightSplitter" Grid.Row="1" Grid.Column="4"
                     ResizeDirection="Columns" Background="{DynamicResource VcBorder}"
