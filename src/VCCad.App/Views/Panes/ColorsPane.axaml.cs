@@ -1,20 +1,54 @@
 using System.Globalization;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
 using ModelFillRule = VCCad.Core.Model.FillRule;
 
 namespace VCCad.App.Views.Panes;
 
-/// <summary>Colors tab: fill (RGB + rule) and stroke colour for the selection.</summary>
+/// <summary>Colour tab: a circular spectrum picker (hue ring + saturation +
+/// value), hex/RGB entry, and apply-to-fill/stroke actions.</summary>
 public partial class ColorsPane : UserControl
 {
     private EditorViewModel? _vm;
+    private bool _syncing;
 
     public ColorsPane()
     {
         InitializeComponent();
+        Wheel.ColorChanged += (_, _) => OnWheelChanged();
+        ValueSlider.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == Slider.ValueProperty && !_syncing)
+            {
+                Wheel.Value = ValueSlider.Value / 100.0;
+                OnWheelChanged();
+            }
+        };
+        HexBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                ApplyHex();
+                e.Handled = true;
+            }
+        };
+        HexBox.LostFocus += (_, _) => ApplyHex();
+        foreach (TextBox box in new[] { FillR, FillG, FillB })
+        {
+            box.KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Enter)
+                {
+                    ApplyRgb();
+                    e.Handled = true;
+                }
+            };
+            box.LostFocus += (_, _) => ApplyRgb();
+        }
     }
 
     public void Attach(EditorViewModel vm)
@@ -28,41 +62,87 @@ public partial class ColorsPane : UserControl
     {
         if (_vm?.PrimarySelection is not PathItem path)
         {
-            foreach (TextBox box in new[] { FillR, FillG, FillB, StrokeR, StrokeG, StrokeB })
-            {
-                SetBox(box, null);
-            }
-
             return;
         }
 
-        SetBox(FillR, Math.Round(path.Fill.Color.R * 255));
-        SetBox(FillG, Math.Round(path.Fill.Color.G * 255));
-        SetBox(FillB, Math.Round(path.Fill.Color.B * 255));
-        FillRuleBox.SelectedIndex = path.Fill.Rule == ModelFillRule.EvenOdd ? 1 : 0;
-
-        SetBox(StrokeR, Math.Round(path.Stroke.Color.R * 255));
-        SetBox(StrokeG, Math.Round(path.Stroke.Color.G * 255));
-        SetBox(StrokeB, Math.Round(path.Stroke.Color.B * 255));
+        _syncing = true;
+        Wheel.SetColor(path.Fill.Color);
+        ValueSlider.Value = Wheel.Value * 100;
+        _syncing = false;
+        UpdateReadouts();
     }
 
-    private void SetBox(TextBox box, double? value)
+    private void OnWheelChanged()
     {
-        if (!box.IsFocused)
+        if (!_syncing)
         {
-            box.Text = value.HasValue ? value.Value.ToString("0", CultureInfo.InvariantCulture) : string.Empty;
+            UpdateReadouts();
         }
     }
 
-    private static ColorRgb ReadColor(TextBox r, TextBox g, TextBox b)
+    private void UpdateReadouts()
     {
-        byte Channel(TextBox box)
-            => double.TryParse(box.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double v)
-                ? (byte)Math.Clamp(Math.Round(v), 0, 255)
-                : (byte)0;
+        ColorRgb color = Wheel.Color;
+        _syncing = true;
+        SetBox(FillR, Math.Round(color.R * 255));
+        SetBox(FillG, Math.Round(color.G * 255));
+        SetBox(FillB, Math.Round(color.B * 255));
+        if (!HexBox.IsFocused)
+        {
+            HexBox.Text = $"#{(byte)Math.Round(color.R * 255):X2}" +
+                          $"{(byte)Math.Round(color.G * 255):X2}" +
+                          $"{(byte)Math.Round(color.B * 255):X2}";
+        }
 
-        return ColorRgb.FromBytes(Channel(r), Channel(g), Channel(b));
+        _syncing = false;
+        Preview.Background = new SolidColorBrush(Color.FromRgb(
+            (byte)Math.Round(color.R * 255),
+            (byte)Math.Round(color.G * 255),
+            (byte)Math.Round(color.B * 255)));
     }
+
+    private void SetBox(TextBox box, double value)
+    {
+        if (!box.IsFocused)
+        {
+            box.Text = value.ToString("0", CultureInfo.InvariantCulture);
+        }
+    }
+
+    private void ApplyHex()
+    {
+        string text = (HexBox.Text ?? string.Empty).Trim().TrimStart('#');
+        if (text.Length == 6 && uint.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint value))
+        {
+            var color = ColorRgb.FromBytes((byte)(value >> 16), (byte)(value >> 8), (byte)value);
+            _syncing = true;
+            Wheel.SetColor(color);
+            ValueSlider.Value = Wheel.Value * 100;
+            _syncing = false;
+            UpdateReadouts();
+        }
+    }
+
+    private void ApplyRgb()
+    {
+        if (_syncing)
+        {
+            return;
+        }
+
+        var color = ColorRgb.FromBytes(
+            ParseByte(FillR), ParseByte(FillG), ParseByte(FillB));
+        _syncing = true;
+        Wheel.SetColor(color);
+        ValueSlider.Value = Wheel.Value * 100;
+        _syncing = false;
+        UpdateReadouts();
+    }
+
+    private static byte ParseByte(TextBox box)
+        => double.TryParse(box.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double v)
+            ? (byte)Math.Clamp(Math.Round(v), 0, 255)
+            : (byte)0;
 
     private void OnApplyFill(object? sender, RoutedEventArgs e)
     {
@@ -72,11 +152,11 @@ public partial class ColorsPane : UserControl
         }
 
         ModelFillRule rule = FillRuleBox.SelectedIndex == 1 ? ModelFillRule.EvenOdd : ModelFillRule.NonZero;
-        _vm.ApplyFill(ReadColor(FillR, FillG, FillB), rule);
+        _vm.ApplyFill(Wheel.Color, rule);
     }
 
     private void OnApplyStrokeColor(object? sender, RoutedEventArgs e)
     {
-        _vm?.ApplyStrokeColor(ReadColor(StrokeR, StrokeG, StrokeB));
+        _vm?.ApplyStrokeColor(Wheel.Color);
     }
 }

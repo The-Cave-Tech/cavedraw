@@ -1,10 +1,24 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:VCCad.App.Controls"
              x:Class="VCCad.App.Views.Panes.ColorsPane">
   <ScrollViewer>
     <StackPanel Margin="10,8" Spacing="8">
-      <TextBlock Text="FILL" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
-      <Grid ColumnDefinitions="Auto,*,8,Auto,*,8,Auto,*">
+      <TextBlock Text="COLOUR" FontWeight="SemiBold" Foreground="{DynamicResource VcTextDim}"/>
+
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+        <controls:ColorWheel x:Name="Wheel" Grid.Column="0" Width="150" Height="150"/>
+        <StackPanel Grid.Column="1" Spacing="6" VerticalAlignment="Top">
+          <TextBlock Text="Value" Foreground="{DynamicResource VcTextDim}"/>
+          <Slider x:Name="ValueSlider" Minimum="0" Maximum="100" Value="100"/>
+          <Border x:Name="Preview" Height="30" CornerRadius="4"
+                  BorderBrush="{DynamicResource VcBorder}" BorderThickness="1"
+                  Background="#000000"/>
+          <TextBox x:Name="HexBox" Watermark="#RRGGBB"/>
+        </StackPanel>
+      </Grid>
+
+      <Grid ColumnDefinitions="Auto,*,8,Auto,*,8,Auto,*" ColumnSpacing="2">
         <TextBlock Text="R" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="FillR" Grid.Column="1"/>
         <TextBlock Text="G" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
@@ -12,6 +26,7 @@
         <TextBlock Text="B" Grid.Column="6" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="FillB" Grid.Column="7"/>
       </Grid>
+
       <Grid ColumnDefinitions="Auto,*">
         <TextBlock Text="Rule" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <ComboBox x:Name="FillRuleBox" Grid.Column="1" SelectedIndex="0" HorizontalAlignment="Stretch">
@@ -20,17 +35,6 @@
         </ComboBox>
       </Grid>
       <Button Content="Apply Fill" Click="OnApplyFill"/>
-
-      <TextBlock Text="STROKE COLOUR" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
-                 Foreground="{DynamicResource VcTextDim}" Margin="0,6,0,0"/>
-      <Grid ColumnDefinitions="Auto,*,8,Auto,*,8,Auto,*">
-        <TextBlock Text="R" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="StrokeR" Grid.Column="1"/>
-        <TextBlock Text="G" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="StrokeG" Grid.Column="4"/>
-        <TextBlock Text="B" Grid.Column="6" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="StrokeB" Grid.Column="7"/>
-      </Grid>
       <Button Content="Apply Stroke Colour" Click="OnApplyStrokeColor"/>
     </StackPanel>
   </ScrollViewer>

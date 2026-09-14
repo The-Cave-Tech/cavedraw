@@ -3,6 +3,7 @@
   <PropertyGroup>
     <AssemblyName>VCCad.App</AssemblyName>
     <RootNamespace>VCCad.App</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Description>VCCad editor shell (Avalonia): windows-style menus/toolbars, docking panes and the pasteboard workspace. Consumed by the WebAssembly host.</Description>
   </PropertyGroup>
 
