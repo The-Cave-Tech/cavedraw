@@ -62,6 +62,12 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// <summary>Where status messages go (set by the owning view-model).</summary>
     public Action<string>? StatusSink;
 
+    /// <summary>True while a text object is being edited on the canvas.</summary>
+    public bool IsEditingText { get; set; }
+
+    /// <summary>Run index under the text caret (for run-aware styling).</summary>
+    public int TextCaretRunIndex { get; set; }
+
     private void SetStatus(string message) => StatusSink?.Invoke(message);
 
     /// <summary>Raised after any change that must trigger a workspace repaint or a
@@ -378,19 +384,33 @@ public sealed class DocumentSession : INotifyPropertyChanged
 
     /// <summary>Updates the content and uniform style of the selected text
     /// object(s). One undo step.</summary>
-    public void UpdateSelectedText(string content, string family, double fontSize, bool bold, bool italic, ColorRgb color)
+    public void UpdateSelectedText(string content, string family, double fontSize, bool bold, bool italic,
+        ColorRgb color, int? runIndex = null)
     {
         var edits = new List<IUndoableCommand>();
         foreach (TextItem text in SelectedTextItems())
         {
             TextItem before = (TextItem)text.Clone();
-            text.PlainText = content;
-            foreach (TextRun run in text.Runs)
+
+            if (runIndex is { } r && r >= 0 && r < text.Runs.Count)
             {
+                // Style just the run under the caret (rich text).
+                TextRun run = text.Runs[r];
                 run.FontFamily = family;
                 run.FontSize = fontSize;
                 run.Bold = bold;
                 run.Italic = italic;
+            }
+            else
+            {
+                text.PlainText = content;
+                foreach (TextRun run in text.Runs)
+                {
+                    run.FontFamily = family;
+                    run.FontSize = fontSize;
+                    run.Bold = bold;
+                    run.Italic = italic;
+                }
             }
 
             text.Color = color;

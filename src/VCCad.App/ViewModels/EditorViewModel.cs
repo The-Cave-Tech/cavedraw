@@ -235,6 +235,17 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public bool HasSegmentSelection => _active.HasSegmentSelection;
     public bool HasTransformableSelection => _active.HasTransformableSelection;
     public Point2D? PointPosition => _active.PointPosition;
+    public bool IsEditingText
+    {
+        get => _active.IsEditingText;
+        set => _active.IsEditingText = value;
+    }
+
+    public int TextCaretRunIndex
+    {
+        get => _active.TextCaretRunIndex;
+        set => _active.TextCaretRunIndex = value;
+    }
 
     public IEnumerable<PathItem> SelectedPaths() => _active.SelectedPaths();
     public IEnumerable<TextItem> SelectedTextItems() => _active.SelectedTextItems();
@@ -285,8 +296,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public void SetArtboardBounds(Artboard artboard, Rect2D before, Rect2D after) => _active.SetArtboardBounds(artboard, before, after);
 
     public TextItem CreateTextAt(Point2D world, string family, double fontSize) => _active.CreateTextAt(world, family, fontSize);
-    public void UpdateSelectedText(string content, string family, double size, bool bold, bool italic, ColorRgb color)
-        => _active.UpdateSelectedText(content, family, size, bold, italic, color);
+    public void UpdateSelectedText(string content, string family, double size, bool bold, bool italic,
+        ColorRgb color, int? runIndex = null)
+        => _active.UpdateSelectedText(content, family, size, bold, italic, color, runIndex);
 
     private void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

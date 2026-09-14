@@ -23,6 +23,7 @@ public partial class TextPane : UserControl
     {
         _vm = vm;
         vm.DocumentChanged += (_, _) => Refresh();
+        vm.TransformChanged += (_, _) => Refresh();
         Refresh();
     }
 
@@ -72,8 +73,9 @@ public partial class TextPane : UserControl
                 : (byte)0;
 
         var color = ColorRgb.FromBytes(Channel(ColorR), Channel(ColorG), Channel(ColorB));
+        int? runIndex = _vm.IsEditingText ? _vm.TextCaretRunIndex : null;
         _vm.UpdateSelectedText(ContentBox.Text ?? string.Empty, family, size,
-            BoldBox.IsChecked == true, ItalicBox.IsChecked == true, color);
+            BoldBox.IsChecked == true, ItalicBox.IsChecked == true, color, runIndex);
         Refresh();
     }
 }

@@ -69,6 +69,8 @@ public sealed class CanvasWorkspace : Control
     private Point2D _resizeCenter0;
     private readonly List<PathItem> _resizePaths = new();
     private readonly Dictionary<PathItem, PathItem> _resizeOriginals = new();
+    private readonly List<TextItem> _resizeTexts = new();
+    private readonly Dictionary<TextItem, TextItem> _resizeTextBefore = new();
 
     // Oriented selection chrome: a base (unrotated) rectangle plus an angle, so
     // the selection box rotates with the object instead of turning into a
@@ -126,6 +128,11 @@ public sealed class CanvasWorkspace : Control
     private int _pendingInsertSeg;
     private Point2D _pendingInsertPoint;
 
+    // On-canvas text editing.
+    private TextItem? _editingText;
+    private TextItem? _editBefore;
+    private int _caret;
+
     // Whether the current gesture actually displaced anything (commit gating).
     private bool _gestureMoved;
 
@@ -135,6 +142,8 @@ public sealed class CanvasWorkspace : Control
     private double _rotateAngle0;
     private readonly List<PathItem> _rotatePaths = new();
     private readonly Dictionary<PathItem, PathItem> _rotateOriginals = new();
+    private readonly List<TextItem> _rotateTexts = new();
+    private readonly Dictionary<TextItem, TextItem> _rotateTextBefore = new();
 
     // Shape tools (Rectangle / Ellipse).
     private Point2D? _shapeStart;
@@ -510,6 +519,20 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        // Text editing: a click outside the edited text leaves edit mode; a
+        // double-click on a text object enters it.
+        if (_editingText is { } editing && !editing.BoundingBox().Contains(model - editing.ArtboardOffset()))
+        {
+            ExitTextEdit();
+        }
+
+        if (e.ClickCount >= 2 && HitTestTopItem(model) is TextItem dblText)
+        {
+            EnterTextEdit(dblText);
+            e.Handled = true;
+            return;
+        }
+
         // Clicking an artboard's title enters artboard editing mode.
         if (HitTestArtboardLabel(model) is { } labelled)
         {
@@ -543,7 +566,7 @@ public sealed class CanvasWorkspace : Control
                 break;
 
             case EditorTool.Text:
-                _vm!.CreateTextAt(model, "DejaVu Sans", 12);
+                EnterTextEdit(_vm!.CreateTextAt(model, "DejaVu Sans", 12));
                 break;
         }
     }
@@ -1161,10 +1184,18 @@ public sealed class CanvasWorkspace : Control
 
         _resizePaths.Clear();
         _resizeOriginals.Clear();
+        _resizeTexts.Clear();
+        _resizeTextBefore.Clear();
         foreach (PathItem path in _vm.SelectedPaths())
         {
             _resizePaths.Add(path);
             _resizeOriginals[path] = path.GeometrySnapshot();
+        }
+
+        foreach (TextItem text in _vm.SelectedTextItems())
+        {
+            _resizeTexts.Add(text);
+            _resizeTextBefore[text] = (TextItem)text.Clone();
         }
 
         _dragStartModel = model;
@@ -1216,6 +1247,22 @@ public sealed class CanvasWorkspace : Control
             sy = sx; // Shift + corner drag keeps the aspect ratio
         }
 
+        foreach (TextItem text in _resizeTexts)
+        {
+            TextItem before = _resizeTextBefore[text];
+            text.CopyFrom(before);
+            Vector2D offset = text.ArtboardOffset();
+            Point2D pivotLocal = _resizePivot - offset;
+            text.Origin = pivotLocal + new Vector2D(
+                (text.Origin.X - pivotLocal.X) * sx,
+                (text.Origin.Y - pivotLocal.Y) * sy);
+            double fontScale = Math.Sqrt(Math.Abs(sx * sy));
+            foreach (TextRun run in text.Runs)
+            {
+                run.FontSize *= fontScale;
+            }
+        }
+
         // Shift + a group selection scales each object in place (about its own
         // centre) instead of translating it to match the group scale.
         bool groupInPlace = _shiftHeld && _vm!.SelectedObjects.Any(o => o is ArtGroup);
@@ -1247,14 +1294,45 @@ public sealed class CanvasWorkspace : Control
 
     private void CommitResize()
     {
-        if (_resizePaths.Count > 0)
-        {
-            CommitPaths("Resize objects", _resizePaths, _resizeOriginals);
-        }
-
+        CommitTransformEdits("Resize objects", _resizePaths, _resizeOriginals, _resizeTexts, _resizeTextBefore);
         _resizeActive = false;
         _resizePaths.Clear();
         _resizeOriginals.Clear();
+        _resizeTexts.Clear();
+        _resizeTextBefore.Clear();
+    }
+
+    /// <summary>Commits a transform gesture over paths and text as one undo step.</summary>
+    private void CommitTransformEdits(string label, IReadOnlyList<PathItem> paths,
+        Dictionary<PathItem, PathItem> pathOriginals, IReadOnlyList<TextItem> texts,
+        Dictionary<TextItem, TextItem> textOriginals)
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        var edits = new List<IUndoableCommand>();
+        foreach (PathItem path in paths)
+        {
+            if (pathOriginals.TryGetValue(path, out PathItem? before))
+            {
+                edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot()));
+            }
+        }
+
+        foreach (TextItem text in texts)
+        {
+            if (textOriginals.TryGetValue(text, out TextItem? before))
+            {
+                edits.Add(new ReplaceTextCommand(text, before, (TextItem)text.Clone()));
+            }
+        }
+
+        if (edits.Count > 0)
+        {
+            _vm.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand(label, edits));
+        }
     }
 
     /// <summary>Scales a path about <paramref name="pivotLocal"/> along axes rotated
@@ -1321,13 +1399,11 @@ public sealed class CanvasWorkspace : Control
 
     private void EndRotate()
     {
-        if (_rotatePaths.Count > 0)
-        {
-            CommitRotateEdit();
-        }
-
+        CommitTransformEdits("Rotate objects", _rotatePaths, _rotateOriginals, _rotateTexts, _rotateTextBefore);
         _rotatePaths.Clear();
         _rotateOriginals.Clear();
+        _rotateTexts.Clear();
+        _rotateTextBefore.Clear();
     }
 
     private void BeginRotate(Point2D model)
@@ -1345,10 +1421,18 @@ public sealed class CanvasWorkspace : Control
 
         _rotatePaths.Clear();
         _rotateOriginals.Clear();
+        _rotateTexts.Clear();
+        _rotateTextBefore.Clear();
         foreach (PathItem path in _vm.SelectedPaths())
         {
             _rotatePaths.Add(path);
             _rotateOriginals[path] = path.GeometrySnapshot();
+        }
+
+        foreach (TextItem text in _vm.SelectedTextItems())
+        {
+            _rotateTexts.Add(text);
+            _rotateTextBefore[text] = (TextItem)text.Clone();
         }
     }
 
@@ -1365,6 +1449,20 @@ public sealed class CanvasWorkspace : Control
         {
             path.RestoreGeometryFrom(_rotateOriginals[path]);
             path.RotateGeometryAbout(_rotateCenter - path.ArtboardOffset(), angle);
+        }
+
+        foreach (TextItem text in _rotateTexts)
+        {
+            TextItem before = _rotateTextBefore[text];
+            text.CopyFrom(before);
+            Vector2D offset = text.ArtboardOffset();
+            Point2D localCenter = _rotateCenter - offset;
+            double cos = Math.Cos(angle);
+            double sin = Math.Sin(angle);
+            double dx = text.Origin.X - localCenter.X;
+            double dy = text.Origin.Y - localCenter.Y;
+            text.Origin = new Point2D(localCenter.X + dx * cos - dy * sin, localCenter.Y + dx * sin + dy * cos);
+            text.RotationRadians = before.RotationRadians + angle;
         }
 
         _chromeAngle = _rotateAngle0 + angle; // selection box rotates with the objects
@@ -2407,6 +2505,17 @@ public sealed class CanvasWorkspace : Control
         double x = 0;
         double y = 0;
 
+        Avalonia.Matrix? transform = null;
+        if (Math.Abs(text.RotationRadians) > 1e-9)
+        {
+            Point s0 = ModelToScreen(text.Origin + offset);
+            transform = Avalonia.Matrix.CreateTranslation(-s0.X, -s0.Y)
+                * Avalonia.Matrix.CreateRotation(text.RotationRadians)
+                * Avalonia.Matrix.CreateTranslation(s0.X, s0.Y);
+        }
+
+        IDisposable? pushed = transform is { } m ? context.PushTransform(m) : null;
+
         foreach (TextRun run in text.Runs)
         {
             var typeface = new Typeface(
@@ -2433,6 +2542,8 @@ public sealed class CanvasWorkspace : Control
                 }
             }
         }
+
+        pushed?.Dispose();
     }
 
     private void PaintPath(DrawingContext context, PathItem path, double opacity)
@@ -2589,6 +2700,11 @@ public sealed class CanvasWorkspace : Control
         if (_marqueeActive)
         {
             PaintMarquee(context);
+        }
+
+        if (_editingText is not null)
+        {
+            PaintTextCaret(context);
         }
 
         if (tool == EditorTool.Artboard)
@@ -2816,6 +2932,291 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
+    // ------------------------------------------------------------------
+    // On-canvas text editing (rich text)
+    // ------------------------------------------------------------------
+
+    /// <summary>Enters text-edit mode for an object (caret at the end).</summary>
+    private void EnterTextEdit(TextItem text)
+    {
+        _editingText = text;
+        _editBefore = (TextItem)text.Clone();
+        _caret = text.PlainText.Length;
+        _vm!.SelectObject(text);
+        _vm.IsEditingText = true;
+        _vm.TextCaretRunIndex = RunIndexForCaret();
+        Focus();
+        InvalidateVisual();
+    }
+
+    /// <summary>Leaves text-edit mode, committing the session as one undo step.</summary>
+    private void ExitTextEdit()
+    {
+        if (_editingText is null)
+        {
+            return;
+        }
+
+        if (_editBefore is not null && !TextEquals(_editBefore, _editingText))
+        {
+            _vm!.Execute(new ReplaceTextCommand(_editingText, _editBefore, (TextItem)_editingText.Clone(), "Edit text"));
+        }
+
+        _editingText = null;
+        _editBefore = null;
+        if (_vm is not null)
+        {
+            _vm.IsEditingText = false;
+        }
+
+        InvalidateVisual();
+    }
+
+    private static bool TextEquals(TextItem a, TextItem b)
+    {
+        if (a.Runs.Count != b.Runs.Count || a.Origin != b.Origin || a.Color != b.Color ||
+            Math.Abs(a.RotationRadians - b.RotationRadians) > 1e-9)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < a.Runs.Count; i++)
+        {
+            TextRun ra = a.Runs[i];
+            TextRun rb = b.Runs[i];
+            if (ra.Text != rb.Text || ra.FontFamily != rb.FontFamily ||
+                Math.Abs(ra.FontSize - rb.FontSize) > 1e-9 || ra.Bold != rb.Bold || ra.Italic != rb.Italic)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private (int Run, int Char) LocateCaret()
+    {
+        if (_editingText is null)
+        {
+            return (0, 0);
+        }
+
+        int remaining = _caret;
+        for (int r = 0; r < _editingText.Runs.Count; r++)
+        {
+            int len = _editingText.Runs[r].Text.Length;
+            if (remaining <= len)
+            {
+                return (r, remaining);
+            }
+
+            remaining -= len;
+        }
+
+        int last = Math.Max(0, _editingText.Runs.Count - 1);
+        return (last, _editingText.Runs[last].Text.Length);
+    }
+
+    private int RunIndexForCaret()
+    {
+        (int run, _) = LocateCaret();
+        return run;
+    }
+
+    private void InsertText(string value)
+    {
+        if (_editingText is null)
+        {
+            return;
+        }
+
+        if (_editingText.Runs.Count == 0)
+        {
+            _editingText.Runs.Add(new TextRun { FontSize = 12 });
+        }
+
+        (int run, int ch) = LocateCaret();
+        _editingText.Runs[run].Text = _editingText.Runs[run].Text.Insert(ch, value);
+        _caret += value.Length;
+        AfterTextEdit();
+    }
+
+    private void BackspaceText()
+    {
+        if (_editingText is null || _caret == 0)
+        {
+            return;
+        }
+
+        (int run, int ch) = LocateCaret();
+        if (ch > 0)
+        {
+            _editingText.Runs[run].Text = _editingText.Runs[run].Text.Remove(ch - 1, 1);
+        }
+        else if (run > 0)
+        {
+            TextRun prev = _editingText.Runs[run - 1];
+            if (prev.Text.Length > 0)
+            {
+                prev.Text = prev.Text.Remove(prev.Text.Length - 1);
+            }
+
+            if (prev.Text.Length == 0)
+            {
+                _editingText.Runs.RemoveAt(run - 1);
+            }
+        }
+
+        _caret--;
+        AfterTextEdit();
+    }
+
+    private void DeleteText()
+    {
+        if (_editingText is null || _caret >= _editingText.PlainText.Length)
+        {
+            return;
+        }
+
+        (int run, int ch) = LocateCaret();
+        string text = _editingText.Runs[run].Text;
+        if (ch < text.Length)
+        {
+            _editingText.Runs[run].Text = text.Remove(ch, 1);
+        }
+        else if (run + 1 < _editingText.Runs.Count)
+        {
+            _editingText.Runs.RemoveAt(run + 1);
+        }
+
+        AfterTextEdit();
+    }
+
+    private void AfterTextEdit()
+    {
+        if (_vm is not null)
+        {
+            _vm.TextCaretRunIndex = RunIndexForCaret();
+            _vm.RaiseTransformChanged();
+        }
+
+        InvalidateVisual();
+    }
+
+    private void HandleTextEditKey(KeyEventArgs e)
+    {
+        bool handled = true;
+        switch (e.Key)
+        {
+            case Key.Escape:
+                ExitTextEdit();
+                break;
+            case Key.Left:
+                _caret = Math.Max(0, _caret - 1);
+                AfterTextEdit();
+                break;
+            case Key.Right:
+                _caret = Math.Min(_editingText!.PlainText.Length, _caret + 1);
+                AfterTextEdit();
+                break;
+            case Key.Home:
+                _caret = 0;
+                AfterTextEdit();
+                break;
+            case Key.End:
+                _caret = _editingText!.PlainText.Length;
+                AfterTextEdit();
+                break;
+            case Key.Back:
+                BackspaceText();
+                break;
+            case Key.Delete:
+                DeleteText();
+                break;
+            case Key.Enter:
+                InsertText("\n");
+                break;
+            default:
+                // Printable keys are left unhandled so OnTextInput receives them;
+                // returning here still prevents tool shortcuts firing.
+                handled = false;
+                break;
+        }
+
+        e.Handled = handled;
+    }
+
+    protected override void OnTextInput(TextInputEventArgs e)
+    {
+        base.OnTextInput(e);
+        if (_editingText is not null && !string.IsNullOrEmpty(e.Text))
+        {
+            InsertText(e.Text);
+            e.Handled = true;
+        }
+    }
+
+    private Point2D CaretLocal()
+    {
+        if (_editingText is null)
+        {
+            return default;
+        }
+
+        double x = 0;
+        double y = 0;
+        int remaining = _caret;
+        foreach (TextRun run in _editingText.Runs)
+        {
+            foreach (char ch in run.Text)
+            {
+                if (remaining == 0)
+                {
+                    return new Point2D(x, y);
+                }
+
+                if (ch == '\n')
+                {
+                    x = 0;
+                    y += run.FontSize * 1.2;
+                }
+                else
+                {
+                    x += run.FontSize * 0.6;
+                }
+
+                remaining--;
+            }
+        }
+
+        return new Point2D(x, y);
+    }
+
+    private void PaintTextCaret(DrawingContext context)
+    {
+        if (_editingText is null)
+        {
+            return;
+        }
+
+        Vector2D offset = _editingText.ArtboardOffset();
+        Point2D local = CaretLocal();
+        Point2D world = _editingText.Origin + new Vector2D(local.X, local.Y);
+        if (Math.Abs(_editingText.RotationRadians) > 1e-9)
+        {
+            double cos = Math.Cos(_editingText.RotationRadians);
+            double sin = Math.Sin(_editingText.RotationRadians);
+            double dx = world.X - _editingText.Origin.X;
+            double dy = world.Y - _editingText.Origin.Y;
+            world = new Point2D(_editingText.Origin.X + dx * cos - dy * sin,
+                _editingText.Origin.Y + dx * sin + dy * cos);
+        }
+
+        Point screen = ModelToScreen(world + offset);
+        double h = _editingText.MaxFontSize * 1.2 * _layout.Zoom;
+        context.DrawLine(new Pen(Brushes.White, 1.4), screen, new Point(screen.X, screen.Y + h));
+    }
+
     private static FormattedText BuildArtboardLabel(string name, IBrush brush)
         => new(name, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
             new Typeface(FontFamily.Default), EditorTheme.FontSize, brush);
@@ -2960,6 +3361,12 @@ public sealed class CanvasWorkspace : Control
         base.OnKeyDown(e);
         if (_vm is null)
         {
+            return;
+        }
+
+        if (_editingText is not null)
+        {
+            HandleTextEditKey(e);
             return;
         }
 

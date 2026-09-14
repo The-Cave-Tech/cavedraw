@@ -57,6 +57,7 @@ internal sealed record TextDto(
     bool IsLocked,
     Point2D Origin,
     ColorDto Color,
+    double RotationRadians,
     TextRunDto[] Runs) : ItemDto;
 
 /// <summary>
@@ -84,6 +85,7 @@ internal abstract record ItemDto
         t.IsLocked,
         t.Origin,
         new ColorDto(t.Color.R, t.Color.G, t.Color.B),
+        t.RotationRadians,
         t.Runs.Select(r => new TextRunDto(r.Text, r.FontFamily, r.FontSize, r.Bold, r.Italic)).ToArray());
 
     private static PathDto ToPath(PathItem p) => new(
@@ -135,6 +137,7 @@ internal static class ItemDtoExtensions
             IsLocked = t.IsLocked,
             Origin = t.Origin,
             Color = new ColorRgb(t.Color.R, t.Color.G, t.Color.B),
+            RotationRadians = t.RotationRadians,
         };
         item.RestoreIdentity(t.Id);
         foreach (TextRunDto run in t.Runs)

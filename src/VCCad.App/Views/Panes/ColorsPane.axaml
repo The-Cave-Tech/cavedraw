@@ -4,28 +4,19 @@
              x:Class="VCCad.App.Views.Panes.ColorsPane">
   <ScrollViewer>
     <StackPanel Margin="10,8" Spacing="8">
-      <!-- Fill / stroke target diagram (top-left) -->
       <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
-        <controls:FillStrokeSelector x:Name="TargetSelector" Grid.Column="0" Width="66" Height="66"
-                                     HorizontalAlignment="Left"/>
-        <TextBlock Grid.Column="1" VerticalAlignment="Bottom" TextWrapping="Wrap"
-                   Foreground="{DynamicResource VcTextDim}"
-                   Text="Click the ring for stroke, the solid circle for fill; the small swatch clears it."/>
-      </Grid>
-
-      <TextBlock Text="COLOUR" FontWeight="SemiBold" Foreground="{DynamicResource VcTextDim}"/>
-
-      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
-        <controls:ColorWheel x:Name="Wheel" Grid.Column="0" Width="150" Height="150"/>
+        <controls:FillStrokeSelector x:Name="TargetSelector" Grid.Column="0"
+                                     Width="44" Height="44" HorizontalAlignment="Left"/>
         <StackPanel Grid.Column="1" Spacing="6" VerticalAlignment="Top">
-          <TextBlock Text="Value" Foreground="{DynamicResource VcTextDim}"/>
           <Slider x:Name="ValueSlider" Minimum="0" Maximum="100" Value="100"/>
-          <Border x:Name="Preview" Height="30" CornerRadius="4"
+          <Border x:Name="Preview" Height="26" CornerRadius="4"
                   BorderBrush="{DynamicResource VcBorder}" BorderThickness="1"
                   Background="#000000"/>
           <TextBox x:Name="HexBox" Watermark="#RRGGBB"/>
         </StackPanel>
       </Grid>
+
+      <controls:ColorWheel x:Name="Wheel" Width="112" Height="112" HorizontalAlignment="Left"/>
 
       <Grid ColumnDefinitions="Auto,*,8,Auto,*,8,Auto,*" ColumnSpacing="2">
         <TextBlock Text="R" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
@@ -43,8 +34,6 @@
           <ComboBoxItem Content="EvenOdd"/>
         </ComboBox>
       </Grid>
-      <Button Content="Apply Fill" Click="OnApplyFill"/>
-      <Button Content="Apply Stroke Colour" Click="OnApplyStrokeColor"/>
     </StackPanel>
   </ScrollViewer>
 </UserControl>

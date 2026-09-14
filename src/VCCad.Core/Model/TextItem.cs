@@ -49,6 +49,9 @@ public sealed class TextItem : LayerItem
     /// <summary>Text colour.</summary>
     public ColorRgb Color { get; set; } = ColorRgb.Black;
 
+    /// <summary>Rotation of the text block about its origin, in radians.</summary>
+    public double RotationRadians { get; set; }
+
     /// <summary>All runs concatenated (used for simple editing/measurement).</summary>
     public string PlainText
     {
@@ -100,7 +103,30 @@ public sealed class TextItem : LayerItem
         width = Math.Max(width, lineWidth);
         height += anyLine || Runs.Count > 0 ? lineHeight : 0;
 
-        return new Rect2D(Origin.X, Origin.Y, width, height);
+        var local = new Rect2D(Origin.X, Origin.Y, width, height);
+        if (Math.Abs(RotationRadians) < 1e-9)
+        {
+            return local;
+        }
+
+        // Rotated block: return the axis-aligned box of the rotated corners.
+        Point2D Rotate(Point2D p)
+        {
+            double cos = Math.Cos(RotationRadians);
+            double sin = Math.Sin(RotationRadians);
+            double dx = p.X - Origin.X;
+            double dy = p.Y - Origin.Y;
+            return new Point2D(Origin.X + dx * cos - dy * sin, Origin.Y + dx * sin + dy * cos);
+        }
+
+        var corners = new[]
+        {
+            Rotate(new Point2D(local.Left, local.Top)),
+            Rotate(new Point2D(local.Right, local.Top)),
+            Rotate(new Point2D(local.Right, local.Bottom)),
+            Rotate(new Point2D(local.Left, local.Bottom)),
+        };
+        return Rect2D.FromPoints(corners);
     }
 
     /// <summary>Bounds in document/world space (local bounds + artboard origin).</summary>
@@ -116,6 +142,7 @@ public sealed class TextItem : LayerItem
     {
         Origin = other.Origin;
         Color = other.Color;
+        RotationRadians = other.RotationRadians;
         Runs.Clear();
         Runs.AddRange(other.Runs.Select(r => r.Clone()));
     }
@@ -130,6 +157,7 @@ public sealed class TextItem : LayerItem
             IsLocked = IsLocked,
             Origin = Origin,
             Color = Color,
+            RotationRadians = RotationRadians,
         };
         copy.Runs.AddRange(Runs.Select(r => r.Clone()));
         return copy;
