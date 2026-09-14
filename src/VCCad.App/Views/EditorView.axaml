@@ -41,25 +41,32 @@
       <MenuItem Header="_Windows" Name="WindowsMenu"/>
     </Menu>
 
-    <!-- Docking area -->
-    <Grid Grid.Row="1" Name="DockArea" ColumnDefinitions="240,4,*,4,272" RowDefinitions="Auto,*,Auto">
+    <!-- Docking area.
+         Columns: [left toolbars][left panels][split][canvas][split][right panels][right toolbars]
+         Toolbar zones are fixed width; panel columns are scalable via splitters. -->
+    <Grid Grid.Row="1" Name="DockArea"
+          ColumnDefinitions="Auto,240,4,*,4,272,Auto" RowDefinitions="Auto,*,Auto">
       <!-- Horizontal toolbars span the full row -->
-      <StackPanel Name="TopHost" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="5" Orientation="Vertical"/>
-      <StackPanel Name="LeftHost" Grid.Row="1" Grid.Column="0" Orientation="Vertical"/>
-      <GridSplitter Name="LeftSplitter" Grid.Row="1" Grid.Column="1"
+      <StackPanel Name="TopHost" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="7" Orientation="Vertical"/>
+
+      <StackPanel Name="LeftToolbarHost" Grid.Row="1" Grid.Column="0" Orientation="Vertical"/>
+      <StackPanel Name="LeftPanelHost" Grid.Row="1" Grid.Column="1" Orientation="Vertical" MinWidth="120"/>
+      <GridSplitter Name="LeftSplitter" Grid.Row="1" Grid.Column="2"
                     ResizeDirection="Columns" Background="{DynamicResource VcBorder}"
                     HorizontalAlignment="Stretch"/>
-      <Border Grid.Row="1" Grid.Column="2" Background="{DynamicResource VcBackground}">
+      <Border Grid.Row="1" Grid.Column="3" Background="{DynamicResource VcBackground}">
         <controls:CanvasWorkspace x:Name="Workspace" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
       </Border>
-      <GridSplitter Name="RightSplitter" Grid.Row="1" Grid.Column="3"
+      <GridSplitter Name="RightSplitter" Grid.Row="1" Grid.Column="4"
                     ResizeDirection="Columns" Background="{DynamicResource VcBorder}"
                     HorizontalAlignment="Stretch"/>
-      <StackPanel Name="RightHost" Grid.Row="1" Grid.Column="4" Orientation="Vertical"/>
-      <StackPanel Name="BottomHost" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="5" Orientation="Vertical"/>
+      <StackPanel Name="RightPanelHost" Grid.Row="1" Grid.Column="5" Orientation="Vertical" MinWidth="120"/>
+      <StackPanel Name="RightToolbarHost" Grid.Row="1" Grid.Column="6" Orientation="Vertical"/>
+
+      <StackPanel Name="BottomHost" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="7" Orientation="Vertical"/>
 
       <!-- Drop-zone highlight while dragging a panel/toolbar -->
-      <Canvas Name="DropOverlay" Grid.Row="0" Grid.RowSpan="3" Grid.Column="0" Grid.ColumnSpan="5"
+      <Canvas Name="DropOverlay" Grid.Row="0" Grid.RowSpan="3" Grid.Column="0" Grid.ColumnSpan="7"
               IsHitTestVisible="False">
         <Border Name="DropLeft" Background="#552B4C7E" BorderBrush="#4C9AFF" BorderThickness="2" IsVisible="False"/>
         <Border Name="DropRight" Background="#552B4C7E" BorderBrush="#4C9AFF" BorderThickness="2" IsVisible="False"/>

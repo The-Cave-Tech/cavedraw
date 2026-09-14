@@ -45,41 +45,42 @@ public partial class EditorView : UserControl
     {
         var columns = DockArea.ColumnDefinitions;
 
-        if (LeftHost.Children.Count == 0)
+        // Column 1 = left panel column; column 5 = right panel column.
+        if (LeftPanelHost.Children.Count == 0)
         {
-            if (columns[0].Width.IsAbsolute && columns[0].Width.Value > 0)
+            if (columns[1].Width.IsAbsolute && columns[1].Width.Value > 0)
             {
-                _leftWidth = columns[0].Width.Value;
+                _leftWidth = columns[1].Width.Value;
             }
 
-            columns[0].Width = new GridLength(0);
+            columns[1].Width = new GridLength(0);
             LeftSplitter.IsVisible = false;
         }
         else
         {
-            if (columns[0].Width.Value <= 0)
+            if (columns[1].Width.Value <= 0)
             {
-                columns[0].Width = new GridLength(_leftWidth > 0 ? _leftWidth : 240);
+                columns[1].Width = new GridLength(_leftWidth > 0 ? _leftWidth : 240);
             }
 
             LeftSplitter.IsVisible = true;
         }
 
-        if (RightHost.Children.Count == 0)
+        if (RightPanelHost.Children.Count == 0)
         {
-            if (columns[4].Width.IsAbsolute && columns[4].Width.Value > 0)
+            if (columns[5].Width.IsAbsolute && columns[5].Width.Value > 0)
             {
-                _rightWidth = columns[4].Width.Value;
+                _rightWidth = columns[5].Width.Value;
             }
 
-            columns[4].Width = new GridLength(0);
+            columns[5].Width = new GridLength(0);
             RightSplitter.IsVisible = false;
         }
         else
         {
-            if (columns[4].Width.Value <= 0)
+            if (columns[5].Width.Value <= 0)
             {
-                columns[4].Width = new GridLength(_rightWidth > 0 ? _rightWidth : 272);
+                columns[5].Width = new GridLength(_rightWidth > 0 ? _rightWidth : 272);
             }
 
             RightSplitter.IsVisible = true;
@@ -93,7 +94,7 @@ public partial class EditorView : UserControl
         DataContext = _viewModel;
         Workspace.AttachEditor(_viewModel);
 
-        _manager = new DockManager(LeftHost, RightHost, TopHost, BottomHost);
+        _manager = new DockManager(LeftPanelHost, RightPanelHost, LeftToolbarHost, RightToolbarHost, TopHost, BottomHost);
         _manager.LayoutChanged += (_, _) =>
         {
             RefreshWindowMenu();

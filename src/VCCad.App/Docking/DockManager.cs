@@ -17,21 +17,31 @@ public sealed class DockManager
     private readonly Dictionary<string, DockToolbarView> _toolbarViews = new();
     private readonly Dictionary<string, DockSide> _toolbarSides = new();
 
-    public DockManager(StackPanel leftHost, StackPanel rightHost, StackPanel topHost, StackPanel bottomHost)
+    public DockManager(
+        StackPanel leftPanelHost, StackPanel rightPanelHost,
+        StackPanel leftToolbarHost, StackPanel rightToolbarHost,
+        StackPanel topToolbarHost, StackPanel bottomToolbarHost)
     {
-        LeftHost = leftHost;
-        RightHost = rightHost;
-        TopHost = topHost;
-        BottomHost = bottomHost;
+        LeftPanelHost = leftPanelHost;
+        RightPanelHost = rightPanelHost;
+        LeftToolbarHost = leftToolbarHost;
+        RightToolbarHost = rightToolbarHost;
+        TopToolbarHost = topToolbarHost;
+        BottomToolbarHost = bottomToolbarHost;
     }
 
-    public StackPanel LeftHost { get; }
+    // Panels and toolbars are separate kinds and never share a zone.
+    public StackPanel LeftPanelHost { get; }
 
-    public StackPanel RightHost { get; }
+    public StackPanel RightPanelHost { get; }
 
-    public StackPanel TopHost { get; }
+    public StackPanel LeftToolbarHost { get; }
 
-    public StackPanel BottomHost { get; }
+    public StackPanel RightToolbarHost { get; }
+
+    public StackPanel TopToolbarHost { get; }
+
+    public StackPanel BottomToolbarHost { get; }
 
     /// <summary>Raised whenever the layout changes (open/close/dock).</summary>
     public event EventHandler? LayoutChanged;
@@ -139,10 +149,12 @@ public sealed class DockManager
     /// <summary>Recreates the host contents from the current model.</summary>
     public void Build()
     {
-        LeftHost.Children.Clear();
-        RightHost.Children.Clear();
-        TopHost.Children.Clear();
-        BottomHost.Children.Clear();
+        LeftPanelHost.Children.Clear();
+        RightPanelHost.Children.Clear();
+        LeftToolbarHost.Children.Clear();
+        RightToolbarHost.Children.Clear();
+        TopToolbarHost.Children.Clear();
+        BottomToolbarHost.Children.Clear();
 
         foreach (DockPanelModel panel in _panels.Values)
         {
@@ -151,7 +163,7 @@ public sealed class DockManager
                 continue;
             }
 
-            StackPanel host = panel.Side == DockSide.Right ? RightHost : LeftHost;
+            StackPanel host = panel.Side == DockSide.Right ? RightPanelHost : LeftPanelHost;
             if (!_panelViews.TryGetValue(panel.Id, out DockTabPanelView? view))
             {
                 view = new DockTabPanelView(panel, this);
@@ -167,10 +179,10 @@ public sealed class DockManager
         {
             StackPanel host = toolbar.Side switch
             {
-                DockSide.Right => RightHost,
-                DockSide.Left => LeftHost,
-                DockSide.Bottom => BottomHost,
-                _ => TopHost,
+                DockSide.Right => RightToolbarHost,
+                DockSide.Left => LeftToolbarHost,
+                DockSide.Bottom => BottomToolbarHost,
+                _ => TopToolbarHost,
             };
 
             // Reuse the view unless the side changed (orientation differs).
