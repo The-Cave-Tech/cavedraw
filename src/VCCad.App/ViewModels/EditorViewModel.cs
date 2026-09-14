@@ -288,6 +288,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public void RequestDeleteSelection() => _active.RequestDeleteSelection();
     public void DeleteArtboard(Artboard artboard, ArtboardDeletionChoice choice) => _active.DeleteArtboard(artboard, choice);
     public void GroupSelection() => _active.GroupSelection();
+    public void MoveItems(IReadOnlyList<LayerItem> items, IItemContainer target, int index)
+        => _active.MoveItems(items, target, index);
     public void UngroupSelection() => _active.UngroupSelection();
     public void CloseSelectedPaths() => _active.CloseSelectedPaths();
     public void JoinSelection() => _active.JoinSelection();

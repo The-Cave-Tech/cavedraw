@@ -1,5 +1,9 @@
 using Avalonia;
 using System.Collections;
+using Avalonia.Input;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
+using Avalonia.VisualTree;
 using Avalonia.Controls;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
@@ -14,9 +18,18 @@ public partial class ObjectsPane : UserControl
     private EditorViewModel? _vm;
     private bool _syncing;
 
+    private Point _pressPoint;
+    private TreeViewItem? _pressItem;
+    private bool _dragArmed;
+
     public ObjectsPane()
     {
         InitializeComponent();
+        DragDrop.SetAllowDrop(ObjectTree, true);
+        ObjectTree.PointerPressed += OnTreePointerPressed;
+        ObjectTree.PointerMoved += OnTreePointerMoved;
+        AddHandler(DragDrop.DragOverEvent, OnDragOver);
+        AddHandler(DragDrop.DropEvent, OnDrop);
     }
 
     public void Attach(EditorViewModel vm)
@@ -115,25 +128,6 @@ public partial class ObjectsPane : UserControl
 
     private TreeViewItem MakeNode(string text, object? tag, bool header, bool isVisible, Action toggle)
     {
-        var eye = new Button
-        {
-            Content = isVisible ? "◉" : "○",
-            FontSize = EditorTheme.FontSize,
-            Padding = new Thickness(4, 0),
-            Background = Avalonia.Media.Brushes.Transparent,
-            BorderThickness = new Thickness(0),
-            Foreground = new Avalonia.Media.SolidColorBrush(
-                isVisible ? Avalonia.Media.Color.FromRgb(0xE6, 0xE6, 0xE9)
-                          : Avalonia.Media.Color.FromRgb(0x6A, 0x6A, 0x72)),
-        };
-        ToolTip.SetTip(eye, isVisible ? "Hide" : "Show");
-        eye.Click += (_, e) =>
-        {
-            toggle();
-            RefreshTree();
-            e.Handled = true;
-        };
-
         var label = new TextBlock
         {
             Text = text,
@@ -143,16 +137,167 @@ public partial class ObjectsPane : UserControl
                           : Avalonia.Media.Color.FromRgb(0x6A, 0x6A, 0x72)),
         };
 
-        var headerPanel = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 2 };
-        headerPanel.Children.Add(eye);
-        headerPanel.Children.Add(label);
+        var eye = new Button
+        {
+            Content = EyeIcon(isVisible),
+            Padding = new Thickness(4, 0),
+            Background = Avalonia.Media.Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(eye, isVisible ? "Hide" : "Show");
+        eye.Click += (_, e) =>
+        {
+            toggle();
+            RefreshTree();
+            e.Handled = true;
+        };
 
-        return new TreeViewItem { Header = headerPanel, Tag = tag, IsExpanded = header };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        Grid.SetColumn(label, 0);
+        Grid.SetColumn(eye, 1);
+        grid.Children.Add(label);
+        grid.Children.Add(eye);
+
+        return new TreeViewItem { Header = grid, Tag = tag, IsExpanded = header };
+    }
+
+    private static Image EyeIcon(bool visible)
+    {
+        var bitmap = new Bitmap(AssetLoader.Open(new Uri(
+            $"avares://VCCad.App/Assets/Icons/{(visible ? "eye" : "eye-off")}.png")));
+        return new Image { Source = bitmap, Width = 14, Height = 14, Stretch = Avalonia.Media.Stretch.Uniform };
+    }
+
+    private void OnTreePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        _pressPoint = e.GetPosition(ObjectTree);
+        _pressItem = FindItem(e.Source as Visual);
+        _dragArmed = e.GetCurrentPoint(ObjectTree).Properties.IsLeftButtonPressed;
+    }
+
+    private void OnTreePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_dragArmed || !e.GetCurrentPoint(ObjectTree).Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        Point p = e.GetPosition(ObjectTree);
+        if (Math.Abs(p.X - _pressPoint.X) < 6 && Math.Abs(p.Y - _pressPoint.Y) < 6)
+        {
+            return;
+        }
+
+        _dragArmed = false;
+        var items = new List<LayerItem>();
+        foreach (object? selected in ObjectTree.SelectedItems)
+        {
+            if (selected is TreeViewItem { Tag: LayerItem li })
+            {
+                items.Add(li);
+            }
+        }
+
+        if (items.Count == 0 && _pressItem?.Tag is LayerItem single)
+        {
+            items.Add(single);
+        }
+
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        var data = new DataObject();
+        data.Set("vccad/items", items);
+        DragDrop.DoDragDrop(e, data, DragDropEffects.Move);
+    }
+
+    private void OnDragOver(object? sender, DragEventArgs e)
+        => e.DragEffects = e.Data.Contains("vccad/items") ? DragDropEffects.Move : DragDropEffects.None;
+
+    private void OnDrop(object? sender, DragEventArgs e)
+    {
+        if (_vm is null || e.Data.Get("vccad/items") is not List<LayerItem> items || items.Count == 0)
+        {
+            return;
+        }
+
+        TreeViewItem? target = FindItem(e.Source as Visual);
+        IItemContainer container;
+        int index;
+
+        if (target?.Tag is ArtGroup group)
+        {
+            container = group;
+            index = group.Children.Count;
+        }
+        else if (target?.Tag is Layer layer)
+        {
+            container = layer;
+            index = layer.Children.Count;
+        }
+        else if (target?.Tag is LayerItem item && item.Container is { } parent)
+        {
+            container = parent;
+            index = IndexOf(parent, item);
+            // Drop on the lower half of a row to insert after it.
+            double h = target.Bounds.Height;
+            if (e.GetPosition(target).Y > h / 2)
+            {
+                index++;
+            }
+        }
+        else
+        {
+            container = _vm.Document.Orphans;
+            index = container.Children.Count;
+        }
+
+        try
+        {
+            _vm.MoveItems(items, container, index);
+        }
+        catch (InvalidOperationException)
+        {
+            // Dropping a group into its own descendant is not allowed.
+        }
+
+        RefreshTree();
+    }
+
+    private static TreeViewItem? FindItem(Visual? source)
+    {
+        for (Visual? v = source; v is not null; v = v.GetVisualParent())
+        {
+            if (v is TreeViewItem item)
+            {
+                return item;
+            }
+        }
+
+        return null;
+    }
+
+    private static int IndexOf(IItemContainer container, LayerItem item)
+    {
+        for (int i = 0; i < container.Children.Count; i++)
+        {
+            if (ReferenceEquals(container.Children[i], item))
+            {
+                return i;
+            }
+        }
+
+        return 0;
     }
 
     private static Rect2D BoundsOf(LayerItem item) => item switch
     {
         PathItem path => path.BoundingBox(),
+        TextItem text => text.BoundingBox(),
         ArtGroup group => group.Transform.Transform(group.BoundingBox()),
         _ => Rect2D.Empty,
     };
@@ -217,9 +362,22 @@ public partial class ObjectsPane : UserControl
             return;
         }
 
-        if (ObjectTree.SelectedItem is TreeViewItem { Tag: LayerItem item })
+        var selected = new List<LayerItem>();
+        foreach (object? entry in ObjectTree.SelectedItems)
         {
-            _vm.SelectObject(item);
+            if (entry is TreeViewItem { Tag: LayerItem li })
+            {
+                selected.Add(li);
+            }
+        }
+
+        if (selected.Count == 1)
+        {
+            _vm.SelectObject(selected[0]);
+        }
+        else if (selected.Count > 1)
+        {
+            _vm.SelectRange(selected, additive: false);
         }
         else if (ObjectTree.SelectedItem is TreeViewItem { Tag: Artboard artboard })
         {

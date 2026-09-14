@@ -529,3 +529,82 @@ public sealed class SetTextOriginCommand : IUndoableCommand
 
     public void Undo() => _item.Origin = _before;
 }
+
+/// <summary>
+/// Moves one or more items to a new position — optionally a different container —
+/// changing stacking order and/or parenting as one undo step. Original
+/// container/index pairs are captured for the inverse.
+/// </summary>
+public sealed class MoveItemsCommand : IUndoableCommand
+{
+    private readonly IReadOnlyList<LayerItem> _items;
+    private readonly IItemContainer _target;
+    private readonly int _index;
+    private List<(IItemContainer Container, int Index, LayerItem Item)>? _before;
+
+    public string Description => "Reorder objects";
+
+    public MoveItemsCommand(IEnumerable<LayerItem> items, IItemContainer target, int index)
+    {
+        _items = items.ToList();
+        _target = target;
+        _index = index;
+    }
+
+    public void Do()
+    {
+        if (_before is null)
+        {
+            _before = new List<(IItemContainer, int, LayerItem)>();
+            foreach (LayerItem item in _items)
+            {
+                if (item.Container is { } container)
+                {
+                    _before.Add((container, IndexOf(container, item), item));
+                }
+            }
+        }
+
+        foreach (LayerItem item in _items)
+        {
+            item.Container?.RemoveItem(item);
+        }
+
+        int index = Math.Clamp(_index, 0, _target.Children.Count);
+        foreach (LayerItem item in _items)
+        {
+            _target.AddItem(item, index++);
+        }
+    }
+
+    public void Undo()
+    {
+        if (_before is null)
+        {
+            return;
+        }
+
+        foreach (LayerItem item in _items)
+        {
+            item.Container?.RemoveItem(item);
+        }
+
+        foreach ((IItemContainer container, int index, LayerItem item) in _before)
+        {
+            container.AddItem(item, Math.Clamp(index, 0, container.Children.Count));
+        }
+    }
+
+    private static int IndexOf(IItemContainer container, LayerItem item)
+    {
+        for (int i = 0; i < container.Children.Count; i++)
+        {
+            if (ReferenceEquals(container.Children[i], item))
+            {
+                return i;
+            }
+        }
+
+        return 0;
+    }
+}

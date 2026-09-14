@@ -433,6 +433,19 @@ public sealed class DocumentSession : INotifyPropertyChanged
         SetStatus("Text updated");
     }
 
+    /// <summary>Moves items to a new container/index (drag-and-drop in the object
+    /// list) as one undo step.</summary>
+    public void MoveItems(IReadOnlyList<LayerItem> items, IItemContainer target, int index)
+    {
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        Execute(new MoveItemsCommand(items, target, index));
+        SetStatus("Reordered");
+    }
+
     /// <summary>Groups the selected sibling objects (Edit → Group).</summary>
     public void GroupSelection()
     {
@@ -919,6 +932,12 @@ public sealed class DocumentSession : INotifyPropertyChanged
     public void ApplyStroke(double width, StrokeCap cap, StrokeJoin join, double miterLimit,
         StrokeAlignment alignment)
     {
+        // The new spec becomes the "current style" for objects drawn next, even
+        // when nothing is selected (so setting a width before drawing works).
+        ColorRgb baseColor = CurrentStroke.IsVisible ? CurrentStroke.Color : ColorRgb.Black;
+        CurrentStroke = new StrokeSpec(true, baseColor, Math.Max(0, width), cap, join,
+            Math.Max(1, miterLimit), alignment);
+
         var edits = SelectedPaths().Select(p =>
         {
             ColorRgb color = p.Stroke.IsVisible ? p.Stroke.Color : ColorRgb.Black;
