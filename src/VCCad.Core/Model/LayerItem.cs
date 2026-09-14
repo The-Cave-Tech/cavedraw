@@ -1,3 +1,4 @@
+using VCCad.Geometry;
 namespace VCCad.Core.Model;
 
 /// <summary>
@@ -89,6 +90,14 @@ public abstract class LayerItem : CadObject
         }
 
         return null;
+    }
+
+    /// <summary>The owning artboard's origin (path/text coordinates are stored
+    /// relative to it). Zero for items on the pasteboard.</summary>
+    public Vector2D ArtboardOffset()
+    {
+        Artboard? artboard = OwningLayer()?.Artboard;
+        return artboard is null ? default : new Vector2D(artboard.X, artboard.Y);
     }
 
     /// <summary>Deep copy of the item, detached from any container.</summary>

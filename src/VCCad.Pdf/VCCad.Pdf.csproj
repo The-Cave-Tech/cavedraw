@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Fonts\*.ttf" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\VCCad.Core\VCCad.Core.csproj" />
     <ProjectReference Include="..\VCCad.Geometry\VCCad.Geometry.csproj" />
   </ItemGroup>

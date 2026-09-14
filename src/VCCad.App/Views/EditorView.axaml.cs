@@ -131,11 +131,14 @@ public partial class EditorView : UserControl
         swatches.Attach(_viewModel);
         var objects = new ObjectsPane();
         objects.Attach(_viewModel);
+        var text = new TextPane();
+        text.Attach(_viewModel);
 
         var appearance = new DockPanelModel { Id = "appearance", Title = "Appearance", Side = DockSide.Right };
         appearance.Tabs.Add(new DockTab { Id = "colors", Title = "Color", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => colors, IsOpen = true });
         appearance.Tabs.Add(new DockTab { Id = "swatches", Title = "Swatches", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => swatches });
         appearance.Tabs.Add(new DockTab { Id = "stroke", Title = "Stroke", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => stroke, IsOpen = true });
+        appearance.Tabs.Add(new DockTab { Id = "text", Title = "Text", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => text });
         appearance.ActiveTabId = "colors";
 
         var objectsPanel = new DockPanelModel { Id = "objects", Title = "Objects", Side = DockSide.Right };
@@ -217,6 +220,7 @@ public partial class EditorView : UserControl
         bar.Children.Add(ToolButton(EditorTool.Rectangle, "rectangle", "Rectangle (M)"));
         bar.Children.Add(ToolButton(EditorTool.Ellipse, "ellipse", "Ellipse (L)"));
         bar.Children.Add(ToolButton(EditorTool.Artboard, "artboard", "Artboard (O)"));
+        bar.Children.Add(ToolButton(EditorTool.Text, "text", "Text (T)"));
         HighlightActiveTool();
         return bar;
     }

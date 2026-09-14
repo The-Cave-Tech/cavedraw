@@ -486,3 +486,46 @@ public sealed class JoinPathsCommand : IUndoableCommand
         return 0;
     }
 }
+
+/// <summary>Replaces a text item's state (runs/origin/colour) as one undo step.</summary>
+public sealed class ReplaceTextCommand : IUndoableCommand
+{
+    private readonly TextItem _item;
+    private readonly TextItem _before;
+    private readonly TextItem _after;
+
+    public string Description { get; }
+
+    public ReplaceTextCommand(TextItem item, TextItem before, TextItem after, string? description = null)
+    {
+        _item = item;
+        _before = before.Clone() as TextItem ?? new TextItem();
+        _after = after.Clone() as TextItem ?? new TextItem();
+        Description = description ?? "Edit text";
+    }
+
+    public void Do() => _item.CopyFrom(_after);
+
+    public void Undo() => _item.CopyFrom(_before);
+}
+
+/// <summary>Moves a text item's origin as one undo step.</summary>
+public sealed class SetTextOriginCommand : IUndoableCommand
+{
+    private readonly TextItem _item;
+    private readonly Geometry.Point2D _before;
+    private readonly Geometry.Point2D _after;
+
+    public string Description => "Move text";
+
+    public SetTextOriginCommand(TextItem item, Geometry.Point2D before, Geometry.Point2D after)
+    {
+        _item = item;
+        _before = before;
+        _after = after;
+    }
+
+    public void Do() => _item.Origin = _after;
+
+    public void Undo() => _item.Origin = _before;
+}

@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Text;
 using VCCad.Core.Model;
 using VCCad.Core.Serialization;
+using VCCad.Pdf.Fonts;
 using VCCad.Geometry;
 
 namespace VCCad.Pdf;
@@ -73,6 +74,18 @@ public static class PdfDocumentExporter
         }
 
         // ------------------------------------------------------------------
+        // Fonts: collect text usage and embed the bundled fonts (FontFile2).
+        // ------------------------------------------------------------------
+        var usage = new Dictionary<FontKey, HashSet<int>>();
+        foreach (Artboard artboard in document.Artboards)
+        {
+            ScanText(artboard, usage);
+        }
+
+        var embedder = new PdfFontEmbedder(assembler, usage);
+        string resources = embedder.ResourcesDict();
+
+        // ------------------------------------------------------------------
         // Sidecar: lossless model JSON, zlib (RFC 1950) compressed — the PDF
         // FlateDecode filter uses exactly the zlib wrapper, so a conformant
         // reader can decompress it without custom code.
@@ -93,7 +106,7 @@ public static class PdfDocumentExporter
         for (int i = 0; i < document.Artboards.Count; i++)
         {
             Artboard artboard = document.Artboards[i];
-            byte[] content = BuildArtboardContent(artboard);
+            byte[] content = BuildArtboardContent(artboard, embedder);
             // Content streams are FlateDecode-filtered like the sidecar; the raw
             // operator text is compressed here before being wrapped.
             assembler.SetBody(contentNumbers[i], MakeStreamObject(Compress(content)));
@@ -103,7 +116,7 @@ public static class PdfDocumentExporter
                 $"<< /Type /Page /Parent {pagesNumber} 0 R " +
                 $"/MediaBox [0 0 {Num(artboard.Width)} {Num(artboard.Height)}] " +
                 $"/Contents {contentNumbers[i]} 0 R " +
-                $"/Resources << >> >>");
+                resources + " >>");
 
             kidList.Append(pageNumbers[i]).Append(" 0 R ");
         }
@@ -130,7 +143,7 @@ public static class PdfDocumentExporter
     /// mapping rules. The returned bytes are the plain content (uncompressed);
     /// callers wrap them via <see cref="MakeStreamObject"/>.
     /// </summary>
-    private static byte[] BuildArtboardContent(Artboard artboard)
+    private static byte[] BuildArtboardContent(Artboard artboard, PdfFontEmbedder embedder)
     {
         var ops = new List<string>();
 
@@ -150,6 +163,15 @@ public static class PdfDocumentExporter
             foreach (LayerItem item in layer.Children)
             {
                 PaintItem(ops, item, AffineTransform.Identity, 1.0);
+            }
+        }
+
+        // Text objects (page-local coordinates, same frame as paths).
+        foreach (TextItem text in AllTextItems(artboard))
+        {
+            if (text.IsVisible)
+            {
+                WriteText(ops, text, embedder);
             }
         }
 
@@ -316,6 +338,124 @@ public static class PdfDocumentExporter
         }
     }
 
+    private static IEnumerable<TextItem> AllTextItems(Artboard artboard)
+    {
+        foreach (Layer layer in artboard.Layers)
+        {
+            foreach (LayerItem item in layer.Children)
+            {
+                foreach (TextItem text in FlattenText(item))
+                {
+                    yield return text;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<TextItem> FlattenText(LayerItem item)
+    {
+        switch (item)
+        {
+            case TextItem text:
+                yield return text;
+                break;
+            case ArtGroup group:
+                foreach (LayerItem child in group.Children)
+                {
+                    foreach (TextItem t in FlattenText(child))
+                    {
+                        yield return t;
+                    }
+                }
+
+                break;
+        }
+    }
+
+    private static void ScanText(Artboard artboard, Dictionary<FontKey, HashSet<int>> usage)
+    {
+        foreach (TextItem text in AllTextItems(artboard))
+        {
+            foreach (TextRun run in text.Runs)
+            {
+                var key = new FontKey(run.FontFamily, run.Bold, run.Italic);
+                if (!usage.TryGetValue(key, out HashSet<int>? codes))
+                {
+                    usage[key] = codes = new HashSet<int>();
+                }
+
+                foreach (char ch in run.Text)
+                {
+                    if (ch != '\n')
+                    {
+                        codes.Add(ch);
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>Emits a text object as BT/Tf/Tm/Tj/ET, advancing manually across
+    /// runs and newlines. The Tm flips Y so glyphs are upright despite the page's
+    /// global coordinate flip.</summary>
+    private static void WriteText(List<string> ops, TextItem text, PdfFontEmbedder embedder)
+    {
+        double originX = text.Origin.X;
+        double x = originX;
+        double y = text.Origin.Y;
+
+        foreach (TextRun run in text.Runs)
+        {
+            var key = new FontKey(run.FontFamily, run.Bold, run.Italic);
+            TrueTypeFont font = embedder.FontFor(key);
+            string resource = embedder.NameFor(key);
+
+            var hex = new StringBuilder();
+            double lineStartX = x;
+            double lineY = y;
+
+            void Flush()
+            {
+                if (hex.Length == 0)
+                {
+                    return;
+                }
+
+                ops.Add($"{Num(text.Color.R)} {Num(text.Color.G)} {Num(text.Color.B)} rg");
+                ops.Add("BT");
+                ops.Add($"{resource} {Num(run.FontSize)} Tf");
+                ops.Add($"1 0 0 -1 {Num(lineStartX)} {Num(lineY)} Tm");
+                ops.Add($"<{hex}> Tj");
+                ops.Add("ET");
+                hex.Clear();
+            }
+
+            foreach (char ch in run.Text)
+            {
+                if (ch == '\n')
+                {
+                    Flush();
+                    x = originX;
+                    y += run.FontSize * 1.2;
+                    lineStartX = x;
+                    lineY = y;
+                    continue;
+                }
+
+                int gid = font.GlyphFor(ch);
+                if (gid == 0)
+                {
+                    continue;
+                }
+
+                hex.Append(gid.ToString("X4", CultureInfo.InvariantCulture));
+                x += font.Advance1000(gid) * run.FontSize / 1000.0;
+            }
+
+            Flush();
+        }
+    }
+
     /// <summary>Writes the raw geometry of several contours into the current path.</summary>
     private static void WriteContours(List<string> ops, List<Contour> contours)
     {
@@ -395,9 +535,9 @@ public static class PdfDocumentExporter
     /// carrying a <c>/Filter /FlateDecode</c> entry, with the compressed length
     /// written into the dictionary.
     /// </summary>
-    private static byte[] MakeStreamObject(byte[] data)
+    internal static byte[] MakeStreamObject(byte[] data, string extraDict = "")
     {
-        string dict = $"<< /Length {data.Length} /Filter /FlateDecode >>\nstream\n";
+        string dict = $"<< /Length {data.Length}{extraDict} /Filter /FlateDecode >>\nstream\n";
         byte[] head = Encoding.ASCII.GetBytes(dict);
         byte[] tail = Encoding.ASCII.GetBytes("\nendstream");
         var result = new byte[head.Length + data.Length + tail.Length];

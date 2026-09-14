@@ -80,6 +80,8 @@ public sealed class CanvasWorkspace : Control
     // Whole-object move / rotate targets (Select tool).
     private readonly List<PathItem> _dragPaths = new();
     private readonly Dictionary<PathItem, PathItem> _dragOriginals = new();
+    private readonly List<TextItem> _dragTexts = new();
+    private readonly Dictionary<TextItem, Point2D> _dragTextOrigins = new();
     private Point2D _dragStartModel;
 
     // Node / handle drag (Node tool).
@@ -450,7 +452,7 @@ public sealed class CanvasWorkspace : Control
         return topmost;
     }
 
-    private static PathItem? HitTestItem(LayerItem item, Point2D model, double tolerance)
+    private static LayerItem? HitTestItem(LayerItem item, Point2D model, double tolerance)
     {
         if (!item.IsVisible)
         {
@@ -460,17 +462,18 @@ public sealed class CanvasWorkspace : Control
         return item switch
         {
             PathItem path when PathPicking.HitTest(path, model, tolerance) != PickKind.None => path,
+            TextItem text when text.BoundingBox().Contains(model) => text,
             ArtGroup group => HitTestGroup(group, model, tolerance),
             _ => null,
         };
     }
 
-    private static PathItem? HitTestGroup(ArtGroup group, Point2D model, double tolerance)
+    private static LayerItem? HitTestGroup(ArtGroup group, Point2D model, double tolerance)
     {
-        PathItem? topmost = null;
+        LayerItem? topmost = null;
         foreach (LayerItem child in group.Children)
         {
-            PathItem? hit = HitTestItem(child, model, tolerance);
+            LayerItem? hit = HitTestItem(child, model, tolerance);
             if (hit is not null)
             {
                 topmost = hit;
@@ -537,6 +540,10 @@ public sealed class CanvasWorkspace : Control
 
             case EditorTool.Artboard:
                 ArtboardPress(model);
+                break;
+
+            case EditorTool.Text:
+                _vm!.CreateTextAt(model, "DejaVu Sans", 12);
                 break;
         }
     }
@@ -707,6 +714,16 @@ public sealed class CanvasWorkspace : Control
             any = true;
         }
 
+        foreach (TextItem text in _vm.SelectedTextItems())
+        {
+            Rect2D b = text.WorldBounds();
+            if (!b.IsEmpty)
+            {
+                Include(b.Left, b.Top);
+                Include(b.Right, b.Bottom);
+            }
+        }
+
         foreach (PathItem path in _vm.SelectedPaths())
         {
             Vector2D offset = path.ArtboardOffset();
@@ -869,10 +886,18 @@ public sealed class CanvasWorkspace : Control
     {
         _dragPaths.Clear();
         _dragOriginals.Clear();
+        _dragTexts.Clear();
+        _dragTextOrigins.Clear();
         foreach (PathItem path in _vm!.SelectedPaths())
         {
             _dragPaths.Add(path);
             _dragOriginals[path] = path.GeometrySnapshot();
+        }
+
+        foreach (TextItem text in _vm.SelectedTextItems())
+        {
+            _dragTexts.Add(text);
+            _dragTextOrigins[text] = text.Origin;
         }
 
         // Snapshot the chrome box BEFORE any translation so each move can place
@@ -917,6 +942,11 @@ public sealed class CanvasWorkspace : Control
             path.TranslateGeometryBy(delta);
         }
 
+        foreach (TextItem text in _dragTexts)
+        {
+            text.Origin = _dragTextOrigins[text] + delta;
+        }
+
         if (!_chromeRect0.IsEmpty)
         {
             _chromeRect = new Rect2D(
@@ -946,7 +976,7 @@ public sealed class CanvasWorkspace : Control
 
         if (_selectMoved)
         {
-            CommitMultiPathEdit("Move objects");
+            CommitMoveEdits();
         }
         else if (_shiftToggleCandidate is not null && _shiftHeld)
         {
@@ -956,8 +986,41 @@ public sealed class CanvasWorkspace : Control
 
         _dragPaths.Clear();
         _dragOriginals.Clear();
+        _dragTexts.Clear();
+        _dragTextOrigins.Clear();
         _shiftToggleCandidate = null;
         _selectMoved = false;
+    }
+
+    /// <summary>Commits a move gesture (paths + text) as one undo step.</summary>
+    private void CommitMoveEdits()
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        var edits = new List<IUndoableCommand>();
+        foreach (PathItem path in _dragPaths)
+        {
+            if (_dragOriginals.TryGetValue(path, out PathItem? before))
+            {
+                edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot()));
+            }
+        }
+
+        foreach (TextItem text in _dragTexts)
+        {
+            if (_dragTextOrigins.TryGetValue(text, out Point2D before))
+            {
+                edits.Add(new SetTextOriginCommand(text, before, text.Origin));
+            }
+        }
+
+        if (edits.Count > 0)
+        {
+            _vm.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Move objects", edits));
+        }
     }
 
     // ---- marquee ---------------------------------------------------------
@@ -2323,6 +2386,10 @@ public sealed class CanvasWorkspace : Control
                 PaintPath(context, path, opacity * path.Opacity);
                 break;
 
+            case TextItem text when text.IsVisible:
+                PaintText(context, text, opacity);
+                break;
+
             case ArtGroup group when group.IsVisible:
                 foreach (LayerItem child in group.Children)
                 {
@@ -2330,6 +2397,41 @@ public sealed class CanvasWorkspace : Control
                 }
 
                 break;
+        }
+    }
+
+    private void PaintText(DrawingContext context, TextItem text, double opacity)
+    {
+        Vector2D offset = text.ArtboardOffset();
+        IBrush brush = ToBrush(text.Color, opacity);
+        double x = 0;
+        double y = 0;
+
+        foreach (TextRun run in text.Runs)
+        {
+            var typeface = new Typeface(
+                new FontFamily(run.FontFamily),
+                run.Italic ? FontStyle.Italic : FontStyle.Normal,
+                run.Bold ? FontWeight.Bold : FontWeight.Normal);
+            string[] lines = run.Text.Split('\n');
+
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (lines[i].Length > 0)
+                {
+                    var formatted = new FormattedText(lines[i], CultureInfo.CurrentCulture,
+                        FlowDirection.LeftToRight, typeface, run.FontSize, brush);
+                    Point screen = ModelToScreen(new Point2D(text.Origin.X + x, text.Origin.Y + y) + offset);
+                    context.DrawText(formatted, screen);
+                    x += formatted.Width / Math.Max(_layout.Zoom, 1e-6);
+                }
+
+                if (i < lines.Length - 1)
+                {
+                    x = 0;
+                    y += run.FontSize * 1.2;
+                }
+            }
         }
     }
 
@@ -2914,6 +3016,12 @@ public sealed class CanvasWorkspace : Control
 
             case Key.P:
                 _vm.Tool = EditorTool.Pen;
+                e.Handled = true;
+                break;
+
+            case Key.T:
+                _vm.Tool = EditorTool.Text;
+                FinalizePen();
                 e.Handled = true;
                 break;
 

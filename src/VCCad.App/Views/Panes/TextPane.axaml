@@ -1,0 +1,33 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="VCCad.App.Views.Panes.TextPane">
+  <ScrollViewer>
+    <StackPanel Margin="10,8" Spacing="8">
+      <TextBlock Text="CONTENT" FontWeight="SemiBold" Foreground="{DynamicResource VcTextDim}"/>
+      <TextBox x:Name="ContentBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="70"/>
+
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+        <TextBlock Text="Font" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <ComboBox x:Name="FamilyBox" Grid.Column="1" HorizontalAlignment="Stretch"/>
+      </Grid>
+      <Grid ColumnDefinitions="Auto,*,10,Auto,*" ColumnSpacing="4">
+        <TextBlock Text="Size" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="SizeBox" Grid.Column="1"/>
+        <CheckBox x:Name="BoldBox" Grid.Column="3" Content="Bold"/>
+        <CheckBox x:Name="ItalicBox" Grid.Column="4" Content="Italic"/>
+      </Grid>
+
+      <TextBlock Text="COLOUR" FontWeight="SemiBold" Foreground="{DynamicResource VcTextDim}"/>
+      <Grid ColumnDefinitions="Auto,*,8,Auto,*,8,Auto,*" ColumnSpacing="2">
+        <TextBlock Text="R" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="ColorR" Grid.Column="1"/>
+        <TextBlock Text="G" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="ColorG" Grid.Column="4"/>
+        <TextBlock Text="B" Grid.Column="6" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="ColorB" Grid.Column="7"/>
+      </Grid>
+
+      <Button Content="Apply Text" Click="OnApply"/>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

@@ -84,6 +84,31 @@ public class PdfExportTests
     }
 
     [Fact]
+    public void TextIsExportedWithEmbeddedFont()
+    {
+        CadDocument doc = CadDocument.CreateDefault("text");
+        var text = new TextItem { Name = "t", Origin = new Point2D(50, 60) };
+        text.Runs.Add(new TextRun { Text = "VCCad", FontFamily = "DejaVu Sans", FontSize = 24, Bold = true });
+        doc.Artboards[0].Layers[0].AddItem(text);
+
+        byte[] pdf = PdfDocumentExporter.Export(doc);
+        string ascii = System.Text.Encoding.ASCII.GetString(pdf);
+
+        Assert.Contains("/FontFile2", ascii);
+        Assert.Contains("/Identity-H", ascii);
+        Assert.Contains("/ToUnicode", ascii);
+
+        // Content streams are compressed; check the operators after inflating.
+        string content = DecompressAllContent(pdf);
+        Assert.Contains("Tf", content);
+        Assert.Contains("Tj", content);
+
+        // The lossless sidecar still round-trips the text object.
+        CadDocument revived = PdfSidecarReader.ReadDocument(pdf);
+        Assert.IsType<TextItem>(revived.Artboards[0].Layers[0].Children[0]);
+    }
+
+    [Fact]
     public void MissingSidecarRaisesInvalidData()
     {
         // Hand-built PDF with a catalog but no Names/EmbeddedFiles chain.

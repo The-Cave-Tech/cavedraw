@@ -29,6 +29,8 @@ internal sealed record NodeDto(Point2D Anchor, Point2D InHandle, Point2D OutHand
 
 internal sealed record SubPathDto(bool Closed, NodeDto[] Nodes);
 
+internal sealed record TextRunDto(string Text, string FontFamily, double FontSize, bool Bold, bool Italic);
+
 internal sealed record PathDto(
     Guid Id,
     string Name,
@@ -48,6 +50,15 @@ internal sealed record GroupDto(
     double Opacity,
     ItemDto[] Children) : ItemDto;
 
+internal sealed record TextDto(
+    Guid Id,
+    string Name,
+    bool IsVisible,
+    bool IsLocked,
+    Point2D Origin,
+    ColorDto Color,
+    TextRunDto[] Runs) : ItemDto;
+
 /// <summary>
 /// Discriminated union over the possible layer items. System.Text.Json picks the
 /// concrete type from the <c>$kind</c> property written by the converter below.
@@ -55,14 +66,25 @@ internal sealed record GroupDto(
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$kind")]
 [JsonDerivedType(typeof(PathDto), "path")]
 [JsonDerivedType(typeof(GroupDto), "group")]
+[JsonDerivedType(typeof(TextDto), "text")]
 internal abstract record ItemDto
 {
     public static ItemDto From(LayerItem item) => item switch
     {
         PathItem path => ToPath(path),
         ArtGroup group => ToGroup(group),
+        TextItem text => ToText(text),
         _ => throw new NotSupportedException($"Unsupported layer item type {item.GetType().Name}."),
     };
+
+    private static TextDto ToText(TextItem t) => new(
+        t.Id,
+        t.Name,
+        t.IsVisible,
+        t.IsLocked,
+        t.Origin,
+        new ColorDto(t.Color.R, t.Color.G, t.Color.B),
+        t.Runs.Select(r => new TextRunDto(r.Text, r.FontFamily, r.FontSize, r.Bold, r.Italic)).ToArray());
 
     private static PathDto ToPath(PathItem p) => new(
         p.Id,
@@ -100,8 +122,35 @@ internal static class ItemDtoExtensions
     {
         PathDto p => p.ToModel(),
         GroupDto g => g.ToModel(),
+        TextDto t => t.ToModel(),
         _ => throw new NotSupportedException($"Unknown DTO kind {dto.GetType().Name}."),
     };
+
+    private static TextItem ToModel(this TextDto t)
+    {
+        var item = new TextItem
+        {
+            Name = t.Name,
+            IsVisible = t.IsVisible,
+            IsLocked = t.IsLocked,
+            Origin = t.Origin,
+            Color = new ColorRgb(t.Color.R, t.Color.G, t.Color.B),
+        };
+        item.RestoreIdentity(t.Id);
+        foreach (TextRunDto run in t.Runs)
+        {
+            item.Runs.Add(new TextRun
+            {
+                Text = run.Text,
+                FontFamily = run.FontFamily,
+                FontSize = run.FontSize,
+                Bold = run.Bold,
+                Italic = run.Italic,
+            });
+        }
+
+        return item;
+    }
 
     private static PathItem ToModel(this PathDto p)
     {

@@ -43,6 +43,9 @@ public enum EditorTool
 
     /// <summary>Select/move/resize artboards (and create new ones).</summary>
     Artboard,
+
+    /// <summary>Click to place a text object, then edit it in the Text pane.</summary>
+    Text,
 }
 
 /// <summary>
@@ -341,6 +344,96 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         }
 
         Status = "Select two open paths with a shared endpoint";
+    }
+
+    /// <summary>Text items in the selection (including inside selected groups).</summary>
+    public IEnumerable<TextItem> SelectedTextItems()
+    {
+        foreach (LayerItem item in _selectedObjects)
+        {
+            switch (item)
+            {
+                case TextItem text:
+                    yield return text;
+                    break;
+                case ArtGroup group:
+                    foreach (TextItem nested in DescendantTexts(group))
+                    {
+                        yield return nested;
+                    }
+
+                    break;
+            }
+        }
+    }
+
+    private static IEnumerable<TextItem> DescendantTexts(ArtGroup group)
+    {
+        foreach (LayerItem child in group.Children)
+        {
+            switch (child)
+            {
+                case TextItem text:
+                    yield return text;
+                    break;
+                case ArtGroup nested:
+                    foreach (TextItem t in DescendantTexts(nested))
+                    {
+                        yield return t;
+                    }
+
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Creates a text object at a world point in the artboard under it
+    /// (or the pasteboard), selects it and returns it.</summary>
+    public TextItem CreateTextAt(Point2D world, string family, double fontSize)
+    {
+        (Layer layer, Vector2D offset) = TargetFor(world);
+        var item = new TextItem
+        {
+            Name = "Text",
+            Origin = world - offset,
+            Color = ColorRgb.Black,
+        };
+        item.Runs.Add(new TextRun { Text = "Text", FontFamily = family, FontSize = fontSize });
+        Execute(new AddItemCommand(layer, item));
+        SelectObject(item);
+        Status = "Text created — edit it in the Text pane";
+        return item;
+    }
+
+    /// <summary>Updates the content and uniform style of the selected text
+    /// object(s). One undo step.</summary>
+    public void UpdateSelectedText(string content, string family, double fontSize, bool bold, bool italic, ColorRgb color)
+    {
+        var edits = new List<IUndoableCommand>();
+        foreach (TextItem text in SelectedTextItems())
+        {
+            TextItem before = (TextItem)text.Clone();
+            text.PlainText = content;
+            foreach (TextRun run in text.Runs)
+            {
+                run.FontFamily = family;
+                run.FontSize = fontSize;
+                run.Bold = bold;
+                run.Italic = italic;
+            }
+
+            text.Color = color;
+            edits.Add(new ReplaceTextCommand(text, before, (TextItem)text.Clone(), "Edit text"));
+        }
+
+        if (edits.Count == 0)
+        {
+            Status = "Select a text object first";
+            return;
+        }
+
+        Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Edit text", edits));
+        Status = "Text updated";
     }
 
     /// <summary>Groups the selected sibling objects (Edit → Group).</summary>
@@ -683,6 +776,11 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         foreach (PathItem path in SelectedPaths())
         {
             box = box.Union(path.WorldBounds());
+        }
+
+        foreach (TextItem text in SelectedTextItems())
+        {
+            box = box.Union(text.WorldBounds());
         }
 
         return box;
