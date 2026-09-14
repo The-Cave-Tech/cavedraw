@@ -85,21 +85,27 @@ public sealed class PasteboardLayout
             MathUtils.Clamp(desired.Y, minY, maxY));
     }
 
+    /// <summary>Default fit margin: ~1 cm of screen space at 96 dpi (96/2.54 ≈ 37.8 px).</summary>
+    public const double DefaultFitMarginPixels = 37.8;
+
     /// <summary>
-    /// Returns the zoom level that fits the artwork inside the viewport with a
-    /// margin, or 1× when the artwork already fits at real size.
+    /// Returns the zoom level that fits the artwork inside the viewport leaving a
+    /// fixed pixel margin (default ~1 cm at 96 dpi) on each side, or 1× when the
+    /// artwork is empty.
     /// </summary>
-    public double ZoomToFit(Size2D viewportPixels, double marginFraction = 0.1)
+    public double ZoomToFit(Size2D viewportPixels, double marginPixels = DefaultFitMarginPixels)
     {
         if (_extent.IsEmpty)
         {
             return 1.0;
         }
 
-        double marginX = Math.Max(1.0, viewportPixels.Width * marginFraction);
-        double marginY = Math.Max(1.0, viewportPixels.Height * marginFraction);
-        double fitX = (viewportPixels.Width - 2.0 * marginX) / _extent.Width;
-        double fitY = (viewportPixels.Height - 2.0 * marginY) / _extent.Height;
+        // Never let the margin consume the whole viewport.
+        double margin = Math.Min(marginPixels, Math.Min(viewportPixels.Width, viewportPixels.Height) / 2.0 - 1.0);
+        margin = Math.Max(1.0, margin);
+
+        double fitX = (viewportPixels.Width - 2.0 * margin) / _extent.Width;
+        double fitY = (viewportPixels.Height - 2.0 * margin) / _extent.Height;
         return MathUtils.Clamp(Math.Min(fitX, fitY), 0.02, 64.0);
     }
 
