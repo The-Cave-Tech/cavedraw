@@ -55,15 +55,6 @@ public partial class ColorsPane : UserControl
             }
         };
         HexBox.LostFocus += (_, _) => ApplyHex();
-        AlphaSlider.PropertyChanged += (_, e) =>
-        {
-            if (e.Property == Slider.ValueProperty && !_syncing)
-            {
-                ApplyLive(); // instant feedback; committed on release
-            }
-        };
-        AlphaSlider.PointerReleased += (_, _) => CommitLive();
-        AlphaSlider.LostFocus += (_, _) => CommitLive();
         ValueSlider.PointerReleased += (_, _) => CommitLive();
         ValueSlider.LostFocus += (_, _) => CommitLive();
         foreach (TextBox box in new[] { FillR, FillG, FillB, AlphaBox })
@@ -148,7 +139,6 @@ public partial class ColorsPane : UserControl
         }
 
         ValueSlider.Value = Wheel.Value * 100;
-        AlphaSlider.Value = Math.Round(targetColor.A * 100);
         _syncing = false;
         UpdateReadouts();
     }
@@ -173,7 +163,7 @@ public partial class ColorsPane : UserControl
         }
 
         ModelFillRule rule = FillRuleBox.SelectedIndex == 1 ? ModelFillRule.EvenOdd : ModelFillRule.NonZero;
-        ColorRgb color = Wheel.Color.WithAlpha(AlphaSlider.Value / 100.0);
+        ColorRgb color = Wheel.Color.WithAlpha(ParseByte(AlphaBox) / 255.0);
 
         if (_strokeTarget)
         {
@@ -206,6 +196,7 @@ public partial class ColorsPane : UserControl
             _vm.CurrentFill = _vm.PrimarySelection is PathItem fp ? fp.Fill : _vm.CurrentFill;
         }
 
+        UpdateSelectorState();
         _vm.RaiseTransformChanged(); // repaint without a full refresh
     }
 
@@ -238,7 +229,7 @@ public partial class ColorsPane : UserControl
 
     private void UpdateReadouts()
     {
-        ColorRgb color = Wheel.Color.WithAlpha(AlphaSlider.Value / 100.0);
+        ColorRgb color = Wheel.Color.WithAlpha(ParseByte(AlphaBox) / 255.0);
         _syncing = true;
         SetBox(FillR, Math.Round(color.R * 255));
         SetBox(FillG, Math.Round(color.G * 255));
@@ -252,11 +243,19 @@ public partial class ColorsPane : UserControl
         }
 
         _syncing = false;
-        Preview.Background = new SolidColorBrush(Color.FromArgb(
-            (byte)Math.Round(color.A * 255),
-            (byte)Math.Round(color.R * 255),
-            (byte)Math.Round(color.G * 255),
-            (byte)Math.Round(color.B * 255)));
+        UpdateSelectorState();
+    }
+
+    /// <summary>The fill/stroke circles show the currently selected colours.</summary>
+    private void UpdateSelectorState()
+    {
+        if (_vm?.PrimarySelection is not PathItem path)
+        {
+            return;
+        }
+
+        TargetSelector.SetState(path.Fill.Color, path.Fill.IsVisible,
+            path.Stroke.Color, path.Stroke.IsVisible, _strokeTarget);
     }
 
     private void SetBox(TextBox box, double value)
@@ -294,7 +293,6 @@ public partial class ColorsPane : UserControl
         _syncing = true;
         Wheel.SetColor(color);
         ValueSlider.Value = Wheel.Value * 100;
-        AlphaSlider.Value = Math.Round(color.A * 100);
         _syncing = false;
         UpdateReadouts();
         ApplyLive();

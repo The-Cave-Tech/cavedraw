@@ -9,9 +9,6 @@
                                      Width="44" Height="44" HorizontalAlignment="Left"/>
         <StackPanel Grid.Column="1" Spacing="6" VerticalAlignment="Top">
           <Slider x:Name="ValueSlider" Minimum="0" Maximum="100" Value="100"/>
-          <Border x:Name="Preview" Height="26" CornerRadius="4"
-                  BorderBrush="{DynamicResource VcBorder}" BorderThickness="1"
-                  Background="#000000"/>
           <TextBox x:Name="HexBox" Watermark="#RRGGBB"/>
         </StackPanel>
       </Grid>
@@ -19,16 +16,15 @@
       <controls:ColorWheel x:Name="Wheel" Width="112" Height="112" HorizontalAlignment="Left"/>
 
       <Grid ColumnDefinitions="Auto,*,6,Auto,*,6,Auto,*,6,Auto,*" ColumnSpacing="2">
-        <TextBlock Text="R" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBlock Text="r:" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="FillR" Grid.Column="1"/>
-        <TextBlock Text="G" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBlock Text="g:" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="FillG" Grid.Column="4"/>
-        <TextBlock Text="B" Grid.Column="6" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBlock Text="b:" Grid.Column="6" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="FillB" Grid.Column="7"/>
-        <TextBlock Text="A" Grid.Column="9" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBlock Text="a:" Grid.Column="9" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="AlphaBox" Grid.Column="10"/>
       </Grid>
-      <Slider x:Name="AlphaSlider" Minimum="0" Maximum="100" Value="100"/>
 
       <Grid ColumnDefinitions="Auto,*">
         <TextBlock Text="Rule" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
