@@ -15,11 +15,31 @@ public partial class ColorsPane : UserControl
 {
     private EditorViewModel? _vm;
     private bool _syncing;
+    private bool _strokeTarget;
 
     public ColorsPane()
     {
         InitializeComponent();
         Wheel.ColorChanged += (_, _) => OnWheelChanged();
+        Wheel.ColorCommitted += (_, _) => CommitWheelColor();
+        TargetSelector.TargetChanged += (_, stroke) =>
+        {
+            _strokeTarget = stroke;
+            LoadTargetColor();
+        };
+        TargetSelector.ClearRequested += (_, stroke) =>
+        {
+            if (stroke)
+            {
+                _vm?.ClearStroke();
+            }
+            else
+            {
+                _vm?.ClearFill();
+            }
+
+            Refresh();
+        };
         ValueSlider.PropertyChanged += (_, e) =>
         {
             if (e.Property == Slider.ValueProperty && !_syncing)
@@ -65,11 +85,46 @@ public partial class ColorsPane : UserControl
             return;
         }
 
+        TargetSelector.SetState(path.Fill.Color, path.Fill.IsVisible,
+            path.Stroke.Color, path.Stroke.IsVisible, _strokeTarget);
+        LoadTargetColor();
+    }
+
+    /// <summary>Points the wheel at the active target's colour.</summary>
+    private void LoadTargetColor()
+    {
+        if (_vm?.PrimarySelection is not PathItem path)
+        {
+            return;
+        }
+
+        TargetSelector.SetState(path.Fill.Color, path.Fill.IsVisible,
+            path.Stroke.Color, path.Stroke.IsVisible, _strokeTarget);
+
         _syncing = true;
-        Wheel.SetColor(path.Fill.Color);
+        Wheel.SetColor(_strokeTarget ? path.Stroke.Color : path.Fill.Color);
         ValueSlider.Value = Wheel.Value * 100;
         _syncing = false;
         UpdateReadouts();
+    }
+
+    /// <summary>Applies the chosen colour to the active target (one undo step).</summary>
+    private void CommitWheelColor()
+    {
+        if (_vm is null || _syncing || _vm.PrimarySelection is not PathItem)
+        {
+            return;
+        }
+
+        if (_strokeTarget)
+        {
+            _vm.ApplyStrokeColor(Wheel.Color);
+        }
+        else
+        {
+            ModelFillRule rule = FillRuleBox.SelectedIndex == 1 ? ModelFillRule.EvenOdd : ModelFillRule.NonZero;
+            _vm.ApplyFill(Wheel.Color, rule);
+        }
     }
 
     private void OnWheelChanged()

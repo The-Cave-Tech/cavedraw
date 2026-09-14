@@ -882,6 +882,24 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         ExecuteIfAny(edits, "Fill");
     }
 
+    /// <summary>Clears the fill of every selected path (one undo step).</summary>
+    public void ClearFill()
+    {
+        var edits = SelectedPaths()
+            .Select(p => (IUndoableCommand)new SetFillCommand(p, FillSpec.None))
+            .ToList();
+        ExecuteIfAny(edits, "Clear fill");
+    }
+
+    /// <summary>Clears the stroke of every selected path (one undo step).</summary>
+    public void ClearStroke()
+    {
+        var edits = SelectedPaths()
+            .Select(p => (IUndoableCommand)new SetStrokeCommand(p, StrokeSpec.None))
+            .ToList();
+        ExecuteIfAny(edits, "Clear stroke");
+    }
+
     /// <summary>Applies a stroke colour to every selected path, keeping each path's
     /// existing width/caps/joins.</summary>
     public void ApplyStrokeColor(ColorRgb color)

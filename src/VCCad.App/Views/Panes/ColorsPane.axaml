@@ -4,6 +4,15 @@
              x:Class="VCCad.App.Views.Panes.ColorsPane">
   <ScrollViewer>
     <StackPanel Margin="10,8" Spacing="8">
+      <!-- Fill / stroke target diagram (top-left) -->
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+        <controls:FillStrokeSelector x:Name="TargetSelector" Grid.Column="0" Width="66" Height="66"
+                                     HorizontalAlignment="Left"/>
+        <TextBlock Grid.Column="1" VerticalAlignment="Bottom" TextWrapping="Wrap"
+                   Foreground="{DynamicResource VcTextDim}"
+                   Text="Click the ring for stroke, the solid circle for fill; the small swatch clears it."/>
+      </Grid>
+
       <TextBlock Text="COLOUR" FontWeight="SemiBold" Foreground="{DynamicResource VcTextDim}"/>
 
       <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">

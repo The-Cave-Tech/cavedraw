@@ -25,8 +25,12 @@ public sealed class ColorWheel : Control
     private double _value = 1.0;  // 0..1
     private bool _dragging;
 
-    /// <summary>Raised whenever the selected colour changes (from the wheel).</summary>
+    /// <summary>Raised whenever the selected colour changes (live, while dragging).</summary>
     public event EventHandler? ColorChanged;
+
+    /// <summary>Raised when the user finishes choosing (drag released / value set),
+    /// so callers can apply the colour as a single undo step.</summary>
+    public event EventHandler? ColorCommitted;
 
     /// <summary>Value/brightness in 0..1 (kept separate from the disc).</summary>
     public double Value
@@ -37,6 +41,7 @@ public sealed class ColorWheel : Control
             _value = Math.Clamp(value, 0, 1);
             InvalidateVisual();
             ColorChanged?.Invoke(this, EventArgs.Empty);
+            ColorCommitted?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -109,6 +114,7 @@ public sealed class ColorWheel : Control
         base.OnPointerReleased(e);
         _dragging = false;
         e.Pointer.Capture(null);
+        ColorCommitted?.Invoke(this, EventArgs.Empty);
     }
 
     private void UpdateFromPoint(Point point)
