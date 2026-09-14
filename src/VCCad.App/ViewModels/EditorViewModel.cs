@@ -281,6 +281,68 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// and the numeric rotation field).</summary>
     internal void SetSelectionRotationRadians(double radians) => _selectionRotationRadians = radians;
 
+    /// <summary>Closes every selected open path (adds the closing segment; merges
+    /// coincident endpoints). One undo step.</summary>
+    public void CloseSelectedPaths()
+    {
+        var edits = new List<IUndoableCommand>();
+        foreach (PathItem path in SelectedPaths())
+        {
+            PathItem before = path.GeometrySnapshot();
+            bool changed = false;
+            foreach (SubPath sub in path.SubPaths)
+            {
+                if (sub.IsClosed)
+                {
+                    continue;
+                }
+
+                if (!sub.CloseAndMergeEndpoints())
+                {
+                    sub.IsClosed = true;
+                }
+
+                changed = true;
+            }
+
+            if (changed)
+            {
+                edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot(), "Close path"));
+            }
+        }
+
+        if (edits.Count == 0)
+        {
+            Status = "No open paths to close";
+            return;
+        }
+
+        Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Close path", edits));
+        Status = "Path closed";
+    }
+
+    /// <summary>Joins two selected paths that share an endpoint (closing the result
+    /// if its ends meet).</summary>
+    public void JoinSelection()
+    {
+        PathItem[] paths = SelectedPaths().ToArray();
+        for (int i = 0; i < paths.Length; i++)
+        {
+            for (int j = i + 1; j < paths.Length; j++)
+            {
+                if (PathJoin.CanJoin(paths[i], paths[j]))
+                {
+                    Execute(new JoinPathsCommand(paths[i], paths[j]));
+                    SelectObject(paths[i]);
+                    Status = paths[i].IsFullyClosed ? "Paths joined and closed" : "Paths joined";
+                    return;
+                }
+            }
+        }
+
+        Status = "Select two open paths with a shared endpoint";
+    }
+
     /// <summary>Groups the selected sibling objects (Edit → Group).</summary>
     public void GroupSelection()
     {

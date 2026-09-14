@@ -31,6 +31,9 @@
         <Separator/>
         <MenuItem Header="_Group" Click="OnGroup"/>
         <MenuItem Header="_Ungroup" Click="OnUngroup"/>
+        <Separator/>
+        <MenuItem Header="Close _Path" Click="OnClosePath"/>
+        <MenuItem Header="_Join Paths" Click="OnJoinPaths"/>
       </MenuItem>
       <MenuItem Header="_View">
         <MenuItem Header="_Zoom In" Click="OnZoomIn"/>

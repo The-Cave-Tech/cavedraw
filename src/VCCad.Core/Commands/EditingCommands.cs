@@ -426,3 +426,63 @@ public sealed class ReparentItemsCommand : IUndoableCommand
         }
     }
 }
+
+/// <summary>
+/// Joins two open paths that share an endpoint into one (mutating the first and
+/// removing the second). If the result's ends meet, it is closed.
+/// </summary>
+public sealed class JoinPathsCommand : IUndoableCommand
+{
+    private readonly PathItem _a;
+    private readonly PathItem _b;
+    private IItemContainer? _container;
+    private int _index;
+    private PathItem? _before;
+
+    public string Description => "Join paths";
+
+    public JoinPathsCommand(PathItem a, PathItem b)
+    {
+        _a = a;
+        _b = b;
+    }
+
+    public void Do()
+    {
+        _before = _a.GeometrySnapshot();
+        _container = _b.Container;
+        _index = IndexOf(_container, _b);
+        if (PathJoin.Join(_a, _b))
+        {
+            _container?.RemoveItem(_b);
+        }
+    }
+
+    public void Undo()
+    {
+        if (_before is not null)
+        {
+            _a.RestoreGeometryFrom(_before);
+        }
+
+        _container?.AddItem(_b, _index);
+    }
+
+    private static int IndexOf(IItemContainer? container, LayerItem item)
+    {
+        if (container is null)
+        {
+            return 0;
+        }
+
+        for (int i = 0; i < container.Children.Count; i++)
+        {
+            if (ReferenceEquals(container.Children[i], item))
+            {
+                return i;
+            }
+        }
+
+        return 0;
+    }
+}

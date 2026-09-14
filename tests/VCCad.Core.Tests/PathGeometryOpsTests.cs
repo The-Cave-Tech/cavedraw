@@ -106,6 +106,34 @@ public class PathGeometryOpsTests
     }
 
     [Fact]
+    public void DraggingEndpointOntoOtherClosesAndMerges()
+    {
+        PathItem poly = PathFactory.CreatePolyline("p", new[]
+        {
+            new Point2D(0, 0),
+            new Point2D(10, 0),
+            new Point2D(0, 0),
+        });
+        SubPath sub = poly.SubPaths[0];
+
+        Assert.True(sub.CloseAndMergeEndpoints());
+        Assert.True(sub.IsClosed);
+        Assert.Equal(2, sub.Nodes.Count); // duplicate endpoint merged away
+    }
+
+    [Fact]
+    public void JoiningTwoArcsThatMeetClosesTheResult()
+    {
+        PathItem a = PathFactory.CreatePolyline("a", new[] { new Point2D(0, 0), new Point2D(10, 0) });
+        PathItem b = PathFactory.CreatePolyline("b", new[] { new Point2D(10, 0), new Point2D(0, 0) });
+
+        Assert.True(PathJoin.CanJoin(a, b));
+        Assert.True(PathJoin.Join(a, b));
+        Assert.True(a.SubPaths[0].IsClosed);
+        Assert.Equal(2, a.SubPaths[0].Nodes.Count);
+    }
+
+    [Fact]
     public void ClosestSegmentFindsThePickedSegment()
     {
         // Path of two collinear runs: horizontal from (0,0) and a vertical tail.

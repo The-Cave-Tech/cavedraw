@@ -192,9 +192,9 @@ public partial class EditorView : UserControl
 
         var snap = new ToggleButton
         {
-            Content = "Snap",
+            Content = Icon("magnet", 18),
             IsChecked = _viewModel.OrthogonalSnapEnabled,
-            Padding = new Thickness(10, 4),
+            Padding = new Thickness(6, 2),
             CornerRadius = new CornerRadius(6),
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
@@ -473,6 +473,8 @@ public partial class EditorView : UserControl
     }
     private void OnGroup(object? sender, RoutedEventArgs e) => _viewModel.GroupSelection();
     private void OnUngroup(object? sender, RoutedEventArgs e) => _viewModel.UngroupSelection();
+    private void OnClosePath(object? sender, RoutedEventArgs e) => _viewModel.CloseSelectedPaths();
+    private void OnJoinPaths(object? sender, RoutedEventArgs e) => _viewModel.JoinSelection();
 
     private void OnZoomIn(object? sender, RoutedEventArgs e) { Workspace.ZoomIn(); UpdateStatus(); }
     private void OnZoomOut(object? sender, RoutedEventArgs e) { Workspace.ZoomOut(); UpdateStatus(); }

@@ -49,6 +49,46 @@ public sealed class SubPath
     /// <summary>Whether the subpath currently holds no geometry.</summary>
     public bool IsEmpty => Nodes.Count == 0;
 
+    /// <summary>The first node's anchor (start point), or null when empty.</summary>
+    public Point2D? StartPoint => Nodes.Count > 0 ? Nodes[0].Anchor : null;
+
+    /// <summary>The last node's anchor (end point), or null when empty.</summary>
+    public Point2D? EndPoint => Nodes.Count > 0 ? Nodes[^1].Anchor : null;
+
+    /// <summary>Reverses the direction of an open subpath (swapping each node's
+    /// in/out handles). Used when joining two paths.</summary>
+    public void Reverse()
+    {
+        Nodes.Reverse();
+        foreach (PathNode node in Nodes)
+        {
+            (node.InHandle, node.OutHandle) = (node.OutHandle, node.InHandle);
+        }
+    }
+
+    /// <summary>
+    /// If the first and last anchors coincide, merges them into a single node
+    /// (keeping the incoming handle of the last and the outgoing handle of the
+    /// first) and closes the subpath. Returns true when it closed.
+    /// </summary>
+    public bool CloseAndMergeEndpoints()
+    {
+        if (IsClosed || Nodes.Count < 2)
+        {
+            return IsClosed;
+        }
+
+        if (!Nodes[0].Anchor.NearlyEquals(Nodes[^1].Anchor, 1e-6))
+        {
+            return false;
+        }
+
+        Nodes[0].InHandle = Nodes[^1].InHandle;
+        Nodes.RemoveAt(Nodes.Count - 1);
+        IsClosed = true;
+        return true;
+    }
+
     /// <summary>Appends a fresh corner node at <paramref name="point"/> (pen-tool default).</summary>
     public PathNode AppendNode(Point2D point)
     {

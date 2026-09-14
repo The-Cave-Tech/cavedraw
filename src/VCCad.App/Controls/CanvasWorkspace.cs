@@ -1,3 +1,4 @@
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -259,6 +260,89 @@ public sealed class CanvasWorkspace : Control
 
     private double PickTolerance => Math.Max(0.05, 5.0 / Math.Max(_layout.Zoom, 1e-6));
 
+    private IEnumerable<PathItem> AllPaths()
+    {
+        if (_document is null)
+        {
+            yield break;
+        }
+
+        foreach (Artboard artboard in _document.Artboards)
+        {
+            foreach (Layer layer in artboard.Layers)
+            {
+                foreach (LayerItem item in layer.Children)
+                {
+                    foreach (PathItem p in Flatten(item))
+                    {
+                        yield return p;
+                    }
+                }
+            }
+        }
+
+        foreach (LayerItem item in _document.Orphans.Children)
+        {
+            foreach (PathItem p in Flatten(item))
+            {
+                yield return p;
+            }
+        }
+    }
+
+    private static IEnumerable<PathItem> Flatten(LayerItem item)
+    {
+        switch (item)
+        {
+            case PathItem path:
+                yield return path;
+                break;
+            case ArtGroup group:
+                foreach (LayerItem child in group.Children)
+                {
+                    foreach (PathItem p in Flatten(child))
+                    {
+                        yield return p;
+                    }
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>Nearest anchor across the document within snap tolerance, in world
+    /// space (or null). <paramref name="exclude"/> skips the path being edited.</summary>
+    private Point2D? FindSnapAnchor(Point2D world, PathItem? exclude)
+    {
+        Point2D? best = null;
+        double bestDistance = PickTolerance * 1.5;
+
+        foreach (PathItem path in AllPaths())
+        {
+            if (ReferenceEquals(path, exclude))
+            {
+                continue;
+            }
+
+            Vector2D offset = path.ArtboardOffset();
+            foreach (SubPath sub in path.SubPaths)
+            {
+                foreach (PathNode node in sub.Nodes)
+                {
+                    Point2D candidate = node.Anchor + offset;
+                    double distance = candidate.DistanceTo(world);
+                    if (distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        best = candidate;
+                    }
+                }
+            }
+        }
+
+        return best;
+    }
+
     /// <summary>Converts a world point into a path's artboard-local frame.</summary>
     private static Point2D LocalFor(PathItem path, Point2D world) => world - path.ArtboardOffset();
 
@@ -420,6 +504,17 @@ public sealed class CanvasWorkspace : Control
 
         if (!props.IsLeftButtonPressed)
         {
+            return;
+        }
+
+        // Clicking an artboard's title enters artboard editing mode.
+        if (HitTestArtboardLabel(model) is { } labelled)
+        {
+            _vm!.SelectArtboard(labelled);
+            _vm.Tool = EditorTool.Artboard;
+            _leftDown = true;
+            e.Pointer.Capture(this);
+            e.Handled = true;
             return;
         }
 
@@ -1673,8 +1768,55 @@ public sealed class CanvasWorkspace : Control
         node.OutHandle += delta;
     }
 
+    /// <summary>
+    /// Snap the moved anchor: first to the opposite endpoint of its own open
+    /// subpath (which closes the path by merging), otherwise to any nearby anchor.
+    /// Gated on the snap toggle.
+    /// </summary>
+    private void ApplyNodeSnap()
+    {
+        if (_vm is null || !_vm.OrthogonalSnapEnabled || !_gestureMoved ||
+            _nodePath is null || _nodeSub is null || _nodeGrabHandle)
+        {
+            return;
+        }
+
+        Vector2D offset = _nodePath.ArtboardOffset();
+        Point2D world = _nodeSub.Nodes[_nodeIndex].Anchor + offset;
+
+        // 1) Dragging one end onto the other closes the path.
+        if (!_nodeSub.IsClosed && (_nodeIndex == 0 || _nodeIndex == _nodeSub.Nodes.Count - 1))
+        {
+            int otherIndex = _nodeIndex == 0 ? _nodeSub.Nodes.Count - 1 : 0;
+            Point2D otherWorld = _nodeSub.Nodes[otherIndex].Anchor + offset;
+            if (world.DistanceTo(otherWorld) <= PickTolerance * 1.5)
+            {
+                PathNode node = _nodeSub.Nodes[_nodeIndex];
+                Vector2D delta = otherWorld - world;
+                node.Anchor += delta;
+                node.InHandle += delta;
+                node.OutHandle += delta;
+                _nodeSub.CloseAndMergeEndpoints();
+                InvalidateVisual();
+                return;
+            }
+        }
+
+        // 2) Otherwise snap to any other anchor.
+        if (FindSnapAnchor(world, _nodePath) is { } snap)
+        {
+            PathNode node = _nodeSub.Nodes[_nodeIndex];
+            Vector2D delta = snap - world;
+            node.Anchor += delta;
+            node.InHandle += delta;
+            node.OutHandle += delta;
+            InvalidateVisual();
+        }
+    }
+
     private void NodeRelease()
     {
+        ApplyNodeSnap();
         ApplyOrthogonalSnap();
 
         if (_pendingInsertArmed && !_gestureMoved && _pendingInsertPath is not null)
@@ -1781,7 +1923,11 @@ public sealed class CanvasWorkspace : Control
 
         // Shift constrains the new anchor to be orthogonal to the previous one.
         Point2D placed = penLocal;
-        if (_shiftHeld && sub.Nodes.Count > 0)
+        if (_vm.OrthogonalSnapEnabled && FindSnapAnchor(model, null) is { } snapAnchor)
+        {
+            placed = snapAnchor - _penOffset;
+        }
+        else if (_shiftHeld && sub.Nodes.Count > 0)
         {
             Point2D previous = sub.Nodes[^1].Anchor;
             placed = previous + SnapTranslation(penLocal - previous);
@@ -2141,6 +2287,7 @@ public sealed class CanvasWorkspace : Control
             }
         }
 
+        PaintArtboardLabels(context);
         PaintOverlays(context);
     }
 
@@ -2567,6 +2714,58 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
+    private static FormattedText BuildArtboardLabel(string name, IBrush brush)
+        => new(name, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+            new Typeface(FontFamily.Default), EditorTheme.FontSize, brush);
+
+    private Rect ArtboardLabelRect(Artboard artboard)
+    {
+        Point topLeft = ModelToScreen(new Point2D(artboard.X, artboard.Y));
+        FormattedText text = BuildArtboardLabel(artboard.Name, Brushes.White);
+        double w = text.Width + 8;
+        double h = text.Height + 2;
+        return new Rect(topLeft.X, topLeft.Y - h - 4, w, h);
+    }
+
+    /// <summary>Artboard whose name label contains the (screen) point, or null.</summary>
+    private Artboard? HitTestArtboardLabel(Point2D model)
+    {
+        if (_document is null)
+        {
+            return null;
+        }
+
+        Point screen = ModelToScreen(model);
+        for (int i = _document.Artboards.Count - 1; i >= 0; i--)
+        {
+            if (ArtboardLabelRect(_document.Artboards[i]).Contains(screen))
+            {
+                return _document.Artboards[i];
+            }
+        }
+
+        return null;
+    }
+
+    private void PaintArtboardLabels(DrawingContext context)
+    {
+        if (_document is null)
+        {
+            return;
+        }
+
+        IBrush background = new SolidColorBrush(Color.FromArgb(200, 0x2A, 0x2A, 0x2F));
+        IBrush textBrush = new SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xE9));
+
+        foreach (Artboard artboard in _document.Artboards)
+        {
+            Rect rect = ArtboardLabelRect(artboard);
+            context.FillRectangle(background, rect, 3);
+            FormattedText text = BuildArtboardLabel(artboard.Name, textBrush);
+            context.DrawText(text, new Point(rect.X + 4, rect.Y + 1));
+        }
+    }
+
     private void PaintArtboardChrome(DrawingContext context)
     {
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
@@ -2750,7 +2949,15 @@ public sealed class CanvasWorkspace : Control
                 break;
 
             case Key.Escape or Key.Enter:
-                FinalizePen(select: false);
+                if (_vm.Tool == EditorTool.Artboard)
+                {
+                    _vm.Tool = EditorTool.Select;
+                }
+                else
+                {
+                    FinalizePen(select: false);
+                }
+
                 e.Handled = true;
                 break;
         }
