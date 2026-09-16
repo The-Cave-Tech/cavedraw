@@ -12,11 +12,26 @@ namespace VCCad.App.Views.Panes;
 public partial class TextPane : UserControl
 {
     private EditorViewModel? _vm;
+    private bool _syncingAlign;
 
     public TextPane()
     {
         InitializeComponent();
         FamilyBox.ItemsSource = BundledFonts.Families;
+        AlignBox.SelectionChanged += (_, _) =>
+        {
+            if (_syncingAlign || _vm is null)
+            {
+                return;
+            }
+
+            _vm.SetTextAlignment(AlignBox.SelectedIndex switch
+            {
+                1 => TextAlignment.Center,
+                2 => TextAlignment.Right,
+                _ => TextAlignment.Left,
+            });
+        };
     }
 
     public void Attach(EditorViewModel vm)
@@ -54,6 +69,15 @@ public partial class TextPane : UserControl
         ColorG.Text = Math.Round(text.Color.G * 255).ToString("0", CultureInfo.InvariantCulture);
         ColorB.Text = Math.Round(text.Color.B * 255).ToString("0", CultureInfo.InvariantCulture);
         ColorA.Text = Math.Round(text.Color.A * 255).ToString("0", CultureInfo.InvariantCulture);
+
+        _syncingAlign = true;
+        AlignBox.SelectedIndex = text.Alignment switch
+        {
+            TextAlignment.Center => 1,
+            TextAlignment.Right => 2,
+            _ => 0,
+        };
+        _syncingAlign = false;
     }
 
     private void OnApply(object? sender, RoutedEventArgs e)

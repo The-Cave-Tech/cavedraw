@@ -58,6 +58,7 @@ internal sealed record TextDto(
     Point2D Origin,
     ColorDto Color,
     double RotationRadians,
+    TextAlignment Alignment,
     TextRunDto[] Runs) : ItemDto;
 
 /// <summary>
@@ -86,6 +87,7 @@ internal abstract record ItemDto
         t.Origin,
         new ColorDto(t.Color.R, t.Color.G, t.Color.B, t.Color.A),
         t.RotationRadians,
+        t.Alignment,
         t.Runs.Select(r => new TextRunDto(r.Text, r.FontFamily, r.FontSize, r.Bold, r.Italic)).ToArray());
 
     private static PathDto ToPath(PathItem p) => new(
@@ -138,6 +140,7 @@ internal static class ItemDtoExtensions
             Origin = t.Origin,
             Color = new ColorRgb(t.Color.R, t.Color.G, t.Color.B, t.Color.A),
             RotationRadians = t.RotationRadians,
+            Alignment = t.Alignment,
         };
         item.RestoreIdentity(t.Id);
         foreach (TextRunDto run in t.Runs)

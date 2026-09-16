@@ -1,3 +1,4 @@
+using Avalonia;
 using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -94,9 +95,11 @@ public partial class ColorsPane : UserControl
     public void Attach(EditorViewModel vm)
     {
         _vm = vm;
-        vm.DocumentChanged += (_, _) => Refresh();
+        vm.DocumentChanged += (_, _) => { Refresh(); RefreshSwatches(); };
+        vm.TransformChanged += (_, _) => RefreshSwatches();
         vm.SelectionChanged += (_, _) => Refresh();
         Refresh();
+        RefreshSwatches();
     }
 
     private void Refresh()
@@ -110,6 +113,56 @@ public partial class ColorsPane : UserControl
         TargetSelector.SetState(path.Fill.Color, path.Fill.IsVisible,
             path.Stroke.Color, path.Stroke.IsVisible, _strokeTarget);
         LoadTargetColor();
+    }
+
+    /// <summary>Rebuilds the swatch strip from the document's used colours.</summary>
+    private void RefreshSwatches()
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        SwatchStrip.Children.Clear();
+        foreach (ColorRgb color in _vm.UsedColors())
+        {
+            var swatch = new Button
+            {
+                Width = 18,
+                Height = 18,
+                Margin = new Thickness(2),
+                Padding = new Thickness(0),
+                CornerRadius = new CornerRadius(3),
+                BorderThickness = new Thickness(1),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x52)),
+                Background = new SolidColorBrush(Color.FromArgb(
+                    (byte)Math.Round(color.A * 255),
+                    (byte)Math.Round(color.R * 255),
+                    (byte)Math.Round(color.G * 255),
+                    (byte)Math.Round(color.B * 255))),
+            };
+            ToolTip.SetTip(swatch, $"#{color.R * 255:0}{color.G * 255:0}{color.B * 255:0}");
+            ColorRgb picked = color;
+            swatch.Click += (_, _) => PickSwatch(picked);
+            SwatchStrip.Children.Add(swatch);
+        }
+    }
+
+    private void PickSwatch(ColorRgb color)
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        _syncing = true;
+        Wheel.SetColor(color);
+        ValueSlider.Value = Wheel.Value * 100;
+        AlphaBox.Text = Math.Round(color.A * 255).ToString("0", CultureInfo.InvariantCulture);
+        _syncing = false;
+        UpdateReadouts();
+        ApplyLive();
+        CommitLive();
     }
 
     private void ResetBefore()

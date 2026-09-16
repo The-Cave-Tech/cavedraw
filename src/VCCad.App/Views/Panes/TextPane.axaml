@@ -16,6 +16,14 @@
         <CheckBox x:Name="BoldBox" Grid.Column="3" Content="Bold"/>
         <CheckBox x:Name="ItalicBox" Grid.Column="4" Content="Italic"/>
       </Grid>
+      <Grid ColumnDefinitions="Auto,*">
+        <TextBlock Text="Align" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <ComboBox x:Name="AlignBox" Grid.Column="1" SelectedIndex="0" HorizontalAlignment="Stretch">
+          <ComboBoxItem Content="Left"/>
+          <ComboBoxItem Content="Center"/>
+          <ComboBoxItem Content="Right"/>
+        </ComboBox>
+      </Grid>
 
       <TextBlock Text="COLOUR" FontWeight="SemiBold" Foreground="{DynamicResource VcTextDim}"/>
       <Grid ColumnDefinitions="Auto,*,6,Auto,*,6,Auto,*,6,Auto,*" ColumnSpacing="2">

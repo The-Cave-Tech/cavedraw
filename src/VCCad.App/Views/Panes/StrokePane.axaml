@@ -34,7 +34,6 @@
           <ComboBoxItem Content="Outside"/>
         </ComboBox>
       </Grid>
-      <Button Content="Apply Stroke" Click="OnApplyStroke"/>
     </StackPanel>
   </ScrollViewer>
 </UserControl>

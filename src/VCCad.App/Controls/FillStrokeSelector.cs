@@ -56,7 +56,6 @@ public sealed class FillStrokeSelector : Control
     public override void Render(DrawingContext context)
     {
         (Point strokeCenter, Point fillCenter, Point noneCenter, double r) = Layout();
-        IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
 
         void DrawStroke()
         {
@@ -70,10 +69,6 @@ public sealed class FillStrokeSelector : Control
                 DrawSlash(context, strokeCenter, r * 0.95, Brushes.Red);
             }
 
-            if (_strokeSelected)
-            {
-                context.DrawEllipse(null, new Pen(accent, 1.5), strokeCenter, r + 2, r + 2);
-            }
         }
 
         void DrawFill()
@@ -88,10 +83,6 @@ public sealed class FillStrokeSelector : Control
                 DrawSlash(context, fillCenter, r * 0.95, Brushes.Red);
             }
 
-            if (!_strokeSelected)
-            {
-                context.DrawEllipse(null, new Pen(accent, 1.5), fillCenter, r + 2, r + 2);
-            }
         }
 
         // The selected target is drawn last (higher z-order).

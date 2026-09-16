@@ -7,6 +7,7 @@ using VCCad.App.ViewModels;
 using VCCad.Core.Commands;
 using VCCad.Core.Model;
 using ModelFillRule = VCCad.Core.Model.FillRule;
+using ModelTextAlignment = VCCad.Core.Model.TextAlignment;
 using MediaFillRule = Avalonia.Media.FillRule;
 using VCCad.Core.Picking;
 using VCCad.Core.Viewport;
@@ -132,6 +133,9 @@ public sealed class CanvasWorkspace : Control
     private TextItem? _editingText;
     private TextItem? _editBefore;
     private int _caret;
+    private int _editAnchor;
+    private bool _textSelecting;
+    private string? _textClipboard;
 
     // Whether the current gesture actually displaced anything (commit gating).
     private bool _gestureMoved;
@@ -524,10 +528,35 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        // Text editing: a click outside the edited text leaves edit mode; a
-        // double-click on a text object enters it.
-        if (_editingText is { } editing && !editing.BoundingBox().Contains(model - editing.ArtboardOffset()))
+        // Text editing: clicks inside position the caret / select; outside exits.
+        if (_editingText is { } editing)
         {
+            Point2D localPoint = model - editing.ArtboardOffset();
+            if (editing.BoundingBox().Contains(localPoint))
+            {
+                int index = IndexAtLocal(editing, localPoint);
+                if (e.ClickCount >= 2)
+                {
+                    (int wordStart, int wordEnd) = WordBounds(editing, index);
+                    _editAnchor = wordStart;
+                    _caret = wordEnd;
+                }
+                else
+                {
+                    _caret = index;
+                    if (!e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+                    {
+                        _editAnchor = index;
+                    }
+                }
+
+                _textSelecting = true;
+                e.Pointer.Capture(this);
+                AfterTextEdit();
+                e.Handled = true;
+                return;
+            }
+
             ExitTextEdit();
         }
 
@@ -586,6 +615,13 @@ public sealed class CanvasWorkspace : Control
         _hoverModel = model;
         _shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
 
+        if (_textSelecting && _editingText is { } selText)
+        {
+            _caret = IndexAtLocal(selText, model - selText.ArtboardOffset());
+            AfterTextEdit();
+            return;
+        }
+
         if (_isPanning)
         {
             Vector2D delta = new(position.X - _lastPan.X, position.Y - _lastPan.Y);
@@ -637,6 +673,13 @@ public sealed class CanvasWorkspace : Control
     {
         base.OnPointerReleased(e);
         Point2D model = ModelPointAtScreen(e.GetPosition(this));
+
+        if (_textSelecting)
+        {
+            _textSelecting = false;
+            e.Pointer.Capture(null);
+            return;
+        }
 
         if (_isPanning)
         {
@@ -2536,8 +2579,7 @@ public sealed class CanvasWorkspace : Control
     {
         Vector2D offset = text.ArtboardOffset();
         IBrush brush = ToBrush(text.Color, opacity);
-        double x = 0;
-        double y = 0;
+        TextMetrics metrics = MeasureText(text);
 
         Avalonia.Matrix? transform = null;
         if (Math.Abs(text.RotationRadians) > 1e-9)
@@ -2550,34 +2592,146 @@ public sealed class CanvasWorkspace : Control
 
         IDisposable? pushed = transform is { } m ? context.PushTransform(m) : null;
 
+        // Selection highlight (only while this text is being edited).
+        if (ReferenceEquals(text, _editingText))
+        {
+            int a = Math.Min(_caret, _editAnchor);
+            int b = Math.Max(_caret, _editAnchor);
+            var selBrush = new SolidColorBrush(Color.FromArgb(90, 0x4C, 0x9A, 0xFF));
+            for (int i = a; i < b && i + 1 < metrics.X.Length; i++)
+            {
+                Point p0 = ModelToScreen(text.Origin + new Vector2D(metrics.X[i], metrics.Y[i]) + offset);
+                double w = metrics.Y[i + 1] == metrics.Y[i]
+                    ? (metrics.X[i + 1] - metrics.X[i]) * _layout.Zoom
+                    : metrics.Size[i] * 0.3 * _layout.Zoom;
+                context.FillRectangle(selBrush, new Rect(p0.X, p0.Y, Math.Max(1, w), metrics.Size[i] * 1.2 * _layout.Zoom));
+            }
+        }
+
+        // Draw each run's lines using the measured layout.
         foreach (TextRun run in text.Runs)
         {
             var typeface = new Typeface(
                 new FontFamily(run.FontFamily),
                 run.Italic ? FontStyle.Italic : FontStyle.Normal,
                 run.Bold ? FontWeight.Bold : FontWeight.Normal);
-            string[] lines = run.Text.Split('\n');
 
+            string[] lines = run.Text.Split('\n');
             for (int i = 0; i < lines.Length; i++)
             {
                 if (lines[i].Length > 0)
                 {
                     var formatted = new FormattedText(lines[i], CultureInfo.CurrentCulture,
                         FlowDirection.LeftToRight, typeface, run.FontSize, brush);
-                    Point screen = ModelToScreen(new Point2D(text.Origin.X + x, text.Origin.Y + y) + offset);
+                    Point screen = ModelToScreen(new Point2D(text.Origin.X, text.Origin.Y) + offset);
                     context.DrawText(formatted, screen);
-                    x += formatted.Width / Math.Max(_layout.Zoom, 1e-6);
-                }
-
-                if (i < lines.Length - 1)
-                {
-                    x = 0;
-                    y += run.FontSize * 1.2;
                 }
             }
         }
 
         pushed?.Dispose();
+    }
+
+    /// <summary>Measured layout of a text block: per-character boundary positions
+    /// (global indices) with alignment applied, plus the block size.</summary>
+    private sealed class TextMetrics
+    {
+        public double[] X = Array.Empty<double>();
+        public double[] Y = Array.Empty<double>();
+        public double[] Size = Array.Empty<double>();
+        public double MaxWidth;
+        public double TotalHeight;
+    }
+
+    private static TextMetrics MeasureText(TextItem text)
+    {
+        var lines = new List<(int Start, int Count, double Width, double Height)>();
+        int total = 0;
+        int lineStart = 0;
+        double lineWidth = 0;
+        double lineHeight = text.MaxFontSize * 1.2;
+
+        foreach (TextRun run in text.Runs)
+        {
+            foreach (char ch in run.Text)
+            {
+                if (ch == '\n')
+                {
+                    lines.Add((lineStart, total - lineStart, lineWidth, lineHeight));
+                    lineStart = total + 1;
+                    lineWidth = 0;
+                    lineHeight = text.MaxFontSize * 1.2;
+                }
+                else
+                {
+                    lineWidth += run.FontSize * 0.6;
+                    lineHeight = Math.Max(lineHeight, run.FontSize * 1.2);
+                }
+
+                total++;
+            }
+        }
+
+        lines.Add((lineStart, total - lineStart, lineWidth, lineHeight));
+        double blockWidth = lines.Count == 0 ? 0 : lines.Max(l => l.Width);
+
+        var m = new TextMetrics
+        {
+            X = new double[total + 1],
+            Y = new double[total + 1],
+            Size = new double[total + 1],
+            MaxWidth = blockWidth,
+        };
+
+        // Second pass: positions with horizontal alignment.
+        double y = 0;
+        foreach ((int lineStartIndex, int count, double width, double height) in lines)
+        {
+            double offset = text.Alignment switch
+            {
+                ModelTextAlignment.Center => (blockWidth - width) / 2,
+                ModelTextAlignment.Right => blockWidth - width,
+                _ => 0,
+            };
+
+            double x = offset;
+            for (int k = 0; k <= count; k++)
+            {
+                int index = lineStartIndex + k;
+                if (index <= total)
+                {
+                    m.X[index] = x;
+                    m.Y[index] = y;
+                    m.Size[index] = height / 1.2;
+                }
+
+                if (k < count)
+                {
+                    x += CharWidth(text, index);
+                }
+            }
+
+            y += height;
+        }
+
+        m.TotalHeight = y;
+        return m;
+    }
+
+    private static double CharWidth(TextItem text, int globalIndex)
+    {
+        int remaining = globalIndex;
+        foreach (TextRun run in text.Runs)
+        {
+            if (remaining < run.Text.Length)
+            {
+                return run.FontSize * 0.6;
+            }
+
+            remaining -= run.Text.Length;
+        }
+
+        return text.MaxFontSize * 0.6;
     }
 
     private void PaintPath(DrawingContext context, PathItem path, double opacity)
@@ -2967,23 +3121,22 @@ public sealed class CanvasWorkspace : Control
     }
 
     // ------------------------------------------------------------------
-    // On-canvas text editing (rich text)
+    // On-canvas rich-text editing
     // ------------------------------------------------------------------
 
-    /// <summary>Enters text-edit mode for an object (caret at the end).</summary>
     private void EnterTextEdit(TextItem text)
     {
         _editingText = text;
         _editBefore = (TextItem)text.Clone();
-        _caret = text.PlainText.Length;
+        _caret = TextEditing.Length(text);
+        _editAnchor = _caret;
         _vm!.SelectObject(text);
         _vm.IsEditingText = true;
-        _vm.TextCaretRunIndex = RunIndexForCaret();
+        UpdateCaretInfo();
         Focus();
         InvalidateVisual();
     }
 
-    /// <summary>Leaves text-edit mode, committing the session as one undo step.</summary>
     private void ExitTextEdit()
     {
         if (_editingText is null)
@@ -2998,6 +3151,7 @@ public sealed class CanvasWorkspace : Control
 
         _editingText = null;
         _editBefore = null;
+        _textSelecting = false;
         if (_vm is not null)
         {
             _vm.IsEditingText = false;
@@ -3006,10 +3160,23 @@ public sealed class CanvasWorkspace : Control
         InvalidateVisual();
     }
 
+    private void UpdateCaretInfo()
+    {
+        if (_vm is null || _editingText is null)
+        {
+            return;
+        }
+
+        (int run, _) = TextEditing.Locate(_editingText, _caret);
+        _vm.TextCaretRunIndex = run;
+        _vm.TextSelectionStart = Math.Min(_caret, _editAnchor);
+        _vm.TextSelectionEnd = Math.Max(_caret, _editAnchor);
+    }
+
     private static bool TextEquals(TextItem a, TextItem b)
     {
         if (a.Runs.Count != b.Runs.Count || a.Origin != b.Origin || a.Color != b.Color ||
-            Math.Abs(a.RotationRadians - b.RotationRadians) > 1e-9)
+            a.Alignment != b.Alignment || Math.Abs(a.RotationRadians - b.RotationRadians) > 1e-9)
         {
             return false;
         }
@@ -3028,34 +3195,22 @@ public sealed class CanvasWorkspace : Control
         return true;
     }
 
-    private (int Run, int Char) LocateCaret()
+    private void AfterTextEdit()
     {
         if (_editingText is null)
         {
-            return (0, 0);
+            return;
         }
 
-        int remaining = _caret;
-        for (int r = 0; r < _editingText.Runs.Count; r++)
-        {
-            int len = _editingText.Runs[r].Text.Length;
-            if (remaining <= len)
-            {
-                return (r, remaining);
-            }
-
-            remaining -= len;
-        }
-
-        int last = Math.Max(0, _editingText.Runs.Count - 1);
-        return (last, _editingText.Runs[last].Text.Length);
+        _caret = Math.Clamp(_caret, 0, TextEditing.Length(_editingText));
+        _editAnchor = Math.Clamp(_editAnchor, 0, TextEditing.Length(_editingText));
+        UpdateCaretInfo();
+        _vm?.RaiseTransformChanged();
+        InvalidateVisual();
     }
 
-    private int RunIndexForCaret()
-    {
-        (int run, _) = LocateCaret();
-        return run;
-    }
+    private (int Start, int End) Selection()
+        => (Math.Min(_caret, _editAnchor), Math.Max(_caret, _editAnchor));
 
     private void InsertText(string value)
     {
@@ -3064,120 +3219,289 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        if (_editingText.Runs.Count == 0)
+        (int start, int end) = Selection();
+        if (start != end)
         {
-            _editingText.Runs.Add(new TextRun { FontSize = 12 });
+            TextEditing.DeleteRange(_editingText, start, end);
+            _caret = start;
         }
 
-        (int run, int ch) = LocateCaret();
-        _editingText.Runs[run].Text = _editingText.Runs[run].Text.Insert(ch, value);
+        TextEditing.Insert(_editingText, _caret, value);
         _caret += value.Length;
+        _editAnchor = _caret;
         AfterTextEdit();
     }
 
     private void BackspaceText()
     {
-        if (_editingText is null || _caret == 0)
+        if (_editingText is null)
         {
             return;
         }
 
-        (int run, int ch) = LocateCaret();
-        if (ch > 0)
+        (int start, int end) = Selection();
+        if (start != end)
         {
-            _editingText.Runs[run].Text = _editingText.Runs[run].Text.Remove(ch - 1, 1);
+            TextEditing.DeleteRange(_editingText, start, end);
+            _caret = start;
         }
-        else if (run > 0)
+        else if (_caret > 0)
         {
-            TextRun prev = _editingText.Runs[run - 1];
-            if (prev.Text.Length > 0)
-            {
-                prev.Text = prev.Text.Remove(prev.Text.Length - 1);
-            }
-
-            if (prev.Text.Length == 0)
-            {
-                _editingText.Runs.RemoveAt(run - 1);
-            }
+            TextEditing.DeleteRange(_editingText, _caret - 1, _caret);
+            _caret--;
         }
 
-        _caret--;
+        _editAnchor = _caret;
         AfterTextEdit();
     }
 
     private void DeleteText()
     {
-        if (_editingText is null || _caret >= _editingText.PlainText.Length)
+        if (_editingText is null)
         {
             return;
         }
 
-        (int run, int ch) = LocateCaret();
-        string text = _editingText.Runs[run].Text;
-        if (ch < text.Length)
+        (int start, int end) = Selection();
+        if (start != end)
         {
-            _editingText.Runs[run].Text = text.Remove(ch, 1);
+            TextEditing.DeleteRange(_editingText, start, end);
+            _caret = start;
         }
-        else if (run + 1 < _editingText.Runs.Count)
+        else if (_caret < TextEditing.Length(_editingText))
         {
-            _editingText.Runs.RemoveAt(run + 1);
+            TextEditing.DeleteRange(_editingText, _caret, _caret + 1);
+        }
+
+        _editAnchor = _caret;
+        AfterTextEdit();
+    }
+
+    private void MoveCaret(int index, bool extend)
+    {
+        _caret = Math.Clamp(index, 0, _editingText is null ? 0 : TextEditing.Length(_editingText));
+        if (!extend)
+        {
+            _editAnchor = _caret;
         }
 
         AfterTextEdit();
     }
 
-    private void AfterTextEdit()
+    private void ApplyStyleToSelection(Action<TextRun> style)
     {
-        if (_vm is not null)
+        if (_editingText is null)
         {
-            _vm.TextCaretRunIndex = RunIndexForCaret();
-            _vm.RaiseTransformChanged();
+            return;
         }
 
-        InvalidateVisual();
+        (int start, int end) = Selection();
+        TextEditing.ApplyStyle(_editingText, start, end, style);
+        AfterTextEdit();
     }
 
     private void HandleTextEditKey(KeyEventArgs e)
     {
-        bool handled = true;
-        switch (e.Key)
+        if (_editingText is null)
         {
-            case Key.Escape:
-                ExitTextEdit();
-                break;
-            case Key.Left:
-                _caret = Math.Max(0, _caret - 1);
+            e.Handled = true;
+            return;
+        }
+
+        bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        bool handled = true;
+        int length = TextEditing.Length(_editingText);
+
+        if (ctrl && e.Key == Key.A)
+        {
+            _editAnchor = 0;
+            MoveCaret(length, extend: true);
+        }
+        else if (ctrl && e.Key == Key.B)
+        {
+            ToggleStyle(bold: true);
+        }
+        else if (ctrl && e.Key == Key.I)
+        {
+            ToggleStyle(bold: false);
+        }
+        else if (ctrl && e.Key == Key.C)
+        {
+            (int s, int en) = Selection();
+            _textClipboard = TextEditing.GetRange(_editingText, s, en);
+        }
+        else if (ctrl && e.Key == Key.X)
+        {
+            (int s, int en) = Selection();
+            _textClipboard = TextEditing.GetRange(_editingText, s, en);
+            if (s != en)
+            {
+                TextEditing.DeleteRange(_editingText, s, en);
+                _caret = s;
+                _editAnchor = s;
                 AfterTextEdit();
-                break;
-            case Key.Right:
-                _caret = Math.Min(_editingText!.PlainText.Length, _caret + 1);
-                AfterTextEdit();
-                break;
-            case Key.Home:
-                _caret = 0;
-                AfterTextEdit();
-                break;
-            case Key.End:
-                _caret = _editingText!.PlainText.Length;
-                AfterTextEdit();
-                break;
-            case Key.Back:
-                BackspaceText();
-                break;
-            case Key.Delete:
-                DeleteText();
-                break;
-            case Key.Enter:
-                InsertText("\n");
-                break;
-            default:
-                // Printable keys are left unhandled so OnTextInput receives them;
-                // returning here still prevents tool shortcuts firing.
-                handled = false;
-                break;
+            }
+        }
+        else if (ctrl && e.Key == Key.V)
+        {
+            if (!string.IsNullOrEmpty(_textClipboard))
+            {
+                InsertText(_textClipboard!);
+            }
+        }
+        else
+        {
+            switch (e.Key)
+            {
+                case Key.Escape:
+                    ExitTextEdit();
+                    break;
+                case Key.Left:
+                    MoveCaret(_caret - 1, shift);
+                    break;
+                case Key.Right:
+                    MoveCaret(_caret + 1, shift);
+                    break;
+                case Key.Home:
+                    MoveCaret(LineStart(_caret), shift);
+                    break;
+                case Key.End:
+                    MoveCaret(LineEnd(_caret), shift);
+                    break;
+                case Key.Up:
+                    MoveCaret(VerticalMove(_caret, -1), shift);
+                    break;
+                case Key.Down:
+                    MoveCaret(VerticalMove(_caret, 1), shift);
+                    break;
+                case Key.Back:
+                    BackspaceText();
+                    break;
+                case Key.Delete:
+                    DeleteText();
+                    break;
+                case Key.Enter:
+                    InsertText("\n");
+                    break;
+                default:
+                    handled = false; // let OnTextInput produce the character
+                    break;
+            }
         }
 
         e.Handled = handled;
+    }
+
+    private void ToggleStyle(bool bold)
+    {
+        if (_editingText is null)
+        {
+            return;
+        }
+
+        (int start, int end) = Selection();
+        (int run, _) = TextEditing.Locate(_editingText, start);
+        bool makeBold = bold
+            ? !_editingText.Runs[run].Bold
+            : false;
+        ApplyStyleToSelection(r =>
+        {
+            if (bold)
+            {
+                r.Bold = makeBold;
+            }
+            else
+            {
+                r.Italic = !r.Italic;
+            }
+        });
+    }
+
+    private int LineStart(int index)
+    {
+        if (_editingText is null)
+        {
+            return 0;
+        }
+
+        string flat = TextEditing.GetText(_editingText);
+        int i = Math.Clamp(index, 0, flat.Length);
+        while (i > 0 && flat[i - 1] != '\n')
+        {
+            i--;
+        }
+
+        return i;
+    }
+
+    private int LineEnd(int index)
+    {
+        if (_editingText is null)
+        {
+            return 0;
+        }
+
+        string flat = TextEditing.GetText(_editingText);
+        int i = Math.Clamp(index, 0, flat.Length);
+        while (i < flat.Length && flat[i] != '\n')
+        {
+            i++;
+        }
+
+        return i;
+    }
+
+    private int VerticalMove(int index, int direction)
+    {
+        if (_editingText is null)
+        {
+            return index;
+        }
+
+        TextMetrics metrics = MeasureText(_editingText);
+        int line = LineStart(index);
+        int column = index - line;
+        if (direction < 0)
+        {
+            if (line == 0)
+            {
+                return index;
+            }
+
+            int prevEnd = line - 1;          // the newline char
+            int prevStart = LineStart(prevEnd);
+            return Math.Min(prevStart + column, prevEnd);
+        }
+
+        int end = LineEnd(index);
+        if (end >= TextEditing.Length(_editingText))
+        {
+            return index;
+        }
+
+        int nextStart = end + 1;
+        int nextEnd = LineEnd(nextStart);
+        return Math.Min(nextStart + column, nextEnd);
+    }
+
+    private static (int Start, int End) WordBounds(TextItem text, int index)
+    {
+        string flat = TextEditing.GetText(text);
+        index = Math.Clamp(index, 0, flat.Length);
+        int start = index;
+        int end = index;
+        while (start > 0 && char.IsLetterOrDigit(flat[start - 1]))
+        {
+            start--;
+        }
+
+        while (end < flat.Length && char.IsLetterOrDigit(flat[end]))
+        {
+            end++;
+        }
+
+        return (start, end);
     }
 
     protected override void OnTextInput(TextInputEventArgs e)
@@ -3190,42 +3514,6 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
-    private Point2D CaretLocal()
-    {
-        if (_editingText is null)
-        {
-            return default;
-        }
-
-        double x = 0;
-        double y = 0;
-        int remaining = _caret;
-        foreach (TextRun run in _editingText.Runs)
-        {
-            foreach (char ch in run.Text)
-            {
-                if (remaining == 0)
-                {
-                    return new Point2D(x, y);
-                }
-
-                if (ch == '\n')
-                {
-                    x = 0;
-                    y += run.FontSize * 1.2;
-                }
-                else
-                {
-                    x += run.FontSize * 0.6;
-                }
-
-                remaining--;
-            }
-        }
-
-        return new Point2D(x, y);
-    }
-
     private void PaintTextCaret(DrawingContext context)
     {
         if (_editingText is null)
@@ -3234,7 +3522,10 @@ public sealed class CanvasWorkspace : Control
         }
 
         Vector2D offset = _editingText.ArtboardOffset();
-        Point2D local = CaretLocal();
+        TextMetrics metrics = MeasureText(_editingText);
+        int index = Math.Clamp(_caret, 0, metrics.X.Length - 1);
+
+        Point2D local = new(metrics.X[index], metrics.Y[index]);
         Point2D world = _editingText.Origin + new Vector2D(local.X, local.Y);
         if (Math.Abs(_editingText.RotationRadians) > 1e-9)
         {
@@ -3247,8 +3538,29 @@ public sealed class CanvasWorkspace : Control
         }
 
         Point screen = ModelToScreen(world + offset);
-        double h = _editingText.MaxFontSize * 1.2 * _layout.Zoom;
+        double h = metrics.Size[index] * 1.2 * _layout.Zoom;
         context.DrawLine(new Pen(Brushes.White, 1.4), screen, new Point(screen.X, screen.Y + h));
+    }
+
+    /// <summary>Nearest character index for a local text point (click/drag).</summary>
+    private int IndexAtLocal(TextItem text, Point2D local)
+    {
+        TextMetrics metrics = MeasureText(text);
+        int best = 0;
+        double bestDistance = double.PositiveInfinity;
+        for (int i = 0; i < metrics.X.Length; i++)
+        {
+            double dx = metrics.X[i] - local.X;
+            double dy = metrics.Y[i] - local.Y;
+            double d = dx * dx + dy * dy * 4; // weight vertical distance more
+            if (d < bestDistance)
+            {
+                bestDistance = d;
+                best = i;
+            }
+        }
+
+        return best;
     }
 
     private static FormattedText BuildArtboardLabel(string name, IBrush brush)

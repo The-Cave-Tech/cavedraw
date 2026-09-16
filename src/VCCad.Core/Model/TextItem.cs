@@ -27,6 +27,14 @@ public sealed class TextRun
     };
 }
 
+/// <summary>Horizontal alignment of text lines within a text block.</summary>
+public enum TextAlignment
+{
+    Left,
+    Center,
+    Right,
+}
+
 /// <summary>
 /// A text object. Rich text is represented as an ordered list of
 /// <see cref="TextRun"/>s; newlines inside a run start a new line. The origin is
@@ -51,6 +59,9 @@ public sealed class TextItem : LayerItem
 
     /// <summary>Rotation of the text block about its origin, in radians.</summary>
     public double RotationRadians { get; set; }
+
+    /// <summary>Horizontal alignment of lines within the block.</summary>
+    public TextAlignment Alignment { get; set; } = TextAlignment.Left;
 
     /// <summary>All runs concatenated (used for simple editing/measurement).</summary>
     public string PlainText
@@ -143,6 +154,7 @@ public sealed class TextItem : LayerItem
         Origin = other.Origin;
         Color = other.Color;
         RotationRadians = other.RotationRadians;
+        Alignment = other.Alignment;
         Runs.Clear();
         Runs.AddRange(other.Runs.Select(r => r.Clone()));
     }
@@ -158,6 +170,7 @@ public sealed class TextItem : LayerItem
             Origin = Origin,
             Color = Color,
             RotationRadians = RotationRadians,
+            Alignment = Alignment,
         };
         copy.Runs.AddRange(Runs.Select(r => r.Clone()));
         return copy;

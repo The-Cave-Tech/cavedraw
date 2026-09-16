@@ -68,6 +68,11 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// <summary>Run index under the text caret (for run-aware styling).</summary>
     public int TextCaretRunIndex { get; set; }
 
+    /// <summary>Current text selection range (global char indices) while editing.</summary>
+    public int TextSelectionStart { get; set; }
+
+    public int TextSelectionEnd { get; set; }
+
     /// <summary>Fill used for newly drawn objects (adopted from the selection).</summary>
     public FillSpec CurrentFill { get; set; } = FillSpec.None;
 
@@ -398,9 +403,20 @@ public sealed class DocumentSession : INotifyPropertyChanged
         {
             TextItem before = (TextItem)text.Clone();
 
-            if (runIndex is { } r && r >= 0 && r < text.Runs.Count)
+            if (IsEditingText && TextSelectionEnd > TextSelectionStart)
             {
-                // Style just the run under the caret (rich text).
+                // Style exactly the selected range (rich text).
+                TextEditing.ApplyStyle(text, TextSelectionStart, TextSelectionEnd, run =>
+                {
+                    run.FontFamily = family;
+                    run.FontSize = fontSize;
+                    run.Bold = bold;
+                    run.Italic = italic;
+                });
+            }
+            else if (runIndex is { } r && r >= 0 && r < text.Runs.Count)
+            {
+                // Style just the run under the caret.
                 TextRun run = text.Runs[r];
                 run.FontFamily = family;
                 run.FontSize = fontSize;
@@ -431,6 +447,96 @@ public sealed class DocumentSession : INotifyPropertyChanged
 
         Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Edit text", edits));
         SetStatus("Text updated");
+    }
+
+    /// <summary>
+    /// Distinct colours currently used in the document (fills, strokes and text),
+    /// always including black and white — the source for the swatch strip.
+    /// </summary>
+    public IReadOnlyList<ColorRgb> UsedColors()
+    {
+        var list = new List<ColorRgb>();
+
+        void Add(ColorRgb c)
+        {
+            if (!list.Any(x => SameColor(x, c)))
+            {
+                list.Add(c);
+            }
+        }
+
+        Add(ColorRgb.White);
+        Add(ColorRgb.Black);
+
+        foreach (Artboard artboard in Document.Artboards)
+        {
+            foreach (Layer layer in artboard.Layers)
+            {
+                foreach (LayerItem item in layer.Children)
+                {
+                    CollectColors(item, Add);
+                }
+            }
+        }
+
+        foreach (LayerItem item in Document.Orphans.Children)
+        {
+            CollectColors(item, Add);
+        }
+
+        return list;
+    }
+
+    private static void CollectColors(LayerItem item, Action<ColorRgb> add)
+    {
+        switch (item)
+        {
+            case PathItem path:
+                if (path.Fill.IsVisible)
+                {
+                    add(path.Fill.Color);
+                }
+
+                if (path.Stroke.IsVisible)
+                {
+                    add(path.Stroke.Color);
+                }
+
+                break;
+            case TextItem text:
+                add(text.Color);
+                break;
+            case ArtGroup group:
+                foreach (LayerItem child in group.Children)
+                {
+                    CollectColors(child, add);
+                }
+
+                break;
+        }
+    }
+
+    private static bool SameColor(ColorRgb a, ColorRgb b)
+        => (byte)Math.Round(a.R * 255) == (byte)Math.Round(b.R * 255)
+           && (byte)Math.Round(a.G * 255) == (byte)Math.Round(b.G * 255)
+           && (byte)Math.Round(a.B * 255) == (byte)Math.Round(b.B * 255)
+           && (byte)Math.Round(a.A * 255) == (byte)Math.Round(b.A * 255);
+
+    /// <summary>Sets the horizontal alignment of the selected text object(s).</summary>
+    public void SetTextAlignment(TextAlignment alignment)
+    {
+        var edits = new List<IUndoableCommand>();
+        foreach (TextItem text in SelectedTextItems())
+        {
+            TextItem before = (TextItem)text.Clone();
+            text.Alignment = alignment;
+            edits.Add(new ReplaceTextCommand(text, before, (TextItem)text.Clone(), "Align text"));
+        }
+
+        if (edits.Count > 0)
+        {
+            Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Align text", edits));
+        }
     }
 
     /// <summary>Moves items to a new container/index (drag-and-drop in the object

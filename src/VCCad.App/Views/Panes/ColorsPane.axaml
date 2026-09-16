@@ -15,6 +15,9 @@
 
       <controls:ColorWheel x:Name="Wheel" Width="112" Height="112" HorizontalAlignment="Left"/>
 
+      <!-- Swatches of colours currently used in the document -->
+      <WrapPanel x:Name="SwatchStrip"/>
+
       <Grid ColumnDefinitions="Auto,*,6,Auto,*,6,Auto,*,6,Auto,*" ColumnSpacing="2">
         <TextBlock Text="r:" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="FillR" Grid.Column="1"/>

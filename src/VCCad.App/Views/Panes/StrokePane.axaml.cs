@@ -1,5 +1,6 @@
 using System.Globalization;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
@@ -10,10 +11,44 @@ namespace VCCad.App.Views.Panes;
 public partial class StrokePane : UserControl
 {
     private EditorViewModel? _vm;
+    private bool _syncing;
 
     public StrokePane()
     {
         InitializeComponent();
+
+        // Changes take effect immediately; text fields also commit on Enter.
+        StrokeCapBox.SelectionChanged += (_, _) => ApplyNow();
+        StrokeJoinBox.SelectionChanged += (_, _) => ApplyNow();
+        StrokeAlignBox.SelectionChanged += (_, _) => ApplyNow();
+        foreach (TextBox box in new[] { StrokeWidthBox, MiterBox })
+        {
+            box.KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Enter)
+                {
+                    ApplyNow();
+                    e.Handled = true;
+                }
+            };
+            box.LostFocus += (_, _) => ApplyNow();
+        }
+    }
+
+    /// <summary>Applies the current stroke fields to the selection (and current style).</summary>
+    private void ApplyNow()
+    {
+        if (_vm is null || _syncing)
+        {
+            return;
+        }
+
+        double width = double.TryParse(StrokeWidthBox.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double w) ? w : 1.0;
+        double miter = double.TryParse(MiterBox.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double m) ? m : 4.0;
+        StrokeCap cap = StrokeCapBox.SelectedIndex switch { 1 => StrokeCap.Round, 2 => StrokeCap.Square, _ => StrokeCap.Butt };
+        StrokeJoin join = StrokeJoinBox.SelectedIndex switch { 1 => StrokeJoin.Round, 2 => StrokeJoin.Bevel, _ => StrokeJoin.Miter };
+        StrokeAlignment align = StrokeAlignBox.SelectedIndex switch { 1 => StrokeAlignment.Inside, 2 => StrokeAlignment.Outside, _ => StrokeAlignment.Center };
+        _vm.ApplyStroke(width, cap, join, miter, align);
     }
 
     public void Attach(EditorViewModel vm)
@@ -32,6 +67,7 @@ public partial class StrokePane : UserControl
             return;
         }
 
+        _syncing = true;
         if (!StrokeWidthBox.IsFocused)
         {
             StrokeWidthBox.Text = path.Stroke.Width.ToString("0.##", CultureInfo.InvariantCulture);
@@ -60,20 +96,7 @@ public partial class StrokePane : UserControl
             StrokeAlignment.Outside => 2,
             _ => 0,
         };
+        _syncing = false;
     }
 
-    private void OnApplyStroke(object? sender, RoutedEventArgs e)
-    {
-        if (_vm is null)
-        {
-            return;
-        }
-
-        double width = double.TryParse(StrokeWidthBox.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double w) ? w : 1.0;
-        double miter = double.TryParse(MiterBox.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double m) ? m : 4.0;
-        StrokeCap cap = StrokeCapBox.SelectedIndex switch { 1 => StrokeCap.Round, 2 => StrokeCap.Square, _ => StrokeCap.Butt };
-        StrokeJoin join = StrokeJoinBox.SelectedIndex switch { 1 => StrokeJoin.Round, 2 => StrokeJoin.Bevel, _ => StrokeJoin.Miter };
-        StrokeAlignment align = StrokeAlignBox.SelectedIndex switch { 1 => StrokeAlignment.Inside, 2 => StrokeAlignment.Outside, _ => StrokeAlignment.Center };
-        _vm.ApplyStroke(width, cap, join, miter, align);
-    }
 }

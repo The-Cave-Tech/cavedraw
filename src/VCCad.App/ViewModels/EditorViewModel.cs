@@ -247,6 +247,20 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         set => _active.TextCaretRunIndex = value;
     }
 
+    public int TextSelectionStart
+    {
+        get => _active.TextSelectionStart;
+        set => _active.TextSelectionStart = value;
+    }
+
+    public int TextSelectionEnd
+    {
+        get => _active.TextSelectionEnd;
+        set => _active.TextSelectionEnd = value;
+    }
+
+    public void SetTextAlignment(TextAlignment alignment) => _active.SetTextAlignment(alignment);
+
     public FillSpec CurrentFill
     {
         get => _active.CurrentFill;
@@ -261,6 +275,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     public IEnumerable<PathItem> SelectedPaths() => _active.SelectedPaths();
     public IEnumerable<TextItem> SelectedTextItems() => _active.SelectedTextItems();
+    public IReadOnlyList<ColorRgb> UsedColors() => _active.UsedColors();
     public IEnumerable<(PathItem Path, int Sub, int Seg)> SelectedSegments() => _active.SelectedSegments();
     public Rect2D SelectionBounds() => _active.SelectionBounds();
     public (Rect2D Bounds, double AngleDeg) TransformReadout() => _active.TransformReadout();
