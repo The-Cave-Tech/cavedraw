@@ -218,6 +218,10 @@ public sealed class CanvasWorkspace : Control
             _chromeAngle = 0;
             InvalidateVisual();
         };
+
+        // Lightweight repaints (layer/artboard visibility, stroke colour) raised
+        // by panes that mutate the model without going through a command.
+        viewModel.TransformChanged += (_, _) => InvalidateVisual();
         InvalidateVisual();
     }
 
@@ -2723,32 +2727,43 @@ public sealed class CanvasWorkspace : Control
             }
         }
 
-        double yOffset = 0;
+        // Measure each run's natural width first: the wrapping constraint must
+        // never be narrower than the text, or every line wraps.
+        var laidOut = new List<(FormattedText Formatted, double LineHeight, int Lines)>();
+        double blockWidth = 0;
         foreach (TextRun run in text.Runs)
         {
-            var typeface = new Typeface(
-                new FontFamily(run.FontFamily),
-                run.Italic ? FontStyle.Italic : FontStyle.Normal,
-                run.Bold ? FontWeight.Bold : FontWeight.Normal);
+            FormattedText formatted = CreateFormattedText(run, brush);
+            blockWidth = Math.Max(blockWidth, formatted.Width);
+            laidOut.Add((formatted, run.FontSize * 1.2, run.Text.Count(ch => ch == '\n') + 1));
+        }
 
-            var formatted = new FormattedText(run.Text, CultureInfo.CurrentCulture,
-                FlowDirection.LeftToRight, typeface, run.FontSize, brush)
+        double yOffset = 0;
+        foreach ((FormattedText formatted, double lineHeight, int lines) in laidOut)
+        {
+            formatted.MaxTextWidth = Math.Max(1, blockWidth);
+            formatted.TextAlignment = text.Alignment switch
             {
-                MaxTextWidth = Math.Max(1, metrics.MaxWidth),
-                TextAlignment = text.Alignment switch
-                {
-                    ModelTextAlignment.Center => Avalonia.Media.TextAlignment.Center,
-                    ModelTextAlignment.Right => Avalonia.Media.TextAlignment.Right,
-                    _ => Avalonia.Media.TextAlignment.Left,
-                },
+                ModelTextAlignment.Center => Avalonia.Media.TextAlignment.Center,
+                ModelTextAlignment.Right => Avalonia.Media.TextAlignment.Right,
+                _ => Avalonia.Media.TextAlignment.Left,
             };
 
             Point2D origin = text.Origin + offset + new Vector2D(0, yOffset);
             context.DrawText(formatted, new Point(origin.X, origin.Y));
-
-            int lineCount = run.Text.Count(ch => ch == '\n') + 1;
-            yOffset += lineCount * run.FontSize * 1.2;
+            yOffset += lines * lineHeight;
         }
+    }
+
+    private static FormattedText CreateFormattedText(TextRun run, IBrush brush)
+    {
+        var typeface = new Typeface(
+            new FontFamily(run.FontFamily),
+            run.Italic ? FontStyle.Italic : FontStyle.Normal,
+            run.Bold ? FontWeight.Bold : FontWeight.Normal);
+
+        return new FormattedText(run.Text, CultureInfo.CurrentCulture,
+            FlowDirection.LeftToRight, typeface, run.FontSize, brush);
     }
 
     /// <summary>Measured layout of a text block: per-character boundary positions

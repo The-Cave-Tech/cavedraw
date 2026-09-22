@@ -491,7 +491,10 @@ public static class PdfDocumentExporter
 
             var hex = new StringBuilder();
             double lineStartX = x;
-            double lineY = y;
+            // The model stores the block's top-left; PDF places text on the
+            // baseline, so drop by the embedded font's ascent.
+            double ascent = font.UnitsPerEm > 0 ? (double)font.Ascender / font.UnitsPerEm : 0.8;
+            double lineY = y + (ascent * run.FontSize);
 
             void Flush()
             {
@@ -522,7 +525,7 @@ public static class PdfDocumentExporter
                     x = originX;
                     y += run.FontSize * 1.2;
                     lineStartX = x;
-                    lineY = y;
+                    lineY = y + (ascent * run.FontSize);
                     continue;
                 }
 

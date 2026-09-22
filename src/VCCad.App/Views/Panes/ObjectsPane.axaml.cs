@@ -15,6 +15,7 @@ namespace VCCad.App.Views.Panes;
 /// of controls up front.</summary>
 public partial class ObjectsPane : UserControl
 {
+    private static readonly object PasteboardTag = new();
     private readonly ObservableCollection<ObjectNode> _roots = new();
     private readonly Dictionary<object, ObjectNode> _map = new(ReferenceEqualityComparer.Instance);
 
@@ -51,19 +52,30 @@ public partial class ObjectsPane : UserControl
             return;
         }
 
+        // Remember which nodes the user expanded so a rebuild (which happens on
+        // every edit) does not collapse the tree again.
+        var expanded = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        foreach (ObjectNode node in _map.Values)
+        {
+            if (node.IsExpanded && node.Tag is not null)
+            {
+                expanded.Add(node.Tag);
+            }
+        }
+
         _roots.Clear();
         _map.Clear();
         var pasteboard = new List<LayerItem>();
 
         foreach (Artboard artboard in _vm.Document.Artboards)
         {
-            var board = new ObjectNode(artboard.Name, artboard, artboard.IsVisible, true,
+            var board = new ObjectNode(artboard.Name, artboard, artboard.IsVisible, expanded.Contains(artboard),
                 v => SetVisible(artboard, v));
             _map[artboard] = board;
 
             foreach (Layer layer in artboard.Layers)
             {
-                var layerNode = new ObjectNode(FormatLayer(layer), layer, layer.IsVisible, true,
+                var layerNode = new ObjectNode(FormatLayer(layer), layer, layer.IsVisible, expanded.Contains(layer),
                     v => SetVisible(layer, v));
                 _map[layer] = layerNode;
 
@@ -71,7 +83,7 @@ public partial class ObjectsPane : UserControl
                 {
                     if (IntersectsArtboard(child, artboard))
                     {
-                        AddItemNode(layerNode, child);
+                        AddItemNode(layerNode, child, expanded);
                     }
                     else
                     {
@@ -89,10 +101,10 @@ public partial class ObjectsPane : UserControl
 
         if (pasteboard.Count > 0)
         {
-            var paste = new ObjectNode("Pasteboard", null, true, false, _ => { });
+            var paste = new ObjectNode("Pasteboard", PasteboardTag, true, expanded.Contains(PasteboardTag), _ => { });
             foreach (LayerItem item in pasteboard)
             {
-                AddItemNode(paste, item);
+                AddItemNode(paste, item, expanded);
             }
 
             _roots.Add(paste);
@@ -130,9 +142,9 @@ public partial class ObjectsPane : UserControl
         return $"{layer.Name}{flags}";
     }
 
-    private void AddItemNode(ObjectNode parent, LayerItem item)
+    private void AddItemNode(ObjectNode parent, LayerItem item, HashSet<object> expanded)
     {
-        var node = new ObjectNode(DescribeItem(item), item, item.IsVisible, false,
+        var node = new ObjectNode(DescribeItem(item), item, item.IsVisible, expanded.Contains(item),
             v => SetVisible(item, v));
         _map[item] = node;
 
@@ -140,7 +152,7 @@ public partial class ObjectsPane : UserControl
         {
             foreach (LayerItem child in group.Children)
             {
-                AddItemNode(node, child);
+                AddItemNode(node, child, expanded);
             }
         }
 

@@ -448,7 +448,7 @@ internal sealed class PdfContentImporter
             return;
         }
 
-        (string family, bool bold, bool italic) = MapFont(fontName, resources);
+        (string family, bool bold, bool italic, double ascent) = MapFont(fontName, resources);
 
         // The glyph size is the Tf size scaled by the text matrix (and any enclosing
         // CTM). Illustrator typically writes "/F1 1 Tf" with the real size in Tm, so
@@ -459,10 +459,14 @@ internal sealed class PdfContentImporter
         double rotation = -Math.Atan2(matrix.B, matrix.A);
 
         Point2D origin = matrix.Transform(new Point2D(0, 0));
+
+        // PDF text origins sit on the baseline; the model stores the block's
+        // top-left, so lift the origin by the font's ascent.
+        double ascentPoints = ascent * effectiveSize;
         var item = new TextItem
         {
             Name = "Text",
-            Origin = new Point2D(origin.X, _pageHeight - origin.Y),
+            Origin = new Point2D(origin.X, _pageHeight - origin.Y - ascentPoints),
             Color = color,
             RotationRadians = rotation,
         };
@@ -470,14 +474,25 @@ internal sealed class PdfContentImporter
         items.Add(new PdfImportedItem(layer, item));
     }
 
-    private (string Family, bool Bold, bool Italic) MapFont(string fontName, Dictionary<string, object?> resources)
+    private (string Family, bool Bold, bool Italic, double Ascent) MapFont(
+        string fontName, Dictionary<string, object?> resources)
     {
         string baseFont = fontName;
+        double ascent = 0.8;
         if (_file.ResolveDict(resources.GetValueOrDefault("Font")) is { } fonts &&
-            _file.ResolveDict(fonts.GetValueOrDefault(fontName)) is { } fontDict &&
-            fontDict.GetValueOrDefault("BaseFont") is PdfName bf)
+            _file.ResolveDict(fonts.GetValueOrDefault(fontName)) is { } fontDict)
         {
-            baseFont = bf.Value;
+            if (fontDict.GetValueOrDefault("BaseFont") is PdfName bf)
+            {
+                baseFont = bf.Value;
+            }
+
+            // Ascent from the font descriptor, in thousandths of an em.
+            if (_file.ResolveDict(fontDict.GetValueOrDefault("FontDescriptor")) is { } descriptor &&
+                _file.ResolveNumber(descriptor.GetValueOrDefault("Ascent")) is double a && a > 0)
+            {
+                ascent = a / 1000.0;
+            }
         }
 
         bool bold = baseFont.Contains("Bold", StringComparison.OrdinalIgnoreCase) ||
@@ -495,7 +510,7 @@ internal sealed class PdfContentImporter
                 ? "DejaVu Serif"
                 : "DejaVu Sans";
 
-        return (family, bold, italic);
+        return (family, bold, italic, ascent);
     }
 
     private static void AddCubic(SubPath path, Point2D c1, Point2D c2, Point2D end)
