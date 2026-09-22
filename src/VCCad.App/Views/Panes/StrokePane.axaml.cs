@@ -55,6 +55,7 @@ public partial class StrokePane : UserControl
     {
         _vm = vm;
         vm.DocumentChanged += (_, _) => Refresh();
+        vm.SelectionChanged += (_, _) => Refresh();
         Refresh();
     }
 

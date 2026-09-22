@@ -26,6 +26,17 @@ public sealed class PathItem : LayerItem
     /// <summary>Subpaths in draw order; usually one, but compound shapes use many.</summary>
     public List<SubPath> SubPaths { get; } = new();
 
+    /// <summary>Incremented whenever the geometry changes. Renderers cache compiled
+    /// geometry against this value so they don't rebuild it every frame.</summary>
+    public int GeometryRevision { get; private set; }
+
+    /// <summary>Marks the geometry as changed (bumps the revision and notifies).</summary>
+    private void TouchGeometry()
+    {
+        GeometryRevision++;
+        NotifyPropertyChanged(nameof(SubPaths));
+    }
+
     /// <summary>The fill paint. See class remarks for the open/closed rule.</summary>
     public FillSpec Fill
     {
@@ -55,7 +66,7 @@ public sealed class PathItem : LayerItem
     {
         var sp = new SubPath { IsClosed = closed };
         SubPaths.Add(sp);
-        NotifyPropertyChanged(nameof(SubPaths));
+        TouchGeometry();
         return sp;
     }
 
@@ -131,7 +142,7 @@ public sealed class PathItem : LayerItem
             }
         }
 
-        NotifyPropertyChanged(nameof(SubPaths));
+        TouchGeometry();
     }
 
     /// <summary>Translates every anchor and handle by <paramref name="delta"/> (in
@@ -148,7 +159,7 @@ public sealed class PathItem : LayerItem
             }
         }
 
-        NotifyPropertyChanged(nameof(SubPaths));
+        TouchGeometry();
     }
 
     /// <summary>Translates a single node and its two handles by <paramref name="delta"/>.
@@ -164,7 +175,7 @@ public sealed class PathItem : LayerItem
         node.Anchor += delta;
         node.InHandle += delta;
         node.OutHandle += delta;
-        NotifyPropertyChanged(nameof(SubPaths));
+        TouchGeometry();
     }
 
     /// <summary>Rotates every anchor and handle about <paramref name="center"/> by
@@ -194,7 +205,7 @@ public sealed class PathItem : LayerItem
             }
         }
 
-        NotifyPropertyChanged(nameof(SubPaths));
+        TouchGeometry();
     }
 
     /// <summary>Translates the two end nodes of one segment by <paramref name="delta"/> —
@@ -228,7 +239,7 @@ public sealed class PathItem : LayerItem
             }
         }
 
-        NotifyPropertyChanged(nameof(SubPaths));
+        TouchGeometry();
     }
 
     /// <inheritdoc/>

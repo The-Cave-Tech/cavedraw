@@ -197,6 +197,8 @@ public sealed class CanvasWorkspace : Control
                 _chromeAngle = 0;
             }
 
+            ClearGeometryCache();
+            _brushCache.Clear();
             InvalidateVisual();
         };
         viewModel.PropertyChanged += (_, args) =>
@@ -214,6 +216,7 @@ public sealed class CanvasWorkspace : Control
             // A new selection starts with an axis-aligned chrome box.
             _chromeRect = null;
             _chromeAngle = 0;
+            InvalidateVisual();
         };
         InvalidateVisual();
     }
@@ -1777,6 +1780,7 @@ public sealed class CanvasWorkspace : Control
                 node.OutHandle = _nodeOutStart + delta;
             }
 
+            InvalidateGeometry(_nodePath);
             _vm!.RaiseTransformChanged();
             InvalidateVisual();
             return;
@@ -1815,6 +1819,7 @@ public sealed class CanvasWorkspace : Control
             _gestureMoved = true;
             _segmentNodeA.OutHandle = a0 + h;
             _segmentNodeB.InHandle = b0 + h;
+            InvalidateGeometry(_segmentPath);
             _vm!.RaiseTransformChanged();
             InvalidateVisual();
         }
@@ -2170,6 +2175,11 @@ public sealed class CanvasWorkspace : Control
         }
 
         _penNode.OutHandle = target;
+        if (_penPath is not null)
+        {
+            InvalidateGeometry(_penPath);
+        }
+
         InvalidateVisual();
     }
 
@@ -2487,6 +2497,21 @@ public sealed class CanvasWorkspace : Control
     // Rendering
     // ------------------------------------------------------------------
 
+    // Cached resources (rebuilt only when geometry/colour changes).
+    private readonly Dictionary<PathItem, (int Revision, StreamGeometry Geometry)> _geometryCache = new();
+    private readonly Dictionary<uint, IBrush> _brushCache = new();
+    private static readonly IBrush BackgroundBrush = new SolidColorBrush(Color.FromRgb(0x1B, 0x1B, 0x1F));
+    private static readonly IBrush PasteboardBrush = new SolidColorBrush(Color.FromRgb(0x23, 0x23, 0x27));
+    private static readonly IBrush PageBrush = new SolidColorBrush(Colors.White);
+    private static readonly IBrush PageBorderBrush = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42));
+    private static readonly IBrush ShadowBrush = new SolidColorBrush(Color.FromArgb(110, 0, 0, 0));
+    private Rect2D _worldViewport = Rect2D.Empty;
+
+    /// <summary>Drops cached geometry (called on structural/geometry changes).</summary>
+    private void ClearGeometryCache() => _geometryCache.Clear();
+
+    private void InvalidateGeometry(PathItem path) => _geometryCache.Remove(path);
+
     public override void Render(DrawingContext context)
     {
         base.Render(context);
@@ -2495,28 +2520,36 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        context.FillRectangle(new SolidColorBrush(Color.FromRgb(0x1B, 0x1B, 0x1F)), new Rect(Bounds.Size));
+        context.FillRectangle(BackgroundBrush, new Rect(Bounds.Size));
+
+        double z = Math.Max(_layout.Zoom, 1e-6);
+        double tx = _offset.X - _layout.Extent.Left * z;
+        double ty = _offset.Y - _layout.Extent.Top * z;
+        Avalonia.Matrix world = Avalonia.Matrix.CreateScale(z, z) * Avalonia.Matrix.CreateTranslation(tx, ty);
+
+        _worldViewport = Rect2D.FromPoints(
+            ModelPointAtScreen(new Point(0, 0)),
+            ModelPointAtScreen(new Point(Bounds.Width, Bounds.Height)));
 
         Rect2D extent = _layout.Extent;
-        Point topLeft = ModelToScreen(new Point2D(extent.Left, extent.Top));
-        context.FillRectangle(
-            new SolidColorBrush(Color.FromRgb(0x23, 0x23, 0x27)),
-            new Rect(topLeft.X, topLeft.Y, extent.Width * _layout.Zoom, extent.Height * _layout.Zoom));
-
-        foreach (Artboard artboard in _document.Artboards)
+        using (context.PushTransform(world))
         {
-            if (artboard.IsVisible)
+            context.FillRectangle(PasteboardBrush, new Rect(extent.Left, extent.Top, extent.Width, extent.Height));
+
+            foreach (Artboard artboard in _document.Artboards)
             {
-                PaintArtboard(context, artboard);
+                if (artboard.IsVisible)
+                {
+                    PaintArtboardWorld(context, artboard);
+                }
             }
-        }
 
-        // Orphaned (pasteboard) objects, drawn in world coordinates.
-        if (_document.Orphans.IsVisible)
-        {
-            foreach (LayerItem item in _document.Orphans.Children)
+            if (_document.Orphans.IsVisible)
             {
-                PaintItem(context, item, _document.Orphans.Opacity);
+                foreach (LayerItem item in _document.Orphans.Children)
+                {
+                    PaintItem(context, item, _document.Orphans.Opacity);
+                }
             }
         }
 
@@ -2524,15 +2557,15 @@ public sealed class CanvasWorkspace : Control
         PaintOverlays(context);
     }
 
-    private void PaintArtboard(DrawingContext context, Artboard artboard)
+    private void PaintArtboardWorld(DrawingContext context, Artboard artboard)
     {
-        Point p = ModelToScreen(new Point2D(artboard.X, artboard.Y));
-        var rect = new Rect(p.X, p.Y, artboard.Width * _layout.Zoom, artboard.Height * _layout.Zoom);
-        // Soft drop shadow so the page lifts off the dark pasteboard.
-        context.FillRectangle(new SolidColorBrush(Color.FromArgb(110, 0, 0, 0)),
-            new Rect(rect.X + 3, rect.Y + 3, rect.Width, rect.Height));
-        context.FillRectangle(new SolidColorBrush(Colors.White), rect);
-        context.DrawRectangle(new Pen(new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)), 1.0), rect);
+        Rect2D r = artboard.Bounds;
+        double z = Math.Max(_layout.Zoom, 1e-6);
+        var rect = new Rect(r.Left, r.Top, r.Width, r.Height);
+
+        context.FillRectangle(ShadowBrush, new Rect(rect.X + 3 / z, rect.Y + 3 / z, rect.Width, rect.Height));
+        context.FillRectangle(PageBrush, rect);
+        context.DrawRectangle(null, new Pen(PageBorderBrush, 1 / z), rect);
 
         foreach (Layer layer in artboard.Layers)
         {
@@ -2558,6 +2591,13 @@ public sealed class CanvasWorkspace : Control
         switch (item)
         {
             case PathItem path when path.IsVisible:
+                Rect2D bounds = path.WorldBounds();
+                if (!bounds.IsEmpty &&
+                    !bounds.Inflated(path.Stroke.Width + 1).Intersects(_worldViewport))
+                {
+                    return; // culled (off-screen)
+                }
+
                 PaintPath(context, path, opacity * path.Opacity);
                 break;
 
@@ -2575,24 +2615,83 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
+    private void PaintPath(DrawingContext context, PathItem path, double opacity)
+    {
+        bool anyClosed = path.SubPaths.Any(sp => sp.IsClosed);
+        bool fillVisible = path.Fill.IsVisible && anyClosed;
+        bool strokeVisible = path.Stroke.HasVisibleOutline;
+        if (!fillVisible && !strokeVisible)
+        {
+            return;
+        }
+
+        StreamGeometry geometry = GetGeometry(path);
+        double width = Math.Max(0.01, path.Stroke.Width);
+
+        Pen StrokePen(double thickness) => new(
+            ToBrush(path.Stroke.Color, opacity),
+            thickness: Math.Max(0.01, thickness),
+            lineCap: ToLineCap(path.Stroke.Cap),
+            lineJoin: ToLineJoin(path.Stroke.Join),
+            miterLimit: path.Stroke.MiterLimit);
+
+        if (fillVisible)
+        {
+            context.DrawGeometry(ToBrush(path.Fill.Color, opacity), null, geometry);
+        }
+
+        if (!strokeVisible)
+        {
+            return;
+        }
+
+        bool aligned = path.Stroke.Alignment != StrokeAlignment.Center && anyClosed;
+        if (!aligned)
+        {
+            context.DrawGeometry(null, StrokePen(width), geometry);
+            return;
+        }
+
+        Avalonia.Media.Geometry clip = path.Stroke.Alignment == StrokeAlignment.Inside
+            ? geometry
+            : BuildGeometry(path, outsideClip: true);
+        using (context.PushGeometryClip(clip))
+        {
+            context.DrawGeometry(null, StrokePen(width * 2), geometry);
+        }
+    }
+
+    /// <summary>Cached world-space geometry for a path (rebuilt when its revision changes).</summary>
+    private StreamGeometry GetGeometry(PathItem path)
+    {
+        if (_geometryCache.TryGetValue(path, out (int Revision, StreamGeometry Geometry) entry) &&
+            entry.Revision == path.GeometryRevision)
+        {
+            return entry.Geometry;
+        }
+
+        StreamGeometry geometry = BuildGeometry(path, outsideClip: false);
+        _geometryCache[path] = (path.GeometryRevision, geometry);
+        return geometry;
+    }
+
     private void PaintText(DrawingContext context, TextItem text, double opacity)
     {
         Vector2D offset = text.ArtboardOffset();
         IBrush brush = ToBrush(text.Color, opacity);
         TextMetrics metrics = MeasureText(text);
 
-        Avalonia.Matrix? transform = null;
+        Avalonia.Matrix? rotation = null;
         if (Math.Abs(text.RotationRadians) > 1e-9)
         {
-            Point s0 = ModelToScreen(text.Origin + offset);
-            transform = Avalonia.Matrix.CreateTranslation(-s0.X, -s0.Y)
+            Point2D o = text.Origin + offset;
+            rotation = Avalonia.Matrix.CreateTranslation(-o.X, -o.Y)
                 * Avalonia.Matrix.CreateRotation(text.RotationRadians)
-                * Avalonia.Matrix.CreateTranslation(s0.X, s0.Y);
+                * Avalonia.Matrix.CreateTranslation(o.X, o.Y);
         }
 
-        IDisposable? pushed = transform is { } m ? context.PushTransform(m) : null;
+        using IDisposable? pushed = rotation is { } m ? context.PushTransform(m) : null;
 
-        // Selection highlight (only while this text is being edited).
         if (ReferenceEquals(text, _editingText))
         {
             int a = Math.Min(_caret, _editAnchor);
@@ -2600,15 +2699,15 @@ public sealed class CanvasWorkspace : Control
             var selBrush = new SolidColorBrush(Color.FromArgb(90, 0x4C, 0x9A, 0xFF));
             for (int i = a; i < b && i + 1 < metrics.X.Length; i++)
             {
-                Point p0 = ModelToScreen(text.Origin + new Vector2D(metrics.X[i], metrics.Y[i]) + offset);
+                Point2D p0 = text.Origin + offset + new Vector2D(metrics.X[i], metrics.Y[i]);
                 double w = metrics.Y[i + 1] == metrics.Y[i]
-                    ? (metrics.X[i + 1] - metrics.X[i]) * _layout.Zoom
-                    : metrics.Size[i] * 0.3 * _layout.Zoom;
-                context.FillRectangle(selBrush, new Rect(p0.X, p0.Y, Math.Max(1, w), metrics.Size[i] * 1.2 * _layout.Zoom));
+                    ? metrics.X[i + 1] - metrics.X[i]
+                    : metrics.Size[i] * 0.3;
+                context.FillRectangle(selBrush, new Rect(p0.X, p0.Y, Math.Max(0.5, w), metrics.Size[i] * 1.2));
             }
         }
 
-        // Draw each run's lines using the measured layout.
+        double yOffset = 0;
         foreach (TextRun run in text.Runs)
         {
             var typeface = new Typeface(
@@ -2616,20 +2715,24 @@ public sealed class CanvasWorkspace : Control
                 run.Italic ? FontStyle.Italic : FontStyle.Normal,
                 run.Bold ? FontWeight.Bold : FontWeight.Normal);
 
-            string[] lines = run.Text.Split('\n');
-            for (int i = 0; i < lines.Length; i++)
+            var formatted = new FormattedText(run.Text, CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight, typeface, run.FontSize, brush)
             {
-                if (lines[i].Length > 0)
+                MaxTextWidth = Math.Max(1, metrics.MaxWidth),
+                TextAlignment = text.Alignment switch
                 {
-                    var formatted = new FormattedText(lines[i], CultureInfo.CurrentCulture,
-                        FlowDirection.LeftToRight, typeface, run.FontSize, brush);
-                    Point screen = ModelToScreen(new Point2D(text.Origin.X, text.Origin.Y) + offset);
-                    context.DrawText(formatted, screen);
-                }
-            }
-        }
+                    ModelTextAlignment.Center => Avalonia.Media.TextAlignment.Center,
+                    ModelTextAlignment.Right => Avalonia.Media.TextAlignment.Right,
+                    _ => Avalonia.Media.TextAlignment.Left,
+                },
+            };
 
-        pushed?.Dispose();
+            Point2D origin = text.Origin + offset + new Vector2D(0, yOffset);
+            context.DrawText(formatted, new Point(origin.X, origin.Y));
+
+            int lineCount = run.Text.Count(ch => ch == '\n') + 1;
+            yOffset += lineCount * run.FontSize * 1.2;
+        }
     }
 
     /// <summary>Measured layout of a text block: per-character boundary positions
@@ -2683,7 +2786,6 @@ public sealed class CanvasWorkspace : Control
             MaxWidth = blockWidth,
         };
 
-        // Second pass: positions with horizontal alignment.
         double y = 0;
         foreach ((int lineStartIndex, int count, double width, double height) in lines)
         {
@@ -2734,56 +2836,9 @@ public sealed class CanvasWorkspace : Control
         return text.MaxFontSize * 0.6;
     }
 
-    private void PaintPath(DrawingContext context, PathItem path, double opacity)
-    {
-        bool anyClosed = path.SubPaths.Any(sp => sp.IsClosed);
-        bool fillVisible = path.Fill.IsVisible && anyClosed;
-        bool strokeVisible = path.Stroke.HasVisibleOutline;
-        if (!fillVisible && !strokeVisible)
-        {
-            return;
-        }
-
-        StreamGeometry geometry = BuildGeometry(path, outsideClip: false);
-        double width = Math.Max(0.1, path.Stroke.Width * _layout.Zoom);
-        Pen StrokePen(double thickness) => new(
-            ToBrush(path.Stroke.Color, opacity),
-            thickness: Math.Max(0.1, thickness),
-            lineCap: ToLineCap(path.Stroke.Cap),
-            lineJoin: ToLineJoin(path.Stroke.Join),
-            miterLimit: path.Stroke.MiterLimit);
-
-        if (fillVisible)
-        {
-            context.DrawGeometry(ToBrush(path.Fill.Color, opacity), null, geometry);
-        }
-
-        if (!strokeVisible)
-        {
-            return;
-        }
-
-        bool aligned = path.Stroke.Alignment != StrokeAlignment.Center && anyClosed;
-        if (!aligned)
-        {
-            context.DrawGeometry(null, StrokePen(width), geometry);
-            return;
-        }
-
-        // Inside/Outside: clip to the region, then stroke at double width.
-        Avalonia.Media.Geometry clip = path.Stroke.Alignment == StrokeAlignment.Inside
-            ? geometry
-            : BuildGeometry(path, outsideClip: true);
-        using (context.PushGeometryClip(clip))
-        {
-            context.DrawGeometry(null, StrokePen(width * 2), geometry);
-        }
-    }
-
-    /// <summary>Builds the on-screen geometry for a path. When
-    /// <paramref name="outsideClip"/> is true a huge surrounding rectangle is
-    /// prepended with the even-odd rule, giving the complement region (used to
-    /// clip an "outside" stroke).</summary>
+    /// <summary>Builds world-space geometry for a path. When <paramref name="outsideClip"/>
+    /// is true a huge surrounding rectangle is prepended with the even-odd rule to
+    /// give the complement region (for clipping an "outside" stroke).</summary>
     private StreamGeometry BuildGeometry(PathItem path, bool outsideClip)
     {
         var geometry = new StreamGeometry();
@@ -2791,9 +2846,8 @@ public sealed class CanvasWorkspace : Control
             ? MediaFillRule.EvenOdd
             : MediaFillRule.NonZero;
 
-        // Path coordinates are artboard-local; shift into world space.
         Vector2D offset = path.ArtboardOffset();
-        Point Map(Point2D local) => ModelToScreen(local + offset);
+        Point Map(Point2D local) => new(local.X + offset.X, local.Y + offset.Y);
 
         using (StreamGeometryContext g = geometry.Open())
         {
@@ -2802,14 +2856,10 @@ public sealed class CanvasWorkspace : Control
             if (outsideClip)
             {
                 Rect2D huge = _layout.Extent.Inflated(10000);
-                Point tl = ModelToScreen(new Point2D(huge.Left, huge.Top));
-                Point tr = ModelToScreen(new Point2D(huge.Right, huge.Top));
-                Point br = ModelToScreen(new Point2D(huge.Right, huge.Bottom));
-                Point bl = ModelToScreen(new Point2D(huge.Left, huge.Bottom));
-                g.BeginFigure(tl, true);
-                g.LineTo(tr);
-                g.LineTo(br);
-                g.LineTo(bl);
+                g.BeginFigure(new Point(huge.Left, huge.Top), true);
+                g.LineTo(new Point(huge.Right, huge.Top));
+                g.LineTo(new Point(huge.Right, huge.Bottom));
+                g.LineTo(new Point(huge.Left, huge.Bottom));
                 g.EndFigure(true);
             }
 
@@ -2848,8 +2898,6 @@ public sealed class CanvasWorkspace : Control
         return geometry;
     }
 
-    /// <summary>Everything drawn above the artwork: selection chrome, node/segment
-    /// overlays, shape previews and the pen rubber band.</summary>
     private void PaintOverlays(DrawingContext context)
     {
         if (_vm is null)
@@ -3827,13 +3875,21 @@ public sealed class CanvasWorkspace : Control
     private static bool Near(Point a, Point b)
         => Math.Abs(a.X - b.X) < 1e-6 && Math.Abs(a.Y - b.Y) < 1e-6;
 
-    private static IBrush ToBrush(ColorRgb color, double opacity)
+    private IBrush ToBrush(ColorRgb color, double opacity)
     {
         byte alpha = (byte)Math.Round(MathUtils.Clamp(opacity * color.A, 0.0, 1.0) * 255.0);
         byte r = (byte)Math.Round(MathUtils.Clamp(color.R, 0.0, 1.0) * 255.0);
         byte g = (byte)Math.Round(MathUtils.Clamp(color.G, 0.0, 1.0) * 255.0);
         byte b = (byte)Math.Round(MathUtils.Clamp(color.B, 0.0, 1.0) * 255.0);
-        return new SolidColorBrush(new Color(alpha, r, g, b));
+        uint key = ((uint)alpha << 24) | ((uint)r << 16) | ((uint)g << 8) | b;
+        if (_brushCache.TryGetValue(key, out IBrush? cached))
+        {
+            return cached;
+        }
+
+        var brush = new SolidColorBrush(new Color(alpha, r, g, b));
+        _brushCache[key] = brush;
+        return brush;
     }
 
     private static PenLineCap ToLineCap(StrokeCap cap) => cap switch

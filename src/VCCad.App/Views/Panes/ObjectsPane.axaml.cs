@@ -1,30 +1,34 @@
+using System.Collections.ObjectModel;
 using Avalonia;
-using System.Collections;
-using Avalonia.Input;
-using Avalonia.Media.Imaging;
-using Avalonia.Platform;
-using Avalonia.VisualTree;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.VisualTree;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
 using VCCad.Geometry;
 
 namespace VCCad.App.Views.Panes;
 
-/// <summary>Object browser tab: a hierarchical tree (artboard → layer → group →
-/// path) whose selection stays in sync with the canvas.</summary>
+/// <summary>Object browser tab: a data-bound, virtualised tree (artboard → layer →
+/// group → path) whose selection stays in sync with the canvas. Nodes are plain
+/// view-models, so a document with thousands of objects does not create thousands
+/// of controls up front.</summary>
 public partial class ObjectsPane : UserControl
 {
+    private readonly ObservableCollection<ObjectNode> _roots = new();
+    private readonly Dictionary<object, ObjectNode> _map = new(ReferenceEqualityComparer.Instance);
+
     private EditorViewModel? _vm;
     private bool _syncing;
 
     private Point _pressPoint;
-    private TreeViewItem? _pressItem;
+    private ObjectNode? _pressNode;
     private bool _dragArmed;
 
     public ObjectsPane()
     {
         InitializeComponent();
+        ObjectTree.ItemsSource = _roots;
         DragDrop.SetAllowDrop(ObjectTree, true);
         ObjectTree.PointerPressed += OnTreePointerPressed;
         ObjectTree.PointerMoved += OnTreePointerMoved;
@@ -35,28 +39,34 @@ public partial class ObjectsPane : UserControl
     public void Attach(EditorViewModel vm)
     {
         _vm = vm;
-        vm.DocumentChanged += (_, _) => RefreshTree();
-        RefreshTree();
+        vm.DocumentChanged += (_, _) => Rebuild();
+        vm.SelectionChanged += (_, _) => SyncToSelection();
+        Rebuild();
     }
 
-    private void RefreshTree()
+    private void Rebuild()
     {
         if (_vm is null)
         {
             return;
         }
 
-        ObjectTree.Items.Clear();
+        _roots.Clear();
+        _map.Clear();
         var pasteboard = new List<LayerItem>();
 
         foreach (Artboard artboard in _vm.Document.Artboards)
         {
-            var board = MakeNode(artboard.Name, artboard, header: true, artboard.IsVisible,
-                () => artboard.IsVisible = !artboard.IsVisible);
+            var board = new ObjectNode(artboard.Name, artboard, artboard.IsVisible, true,
+                v => SetVisible(artboard, v));
+            _map[artboard] = board;
+
             foreach (Layer layer in artboard.Layers)
             {
-                var layerNode = MakeNode(FormatLayer(layer), layer, header: true, layer.IsVisible,
-                    () => layer.IsVisible = !layer.IsVisible);
+                var layerNode = new ObjectNode(FormatLayer(layer), layer, layer.IsVisible, true,
+                    v => SetVisible(layer, v));
+                _map[layer] = layerNode;
+
                 foreach (LayerItem child in layer.Children)
                 {
                     if (IntersectsArtboard(child, artboard))
@@ -69,28 +79,44 @@ public partial class ObjectsPane : UserControl
                     }
                 }
 
-                board.Items.Add(layerNode);
+                board.Children.Add(layerNode);
             }
 
-            ObjectTree.Items.Add(board);
+            _roots.Add(board);
         }
 
-        // Document-level orphans (objects that belong to no artboard) plus any
-        // items that have drifted off their artboard are shown as pasteboard.
         pasteboard.AddRange(_vm.Document.Orphans.Children);
 
         if (pasteboard.Count > 0)
         {
-            var paste = MakeNode("Pasteboard", null, header: true, true, () => { });
+            var paste = new ObjectNode("Pasteboard", null, true, false, _ => { });
             foreach (LayerItem item in pasteboard)
             {
                 AddItemNode(paste, item);
             }
 
-            ObjectTree.Items.Add(paste);
+            _roots.Add(paste);
         }
 
         SyncToSelection();
+    }
+
+    private void SetVisible(LayerItem item, bool visible)
+    {
+        item.IsVisible = visible;
+        _vm?.RaiseTransformChanged();
+    }
+
+    private void SetVisible(Artboard artboard, bool visible)
+    {
+        artboard.IsVisible = visible;
+        _vm?.RaiseTransformChanged();
+    }
+
+    private void SetVisible(Layer layer, bool visible)
+    {
+        layer.IsVisible = visible;
+        _vm?.RaiseTransformChanged();
     }
 
     private static string FormatLayer(Layer layer)
@@ -104,10 +130,12 @@ public partial class ObjectsPane : UserControl
         return $"{layer.Name}{flags}";
     }
 
-    private void AddItemNode(TreeViewItem parent, LayerItem item)
+    private void AddItemNode(ObjectNode parent, LayerItem item)
     {
-        var node = MakeNode(DescribeItem(item), item, header: false, item.IsVisible,
-            () => item.IsVisible = !item.IsVisible);
+        var node = new ObjectNode(DescribeItem(item), item, item.IsVisible, false,
+            v => SetVisible(item, v));
+        _map[item] = node;
+
         if (item is ArtGroup group)
         {
             foreach (LayerItem child in group.Children)
@@ -116,7 +144,7 @@ public partial class ObjectsPane : UserControl
             }
         }
 
-        parent.Items.Add(node);
+        parent.Children.Add(node);
     }
 
     private static string DescribeItem(LayerItem item) => item switch
@@ -126,54 +154,10 @@ public partial class ObjectsPane : UserControl
         _ => item.Name,
     };
 
-    private TreeViewItem MakeNode(string text, object? tag, bool header, bool isVisible, Action toggle)
-    {
-        var label = new TextBlock
-        {
-            Text = text,
-            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-            Foreground = new Avalonia.Media.SolidColorBrush(
-                isVisible ? Avalonia.Media.Color.FromRgb(0xE6, 0xE6, 0xE9)
-                          : Avalonia.Media.Color.FromRgb(0x6A, 0x6A, 0x72)),
-        };
-
-        var eye = new Button
-        {
-            Content = EyeIcon(isVisible),
-            Padding = new Thickness(4, 0),
-            Background = Avalonia.Media.Brushes.Transparent,
-            BorderThickness = new Thickness(0),
-            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-        };
-        ToolTip.SetTip(eye, isVisible ? "Hide" : "Show");
-        eye.Click += (_, e) =>
-        {
-            toggle();
-            RefreshTree();
-            e.Handled = true;
-        };
-
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-        Grid.SetColumn(label, 0);
-        Grid.SetColumn(eye, 1);
-        grid.Children.Add(label);
-        grid.Children.Add(eye);
-
-        return new TreeViewItem { Header = grid, Tag = tag, IsExpanded = header };
-    }
-
-    private static Image EyeIcon(bool visible)
-    {
-        var bitmap = new Bitmap(AssetLoader.Open(new Uri(
-            $"avares://VCCad.App/Assets/Icons/{(visible ? "eye" : "eye-off")}.png")));
-        return new Image { Source = bitmap, Width = 14, Height = 14, Stretch = Avalonia.Media.Stretch.Uniform };
-    }
-
     private void OnTreePointerPressed(object? sender, PointerPressedEventArgs e)
     {
         _pressPoint = e.GetPosition(ObjectTree);
-        _pressItem = FindItem(e.Source as Visual);
+        _pressNode = FindNode(e.Source as Visual);
         _dragArmed = e.GetCurrentPoint(ObjectTree).Properties.IsLeftButtonPressed;
     }
 
@@ -192,15 +176,15 @@ public partial class ObjectsPane : UserControl
 
         _dragArmed = false;
         var items = new List<LayerItem>();
-        foreach (object? selected in ObjectTree.SelectedItems)
+        foreach (ObjectNode node in ObjectTree.SelectedItems.OfType<ObjectNode>())
         {
-            if (selected is TreeViewItem { Tag: LayerItem li })
+            if (node.Tag is LayerItem li)
             {
                 items.Add(li);
             }
         }
 
-        if (items.Count == 0 && _pressItem?.Tag is LayerItem single)
+        if (items.Count == 0 && _pressNode?.Tag is LayerItem single)
         {
             items.Add(single);
         }
@@ -225,50 +209,51 @@ public partial class ObjectsPane : UserControl
             return;
         }
 
-        TreeViewItem? target = FindItem(e.Source as Visual);
-        IItemContainer container;
+        TreeViewItem? container = FindContainer(e.Source as Visual);
+        ObjectNode? target = container?.DataContext as ObjectNode;
+        IItemContainer targetContainer;
         int index;
 
         if (target?.Tag is ArtGroup group)
         {
-            container = group;
+            targetContainer = group;
             index = group.Children.Count;
         }
         else if (target?.Tag is Layer layer)
         {
-            container = layer;
+            targetContainer = layer;
             index = layer.Children.Count;
         }
         else if (target?.Tag is LayerItem item && item.Container is { } parent)
         {
-            container = parent;
+            targetContainer = parent;
             index = IndexOf(parent, item);
             // Drop on the lower half of a row to insert after it.
-            double h = target.Bounds.Height;
-            if (e.GetPosition(target).Y > h / 2)
+            double h = container!.Bounds.Height;
+            if (e.GetPosition(container).Y > h / 2)
             {
                 index++;
             }
         }
         else
         {
-            container = _vm.Document.Orphans;
-            index = container.Children.Count;
+            targetContainer = _vm.Document.Orphans;
+            index = targetContainer.Children.Count;
         }
 
         try
         {
-            _vm.MoveItems(items, container, index);
+            _vm.MoveItems(items, targetContainer, index);
         }
         catch (InvalidOperationException)
         {
             // Dropping a group into its own descendant is not allowed.
         }
 
-        RefreshTree();
+        Rebuild();
     }
 
-    private static TreeViewItem? FindItem(Visual? source)
+    private static TreeViewItem? FindContainer(Visual? source)
     {
         for (Visual? v = source; v is not null; v = v.GetVisualParent())
         {
@@ -280,6 +265,9 @@ public partial class ObjectsPane : UserControl
 
         return null;
     }
+
+    private static ObjectNode? FindNode(Visual? source)
+        => FindContainer(source)?.DataContext as ObjectNode;
 
     private static int IndexOf(IItemContainer container, LayerItem item)
     {
@@ -310,7 +298,7 @@ public partial class ObjectsPane : UserControl
 
     private void SyncToSelection()
     {
-        if (_vm is null)
+        if (_vm is null || _syncing)
         {
             return;
         }
@@ -318,41 +306,15 @@ public partial class ObjectsPane : UserControl
         _syncing = true;
         try
         {
-            TreeViewItem? target = null;
-            if (_vm.SelectedObjects.Count > 0)
+            if (_vm.SelectedObjects.Count > 0 && _map.TryGetValue(_vm.SelectedObjects[0], out ObjectNode? node))
             {
-                target = FindNode(ObjectTree.Items, _vm.SelectedObjects[0]);
+                ObjectTree.SelectedItem = node;
             }
-
-            ObjectTree.SelectedItem = target;
         }
         finally
         {
             _syncing = false;
         }
-    }
-
-    private static TreeViewItem? FindNode(IEnumerable items, LayerItem target)
-    {
-        foreach (object child in items)
-        {
-            if (child is not TreeViewItem node)
-            {
-                continue;
-            }
-
-            if (ReferenceEquals(node.Tag, target))
-            {
-                return node;
-            }
-
-            if (FindNode(node.Items, target) is { } found)
-            {
-                return found;
-            }
-        }
-
-        return null;
     }
 
     private void OnTreeSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -363,11 +325,17 @@ public partial class ObjectsPane : UserControl
         }
 
         var selected = new List<LayerItem>();
-        foreach (object? entry in ObjectTree.SelectedItems)
+        Artboard? artboard = null;
+        foreach (ObjectNode node in ObjectTree.SelectedItems.OfType<ObjectNode>())
         {
-            if (entry is TreeViewItem { Tag: LayerItem li })
+            switch (node.Tag)
             {
-                selected.Add(li);
+                case LayerItem item:
+                    selected.Add(item);
+                    break;
+                case Artboard board:
+                    artboard = board;
+                    break;
             }
         }
 
@@ -379,7 +347,7 @@ public partial class ObjectsPane : UserControl
         {
             _vm.SelectRange(selected, additive: false);
         }
-        else if (ObjectTree.SelectedItem is TreeViewItem { Tag: Artboard artboard })
+        else if (artboard is not null)
         {
             _vm.SelectArtboard(artboard);
         }

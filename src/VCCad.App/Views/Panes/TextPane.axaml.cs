@@ -38,6 +38,7 @@ public partial class TextPane : UserControl
     {
         _vm = vm;
         vm.DocumentChanged += (_, _) => Refresh();
+        vm.SelectionChanged += (_, _) => Refresh();
         vm.TransformChanged += (_, _) => Refresh();
         Refresh();
     }

@@ -95,6 +95,9 @@ internal sealed class PdfContentImporter
         var stack = new Stack<AffineTransform>();
         AffineTransform current = ctm;
         double lineWidth = 1.0;
+        int lineCap = 0;
+        int lineJoin = 0;
+        double miterLimit = 10.0;
         ColorRgb strokeColor = ColorRgb.Black;
         ColorRgb fillColor = ColorRgb.Black;
 
@@ -145,7 +148,7 @@ internal sealed class PdfContentImporter
                 item.Fill = fill ? FillSpec.Solid(fillColor) : FillSpec.None;
                 item.Stroke = stroke
                     ? new StrokeSpec(true, strokeColor,
-                        Math.Max(0.01, lineWidth * ScaleOf(current)), StrokeCap.Butt, StrokeJoin.Miter, 4.0)
+                        Math.Max(0.01, lineWidth * ScaleOf(current)), ToCap(lineCap), ToJoin(lineJoin), miterLimit)
                     : StrokeSpec.None;
                 items.Add(item);
             }
@@ -196,6 +199,15 @@ internal sealed class PdfContentImporter
                     break;
                 case "w" when operands.Count >= 1:
                     lineWidth = Number(0);
+                    break;
+                case "J" when operands.Count >= 1:
+                    lineCap = (int)Number(0);
+                    break;
+                case "j" when operands.Count >= 1:
+                    lineJoin = (int)Number(0);
+                    break;
+                case "M" when operands.Count >= 1:
+                    miterLimit = Math.Max(1.0, Number(0));
                     break;
                 case "RG" when operands.Count >= 3:
                     strokeColor = Color3(0);
@@ -422,6 +434,20 @@ internal sealed class PdfContentImporter
 
         return sb.ToString();
     }
+
+    private static StrokeCap ToCap(int value) => value switch
+    {
+        1 => StrokeCap.Round,
+        2 => StrokeCap.Square,
+        _ => StrokeCap.Butt,
+    };
+
+    private static StrokeJoin ToJoin(int value) => value switch
+    {
+        1 => StrokeJoin.Round,
+        2 => StrokeJoin.Bevel,
+        _ => StrokeJoin.Miter,
+    };
 
     private static double ToDouble(object? value) => value switch
     {

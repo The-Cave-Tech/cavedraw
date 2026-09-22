@@ -1263,7 +1263,8 @@ public sealed class DocumentSession : INotifyPropertyChanged
         OnPropertyChanged(nameof(SelectedObjects));
         OnPropertyChanged(nameof(PrimarySelection));
         OnPropertyChanged(nameof(HasMultiSelection));
-        DocumentChanged?.Invoke(this, EventArgs.Empty);
+        // Selection is a lightweight change: it raises SelectionChanged only, so
+        // the object tree is not rebuilt when the user merely picks something.
     }
 
     private void NotifyCanvas()
