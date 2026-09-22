@@ -83,11 +83,30 @@ public static class PdfImporter
             Dictionary<string, object?> page = pageDicts[i];
             (double w, double h) = MediaBox(file, page);
             Artboard artboard = document.AddArtboard(new Size2D(w, h), $"Page {i + 1}", new Point2D(x, 0));
-            Layer layer = artboard.AddLayer("Imported");
 
-            foreach (LayerItem item in new PdfContentImporter(file, h).ParsePage(page))
+            // Preserve the PDF's optional-content layers (Illustrator layers). Items
+            // drawn outside any marked-content block land in a default layer.
+            var layers = new Dictionary<string, Layer>(StringComparer.Ordinal);
+            Layer LayerFor(string? name)
             {
-                layer.AddItem(item);
+                string key = string.IsNullOrWhiteSpace(name) ? "Imported" : name;
+                if (!layers.TryGetValue(key, out Layer? layer))
+                {
+                    layer = artboard.AddLayer(key);
+                    layers[key] = layer;
+                }
+
+                return layer;
+            }
+
+            foreach (PdfImportedItem imported in new PdfContentImporter(file, h).ParsePage(page))
+            {
+                LayerFor(imported.Layer).AddItem(imported.Item);
+            }
+
+            if (layers.Count == 0)
+            {
+                artboard.AddLayer("Imported");
             }
 
             x += w + gap;

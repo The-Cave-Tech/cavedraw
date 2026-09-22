@@ -321,8 +321,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public void ClearFill() => _active.ClearFill();
     public void ClearStroke() => _active.ClearStroke();
     public void ApplyStrokeColor(ColorRgb color) => _active.ApplyStrokeColor(color);
-    public void ApplyStroke(double width, StrokeCap cap, StrokeJoin join, double miter, StrokeAlignment align)
-        => _active.ApplyStroke(width, cap, join, miter, align);
+    public void ApplyStroke(double width, StrokeCap cap, StrokeJoin join, double miter, StrokeAlignment align,
+        DashPattern? dash = null)
+        => _active.ApplyStroke(width, cap, join, miter, align, dash);
     public void ApplyTransform(Point2D pivot, Vector2D translation, double sx, double sy, double rotationDegrees)
         => _active.ApplyTransform(pivot, translation, sx, sy, rotationDegrees);
 

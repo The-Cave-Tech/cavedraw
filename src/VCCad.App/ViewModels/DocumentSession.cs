@@ -1023,12 +1023,13 @@ public sealed class DocumentSession : INotifyPropertyChanged
     {
         CurrentStroke = new StrokeSpec(true, color,
             CurrentStroke.Width > 0 ? CurrentStroke.Width : 1.0,
-            CurrentStroke.Cap, CurrentStroke.Join, CurrentStroke.MiterLimit, CurrentStroke.Alignment);
+            CurrentStroke.Cap, CurrentStroke.Join, CurrentStroke.MiterLimit, CurrentStroke.Alignment,
+            CurrentStroke.Dash);
         var edits = SelectedPaths().Select(p =>
         {
             double width = p.Stroke.Width > 0 ? p.Stroke.Width : 1.0;
             return (IUndoableCommand)new SetStrokeCommand(p,
-                new StrokeSpec(true, color, width, p.Stroke.Cap, p.Stroke.Join, p.Stroke.MiterLimit, p.Stroke.Alignment));
+                new StrokeSpec(true, color, width, p.Stroke.Cap, p.Stroke.Join, p.Stroke.MiterLimit, p.Stroke.Alignment, p.Stroke.Dash));
         }).ToList();
         ExecuteIfAny(edits, "Stroke colour");
     }
@@ -1036,19 +1037,21 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// <summary>Applies stroke geometry (width/cap/join/miter) to selected paths,
     /// keeping each path's existing colour.</summary>
     public void ApplyStroke(double width, StrokeCap cap, StrokeJoin join, double miterLimit,
-        StrokeAlignment alignment)
+        StrokeAlignment alignment, DashPattern? dash = null)
     {
         // The new spec becomes the "current style" for objects drawn next, even
         // when nothing is selected (so setting a width before drawing works).
         ColorRgb baseColor = CurrentStroke.IsVisible ? CurrentStroke.Color : ColorRgb.Black;
+        DashPattern currentDash = dash ?? CurrentStroke.Dash;
         CurrentStroke = new StrokeSpec(true, baseColor, Math.Max(0, width), cap, join,
-            Math.Max(1, miterLimit), alignment);
+            Math.Max(1, miterLimit), alignment, currentDash);
 
         var edits = SelectedPaths().Select(p =>
         {
             ColorRgb color = p.Stroke.IsVisible ? p.Stroke.Color : ColorRgb.Black;
+            DashPattern d = dash ?? p.Stroke.Dash;
             return (IUndoableCommand)new SetStrokeCommand(p,
-                new StrokeSpec(true, color, Math.Max(0, width), cap, join, Math.Max(1, miterLimit), alignment));
+                new StrokeSpec(true, color, Math.Max(0, width), cap, join, Math.Max(1, miterLimit), alignment, d));
         }).ToList();
         ExecuteIfAny(edits, "Stroke");
     }

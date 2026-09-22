@@ -27,6 +27,16 @@
         </ComboBox>
       </Grid>
       <Grid ColumnDefinitions="Auto,*">
+        <TextBlock Text="Dash" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <ComboBox x:Name="StrokeDashBox" Grid.Column="1" SelectedIndex="0" HorizontalAlignment="Stretch">
+          <ComboBoxItem Content="Solid"/>
+          <ComboBoxItem Content="Dashed"/>
+          <ComboBoxItem Content="Dotted"/>
+          <ComboBoxItem Content="Dash-dot"/>
+          <ComboBoxItem Content="Dash-dot-dot"/>
+        </ComboBox>
+      </Grid>
+      <Grid ColumnDefinitions="Auto,*">
         <TextBlock Text="Align" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <ComboBox x:Name="StrokeAlignBox" Grid.Column="1" SelectedIndex="0" HorizontalAlignment="Stretch">
           <ComboBoxItem Content="Center"/>

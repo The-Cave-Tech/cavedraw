@@ -13,6 +13,9 @@ namespace VCCad.Pdf;
 /// text state. Coordinates are converted from PDF user space (bottom-left origin)
 /// into the artboard-local top-left frame.
 /// </summary>
+/// <summary>A model item plus the optional-content (layer) name it was drawn under.</summary>
+internal sealed record PdfImportedItem(string? Layer, LayerItem Item);
+
 internal sealed class PdfContentImporter
 {
     private readonly PdfFile _file;
@@ -24,11 +27,44 @@ internal sealed class PdfContentImporter
         _pageHeight = pageHeight;
     }
 
-    public List<LayerItem> ParsePage(Dictionary<string, object?> pageDict)
+    public List<PdfImportedItem> ParsePage(Dictionary<string, object?> pageDict)
     {
-        var items = new List<LayerItem>();
-        Interpret(GetContents(pageDict), FindResources(pageDict), AffineTransform.Identity, items, 0);
+        var items = new List<PdfImportedItem>();
+        Interpret(GetContents(pageDict), FindResources(pageDict), AffineTransform.Identity, items, 0, null);
         return items;
+    }
+
+    /// <summary>
+    /// Resolves the layer name for an optional-content marked-content property
+    /// (<c>/OC /MCn BDC</c>): the name is looked up in the resource
+    /// <c>/Properties</c> dictionary, whose value is an OCG whose <c>/Name</c> is
+    /// the human-readable layer name shown in Illustrator.
+    /// </summary>
+    private string? ResolveOcgName(Dictionary<string, object?> resources, object? property)
+    {
+        object? target = property;
+        if (property is PdfName key &&
+            _file.ResolveDict(resources.GetValueOrDefault("Properties")) is { } properties)
+        {
+            target = properties.GetValueOrDefault(key.Value);
+        }
+
+        if (_file.ResolveDict(target) is { } ocg)
+        {
+            if (ocg.GetValueOrDefault("Name") is string name && name.Length > 0)
+            {
+                return name;
+            }
+
+            if (ocg.GetValueOrDefault("OCGs") is List<object?> list && list.Count > 0 &&
+                _file.ResolveDict(list[0]) is { } first &&
+                first.GetValueOrDefault("Name") is string nested && nested.Length > 0)
+            {
+                return nested;
+            }
+        }
+
+        return null;
     }
 
     private byte[] GetContents(Dictionary<string, object?> pageDict)
@@ -85,7 +121,7 @@ internal sealed class PdfContentImporter
     // ------------------------------------------------------------------
 
     private void Interpret(byte[] content, Dictionary<string, object?> resources,
-        AffineTransform ctm, List<LayerItem> items, int depth)
+        AffineTransform ctm, List<PdfImportedItem> items, int depth, string? layer)
     {
         if (depth > 12 || content.Length == 0)
         {
@@ -98,6 +134,7 @@ internal sealed class PdfContentImporter
         int lineCap = 0;
         int lineJoin = 0;
         double miterLimit = 10.0;
+        DashPattern dash = DashPattern.None;
         ColorRgb strokeColor = ColorRgb.Black;
         ColorRgb fillColor = ColorRgb.Black;
 
@@ -110,6 +147,10 @@ internal sealed class PdfContentImporter
         var operands = new List<object?>();
         var subPaths = new List<SubPath>();
         SubPath? currentPath = null;
+
+        // Optional-content (layer) state: BDC/BMC push, EMC pops.
+        string? currentLayer = layer;
+        var layerStack = new Stack<string?>();
 
         double Number(int index)
             => index < operands.Count ? ToDouble(operands[index]) : 0.0;
@@ -148,9 +189,10 @@ internal sealed class PdfContentImporter
                 item.Fill = fill ? FillSpec.Solid(fillColor) : FillSpec.None;
                 item.Stroke = stroke
                     ? new StrokeSpec(true, strokeColor,
-                        Math.Max(0.01, lineWidth * ScaleOf(current)), ToCap(lineCap), ToJoin(lineJoin), miterLimit)
+                        Math.Max(0.01, lineWidth * ScaleOf(current)), ToCap(lineCap), ToJoin(lineJoin), miterLimit,
+                        StrokeAlignment.Center, dash)
                     : StrokeSpec.None;
-                items.Add(item);
+                items.Add(new PdfImportedItem(currentLayer, item));
             }
 
             subPaths.Clear();
@@ -209,6 +251,29 @@ internal sealed class PdfContentImporter
                 case "M" when operands.Count >= 1:
                     miterLimit = Math.Max(1.0, Number(0));
                     break;
+                case "d" when operands.Count >= 1:
+                {
+                    double phase = operands.Count >= 2 ? Number(1) : 0.0;
+                    if (operands[0] is List<object?> array && array.Count > 0)
+                    {
+                        double scale = ScaleOf(current);
+                        var segs = new List<double>(array.Count);
+                        foreach (object? entry in array)
+                        {
+                            segs.Add(Math.Max(0.0, ToDouble(entry) * scale));
+                        }
+
+                        dash = segs.Any(v => v > 0.0)
+                            ? new DashPattern(segs, phase * scale)
+                            : DashPattern.None;
+                    }
+                    else
+                    {
+                        dash = DashPattern.None;
+                    }
+
+                    break;
+                }
                 case "RG" when operands.Count >= 3:
                     strokeColor = Color3(0);
                     break;
@@ -278,6 +343,24 @@ internal sealed class PdfContentImporter
                     subPaths.Clear();
                     currentPath = null;
                     break;
+                case "BDC" when operands.Count >= 2:
+                    layerStack.Push(currentLayer);
+                    if (operands[0] is PdfName { Value: "OC" })
+                    {
+                        currentLayer = ResolveOcgName(resources, operands[1]) ?? currentLayer;
+                    }
+
+                    break;
+                case "BMC" when operands.Count >= 1:
+                    layerStack.Push(currentLayer);
+                    break;
+                case "EMC":
+                    if (layerStack.Count > 0)
+                    {
+                        currentLayer = layerStack.Pop();
+                    }
+
+                    break;
                 case "BT":
                     textMatrix = AffineTransform.Identity;
                     lineMatrix = AffineTransform.Identity;
@@ -308,7 +391,7 @@ internal sealed class PdfContentImporter
                     textMatrix = lineMatrix;
                     break;
                 case "Tj" when operands.Count >= 1 && operands[0] is string text:
-                    ShowText(text, resources, fontName, fontSize, current, textMatrix, fillColor, items);
+                    ShowText(text, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer);
                     break;
                 case "TJ" when operands.Count >= 1 && operands[0] is List<object?> array:
                     var sb = new StringBuilder();
@@ -320,10 +403,10 @@ internal sealed class PdfContentImporter
                         }
                     }
 
-                    ShowText(sb.ToString(), resources, fontName, fontSize, current, textMatrix, fillColor, items);
+                    ShowText(sb.ToString(), resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer);
                     break;
                 case "Do" when operands.Count >= 1 && operands[0] is PdfName xname:
-                    DrawXObject(resources, xname.Value, current, items, depth);
+                    DrawXObject(resources, xname.Value, current, items, depth, currentLayer);
                     break;
             }
 
@@ -332,7 +415,7 @@ internal sealed class PdfContentImporter
     }
 
     private void DrawXObject(Dictionary<string, object?> resources, string name,
-        AffineTransform ctm, List<LayerItem> items, int depth)
+        AffineTransform ctm, List<PdfImportedItem> items, int depth, string? layer)
     {
         if (_file.ResolveDict(resources.GetValueOrDefault("XObject")) is not { } xobjects ||
             _file.Resolve(xobjects.GetValueOrDefault(name)) is not PdfStream stream ||
@@ -353,12 +436,12 @@ internal sealed class PdfContentImporter
         Dictionary<string, object?> childResources =
             _file.ResolveDict(dict.GetValueOrDefault("Resources")) ?? resources;
 
-        Interpret(_file.GetStreamData(stream), childResources, ctm.Compose(matrix), items, depth + 1);
+        Interpret(_file.GetStreamData(stream), childResources, ctm.Compose(matrix), items, depth + 1, layer);
     }
 
     private void ShowText(string text, Dictionary<string, object?> resources, string fontName,
         double fontSize, AffineTransform ctm, AffineTransform textMatrix, ColorRgb color,
-        List<LayerItem> items)
+        List<PdfImportedItem> items, string? layer)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -366,15 +449,25 @@ internal sealed class PdfContentImporter
         }
 
         (string family, bool bold, bool italic) = MapFont(fontName, resources);
-        Point2D origin = ctm.Compose(textMatrix).Transform(new Point2D(0, 0));
+
+        // The glyph size is the Tf size scaled by the text matrix (and any enclosing
+        // CTM). Illustrator typically writes "/F1 1 Tf" with the real size in Tm, so
+        // ignoring the matrix scale renders everything at 1pt.
+        AffineTransform matrix = ctm.Compose(textMatrix);
+        double scale = Math.Sqrt((matrix.A * matrix.A) + (matrix.B * matrix.B));
+        double effectiveSize = fontSize * scale;
+        double rotation = -Math.Atan2(matrix.B, matrix.A);
+
+        Point2D origin = matrix.Transform(new Point2D(0, 0));
         var item = new TextItem
         {
             Name = "Text",
             Origin = new Point2D(origin.X, _pageHeight - origin.Y),
             Color = color,
+            RotationRadians = rotation,
         };
-        item.Runs.Add(new TextRun { Text = text, FontFamily = family, FontSize = fontSize, Bold = bold, Italic = italic });
-        items.Add(item);
+        item.Runs.Add(new TextRun { Text = text, FontFamily = family, FontSize = effectiveSize, Bold = bold, Italic = italic });
+        items.Add(new PdfImportedItem(layer, item));
     }
 
     private (string Family, bool Bold, bool Italic) MapFont(string fontName, Dictionary<string, object?> resources)

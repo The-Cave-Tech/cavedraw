@@ -292,6 +292,12 @@ public static class PdfDocumentExporter
             {
                 ops.Add($"{Num(path.Stroke.MiterLimit)} M");
             }
+
+            if (!path.Stroke.Dash.IsEmpty)
+            {
+                string array = string.Join(' ', path.Stroke.Dash.Segments.Select(v => Num(Math.Max(0.0, v * strokeScale))));
+                ops.Add($"[{array}] {Num(path.Stroke.Dash.Offset * strokeScale)} d");
+            }
         }
 
         var closed = contours.Where(c => c.IsClosed).ToList();

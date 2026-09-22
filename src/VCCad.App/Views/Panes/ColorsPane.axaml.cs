@@ -226,7 +226,7 @@ public partial class ColorsPane : UserControl
             {
                 double width = path.Stroke.Width > 0 ? path.Stroke.Width : 1.0;
                 path.Stroke = new StrokeSpec(true, color, width, path.Stroke.Cap, path.Stroke.Join,
-                    path.Stroke.MiterLimit, path.Stroke.Alignment);
+                    path.Stroke.MiterLimit, path.Stroke.Alignment, path.Stroke.Dash);
             }
         }
         else

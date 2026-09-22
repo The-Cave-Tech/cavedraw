@@ -2628,12 +2628,28 @@ public sealed class CanvasWorkspace : Control
         StreamGeometry geometry = GetGeometry(path);
         double width = Math.Max(0.01, path.Stroke.Width);
 
-        Pen StrokePen(double thickness) => new(
-            ToBrush(path.Stroke.Color, opacity),
-            thickness: Math.Max(0.01, thickness),
-            lineCap: ToLineCap(path.Stroke.Cap),
-            lineJoin: ToLineJoin(path.Stroke.Join),
-            miterLimit: path.Stroke.MiterLimit);
+        Pen StrokePen(double thickness)
+        {
+            var pen = new Pen(
+                ToBrush(path.Stroke.Color, opacity),
+                thickness: Math.Max(0.01, thickness),
+                lineCap: ToLineCap(path.Stroke.Cap),
+                lineJoin: ToLineJoin(path.Stroke.Join),
+                miterLimit: path.Stroke.MiterLimit);
+
+            if (!path.Stroke.Dash.IsEmpty)
+            {
+                // Dash lengths are in the same user-space units as the stroke width,
+                // so scale them by the same factor used for the (possibly group-
+                // transformed) width.
+                double factor = path.Stroke.Width > 0 ? thickness / path.Stroke.Width : 1.0;
+                pen.DashStyle = new DashStyle(
+                    path.Stroke.Dash.Segments.Select(d => Math.Max(0.01, d * factor)).ToArray(),
+                    path.Stroke.Dash.Offset * factor);
+            }
+
+            return pen;
+        }
 
         if (fillVisible)
         {
@@ -2972,7 +2988,7 @@ public sealed class CanvasWorkspace : Control
 
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
         var pen = new Pen(accent, 1.2) { DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0) };
-        double half = Math.Max(4.0 / _layout.Zoom, 1.0);
+        double half = 4.0;
 
         // Oriented outline through the four corners (TL → TR → BR → BL).
         var outline = new StreamGeometry();
@@ -3004,7 +3020,7 @@ public sealed class CanvasWorkspace : Control
         // Rotation knob above the oriented top-centre.
         Point2D top = OrientedCell(bounds, 1);
         Point rot = ModelToScreen(RotationHandlePoint(bounds));
-        double r = Math.Max(4.5 / _layout.Zoom, 1.6);
+        double r = 4.5;
         context.DrawLine(handlePen, ModelToScreen(top), rot);
         context.DrawEllipse(Brushes.White, new Pen(accent, 1.4), rot, r, r);
     }
@@ -3014,7 +3030,7 @@ public sealed class CanvasWorkspace : Control
     {
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
         var pen = new Pen(accent, 1.4);
-        double half = Math.Max(4.0 / _layout.Zoom, 1.0);
+        double half = 4.0;
 
         foreach (SubPath sub in path.SubPaths)
         {
@@ -3071,8 +3087,8 @@ public sealed class CanvasWorkspace : Control
             anchor, ModelToScreen(_handleSnapPos));
 
         // Heavier control handle to signal "release to snap".
-        double big = Math.Max(3.6 / _layout.Zoom, 1.4);
-        var ring = new Pen(new SolidColorBrush(Color.FromRgb(0x2B, 0x6C, 0xB0)), Math.Max(1.8, 2.0 * _layout.Zoom));
+        double big = 3.6;
+        var ring = new Pen(new SolidColorBrush(Color.FromRgb(0x2B, 0x6C, 0xB0)), 1.8);
         context.DrawEllipse(Brushes.White, ring, handle, big, big);
     }
 
@@ -3102,7 +3118,7 @@ public sealed class CanvasWorkspace : Control
     {
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
         var handlePen = new Pen(accent, 1.4);
-        double half = Math.Max(4.0 / _layout.Zoom, 1.0);
+        double half = 4.0;
 
         foreach ((PathItem path, int sub, int seg) in _vm!.SelectedSegments())
         {
@@ -3686,7 +3702,7 @@ public sealed class CanvasWorkspace : Control
         Point tl = ModelToScreen(new Point2D(r.Left, r.Top));
         context.DrawRectangle(null, pen, new Rect(tl.X, tl.Y, r.Width * _layout.Zoom, r.Height * _layout.Zoom));
 
-        double half = Math.Max(4.0 / _layout.Zoom, 1.0);
+        double half = 4.0;
         var handlePen = new Pen(accent, 1.4);
         Point2D[] corners =
         {
@@ -3740,7 +3756,7 @@ public sealed class CanvasWorkspace : Control
         if (sub.Nodes.Count >= 2)
         {
             Point start = ModelToScreen(sub.Nodes[0].Anchor);
-            double r = Math.Max(4.0 / _layout.Zoom, 1.0);
+            double r = 4.0;
             context.DrawEllipse(Brushes.White, new Pen(new SolidColorBrush(Color.FromRgb(0xC6, 0x28, 0x28)), 1.0),
                 start, r, r);
         }

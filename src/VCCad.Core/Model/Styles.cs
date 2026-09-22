@@ -122,12 +122,76 @@ public enum StrokeAlignment
 }
 
 /// <summary>
+/// Immutable dash pattern: alternating on/off lengths (in the same units as the
+/// stroke width) plus a phase offset. An empty pattern means a solid line. Value
+/// equality is sequence-based so style comparisons behave as expected.
+/// </summary>
+public readonly struct DashPattern : IEquatable<DashPattern>
+{
+    private readonly double[]? _segments;
+
+    public DashPattern(IReadOnlyList<double> segments, double offset = 0.0)
+    {
+        _segments = segments is { Count: > 0 } ? segments.ToArray() : null;
+        Offset = offset;
+    }
+
+    /// <summary>Alternating on/off lengths, or empty for a solid line.</summary>
+    public IReadOnlyList<double> Segments => _segments ?? Array.Empty<double>();
+
+    /// <summary>Distance into the pattern at which the stroke starts.</summary>
+    public double Offset { get; }
+
+    /// <summary>True when this is a solid (non-dashed) line.</summary>
+    public bool IsEmpty => _segments is null || _segments.Length == 0;
+
+    /// <summary>Convenience: a solid line.</summary>
+    public static DashPattern None => default;
+
+    public bool Equals(DashPattern other)
+    {
+        if (!Offset.Equals(other.Offset))
+        {
+            return false;
+        }
+
+        IReadOnlyList<double> a = Segments;
+        IReadOnlyList<double> b = other.Segments;
+        if (a.Count != b.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < a.Count; i++)
+        {
+            if (!a[i].Equals(b[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public override bool Equals(object? obj) => obj is DashPattern other && Equals(other);
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Offset);
+        foreach (double s in Segments)
+        {
+            hash.Add(s);
+        }
+
+        return hash.ToHashCode();
+    }
+}
+
+/// <summary>
 /// Immutable stroke specification for a path: visibility, colour, geometric width
-/// (in points, unscaled by any group transform), end caps, joins, miter limit and
-/// alignment (centre/inside/outside).
-/// Dash patterns are deferred to a later sprint (plan M2 task 2 marks them a
-/// stretch item); the record is shaped so a <c>DashPattern</c> can be added
-/// without breaking callers.
+/// (in points, unscaled by any group transform), end caps, joins, miter limit,
+/// dash pattern and alignment (centre/inside/outside).
 /// </summary>
 public sealed record StrokeSpec(
     bool IsVisible,
@@ -136,7 +200,8 @@ public sealed record StrokeSpec(
     StrokeCap Cap,
     StrokeJoin Join,
     double MiterLimit,
-    StrokeAlignment Alignment = StrokeAlignment.Center)
+    StrokeAlignment Alignment = StrokeAlignment.Center,
+    DashPattern Dash = default)
 {
     /// <summary>Convenience: no visible stroke.</summary>
     public static StrokeSpec None { get; } =

@@ -46,5 +46,20 @@ public class PdfImportSampleTests
         int nodes = page.Layers.SelectMany(l => l.Children).OfType<PathItem>()
             .Sum(p => p.SubPaths.Sum(s => s.Nodes.Count));
         Assert.True(nodes > 2000, $"expected many nodes, got {nodes}");
+
+        // Optional-content groups must become real layers (not one merged layer).
+        Assert.True(page.Layers.Count > 1, $"expected PDF layers, got {page.Layers.Count}");
+
+        List<PathItem> allPaths = page.Layers.SelectMany(l => l.Children).OfType<PathItem>().ToList();
+
+        // Stroke types: this pattern uses round/square caps and dashed lines.
+        Assert.Contains(allPaths, p => p.Stroke.Cap is StrokeCap.Round or StrokeCap.Square);
+        Assert.Contains(allPaths, p => !p.Stroke.Dash.IsEmpty);
+
+        // Text: the Tf size is 1 and the real size lives in the text matrix, so a
+        // naive import would produce 1pt (invisible) runs.
+        List<TextItem> texts = page.Layers.SelectMany(l => l.Children).OfType<TextItem>().ToList();
+        Assert.NotEmpty(texts);
+        Assert.All(texts.SelectMany(t => t.Runs), r => Assert.True(r.FontSize > 1.0, $"text size {r.FontSize} looks unscaled"));
     }
 }

@@ -21,6 +21,7 @@ public partial class StrokePane : UserControl
         StrokeCapBox.SelectionChanged += (_, _) => ApplyNow();
         StrokeJoinBox.SelectionChanged += (_, _) => ApplyNow();
         StrokeAlignBox.SelectionChanged += (_, _) => ApplyNow();
+        StrokeDashBox.SelectionChanged += (_, _) => ApplyNow();
         foreach (TextBox box in new[] { StrokeWidthBox, MiterBox })
         {
             box.KeyDown += (_, e) =>
@@ -48,7 +49,7 @@ public partial class StrokePane : UserControl
         StrokeCap cap = StrokeCapBox.SelectedIndex switch { 1 => StrokeCap.Round, 2 => StrokeCap.Square, _ => StrokeCap.Butt };
         StrokeJoin join = StrokeJoinBox.SelectedIndex switch { 1 => StrokeJoin.Round, 2 => StrokeJoin.Bevel, _ => StrokeJoin.Miter };
         StrokeAlignment align = StrokeAlignBox.SelectedIndex switch { 1 => StrokeAlignment.Inside, 2 => StrokeAlignment.Outside, _ => StrokeAlignment.Center };
-        _vm.ApplyStroke(width, cap, join, miter, align);
+        _vm.ApplyStroke(width, cap, join, miter, align, DashPreset(StrokeDashBox.SelectedIndex));
     }
 
     public void Attach(EditorViewModel vm)
@@ -57,6 +58,29 @@ public partial class StrokePane : UserControl
         vm.DocumentChanged += (_, _) => Refresh();
         vm.SelectionChanged += (_, _) => Refresh();
         Refresh();
+    }
+
+    /// <summary>Built-in dash presets, indexed by combo order. Lengths are in points.</summary>
+    private static DashPattern DashPreset(int index) => index switch
+    {
+        1 => new DashPattern(new double[] { 4, 3 }),
+        2 => new DashPattern(new double[] { 1, 2 }),
+        3 => new DashPattern(new double[] { 4, 2, 1, 2 }),
+        4 => new DashPattern(new double[] { 4, 2, 1, 2, 1, 2 }),
+        _ => DashPattern.None,
+    };
+
+    private static int DashIndexOf(DashPattern dash)
+    {
+        for (int i = 0; i < 5; i++)
+        {
+            if (DashPreset(i).Equals(dash))
+            {
+                return i;
+            }
+        }
+
+        return 0;
     }
 
     private void Refresh()
@@ -97,6 +121,7 @@ public partial class StrokePane : UserControl
             StrokeAlignment.Outside => 2,
             _ => 0,
         };
+        StrokeDashBox.SelectedIndex = DashIndexOf(path.Stroke.Dash);
         _syncing = false;
     }
 
