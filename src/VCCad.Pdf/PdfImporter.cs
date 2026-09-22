@@ -28,12 +28,27 @@ public static class PdfImporter
         {
             return PdfSidecarReader.ReadDocument(pdfBytes);
         }
-        catch (InvalidDataException)
+        catch (Exception)
         {
-            // no sidecar — fall through to structural import
+            // Not one of our PDFs (no valid sidecar) — fall through.
         }
 
-        // 2) Structural import: one artboard per page, non-uniform sizes allowed.
+        // 2) Full vector import: parse the PDF object model and content streams.
+        try
+        {
+            var file = new Parsing.PdfFile(pdfBytes);
+            var pageDicts = EnumeratePages(file).ToList();
+            if (pageDicts.Count > 0)
+            {
+                return BuildFromPages(file, pageDicts);
+            }
+        }
+        catch (Exception)
+        {
+            // fall through to the structural (page-size only) import
+        }
+
+        // 3) Structural fallback: one artboard per page, non-uniform sizes allowed.
         var document = new CadDocument { Name = "Imported" };
         IReadOnlyList<Size2D> pages = ReadPageSizes(pdfBytes);
 
@@ -55,6 +70,101 @@ public static class PdfImporter
 
         return document;
     }
+
+    private static CadDocument BuildFromPages(Parsing.PdfFile file,
+        IReadOnlyList<Dictionary<string, object?>> pageDicts)
+    {
+        var document = new CadDocument { Name = "Imported" };
+        double x = 0;
+        const double gap = 40;
+
+        for (int i = 0; i < pageDicts.Count; i++)
+        {
+            Dictionary<string, object?> page = pageDicts[i];
+            (double w, double h) = MediaBox(file, page);
+            Artboard artboard = document.AddArtboard(new Size2D(w, h), $"Page {i + 1}", new Point2D(x, 0));
+            Layer layer = artboard.AddLayer("Imported");
+
+            foreach (LayerItem item in new PdfContentImporter(file, h).ParsePage(page))
+            {
+                layer.AddItem(item);
+            }
+
+            x += w + gap;
+        }
+
+        return document;
+    }
+
+    private static IEnumerable<Dictionary<string, object?>> EnumeratePages(Parsing.PdfFile file)
+    {
+        int? catalog = file.FindCatalog();
+        if (catalog is null || file.GetObject(catalog.Value) is not Dictionary<string, object?> root)
+        {
+            yield break;
+        }
+
+        foreach (Dictionary<string, object?> page in Walk(file, root.GetValueOrDefault("Pages"), 0))
+        {
+            yield return page;
+        }
+    }
+
+    private static IEnumerable<Dictionary<string, object?>> Walk(Parsing.PdfFile file, object? node, int depth)
+    {
+        if (depth > 32 || file.ResolveDict(node) is not { } dict)
+        {
+            yield break;
+        }
+
+        string type = dict.GetValueOrDefault("Type") is Parsing.PdfName n ? n.Value : string.Empty;
+        if (type == "Pages" && file.Resolve(dict.GetValueOrDefault("Kids")) is List<object?> kids)
+        {
+            foreach (object? kid in kids)
+            {
+                foreach (Dictionary<string, object?> page in Walk(file, kid, depth + 1))
+                {
+                    yield return page;
+                }
+            }
+        }
+        else if (type == "Page")
+        {
+            yield return dict;
+        }
+    }
+
+    private static (double Width, double Height) MediaBox(Parsing.PdfFile file, Dictionary<string, object?> page)
+    {
+        object? current = page;
+        for (int depth = 0; depth < 32 && current is not null; depth++)
+        {
+            if (file.ResolveDict(current) is not { } dict)
+            {
+                break;
+            }
+
+            if (file.Resolve(dict.GetValueOrDefault("MediaBox")) is List<object?> box && box.Count >= 4)
+            {
+                double llx = ToNum(file.Resolve(box[0]));
+                double lly = ToNum(file.Resolve(box[1]));
+                double urx = ToNum(file.Resolve(box[2]));
+                double ury = ToNum(file.Resolve(box[3]));
+                return (Math.Abs(urx - llx), Math.Abs(ury - lly));
+            }
+
+            current = dict.GetValueOrDefault("Parent");
+        }
+
+        return (PageSizes.A4Landscape.Width, PageSizes.A4Landscape.Height);
+    }
+
+    private static double ToNum(object? value) => value switch
+    {
+        double d => d,
+        long l => l,
+        _ => 0.0,
+    };
 
     /// <summary>
     /// Reads page MediaBox sizes in document order. This is a focused scanner, not

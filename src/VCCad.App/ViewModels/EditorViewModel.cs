@@ -131,6 +131,14 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     public void NewDocument(string? name = null) => AddDocument(CadDocument.CreateDefault(name));
 
+    /// <summary>Imports a PDF (vector content) as a new document tab.</summary>
+    public DocumentSession ImportPdf(byte[] pdfBytes)
+    {
+        CadDocument document = VCCad.Pdf.PdfImporter.Import(pdfBytes);
+        Status = $"Imported PDF ({document.Artboards.Count} page(s))";
+        return AddDocument(document);
+    }
+
     public void CloseSession(DocumentSession session)
     {
         if (Sessions.Count <= 1)

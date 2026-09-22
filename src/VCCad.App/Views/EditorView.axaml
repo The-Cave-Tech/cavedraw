@@ -16,6 +16,7 @@
       <MenuItem Header="_File">
         <MenuItem Header="_New" Click="OnNew"/>
         <MenuItem Header="New _Artboard" Click="OnNewArtboard"/>
+        <MenuItem Header="_Import PDF…" Click="OnImportPdf"/>
         <MenuItem Header="_Open from Server…" Click="OnOpen"/>
         <MenuItem Header="_Save to Server" Click="OnSave"/>
         <Separator/>

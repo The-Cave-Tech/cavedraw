@@ -1,0 +1,422 @@
+using System.Buffers.Binary;
+using System.Globalization;
+using System.IO.Compression;
+using System.Text;
+
+namespace VCCad.Pdf.Parsing;
+
+/// <summary>A PDF name (written <c>/Foo</c>).</summary>
+internal sealed record PdfName(string Value);
+
+/// <summary>An indirect reference <c>N G R</c>.</summary>
+internal sealed record PdfRef(int Number, int Generation);
+
+/// <summary>A PDF stream: its dictionary plus the raw (still filtered) bytes.</summary>
+internal sealed class PdfStream
+{
+    public required Dictionary<string, object?> Dict { get; init; }
+
+    public required byte[] Raw { get; init; }
+}
+
+/// <summary>
+/// A pragmatic PDF reader: object/xref-stream parsing, object streams, FlateDecode
+/// with PNG predictors, and lazy object resolution. Sufficient to read real-world
+/// Illustrator/InDesign PDFs for vector import; not a full PDF implementation.
+/// </summary>
+internal sealed class PdfFile
+{
+    private readonly byte[] _data;
+    private readonly Dictionary<int, long> _offsets = new();
+    private readonly Dictionary<int, (int StreamObj, int Index)> _inObjectStream = new();
+    private readonly Dictionary<int, object?> _cache = new();
+    private readonly Dictionary<int, object?[]> _objectStreams = new();
+
+    public PdfFile(byte[] data)
+    {
+        _data = data;
+        ReadXref();
+    }
+
+    /// <summary>All object numbers known from the xref.</summary>
+    public IEnumerable<int> ObjectNumbers
+        => _offsets.Keys.Concat(_inObjectStream.Keys).Distinct().OrderBy(n => n);
+
+    /// <summary>Object number of the document catalog (/Type /Catalog), if found.</summary>
+    public int? FindCatalog()
+    {
+        foreach (int number in ObjectNumbers)
+        {
+            if (GetObject(number) is Dictionary<string, object?> dict &&
+                dict.GetValueOrDefault("Type") is PdfName { Value: "Catalog" })
+            {
+                return number;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Resolves indirect references recursively (one level).</summary>
+    public object? Resolve(object? value)
+        => value is PdfRef r ? GetObject(r.Number) : value;
+
+    public double? ResolveNumber(object? value)
+    {
+        object? v = Resolve(value);
+        return v switch
+        {
+            double d => d,
+            long l => l,
+            _ => null,
+        };
+    }
+
+    public Dictionary<string, object?>? ResolveDict(object? value)
+        => Resolve(value) as Dictionary<string, object?>;
+
+    public object? GetObject(int number)
+    {
+        if (_cache.TryGetValue(number, out object? cached))
+        {
+            return cached;
+        }
+
+        object? result = null;
+        if (_offsets.TryGetValue(number, out long offset))
+        {
+            result = ParseObjectAt(offset, number);
+        }
+        else if (_inObjectStream.TryGetValue(number, out (int StreamObj, int Index) location))
+        {
+            object?[] objects = LoadObjectStream(location.StreamObj);
+            result = location.Index < objects.Length ? objects[location.Index] : null;
+        }
+
+        _cache[number] = result;
+        return result;
+    }
+
+    /// <summary>Decoded stream bytes (filters applied).</summary>
+    public byte[] GetStreamData(PdfStream stream)
+    {
+        byte[] data = stream.Raw;
+        object? filter = Resolve(stream.Dict.GetValueOrDefault("Filter"));
+
+        bool flate = filter is PdfName { Value: "FlateDecode" }
+                     || (filter is List<object?> list && list.OfType<PdfName>().Any(n => n.Value == "FlateDecode"));
+
+        if (flate)
+        {
+            try
+            {
+                using var input = new MemoryStream(data);
+                using var zlib = new ZLibStream(input, CompressionMode.Decompress);
+                using var output = new MemoryStream();
+                zlib.CopyTo(output);
+                data = output.ToArray();
+            }
+            catch (InvalidDataException)
+            {
+                return Array.Empty<byte>();
+            }
+
+            data = ApplyPredictor(stream, data);
+        }
+
+        return data;
+    }
+
+    // ------------------------------------------------------------------
+    // xref / object streams
+    // ------------------------------------------------------------------
+
+    private void ReadXref()
+    {
+        int startxref = LastIndexOf("%%EOF");
+        string tail = Encoding.Latin1.GetString(_data, Math.Max(0, startxref - 200), Math.Min(200, _data.Length - Math.Max(0, startxref - 200)));
+        int idx = tail.LastIndexOf("startxref", StringComparison.Ordinal);
+        if (idx < 0)
+        {
+            BruteForceScan();
+            return;
+        }
+
+        string num = tail[(idx + 9)..].Trim().Split('\n', '\r', ' ')[0];
+        if (!long.TryParse(num, NumberStyles.Integer, CultureInfo.InvariantCulture, out long xrefOffset))
+        {
+            BruteForceScan();
+            return;
+        }
+
+        // xref stream?
+        object? xrefObj = ParseObjectAt(xrefOffset, -1);
+        if (xrefObj is PdfStream xrefStream && ResolveDict(xrefStream.Dict) is { } dict && dict.GetValueOrDefault("Type") is PdfName { Value: "XRef" })
+        {
+            ReadXrefStream(xrefStream);
+        }
+        else
+        {
+            ReadXrefTable(xrefOffset);
+        }
+
+        if (_offsets.Count == 0)
+        {
+            BruteForceScan();
+        }
+    }
+
+    private void ReadXrefTable(long offset)
+    {
+        var reader = new PdfReader(_data, (int)offset);
+        reader.SkipWhitespace();
+        if (!reader.TryReadKeyword("xref"))
+        {
+            BruteForceScan();
+            return;
+        }
+
+        while (true)
+        {
+            reader.SkipWhitespace();
+            if (reader.Peek() == 't') // trailer
+            {
+                break;
+            }
+
+            long? start = reader.ReadInteger();
+            long? count = reader.ReadInteger();
+            if (start is null || count is null)
+            {
+                break;
+            }
+
+            for (long i = 0; i < count.Value; i++)
+            {
+                long? entryOffset = reader.ReadInteger();
+                long? gen = reader.ReadInteger();
+                reader.SkipWhitespace();
+                char type = (char)reader.Peek();
+                reader.SkipLine();
+                if (entryOffset is null || gen is null || type != 'n')
+                {
+                    continue;
+                }
+
+                _offsets[(int)(start.Value + i)] = entryOffset.Value;
+            }
+        }
+    }
+
+    private void ReadXrefStream(PdfStream xref)
+    {
+        if (Resolve(xref.Dict.GetValueOrDefault("W")) is not List<object?> widths || widths.Count < 3)
+        {
+            BruteForceScan();
+            return;
+        }
+
+        int[] w = widths.Select(x => (int)(Convert.ToDouble(Resolve(x) ?? 0.0))).ToArray();
+        byte[] data = GetStreamData(xref);
+
+        object? indexObj = Resolve(xref.Dict.GetValueOrDefault("Index"));
+        var index = new List<long>();
+        if (indexObj is List<object?> indexList)
+        {
+            index.AddRange(indexList.Select(x => (long)Convert.ToDouble(Resolve(x) ?? 0.0)));
+        }
+        else
+        {
+            index.Add(0);
+            index.Add((long)(ResolveNumber(xref.Dict.GetValueOrDefault("Size")) ?? 0));
+        }
+
+        int pos = 0;
+        for (int s = 0; s + 1 < index.Count; s += 2)
+        {
+            long start = index[s];
+            long count = index[s + 1];
+            for (long i = 0; i < count && pos + w[0] + w[1] + w[2] <= data.Length; i++)
+            {
+                long type = w[0] == 0 ? 1 : ReadField(data, ref pos, w[0]);
+                long field2 = ReadField(data, ref pos, w[1]);
+                long field3 = ReadField(data, ref pos, w[2]);
+                int number = (int)(start + i);
+
+                if (type == 1)
+                {
+                    _offsets[number] = field2;
+                }
+                else if (type == 2)
+                {
+                    _inObjectStream[number] = ((int)field2, (int)field3);
+                }
+            }
+        }
+    }
+
+    private static long ReadField(byte[] data, ref int pos, int width)
+    {
+        long value = 0;
+        for (int i = 0; i < width; i++)
+        {
+            value = (value << 8) | data[pos++];
+        }
+
+        return value;
+    }
+
+    private object?[] LoadObjectStream(int streamNumber)
+    {
+        if (_objectStreams.TryGetValue(streamNumber, out object?[]? cached))
+        {
+            return cached;
+        }
+
+        if (GetObject(streamNumber) is not PdfStream stream)
+        {
+            return _objectStreams[streamNumber] = Array.Empty<object?>();
+        }
+
+        int n = (int)(ResolveNumber(stream.Dict.GetValueOrDefault("N")) ?? 0);
+        int first = (int)(ResolveNumber(stream.Dict.GetValueOrDefault("First")) ?? 0);
+        byte[] data = GetStreamData(stream);
+
+        // Header: N pairs of "objnum offset".
+        var reader = new PdfReader(data, 0);
+        var numbers = new int[n];
+        var offsets = new int[n];
+        for (int i = 0; i < n; i++)
+        {
+            numbers[i] = (int)(reader.ReadInteger() ?? 0);
+            offsets[i] = (int)(reader.ReadInteger() ?? 0);
+        }
+
+        var objects = new object?[n];
+        for (int i = 0; i < n; i++)
+        {
+            var objReader = new PdfReader(data, first + offsets[i]);
+            objects[i] = objReader.ReadObject(this);
+        }
+
+        return _objectStreams[streamNumber] = objects;
+    }
+
+    private void BruteForceScan()
+    {
+        // Fallback: scan for "N 0 obj" markers anywhere in the file.
+        string text = Encoding.Latin1.GetString(_data);
+        int index = 0;
+        while (true)
+        {
+            int obj = text.IndexOf(" 0 obj", index, StringComparison.Ordinal);
+            if (obj < 0)
+            {
+                break;
+            }
+
+            int start = obj - 1;
+            while (start >= 0 && char.IsDigit(text[start]))
+            {
+                start--;
+            }
+
+            string numText = text[(start + 1)..obj];
+            if (int.TryParse(numText, out int number) && !_offsets.ContainsKey(number))
+            {
+                _offsets[number] = start + 1;
+            }
+
+            index = obj + 6;
+        }
+    }
+
+    private object? ParseObjectAt(long offset, int expectedNumber)
+    {
+        var reader = new PdfReader(_data, (int)offset);
+
+        // Skip the "N G obj" header before the object body.
+        reader.ReadInteger();
+        reader.ReadInteger();
+        reader.TryReadKeyword("obj");
+        return reader.ReadObject(this, parseStream: true);
+    }
+
+    private int LastIndexOf(string token)
+    {
+        string text = Encoding.Latin1.GetString(_data);
+        return text.LastIndexOf(token, StringComparison.Ordinal);
+    }
+
+    private byte[] ApplyPredictor(PdfStream stream, byte[] data)
+    {
+        object? parms = Resolve(stream.Dict.GetValueOrDefault("DecodeParms"));
+        if (parms is List<object?> list)
+        {
+            parms = list.FirstOrDefault();
+        }
+
+        if (ResolveDict(parms) is not { } dict)
+        {
+            return data;
+        }
+
+        int predictor = (int)(ResolveNumber(dict.GetValueOrDefault("Predictor")) ?? 1);
+        if (predictor < 10)
+        {
+            return data;
+        }
+
+        int colors = (int)(ResolveNumber(dict.GetValueOrDefault("Colors")) ?? 1);
+        int bpc = (int)(ResolveNumber(dict.GetValueOrDefault("BitsPerComponent")) ?? 8);
+        int columns = (int)(ResolveNumber(dict.GetValueOrDefault("Columns")) ?? 1);
+
+        int bytesPerPixel = Math.Max(1, colors * bpc / 8);
+        int rowLength = (colors * bpc * columns + 7) / 8;
+        int outLength = rowLength * (data.Length / (rowLength + 1));
+
+        var output = new byte[outLength];
+        byte[]? prior = null;
+        int inPos = 0;
+        int outPos = 0;
+
+        while (inPos + 1 <= data.Length && outPos + rowLength <= output.Length)
+        {
+            int filterType = data[inPos++];
+            byte[] row = new byte[rowLength];
+            Array.Copy(data, inPos, row, 0, Math.Min(rowLength, data.Length - inPos));
+            inPos += rowLength;
+
+            for (int i = 0; i < rowLength; i++)
+            {
+                int left = i >= bytesPerPixel ? row[i - bytesPerPixel] : 0;
+                int up = prior?[i] ?? 0;
+                int upLeft = prior is not null && i >= bytesPerPixel ? prior[i - bytesPerPixel] : 0;
+                row[i] = filterType switch
+                {
+                    0 => row[i],
+                    1 => (byte)(row[i] + left),
+                    2 => (byte)(row[i] + up),
+                    3 => (byte)(row[i] + (left + up) / 2),
+                    4 => (byte)(row[i] + Paeth(left, up, upLeft)),
+                    _ => row[i],
+                };
+            }
+
+            Array.Copy(row, 0, output, outPos, rowLength);
+            outPos += rowLength;
+            prior = row;
+        }
+
+        return output;
+    }
+
+    private static int Paeth(int a, int b, int c)
+    {
+        int p = a + b - c;
+        int pa = Math.Abs(p - a);
+        int pb = Math.Abs(p - b);
+        int pc = Math.Abs(p - c);
+        return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+    }
+}

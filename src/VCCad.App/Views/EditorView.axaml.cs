@@ -12,6 +12,7 @@ using VCCad.App.Docking;
 using VCCad.App.ViewModels;
 using VCCad.App.Views.Panes;
 using VCCad.Core.Model;
+using Avalonia.Platform.Storage;
 
 namespace VCCad.App.Views;
 
@@ -490,6 +491,43 @@ public partial class EditorView : UserControl
         DocTabsHost.ItemsSource = items;
     }
     private void OnNewArtboard(object? sender, RoutedEventArgs e) { _viewModel.AddNewArtboard(); UpdateStatus(); }
+
+    private async void OnImportPdf(object? sender, RoutedEventArgs e)
+    {
+        TopLevel? top = TopLevel.GetTopLevel(this);
+        if (top?.StorageProvider is not { } storage)
+        {
+            StatusText.Text = "File picking is unavailable in this environment";
+            return;
+        }
+
+        var options = new FilePickerOpenOptions
+        {
+            Title = "Import PDF",
+            AllowMultiple = false,
+            FileTypeFilter = new[] { new FilePickerFileType("PDF") { Patterns = new[] { "*.pdf" } } },
+        };
+
+        IReadOnlyList<IStorageFile> files = await storage.OpenFilePickerAsync(options);
+        if (files.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await using Stream stream = await files[0].OpenReadAsync();
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            _viewModel.ImportPdf(buffer.ToArray());
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Import failed: {ex.Message}";
+        }
+
+        UpdateStatus();
+    }
 
     private void OnOpen(object? sender, RoutedEventArgs e) => FireAndForget(_viewModel.LoadFromServerAsync(), "Opening…");
     private void OnSave(object? sender, RoutedEventArgs e) => FireAndForget(_viewModel.SaveToServerAsync(), "Saving…");
