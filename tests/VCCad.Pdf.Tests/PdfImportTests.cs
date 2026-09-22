@@ -52,6 +52,46 @@ public class PdfImportTests
     }
 
     [Fact]
+    public void QRestoresFullGraphicsStateNotJustTheCtm()
+    {
+        // A white stroke set inside q...Q must not leak past the Q: the second
+        // path is stroked with the black set before the q.
+        byte[] pdf = BuildSinglePagePdf(string.Join("\n", new[]
+        {
+            "0 0 0 RG",
+            "q",
+            "1 1 1 RG",
+            "0 0 m 10 0 l S",
+            "Q",
+            "0 0 m 20 0 l S",
+        }));
+
+        CadDocument doc = PdfImporter.Import(pdf);
+        List<PathItem> paths = doc.Artboards[0].Layers
+            .SelectMany(l => l.Children).OfType<PathItem>().ToList();
+
+        Assert.Equal(2, paths.Count);
+        Assert.True(paths[0].Stroke.Color.R > 0.9, "first path should be white");
+        Assert.True(paths[1].Stroke.Color.R < 0.1, "graphics state should be restored to black");
+    }
+
+    private static byte[] BuildSinglePagePdf(string content)
+    {
+        var assembler = new PdfAssembler();
+        int catalog = assembler.Allocate();
+        int pages = assembler.Allocate();
+        int page = assembler.Allocate();
+        int contentObj = assembler.Allocate();
+
+        byte[] bytes = Encoding.ASCII.GetBytes(content);
+        assembler.SetBody(contentObj, $"<< /Length {bytes.Length} >>\nstream\n{content}\nendstream");
+        assembler.SetBody(page, $"<< /Type /Page /Parent {pages} 0 R /MediaBox [0 0 300 400] /Contents {contentObj} 0 R /Resources << >> >>");
+        assembler.SetBody(pages, $"<< /Type /Pages /Kids [{page} 0 R] /Count 1 >>");
+        assembler.SetBody(catalog, $"<< /Type /Catalog /Pages {pages} 0 R >>");
+        return assembler.Serialize(catalog);
+    }
+
+    [Fact]
     public void VccadPdfRoundTripsLosslesslyThroughImport()
     {
         // Our own export carries the sidecar, so import must be the full model.

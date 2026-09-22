@@ -128,7 +128,13 @@ internal sealed class PdfContentImporter
             return;
         }
 
-        var stack = new Stack<AffineTransform>();
+        // q/Q save and restore the ENTIRE graphics state (not just the CTM):
+        // colour, line width, caps/joins, dash and text state. Illustrator relies
+        // on this — e.g. a white fill set inside a q...Q must not leak onto later
+        // text that expects the previous (black) fill.
+        var stack = new Stack<(AffineTransform Ctm, double LineWidth, int LineCap, int LineJoin,
+            double MiterLimit, DashPattern Dash, ColorRgb Stroke, ColorRgb Fill,
+            string FontName, double FontSize, double Leading)>();
         AffineTransform current = ctm;
         double lineWidth = 1.0;
         int lineCap = 0;
@@ -226,12 +232,14 @@ internal sealed class PdfContentImporter
             switch (op)
             {
                 case "q":
-                    stack.Push(current);
+                    stack.Push((current, lineWidth, lineCap, lineJoin, miterLimit, dash,
+                        strokeColor, fillColor, fontName, fontSize, leading));
                     break;
                 case "Q":
                     if (stack.Count > 0)
                     {
-                        current = stack.Pop();
+                        (current, lineWidth, lineCap, lineJoin, miterLimit, dash,
+                            strokeColor, fillColor, fontName, fontSize, leading) = stack.Pop();
                     }
 
                     break;
