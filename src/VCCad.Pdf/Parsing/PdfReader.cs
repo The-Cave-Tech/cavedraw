@@ -279,18 +279,41 @@ internal ref struct PdfReader
                 }
 
                 byte esc = _data[_pos++];
-                sb.Append(esc switch
+                if (esc is >= (byte)'0' and <= (byte)'7')
                 {
-                    (byte)'n' => '\n',
-                    (byte)'r' => '\r',
-                    (byte)'t' => '\t',
-                    (byte)'b' => '\b',
-                    (byte)'f' => '\f',
-                    (byte)'(' => '(',
-                    (byte)')' => ')',
-                    (byte)'\\' => '\\',
-                    _ => (char)esc,
-                });
+                    // Octal escape \ddd (1-3 digits) → one byte.
+                    int value = esc - '0';
+                    for (int k = 0; k < 2 && _pos < _data.Length &&
+                                    _data[_pos] is >= (byte)'0' and <= (byte)'7'; k++)
+                    {
+                        value = (value * 8) + (_data[_pos++] - '0');
+                    }
+
+                    sb.Append((char)value);
+                }
+                else if (esc is (byte)'\r' or (byte)'\n')
+                {
+                    // Backslash before EOL is a line continuation; drop it.
+                    if (esc == (byte)'\r' && _pos < _data.Length && _data[_pos] == (byte)'\n')
+                    {
+                        _pos++;
+                    }
+                }
+                else
+                {
+                    sb.Append(esc switch
+                    {
+                        (byte)'n' => '\n',
+                        (byte)'r' => '\r',
+                        (byte)'t' => '\t',
+                        (byte)'b' => '\b',
+                        (byte)'f' => '\f',
+                        (byte)'(' => '(',
+                        (byte)')' => ')',
+                        (byte)'\\' => '\\',
+                        _ => (char)esc,
+                    });
+                }
             }
             else if (c == (byte)'(')
             {
@@ -317,10 +340,14 @@ internal ref struct PdfReader
     private object? ReadHexString()
     {
         _pos++; // <
-        var sb = new StringBuilder();
+        var digits = new StringBuilder();
         while (_pos < _data.Length && _data[_pos] != (byte)'>')
         {
-            sb.Append((char)_data[_pos++]);
+            byte c = _data[_pos++];
+            if (c is not ((byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n' or (byte)'\f'))
+            {
+                digits.Append((char)c);
+            }
         }
 
         if (_pos < _data.Length)
@@ -328,8 +355,30 @@ internal ref struct PdfReader
             _pos++; // >
         }
 
+        // Hex strings are byte strings (ISO 32000-1, 7.3.4.3): decode pairs.
+        if ((digits.Length & 1) == 1)
+        {
+            digits.Append('0'); // odd length: final digit is padded
+        }
+
+        var sb = new StringBuilder(digits.Length / 2);
+        for (int i = 0; i + 1 < digits.Length; i += 2)
+        {
+            int hi = HexValue(digits[i]);
+            int lo = HexValue(digits[i + 1]);
+            sb.Append((char)((hi << 4) | lo));
+        }
+
         return sb.ToString();
     }
+
+    private static int HexValue(char c) => c switch
+    {
+        >= '0' and <= '9' => c - '0',
+        >= 'a' and <= 'f' => c - 'a' + 10,
+        >= 'A' and <= 'F' => c - 'A' + 10,
+        _ => 0,
+    };
 
     private List<object?> ReadArray(PdfFile file)
     {

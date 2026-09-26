@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using VCCad.Core.Model;
 using VCCad.Geometry;
 using VCCad.Pdf.Fonts;
@@ -22,6 +23,9 @@ internal sealed class PdfContentImporter
     private readonly PdfFile _file;
     private readonly double _pageHeight;
 
+    // Font resource object → code→Unicode map from its /ToUnicode CMap.
+    private readonly Dictionary<object, Dictionary<int, string>> _toUnicodeCache = new();
+
     public PdfContentImporter(PdfFile file, double pageHeight)
     {
         _file = file;
@@ -31,7 +35,8 @@ internal sealed class PdfContentImporter
     public List<PdfImportedItem> ParsePage(Dictionary<string, object?> pageDict)
     {
         var items = new List<PdfImportedItem>();
-        Interpret(GetContents(pageDict), FindResources(pageDict), AffineTransform.Identity, items, 0, null);
+        byte[] content = GetContents(pageDict);
+        Interpret(content, FindResources(pageDict), AffineTransform.Identity, items, 0, null);
         return items;
     }
 
@@ -437,6 +442,16 @@ internal sealed class PdfContentImporter
                     textMatrix = AffineTransform.Identity;
                     lineMatrix = AffineTransform.Identity;
                     break;
+                case "'" when operands.Count >= 1 && operands[0] is string sq:
+                    lineMatrix = lineMatrix.Compose(AffineTransform.CreateTranslation(0, -leading));
+                    textMatrix = lineMatrix;
+                    ShowText(sq, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer);
+                    break;
+                case "\"" when operands.Count >= 3 && operands[2] is string dq:
+                    lineMatrix = lineMatrix.Compose(AffineTransform.CreateTranslation(0, -leading));
+                    textMatrix = lineMatrix;
+                    ShowText(dq, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer);
+                    break;
                 case "Tf" when operands.Count >= 2:
                     fontName = operands[0] is PdfName pn ? pn.Value : string.Empty;
                     fontSize = Number(1);
@@ -520,7 +535,17 @@ internal sealed class PdfContentImporter
             return;
         }
 
-        (string family, bool bold, bool italic, double ascent) = MapFont(fontName, resources);
+            (string family, bool bold, bool italic, double ascent) = MapFont(fontName, resources);
+
+        // Text operands carry glyph codes, not characters. Decode via the font's
+        // /ToUnicode CMap (or fall back to Latin-1 for unencoded simple fonts).
+        bool composite = IsCompositeFont(fontName, resources);
+        string rawText = text;
+        string decoded = DecodeText(rawText, ToUnicodeMap(fontName, resources), composite);
+        if (decoded.Length == 0)
+        {
+            decoded = rawText;
+        }
 
         // The glyph size is the Tf size scaled by the text matrix (and any enclosing
         // CTM). Illustrator typically writes "/F1 1 Tf" with the real size in Tm, so
@@ -553,12 +578,12 @@ internal sealed class PdfContentImporter
         };
         var run = new TextRun
         {
-            Text = text,
+            Text = decoded,
             FontFamily = family,
             FontSize = effectiveSize,
             Bold = bold,
             Italic = italic,
-            AdvanceWidth = MeasureAdvance(text, fontName, resources, effectiveSize),
+            AdvanceWidth = MeasureAdvance(rawText, fontName, resources, effectiveSize),
         };
         item.Runs.Add(run);
         items.Add(new PdfImportedItem(layer, item));
@@ -598,6 +623,143 @@ internal sealed class PdfContentImporter
         }
 
         return total / 1000.0 * effectiveSize;
+    }
+
+    private Dictionary<string, object?>? FontDict(string fontName, Dictionary<string, object?> resources)
+        => _file.ResolveDict(resources.GetValueOrDefault("Font")) is { } fonts
+            ? _file.ResolveDict(fonts.GetValueOrDefault(fontName))
+            : null;
+
+    private bool IsCompositeFont(string fontName, Dictionary<string, object?> resources)
+        => FontDict(fontName, resources)?.GetValueOrDefault("Subtype") is PdfName { Value: "Type0" };
+
+    private Dictionary<int, string>? ToUnicodeMap(string fontName, Dictionary<string, object?> resources)
+    {
+        Dictionary<string, object?>? font = FontDict(fontName, resources);
+        if (font is null)
+        {
+            return null;
+        }
+
+        if (_toUnicodeCache.TryGetValue(font, out Dictionary<int, string>? cached))
+        {
+            return cached;
+        }
+
+        Dictionary<int, string>? map = null;
+        if (_file.Resolve(font.GetValueOrDefault("ToUnicode")) is PdfStream stream)
+        {
+            map = ParseToUnicode(_file.GetStreamData(stream));
+        }
+
+        _toUnicodeCache[font] = map;
+        return map;
+    }
+
+    private static string DecodeText(string raw, Dictionary<int, string>? map, bool twoByte)
+    {
+        var sb = new StringBuilder();
+        if (twoByte)
+        {
+            for (int i = 0; i + 1 < raw.Length; i += 2)
+            {
+                int code = (raw[i] << 8) | raw[i + 1];
+                if (map is not null && map.TryGetValue(code, out string? mapped))
+                {
+                    sb.Append(mapped);
+                }
+                else if (code is >= 32 and < 127)
+                {
+                    sb.Append((char)code);
+                }
+            }
+        }
+        else
+        {
+            foreach (char ch in raw)
+            {
+                int code = ch & 0xFF;
+                if (map is not null && map.TryGetValue(code, out string? mapped))
+                {
+                    sb.Append(mapped);
+                }
+                else
+                {
+                    sb.Append(ch);
+                }
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static Dictionary<int, string> ParseToUnicode(byte[] data)
+    {
+        string text = Encoding.Latin1.GetString(data);
+        var map = new Dictionary<int, string>();
+
+        foreach (Match block in Regex.Matches(text, "beginbfchar(.*?)endbfchar", RegexOptions.Singleline))
+        {
+            foreach (Match pair in Regex.Matches(block.Groups[1].Value, "<([0-9A-Fa-f]+)>\\s*<([0-9A-Fa-f]+)>"))
+            {
+                map[HexToInt(pair.Groups[1].Value)] = HexToUnicode(pair.Groups[2].Value);
+            }
+        }
+
+        foreach (Match block in Regex.Matches(text, "beginbfrange(.*?)endbfrange", RegexOptions.Singleline))
+        {
+            string body = block.Groups[1].Value;
+            foreach (Match tri in Regex.Matches(body, "<([0-9A-Fa-f]+)>\\s*<([0-9A-Fa-f]+)>\\s*<([0-9A-Fa-f]+)>"))
+            {
+                int lo = HexToInt(tri.Groups[1].Value);
+                int hi = HexToInt(tri.Groups[2].Value);
+                int baseCode = HexToInt(tri.Groups[3].Value);
+                for (int c = lo; c <= hi && c - lo < 65536; c++)
+                {
+                    try
+                    {
+                        map[c] = char.ConvertFromUtf32(baseCode + (c - lo));
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            foreach (Match arr in Regex.Matches(body, "<([0-9A-Fa-f]+)>\\s*<([0-9A-Fa-f]+)>\\s*\\[(.*?)\\]", RegexOptions.Singleline))
+            {
+                int lo = HexToInt(arr.Groups[1].Value);
+                MatchCollection items = Regex.Matches(arr.Groups[3].Value, "<([0-9A-Fa-f]+)>");
+                for (int i = 0; i < items.Count; i++)
+                {
+                    map[lo + i] = HexToUnicode(items[i].Groups[1].Value);
+                }
+            }
+        }
+
+        return map;
+    }
+
+    private static int HexToInt(string hex)
+        => int.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int value) ? value : 0;
+
+    private static string HexToUnicode(string hex)
+    {
+        if (hex.Length % 2 != 0)
+        {
+            hex = "0" + hex;
+        }
+
+        var bytes = new byte[hex.Length / 2];
+        for (int i = 0; i < bytes.Length; i++)
+        {
+            bytes[i] = (byte)HexToInt(hex.Substring(i * 2, 2));
+        }
+
+        return bytes.Length % 2 == 0 && bytes.Length > 0
+            ? Encoding.BigEndianUnicode.GetString(bytes)
+            : Encoding.Latin1.GetString(bytes);
     }
 
     private (string Family, bool Bold, bool Italic, double Ascent) MapFont(

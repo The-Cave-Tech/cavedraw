@@ -149,15 +149,24 @@ internal sealed class PdfFile
             return;
         }
 
-        // xref stream?
-        object? xrefObj = ParseObjectAt(xrefOffset, -1);
-        if (xrefObj is PdfStream xrefStream && ResolveDict(xrefStream.Dict) is { } dict && dict.GetValueOrDefault("Type") is PdfName { Value: "XRef" })
+        // Walk the /Prev chain newest-first so an incremental update's entries
+        // win over the older sections it supersedes. (Anything not redefined in
+        // the update is only present in the previous section.)
+        long current = xrefOffset;
+        var visited = new HashSet<long>();
+        while (current >= 0 && current < _data.Length && visited.Add(current))
         {
-            ReadXrefStream(xrefStream);
-        }
-        else
-        {
-            ReadXrefTable(xrefOffset);
+            object? xrefObj = ParseObjectAt(current, -1);
+            if (xrefObj is PdfStream xrefStream && ResolveDict(xrefStream.Dict) is { } dict &&
+                dict.GetValueOrDefault("Type") is PdfName { Value: "XRef" })
+            {
+                ReadXrefStream(xrefStream);
+                current = ResolveNumber(dict.GetValueOrDefault("Prev")) is double prev ? (long)prev : -1;
+            }
+            else
+            {
+                current = ReadXrefTable(current) ?? -1;
+            }
         }
 
         if (_offsets.Count == 0)
@@ -166,14 +175,13 @@ internal sealed class PdfFile
         }
     }
 
-    private void ReadXrefTable(long offset)
+    private long? ReadXrefTable(long offset)
     {
         var reader = new PdfReader(_data, (int)offset);
         reader.SkipWhitespace();
         if (!reader.TryReadKeyword("xref"))
         {
-            BruteForceScan();
-            return;
+            return null;
         }
 
         while (true)
@@ -203,9 +211,22 @@ internal sealed class PdfFile
                     continue;
                 }
 
-                _offsets[(int)(start.Value + i)] = entryOffset.Value;
+                int number = (int)(start.Value + i);
+                if (!_offsets.ContainsKey(number))
+                {
+                    _offsets[number] = entryOffset.Value;
+                }
             }
         }
+
+        if (reader.TryReadKeyword("trailer") &&
+            reader.ReadObject(this) is Dictionary<string, object?> trailer &&
+            ResolveNumber(trailer.GetValueOrDefault("Prev")) is double prev)
+        {
+            return (long)prev;
+        }
+
+        return null;
     }
 
     private void ReadXrefStream(PdfStream xref)
@@ -245,11 +266,17 @@ internal sealed class PdfFile
 
                 if (type == 1)
                 {
-                    _offsets[number] = field2;
+                    if (!_offsets.ContainsKey(number))
+                    {
+                        _offsets[number] = field2;
+                    }
                 }
                 else if (type == 2)
                 {
-                    _inObjectStream[number] = ((int)field2, (int)field3);
+                    if (!_inObjectStream.ContainsKey(number))
+                    {
+                        _inObjectStream[number] = ((int)field2, (int)field3);
+                    }
                 }
             }
         }
