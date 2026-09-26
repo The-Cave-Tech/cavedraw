@@ -2622,7 +2622,9 @@ public sealed class CanvasWorkspace : Control
     private void PaintPath(DrawingContext context, PathItem path, double opacity)
     {
         bool anyClosed = path.SubPaths.Any(sp => sp.IsClosed);
-        bool fillVisible = path.Fill.IsVisible && anyClosed;
+        // PDF fills implicitly close open subpaths, so honour Fill.IsVisible
+        // regardless of closure (imported content relies on this).
+        bool fillVisible = path.Fill.IsVisible;
         bool strokeVisible = path.Stroke.HasVisibleOutline;
         if (!fillVisible && !strokeVisible)
         {

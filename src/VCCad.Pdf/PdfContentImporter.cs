@@ -135,6 +135,7 @@ internal sealed class PdfContentImporter
         // text that expects the previous (black) fill.
         var stack = new Stack<(AffineTransform Ctm, double LineWidth, int LineCap, int LineJoin,
             double MiterLimit, DashPattern Dash, ColorRgb Stroke, ColorRgb Fill,
+            object? StrokeSpace, object? FillSpace, double StrokeAlpha, double FillAlpha,
             string FontName, double FontSize, double Leading)>();
         AffineTransform current = ctm;
         double lineWidth = 1.0;
@@ -144,6 +145,10 @@ internal sealed class PdfContentImporter
         DashPattern dash = DashPattern.None;
         ColorRgb strokeColor = ColorRgb.Black;
         ColorRgb fillColor = ColorRgb.Black;
+        object? strokeSpace = null;
+        object? fillSpace = null;
+        double strokeAlpha = 1.0;
+        double fillAlpha = 1.0;
 
         AffineTransform textMatrix = AffineTransform.Identity;
         AffineTransform lineMatrix = AffineTransform.Identity;
@@ -193,9 +198,13 @@ internal sealed class PdfContentImporter
                     item.SubPaths.Add(sp);
                 }
 
-                item.Fill = fill ? FillSpec.Solid(fillColor) : FillSpec.None;
+                ColorRgb fillRgb = fillColor;
+                ColorRgb penRgb = strokeColor;
+                item.Fill = fill
+                    ? FillSpec.Solid(new ColorRgb(fillRgb.R, fillRgb.G, fillRgb.B, fillAlpha))
+                    : FillSpec.None;
                 item.Stroke = stroke
-                    ? new StrokeSpec(true, strokeColor,
+                    ? new StrokeSpec(true, new ColorRgb(penRgb.R, penRgb.G, penRgb.B, strokeAlpha),
                         Math.Max(0.01, lineWidth * ScaleOf(current)), ToCap(lineCap), ToJoin(lineJoin), miterLimit,
                         StrokeAlignment.Center, dash)
                     : StrokeSpec.None;
@@ -234,13 +243,15 @@ internal sealed class PdfContentImporter
             {
                 case "q":
                     stack.Push((current, lineWidth, lineCap, lineJoin, miterLimit, dash,
-                        strokeColor, fillColor, fontName, fontSize, leading));
+                        strokeColor, fillColor, strokeSpace, fillSpace, strokeAlpha, fillAlpha,
+                        fontName, fontSize, leading));
                     break;
                 case "Q":
                     if (stack.Count > 0)
                     {
                         (current, lineWidth, lineCap, lineJoin, miterLimit, dash,
-                            strokeColor, fillColor, fontName, fontSize, leading) = stack.Pop();
+                            strokeColor, fillColor, strokeSpace, fillSpace, strokeAlpha, fillAlpha,
+                            fontName, fontSize, leading) = stack.Pop();
                     }
 
                     break;
@@ -251,6 +262,52 @@ internal sealed class PdfContentImporter
                 case "w" when operands.Count >= 1:
                     lineWidth = Number(0);
                     break;
+                case "cs" when operands.Count >= 1:
+                    fillSpace = operands[0];
+                    break;
+                case "CS" when operands.Count >= 1:
+                    strokeSpace = operands[0];
+                    break;
+                case "sc":
+                case "scn":
+                {
+                    var comps = NumericOperands(operands);
+                    if (comps.Count > 0)
+                    {
+                        fillColor = ResolveColor(fillSpace, comps, resources);
+                    }
+
+                    break;
+                }
+                case "SC":
+                case "SCN":
+                {
+                    var comps = NumericOperands(operands);
+                    if (comps.Count > 0)
+                    {
+                        strokeColor = ResolveColor(strokeSpace, comps, resources);
+                    }
+
+                    break;
+                }
+                case "gs" when operands.Count >= 1 && operands[0] is PdfName gsName:
+                {
+                    if (_file.ResolveDict(resources.GetValueOrDefault("ExtGState")) is { } gsDict &&
+                        _file.ResolveDict(gsDict.GetValueOrDefault(gsName.Value)) is { } gsState)
+                    {
+                        if (_file.ResolveNumber(gsState.GetValueOrDefault("ca")) is double ca)
+                        {
+                            fillAlpha = Math.Clamp(ca, 0.0, 1.0);
+                        }
+
+                        if (_file.ResolveNumber(gsState.GetValueOrDefault("CA")) is double caStroke)
+                        {
+                            strokeAlpha = Math.Clamp(caStroke, 0.0, 1.0);
+                        }
+                    }
+
+                    break;
+                }
                 case "J" when operands.Count >= 1:
                     lineCap = (int)Number(0);
                     break;
@@ -285,21 +342,27 @@ internal sealed class PdfContentImporter
                 }
                 case "RG" when operands.Count >= 3:
                     strokeColor = Color3(0);
+                    strokeSpace = DeviceRgb;
                     break;
                 case "rg" when operands.Count >= 3:
                     fillColor = Color3(0);
+                    fillSpace = DeviceRgb;
                     break;
                 case "G" when operands.Count >= 1:
                     strokeColor = Gray(0);
+                    strokeSpace = DeviceGray;
                     break;
                 case "g" when operands.Count >= 1:
                     fillColor = Gray(0);
+                    fillSpace = DeviceGray;
                     break;
                 case "K" when operands.Count >= 4:
                     strokeColor = Cmyk(0);
+                    strokeSpace = DeviceCmyk;
                     break;
                 case "k" when operands.Count >= 4:
                     fillColor = Cmyk(0);
+                    fillSpace = DeviceCmyk;
                     break;
                 case "m" when operands.Count >= 2:
                     currentPath = new SubPath();
@@ -574,6 +637,295 @@ internal sealed class PdfContentImporter
         }
 
         return (family, bold, italic, ascent);
+    }
+
+
+    private static readonly PdfName DeviceGray = new("DeviceGray");
+    private static readonly PdfName DeviceRgb = new("DeviceRGB");
+    private static readonly PdfName DeviceCmyk = new("DeviceCMYK");
+
+    private static List<double> NumericOperands(List<object?> operands)
+    {
+        var result = new List<double>(operands.Count);
+        foreach (object? o in operands)
+        {
+            if (o is double d)
+            {
+                result.Add(d);
+            }
+            else if (o is long l)
+            {
+                result.Add(l);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Resolves a colour space operand to a concrete space: a device
+    /// name or an array whose first element names the family.</summary>
+    private object? ResolveSpace(object? space, Dictionary<string, object?> resources)
+    {
+        if (space is PdfName name)
+        {
+            if (_file.ResolveDict(resources.GetValueOrDefault("ColorSpace")) is { } spaces &&
+                spaces.GetValueOrDefault(name.Value) is { } mapped)
+            {
+                return ResolveSpace(mapped, resources);
+            }
+
+            return space;
+        }
+
+        return _file.Resolve(space);
+    }
+
+    /// <summary>Converts colour components in <paramref name="space"/> to RGB.</summary>
+    private ColorRgb ResolveColor(object? space, IReadOnlyList<double> comps,
+        Dictionary<string, object?> resources)
+    {
+        double C(int i) => i < comps.Count ? comps[i] : 0.0;
+
+        space = ResolveSpace(space, resources);
+
+        if (space is PdfName n)
+        {
+            return n.Value switch
+            {
+                "DeviceGray" or "G" => new ColorRgb(C(0), C(0), C(0)),
+                "DeviceRGB" or "RGB" => new ColorRgb(C(0), C(1), C(2)),
+                "DeviceCMYK" or "CMYK" => CmykToRgb(C(0), C(1), C(2), C(3)),
+                _ => ColorRgb.Black,
+            };
+        }
+
+        if (space is List<object?> arr && arr.Count > 0 && arr[0] is PdfName kind)
+        {
+            switch (kind.Value)
+            {
+                case "ICCBased":
+                {
+                    var profile = _file.ResolveDict(arr.Count > 1 ? arr[1] : null);
+                    int count = (int)(_file.ResolveNumber(profile?.GetValueOrDefault("N")) ?? 3);
+                    if (profile?.GetValueOrDefault("Alternate") is { } alternate)
+                    {
+                        return ResolveColor(alternate, comps, resources);
+                    }
+
+                    return count switch
+                    {
+                        1 => new ColorRgb(C(0), C(0), C(0)),
+                        4 => CmykToRgb(C(0), C(1), C(2), C(3)),
+                        _ => new ColorRgb(C(0), C(1), C(2)),
+                    };
+                }
+
+                case "Indexed":
+                case "I":
+                {
+                    object? baseSpace = ResolveSpace(arr.Count > 1 ? arr[1] : null, resources);
+                    int components = ComponentCount(baseSpace, resources);
+                    double[] table = LookupBytes(arr.Count > 3 ? arr[3] : null);
+                    int index = Math.Clamp((int)Math.Round(C(0)), 0, Math.Max(0, table.Length / Math.Max(1, components) - 1));
+                    var baseComps = new double[components];
+                    for (int i = 0; i < components; i++)
+                    {
+                        int at = (index * components) + i;
+                        baseComps[i] = at < table.Length ? table[at] : 0.0;
+                    }
+
+                    return ResolveColor(baseSpace, baseComps, resources);
+                }
+
+                case "Separation":
+                {
+                    double[] tinted = ApplyFunction(arr.Count > 3 ? arr[3] : null, new[] { C(0) }, resources);
+                    return ResolveColor(arr.Count > 2 ? arr[2] : null, tinted, resources);
+                }
+
+                case "DeviceN":
+                {
+                    var names = _file.Resolve(arr.Count > 1 ? arr[1] : null) as List<object?>
+                                ?? new List<object?>();
+                    var inputs = new double[names.Count];
+                    for (int i = 0; i < names.Count; i++)
+                    {
+                        inputs[i] = C(i);
+                    }
+
+                    double[] tinted = ApplyFunction(arr.Count > 3 ? arr[3] : null, inputs, resources);
+                    return ResolveColor(arr.Count > 2 ? arr[2] : null, tinted, resources);
+                }
+
+                case "CalGray":
+                    return new ColorRgb(C(0), C(0), C(0));
+                case "CalRGB":
+                    return new ColorRgb(C(0), C(1), C(2));
+                case "Lab":
+                    return LabToRgb(C(0), C(1), C(2));
+                case "Pattern":
+                    return ColorRgb.Black;
+            }
+        }
+
+        // Unknown/absent space: infer from the component count (postScript default).
+        return comps.Count switch
+        {
+            1 => new ColorRgb(C(0), C(0), C(0)),
+            4 => CmykToRgb(C(0), C(1), C(2), C(3)),
+            _ => new ColorRgb(C(0), C(1), C(2)),
+        };
+    }
+
+    private static ColorRgb CmykToRgb(double c, double m, double y, double k)
+        => new((1 - c) * (1 - k), (1 - m) * (1 - k), (1 - y) * (1 - k));
+
+    private int ComponentCount(object? space, Dictionary<string, object?> resources)
+    {
+        space = ResolveSpace(space, resources);
+        if (space is PdfName n)
+        {
+            return n.Value switch
+            {
+                "DeviceGray" or "G" => 1,
+                "DeviceCMYK" or "CMYK" => 4,
+                _ => 3,
+            };
+        }
+
+        if (space is List<object?> arr && arr.Count > 0 && arr[0] is PdfName kind)
+        {
+            switch (kind.Value)
+            {
+                case "ICCBased":
+                    return (int)(_file.ResolveNumber(
+                        _file.ResolveDict(arr.Count > 1 ? arr[1] : null)?.GetValueOrDefault("N")) ?? 3);
+                case "Separation":
+                    return 1;
+                case "DeviceN":
+                    return (_file.Resolve(arr.Count > 1 ? arr[1] : null) as List<object?>)?.Count ?? 1;
+                case "CalGray":
+                    return 1;
+                case "Indexed":
+                case "I":
+                    return 1;
+                default:
+                    return 3;
+            }
+        }
+
+        return 3;
+    }
+
+    private double[] LookupBytes(object? lookup)
+    {
+        if (lookup is string text)
+        {
+            byte[] bytes = new byte[text.Length];
+            for (int i = 0; i < text.Length; i++)
+            {
+                bytes[i] = (byte)(text[i] & 0xFF);
+            }
+
+            return Array.ConvertAll(bytes, b => b / 255.0);
+        }
+
+        if (_file.Resolve(lookup) is PdfStream stream)
+        {
+            return Array.ConvertAll(_file.GetStreamData(stream), b => b / 255.0);
+        }
+
+        return Array.Empty<double>();
+    }
+
+    /// <summary>Evaluates a PDF function (type 2, and type 0/4 best-effort) for one
+    /// input, returning its outputs. Used for Separation/DeviceN tint transforms.</summary>
+    private double[] ApplyFunction(object? function, IReadOnlyList<double> inputs,
+        Dictionary<string, object?> resources)
+    {
+        var dict = _file.ResolveDict(function);
+        if (dict is null)
+        {
+            return inputs.ToArray();
+        }
+
+        int type = (int)(_file.ResolveNumber(dict.GetValueOrDefault("FunctionType")) ?? 4);
+        double x = inputs.Count > 0 ? inputs[0] : 0.0;
+
+        if (type == 2)
+        {
+            double[] c0 = ReadNumbers(dict.GetValueOrDefault("C0")) ?? new[] { 0.0 };
+            double[] c1 = ReadNumbers(dict.GetValueOrDefault("C1")) ?? new[] { 1.0 };
+            double exponent = _file.ResolveNumber(dict.GetValueOrDefault("N")) ?? 1.0;
+            var output = new double[c0.Length];
+            double t = x <= 0 ? 0 : Math.Pow(x, exponent);
+            for (int i = 0; i < output.Length; i++)
+            {
+                double a = i < c0.Length ? c0[i] : 0.0;
+                double b = i < c1.Length ? c1[i] : 1.0;
+                output[i] = a + ((b - a) * t);
+            }
+
+            return output;
+        }
+
+        if (type == 0)
+        {
+            // Sampled function: best effort — return the first sample scaled.
+            object? range = dict.GetValueOrDefault("Range");
+            double[]? r = ReadNumbers(range);
+            if (r is { Length: >= 2 })
+            {
+                return new[] { r[0] + (x * (r[1] - r[0])) };
+            }
+        }
+
+        return inputs.ToArray();
+    }
+
+    private double[]? ReadNumbers(object? array)
+    {
+        if (_file.Resolve(array) is not List<object?> list)
+        {
+            return null;
+        }
+
+        var result = new double[list.Count];
+        for (int i = 0; i < list.Count; i++)
+        {
+            result[i] = ToDouble(_file.Resolve(list[i]));
+        }
+
+        return result;
+    }
+
+    private static ColorRgb LabToRgb(double l, double a, double b)
+    {
+        // ISO 32000-1 default Lab range: L* in [0,100], a*,b* in [-100,100].
+        double fy = (l + 16.0) / 116.0;
+        double fx = fy + (a / 500.0);
+        double fz = fy - (b / 200.0);
+
+        static double F(double t) => t > 6.0 / 29.0
+            ? t * t * t
+            : (t - 4.0 / 29.0) * (108.0 / 841.0);
+
+        double x = 0.9505 * F(fx);
+        double y = 1.0000 * F(fy);
+        double z = 1.0890 * F(fz);
+
+        double r = (3.2406 * x) - (1.5372 * y) - (0.4986 * z);
+        double g = (-0.9689 * x) + (1.8758 * y) + (0.0415 * z);
+        double bl = (0.0557 * x) - (0.2040 * y) + (1.0570 * z);
+
+        static double Gamma(double v) => v <= 0.0031308
+            ? 12.92 * v
+            : (1.055 * Math.Pow(Math.Max(0, v), 1.0 / 2.4)) - 0.055;
+
+        return new ColorRgb(
+            Math.Clamp(Gamma(r), 0.0, 1.0),
+            Math.Clamp(Gamma(g), 0.0, 1.0),
+            Math.Clamp(Gamma(bl), 0.0, 1.0));
     }
 
     private static void AddCubic(SubPath path, Point2D c1, Point2D c2, Point2D end)

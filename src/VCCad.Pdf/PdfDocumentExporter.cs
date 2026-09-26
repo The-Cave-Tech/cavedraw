@@ -332,15 +332,15 @@ public static class PdfDocumentExporter
         var closed = contours.Where(c => c.IsClosed).ToList();
         var open = contours.Where(c => !c.IsClosed).ToList();
 
-        // --- Fill (closed contours only) -----------------------------------
-        if (fillVisible && closed.Count > 0)
+        // --- Fill (all contours; `f` implicitly closes open subpaths) --------
+        if (fillVisible && contours.Count > 0)
         {
             if (alphaStates.HasTransparency)
             {
                 ops.Add($"{alphaStates.NameFor(path.Fill.Color.A * opacity)} gs");
             }
 
-            WriteContours(ops, closed);
+            WriteContours(ops, contours);
             ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "f*" : "f");
         }
 
