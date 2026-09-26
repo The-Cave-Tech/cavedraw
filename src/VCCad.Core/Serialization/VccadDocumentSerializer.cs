@@ -29,7 +29,7 @@ internal sealed record NodeDto(Point2D Anchor, Point2D InHandle, Point2D OutHand
 
 internal sealed record SubPathDto(bool Closed, NodeDto[] Nodes);
 
-internal sealed record TextRunDto(string Text, string FontFamily, double FontSize, bool Bold, bool Italic);
+internal sealed record TextRunDto(string Text, string FontFamily, double FontSize, bool Bold, bool Italic, double? AdvanceWidth = null);
 
 internal sealed record PathDto(
     Guid Id,
@@ -88,7 +88,7 @@ internal abstract record ItemDto
         new ColorDto(t.Color.R, t.Color.G, t.Color.B, t.Color.A),
         t.RotationRadians,
         t.Alignment,
-        t.Runs.Select(r => new TextRunDto(r.Text, r.FontFamily, r.FontSize, r.Bold, r.Italic)).ToArray());
+        t.Runs.Select(r => new TextRunDto(r.Text, r.FontFamily, r.FontSize, r.Bold, r.Italic, r.AdvanceWidth)).ToArray());
 
     private static PathDto ToPath(PathItem p) => new(
         p.Id,
@@ -153,6 +153,7 @@ internal static class ItemDtoExtensions
                 FontSize = run.FontSize,
                 Bold = run.Bold,
                 Italic = run.Italic,
+                AdvanceWidth = run.AdvanceWidth,
             });
         }
 

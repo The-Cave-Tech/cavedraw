@@ -17,6 +17,14 @@ public sealed class TextRun
 
     public bool Italic { get; set; }
 
+    /// <summary>
+    /// Advance width the run should occupy, in model units. Set when importing a
+    /// PDF so a substituted font can be scaled horizontally to the original
+    /// metrics (otherwise wide fallback fonts reflow/overlap the layout).
+    /// <c>null</c> means "use the renderer's natural width".
+    /// </summary>
+    public double? AdvanceWidth { get; set; }
+
     public TextRun Clone() => new()
     {
         Text = Text,
@@ -24,6 +32,7 @@ public sealed class TextRun
         FontSize = FontSize,
         Bold = Bold,
         Italic = Italic,
+        AdvanceWidth = AdvanceWidth,
     };
 }
 

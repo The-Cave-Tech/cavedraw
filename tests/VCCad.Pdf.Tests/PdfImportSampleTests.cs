@@ -61,5 +61,12 @@ public class PdfImportSampleTests
         List<TextItem> texts = page.Layers.SelectMany(l => l.Children).OfType<TextItem>().ToList();
         Assert.NotEmpty(texts);
         Assert.All(texts.SelectMany(t => t.Runs), r => Assert.True(r.FontSize > 1.0, $"text size {r.FontSize} looks unscaled"));
+
+        // Original advance widths are captured so the substituted font can be
+        // scaled to the source layout (avoids reflow/overlap).
+        Assert.All(texts.SelectMany(t => t.Runs), r => Assert.True(r.AdvanceWidth is > 0, "advance width missing"));
+
+        // The pattern has vertical (rotated) piece labels.
+        Assert.Contains(texts, t => Math.Abs(t.RotationRadians) > 0.1);
     }
 }

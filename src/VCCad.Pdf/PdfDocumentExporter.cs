@@ -479,8 +479,8 @@ public static class PdfDocumentExporter
     /// global coordinate flip.</summary>
     private static void WriteText(List<string> ops, TextItem text, PdfFontEmbedder embedder, PdfAlphaStates alphaStates)
     {
-        double originX = text.Origin.X;
-        double x = originX;
+        double cos = Math.Cos(text.RotationRadians);
+        double sin = Math.Sin(text.RotationRadians);
         double y = text.Origin.Y;
 
         foreach (TextRun run in text.Runs)
@@ -490,11 +490,14 @@ public static class PdfDocumentExporter
             string resource = embedder.NameFor(key);
 
             var hex = new StringBuilder();
-            double lineStartX = x;
             // The model stores the block's top-left; PDF places text on the
-            // baseline, so drop by the embedded font's ascent.
+            // baseline, so the baseline sits one ascent down the (rotated) text
+            // axis. Ascent is per run.
             double ascent = font.UnitsPerEm > 0 ? (double)font.Ascender / font.UnitsPerEm : 0.8;
-            double lineY = y + (ascent * run.FontSize);
+            double targetAdvance = run.AdvanceWidth ?? 0.0;
+            bool multiLine = run.Text.Contains('\n');
+            double lineAdvance = 0;
+            double yOffset = y - text.Origin.Y; // model units down the block
 
             void Flush()
             {
@@ -502,6 +505,15 @@ public static class PdfDocumentExporter
                 {
                     return;
                 }
+
+                double sx = !multiLine && targetAdvance > 0 && lineAdvance > 0
+                    ? targetAdvance / lineAdvance
+                    : 1.0;
+
+                // Baseline origin in model space: top-left + R(rot)*(0, y + ascent).
+                double depth = yOffset + (ascent * run.FontSize);
+                double ox = text.Origin.X - (sin * depth);
+                double oy = text.Origin.Y + (cos * depth);
 
                 ops.Add($"{Num(text.Color.R)} {Num(text.Color.G)} {Num(text.Color.B)} rg");
                 if (alphaStates.HasTransparency)
@@ -511,7 +523,8 @@ public static class PdfDocumentExporter
 
                 ops.Add("BT");
                 ops.Add($"{resource} {Num(run.FontSize)} Tf");
-                ops.Add($"1 0 0 -1 {Num(lineStartX)} {Num(lineY)} Tm");
+                // R(rot) with a y-flip for upright glyphs, times the advance scale.
+                ops.Add($"{Num(sx * cos)} {Num(sx * sin)} {Num(sin)} {Num(-cos)} {Num(ox)} {Num(oy)} Tm");
                 ops.Add($"<{hex}> Tj");
                 ops.Add("ET");
                 hex.Clear();
@@ -522,10 +535,9 @@ public static class PdfDocumentExporter
                 if (ch == '\n')
                 {
                     Flush();
-                    x = originX;
                     y += run.FontSize * 1.2;
-                    lineStartX = x;
-                    lineY = y + (ascent * run.FontSize);
+                    yOffset = y - text.Origin.Y;
+                    lineAdvance = 0;
                     continue;
                 }
 
@@ -536,7 +548,7 @@ public static class PdfDocumentExporter
                 }
 
                 hex.Append(gid.ToString("X4", CultureInfo.InvariantCulture));
-                x += font.Advance1000(gid) * run.FontSize / 1000.0;
+                lineAdvance += font.Advance1000(gid) * run.FontSize / 1000.0;
             }
 
             Flush();

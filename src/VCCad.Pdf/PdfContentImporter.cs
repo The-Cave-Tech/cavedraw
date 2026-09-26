@@ -478,8 +478,53 @@ internal sealed class PdfContentImporter
             Color = color,
             RotationRadians = rotation,
         };
-        item.Runs.Add(new TextRun { Text = text, FontFamily = family, FontSize = effectiveSize, Bold = bold, Italic = italic });
+        var run = new TextRun
+        {
+            Text = text,
+            FontFamily = family,
+            FontSize = effectiveSize,
+            Bold = bold,
+            Italic = italic,
+            AdvanceWidth = MeasureAdvance(text, fontName, resources, effectiveSize),
+        };
+        item.Runs.Add(run);
         items.Add(new PdfImportedItem(layer, item));
+    }
+
+    /// <summary>
+    /// Sums the PDF font's glyph widths for <paramref name="text"/> so the
+    /// substituted font can be scaled to the original advance (keeps imported
+    /// layout from reflowing under a wider fallback font). Returns null when the
+    /// font exposes no simple /Widths array (e.g. CID fonts).
+    /// </summary>
+    private double? MeasureAdvance(string text, string fontName,
+        Dictionary<string, object?> resources, double effectiveSize)
+    {
+        if (_file.ResolveDict(resources.GetValueOrDefault("Font")) is not { } fonts ||
+            _file.ResolveDict(fonts.GetValueOrDefault(fontName)) is not { } fontDict ||
+            _file.Resolve(fontDict.GetValueOrDefault("Widths")) is not List<object?> widths)
+        {
+            return null;
+        }
+
+        double missing = _file.ResolveNumber(fontDict.GetValueOrDefault("MissingWidth")) ?? 0;
+        int first = (int)(_file.ResolveNumber(fontDict.GetValueOrDefault("FirstChar")) ?? 0);
+        double total = 0;
+        foreach (char ch in text)
+        {
+            if (ch == '\n')
+            {
+                continue;
+            }
+
+            int index = ch - first;
+            double width = index >= 0 && index < widths.Count
+                ? ToDouble(_file.Resolve(widths[index]))
+                : missing;
+            total += width;
+        }
+
+        return total / 1000.0 * effectiveSize;
     }
 
     private (string Family, bool Bold, bool Italic, double Ascent) MapFont(

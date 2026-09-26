@@ -2729,28 +2729,48 @@ public sealed class CanvasWorkspace : Control
 
         // Measure each run's natural width first: the wrapping constraint must
         // never be narrower than the text, or every line wraps.
-        var laidOut = new List<(FormattedText Formatted, double LineHeight, int Lines)>();
+        var laidOut = new List<(TextRun Run, FormattedText Formatted, double Natural, double LineHeight, int Lines)>();
         double blockWidth = 0;
         foreach (TextRun run in text.Runs)
         {
             FormattedText formatted = CreateFormattedText(run, brush);
-            blockWidth = Math.Max(blockWidth, formatted.Width);
-            laidOut.Add((formatted, run.FontSize * 1.2, run.Text.Count(ch => ch == '\n') + 1));
+            double natural = formatted.Width;
+            double target = run.AdvanceWidth is > 0 ? run.AdvanceWidth.Value : natural;
+            blockWidth = Math.Max(blockWidth, target);
+            laidOut.Add((run, formatted, natural, run.FontSize * 1.2, run.Text.Count(ch => ch == '\n') + 1));
         }
 
         double yOffset = 0;
-        foreach ((FormattedText formatted, double lineHeight, int lines) in laidOut)
+        foreach ((TextRun run, FormattedText formatted, double natural, double lineHeight, int lines) in laidOut)
         {
-            formatted.MaxTextWidth = Math.Max(1, blockWidth);
-            formatted.TextAlignment = text.Alignment switch
+            double target = run.AdvanceWidth is > 0 ? run.AdvanceWidth.Value : natural;
+            double scaleX = run.AdvanceWidth is > 0 && natural > 0 ? target / natural : 1.0;
+            double alignX = text.Alignment switch
             {
-                ModelTextAlignment.Center => Avalonia.Media.TextAlignment.Center,
-                ModelTextAlignment.Right => Avalonia.Media.TextAlignment.Right,
-                _ => Avalonia.Media.TextAlignment.Left,
+                ModelTextAlignment.Center => (blockWidth - target) / 2,
+                ModelTextAlignment.Right => blockWidth - target,
+                _ => 0,
             };
 
-            Point2D origin = text.Origin + offset + new Vector2D(0, yOffset);
-            context.DrawText(formatted, new Point(origin.X, origin.Y));
+            Point2D origin = text.Origin + offset + new Vector2D(alignX, yOffset);
+
+            if (Math.Abs(scaleX - 1.0) > 1e-9)
+            {
+                // Squeeze/stretch to the original PDF advance width so a wider
+                // fallback font does not reflow or overprint the layout.
+                Avalonia.Matrix scale = Avalonia.Matrix.CreateTranslation(-origin.X, -origin.Y)
+                    * Avalonia.Matrix.CreateScale(scaleX, 1.0)
+                    * Avalonia.Matrix.CreateTranslation(origin.X, origin.Y);
+                using (context.PushTransform(scale))
+                {
+                    context.DrawText(formatted, new Point(origin.X, origin.Y));
+                }
+            }
+            else
+            {
+                context.DrawText(formatted, new Point(origin.X, origin.Y));
+            }
+
             yOffset += lines * lineHeight;
         }
     }
