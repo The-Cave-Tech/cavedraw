@@ -54,6 +54,31 @@ public sealed class EmbeddedFont
     /// <summary>/Encoding /Differences pairs (code, glyph name), when present.</summary>
     public IReadOnlyList<(int Code, string Name)> Differences { get; init; } = Array.Empty<(int, string)>();
 
+    // ---- composite (Type0) pass-through fields ----
+    /// <summary>Descendant CID font subtype (CIDFontType0 / CIDFontType2).</summary>
+    public string DescendantSubtype { get; init; } = "CIDFontType2";
+
+    public string DescendantBaseFont { get; init; } = "Embedded";
+
+    /// <summary>Type0 /Encoding: a predefined CMap name (Identity-H) or null.</summary>
+    public string? Type0Encoding { get; init; }
+
+    /// <summary>Raw CMap stream for a custom Type0 encoding.</summary>
+    public byte[]? Type0EncodingStream { get; init; }
+
+    /// <summary>Rendered /CIDSystemInfo dictionary body.</summary>
+    public string CidSystemInfo { get; init; } = "/Registry (Adobe) /Ordering (Identity) /Supplement 0";
+
+    public double DefaultWidth { get; init; } = 1000;
+
+    /// <summary>Rendered descendant /W widths array (may be empty).</summary>
+    public string WidthsSpec { get; init; } = string.Empty;
+
+    /// <summary>/CIDToGIDMap name (Identity) or null when a stream is used.</summary>
+    public string? CidToGidMapName { get; init; } = "Identity";
+
+    public byte[]? CidToGidMapStream { get; init; }
+
     public int Flags { get; init; } = 4;
     public double[] FontBBox { get; init; } = { 0, 0, 0, 0 };
     public double ItalicAngle { get; init; }

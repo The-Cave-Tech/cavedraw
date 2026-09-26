@@ -105,6 +105,12 @@ internal sealed class PdfFontEmbedder
     /// exact original face (no substitution).</summary>
     private void BuildEmbeddedFont(EmbeddedFont font, string name)
     {
+        if (font.Composite)
+        {
+            BuildCompositeEmbeddedFont(font, name);
+            return;
+        }
+
         int fontObj = _assembler.Allocate();
         int descriptor = _assembler.Allocate();
         int fontFile = _assembler.Allocate();
@@ -154,6 +160,73 @@ internal sealed class PdfFontEmbedder
             $"/FontDescriptor {descriptor} 0 R{toUniRef} >>");
 
         // Map the name to the object number for FontDict().
+        _embeddedObjectNames[name] = fontObj;
+    }
+
+    private void BuildCompositeEmbeddedFont(EmbeddedFont font, string name)
+    {
+        int fontObj = _assembler.Allocate();
+        int cidFont = _assembler.Allocate();
+        int descriptor = _assembler.Allocate();
+        int fontFile = _assembler.Allocate();
+        int toUnicode = font.ToUnicode is { Length: > 0 } ? _assembler.Allocate() : 0;
+        int encodingStream = font.Type0EncodingStream is { Length: > 0 } ? _assembler.Allocate() : 0;
+
+        bool cidType0 = font.DescendantSubtype == "CIDFontType0";
+        string fileKey = cidType0 ? "FontFile3" : "FontFile2";
+        string fileExtra = cidType0
+            ? font.Format == EmbeddedFontFormat.OpenType ? " /Subtype /OpenType" : " /Subtype /CIDFontType0C"
+            : $"/Length1 {font.Program.Length}";
+        _assembler.SetBody(fontFile,
+            PdfDocumentExporter.MakeStreamObject(PdfDocumentExporter.Compress(font.Program),
+                fileExtra.StartsWith("/Length1") ? " " + fileExtra : fileExtra));
+
+        string bbox = $"[{Num(font.FontBBox[0])} {Num(font.FontBBox[1])} {Num(font.FontBBox[2])} {Num(font.FontBBox[3])}]";
+        _assembler.SetBody(descriptor,
+            $"<< /Type /FontDescriptor /FontName /{Sanitise(font.DescendantBaseFont)} /Flags {font.Flags} " +
+            $"/FontBBox {bbox} /ItalicAngle {Num(font.ItalicAngle)} /Ascent {Num(font.Ascent)} " +
+            $"/Descent {Num(font.Descent)} /CapHeight {Num(font.CapHeight)} /StemV {Num(font.StemV)} " +
+            $"/MissingWidth {Num(font.MissingWidth)} /{fileKey} {fontFile} 0 R >>");
+
+        if (toUnicode != 0)
+        {
+            _assembler.SetBody(toUnicode,
+                PdfDocumentExporter.MakeStreamObject(PdfDocumentExporter.Compress(font.ToUnicode!)));
+        }
+
+        string cidToGid = font.CidToGidMapStream is { Length: > 0 }
+            ? _assembler.Allocate().ToString()
+            : "/" + (font.CidToGidMapName ?? "Identity");
+        if (font.CidToGidMapStream is { Length: > 0 } mapBytes)
+        {
+            int mapObj = int.Parse(cidToGid, System.Globalization.CultureInfo.InvariantCulture);
+            _assembler.SetBody(mapObj, PdfDocumentExporter.MakeStreamObject(PdfDocumentExporter.Compress(mapBytes)));
+            cidToGid = mapObj + " 0 R";
+        }
+
+        _assembler.SetBody(cidFont,
+            $"<< /Type /Font /Subtype /{font.DescendantSubtype} /BaseFont /{Sanitise(font.DescendantBaseFont)} " +
+            $"/CIDSystemInfo << {font.CidSystemInfo} >> /FontDescriptor {descriptor} 0 R " +
+            $"/DW {Num(font.DefaultWidth)} /W {font.WidthsSpec} " +
+            $"/CIDToGIDMap {(cidToGid.StartsWith('/') ? cidToGid : cidToGid)} >>");
+
+        string encoding;
+        if (encodingStream != 0)
+        {
+            _assembler.SetBody(encodingStream,
+                PdfDocumentExporter.MakeStreamObject(PdfDocumentExporter.Compress(font.Type0EncodingStream!)));
+            encoding = encodingStream + " 0 R";
+        }
+        else
+        {
+            encoding = "/" + (font.Type0Encoding ?? "Identity-H");
+        }
+
+        string toUniRef = toUnicode != 0 ? $" /ToUnicode {toUnicode} 0 R" : string.Empty;
+        _assembler.SetBody(fontObj,
+            $"<< /Type /Font /Subtype /Type0 /BaseFont /{Sanitise(font.BaseFont)} " +
+            $"/Encoding {encoding} /DescendantFonts [{cidFont} 0 R]{toUniRef} >>");
+
         _embeddedObjectNames[name] = fontObj;
     }
 

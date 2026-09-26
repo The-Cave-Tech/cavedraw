@@ -490,7 +490,7 @@ public static class PdfDocumentExporter
             {
                 // Imported runs that carry their original programme are emitted
                 // verbatim, so they need no bundled substitute.
-                if (run.EmbeddedFont is { Composite: false } embedded && run.RawCodes is { Length: > 0 })
+                if (run.EmbeddedFont is { } embedded && run.RawCodes is { Length: > 0 })
                 {
                     if (!embeddedFonts.Contains(embedded))
                     {
@@ -528,7 +528,7 @@ public static class PdfDocumentExporter
 
         foreach (TextRun run in text.Runs)
         {
-            EmbeddedFont? embeddedFont = run.EmbeddedFont is { Composite: false } ef2 ? ef2 : null;
+            EmbeddedFont? embeddedFont = run.EmbeddedFont;
             bool embeddedRun = embeddedFont is not null && run.RawCodes is { Length: > 0 };
             var key = new FontKey(run.FontFamily, run.Bold, run.Italic);
             TrueTypeFont? font = embeddedRun ? null : embedder.FontFor(key);

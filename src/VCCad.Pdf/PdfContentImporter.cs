@@ -654,12 +654,11 @@ internal sealed class PdfContentImporter
         bool composite = subtype == "Type0";
 
         Dictionary<string, object?>? descriptor;
+        Dictionary<string, object?>? descendant = null;
         if (composite)
         {
             var descendants = _file.Resolve(font.GetValueOrDefault("DescendantFonts")) as List<object?>;
-            Dictionary<string, object?>? descendant = descendants is { Count: > 0 }
-                ? _file.ResolveDict(descendants[0])
-                : null;
+            descendant = descendants is { Count: > 0 } ? _file.ResolveDict(descendants[0]) : null;
             descriptor = descendant is null
                 ? null
                 : _file.ResolveDict(descendant.GetValueOrDefault("FontDescriptor"));
@@ -675,6 +674,20 @@ internal sealed class PdfContentImporter
             double[]? bbox = ReadNumbers(descriptor.GetValueOrDefault("FontBBox"));
             result = new EmbeddedFont
             {
+                DescendantSubtype = (descendant?.GetValueOrDefault("Subtype") as PdfName)?.Value ?? "CIDFontType2",
+                DescendantBaseFont = (descendant?.GetValueOrDefault("BaseFont") as PdfName)?.Value
+                    ?? (font.GetValueOrDefault("BaseFont") as PdfName)?.Value ?? "Embedded",
+                Type0Encoding = font.GetValueOrDefault("Encoding") is PdfName e0 ? e0.Value : null,
+                Type0EncodingStream = _file.Resolve(font.GetValueOrDefault("Encoding")) is PdfStream es
+                    ? _file.GetStreamData(es)
+                    : null,
+                CidSystemInfo = BuildCidSystemInfo(_file.ResolveDict(descendant?.GetValueOrDefault("CIDSystemInfo"))),
+                DefaultWidth = _file.ResolveNumber(descendant?.GetValueOrDefault("DW")) ?? 1000,
+                WidthsSpec = FormatPdfArray(descendant?.GetValueOrDefault("W")),
+                CidToGidMapName = descendant?.GetValueOrDefault("CIDToGIDMap") is PdfName cm ? cm.Value : "Identity",
+                CidToGidMapStream = _file.Resolve(descendant?.GetValueOrDefault("CIDToGIDMap")) is PdfStream cms
+                    ? _file.GetStreamData(cms)
+                    : null,
                 Format = format,
                 Program = program,
                 Composite = composite,
@@ -750,6 +763,45 @@ internal sealed class PdfContentImporter
         }
 
         return result;
+    }
+
+    private string BuildCidSystemInfo(Dictionary<string, object?>? info)
+    {
+        if (info is null)
+        {
+            return "/Registry (Adobe) /Ordering (Identity) /Supplement 0";
+        }
+
+        string registry = _file.Resolve(info.GetValueOrDefault("Registry")) switch
+        {
+            PdfName n => n.Value,
+            string s2 => s2,
+            _ => "Adobe",
+        };
+        string ordering = _file.Resolve(info.GetValueOrDefault("Ordering")) switch
+        {
+            PdfName n => n.Value,
+            string s2 => s2,
+            _ => "Identity",
+        };
+        int supplement = (int)(_file.ResolveNumber(info.GetValueOrDefault("Supplement")) ?? 0);
+        return $"/Registry ({registry}) /Ordering ({ordering}) /Supplement {supplement}";
+    }
+
+    /// <summary>Renders a resolved PDF array/number/name back to PDF syntax.</summary>
+    private string FormatPdfArray(object? value)
+    {
+        value = _file.Resolve(value);
+        return value switch
+        {
+            null => "[]",
+            List<object?> list => "[" + string.Join(' ', list.Select(FormatPdfArray)) + "]",
+            PdfName name => "/" + name.Value,
+            string s2 => $"({s2.Replace("\\", "\\\\").Replace("(", "\\(").Replace(")", "\\)")})",
+            double d => d.ToString("0.#####", System.Globalization.CultureInfo.InvariantCulture),
+            long l => l.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            _ => "0",
+        };
     }
 
     private Dictionary<string, object?>? FontDict(string fontName, Dictionary<string, object?> resources)
