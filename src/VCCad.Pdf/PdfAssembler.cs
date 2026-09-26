@@ -39,13 +39,14 @@ internal sealed class PdfAssembler
     /// complete file bytes. See <see cref="PdfSidecarReader"/> for the reader that
     /// parses this layout back.
     /// </summary>
-    public byte[] Serialize(int rootObjectNumber)
+    public byte[] Serialize(int rootObjectNumber, string trailerExtra = "")
     {
         using var output = new MemoryStream();
 
         // The %PDF header must be followed within a few bytes by a line whose first
         // character is a high-bit byte — scanners use it to detect binary files.
-        byte[] header = Encoding.ASCII.GetBytes("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
+        // Latin1 so the ≥128 binary marker survives (ASCII would turn it into "?").
+        byte[] header = Encoding.Latin1.GetBytes("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
         output.Write(header, 0, header.Length);
 
         var offsets = new long[_objects.Count];
@@ -77,7 +78,8 @@ internal sealed class PdfAssembler
         output.Write(xrefBytes, 0, xrefBytes.Length);
 
         byte[] trailer = Encoding.ASCII.GetBytes(
-            $"trailer\n<< /Size {_objects.Count + 1} /Root {rootObjectNumber} 0 R >>\nstartxref\n{xrefOffset}\n%%EOF\n");
+            $"trailer\n<< /Size {_objects.Count + 1} /Root {rootObjectNumber} 0 R{trailerExtra} >>\n" +
+            $"startxref\n{xrefOffset}\n%%EOF\n");
         output.Write(trailer, 0, trailer.Length);
         return output.ToArray();
     }

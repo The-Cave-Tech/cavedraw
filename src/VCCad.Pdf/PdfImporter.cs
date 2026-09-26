@@ -71,6 +71,32 @@ public static class PdfImporter
         return document;
     }
 
+    /// <summary>
+    /// Test/benchmark hook: runs only the real vector-import path (no sidecar, no
+    /// structural fallback) and reports whether it succeeded. Used by the veraPDF
+    /// corpus sweep to measure genuine parsing coverage.
+    /// </summary>
+    internal static bool TryImportVector(byte[] pdfBytes, out CadDocument? document)
+    {
+        try
+        {
+            var file = new Parsing.PdfFile(pdfBytes);
+            var pageDicts = EnumeratePages(file).ToList();
+            if (pageDicts.Count > 0)
+            {
+                document = BuildFromPages(file, pageDicts);
+                return true;
+            }
+        }
+        catch (Exception)
+        {
+            // fall through
+        }
+
+        document = null;
+        return false;
+    }
+
     private static CadDocument BuildFromPages(Parsing.PdfFile file,
         IReadOnlyList<Dictionary<string, object?>> pageDicts)
     {

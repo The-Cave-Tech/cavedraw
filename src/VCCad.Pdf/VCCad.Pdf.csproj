@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Fonts\*.ttf" />
+    <EmbeddedResource Include="Resources\*.icc" />
   </ItemGroup>
 
   <ItemGroup>

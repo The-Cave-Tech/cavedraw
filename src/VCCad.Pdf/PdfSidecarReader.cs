@@ -41,10 +41,20 @@ public static class PdfSidecarReader
 
         // Object 1 is the catalog by construction of our exporter.
         string catalogBody = ReadObject(pdfBytes, offsets, 1);
+
+        // Current layout: a plain /VCCadDocument stream in the catalog (chosen
+        // because PDF/A forbids arbitrary /EmbeddedFiles attachments).
+        int directRef = FindReference(catalogBody, "/VCCadDocument");
+        if (directRef >= 0)
+        {
+            return ExtractStream(pdfBytes, offsets, directRef);
+        }
+
+        // Legacy layout: catalog → Names → EmbeddedFiles → Filespec → EF.
         int namesRef = FindReference(catalogBody, "/Names");
         if (namesRef < 0)
         {
-            throw new InvalidDataException("Catalog has no /Names entry.");
+            throw new InvalidDataException("Catalog has no /VCCadDocument or /Names entry.");
         }
 
         string namesBody = ReadObject(pdfBytes, offsets, namesRef);

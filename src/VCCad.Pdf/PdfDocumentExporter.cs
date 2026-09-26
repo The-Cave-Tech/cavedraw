@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text;
 using VCCad.Core.Model;
 using VCCad.Core.Serialization;
@@ -61,9 +62,7 @@ public static class PdfDocumentExporter
         // ------------------------------------------------------------------
         int catalogNumber = assembler.Allocate();
         int pagesNumber = assembler.Allocate();
-        int namesNumber = assembler.Allocate();
         int sidecarStreamNumber = assembler.Allocate();
-        int sidecarSpecNumber = assembler.Allocate();
 
         var pageNumbers = new int[document.Artboards.Count];
         var contentNumbers = new int[document.Artboards.Count];
@@ -101,11 +100,19 @@ public static class PdfDocumentExporter
         byte[] modelJson = VccadDocumentSerializer.SerializeToBytes(document);
         byte[] sidecarStream = Compress(modelJson);
 
+        // Stored as a plain catalog stream rather than an /EmbeddedFiles
+        // attachment: PDF/A (veraPDF clause 6.8) only permits embedded *files*
+        // that are themselves PDF/A, and our model JSON is not.
         assembler.SetBody(sidecarStreamNumber, MakeStreamObject(sidecarStream));
-        assembler.SetBody(
-            sidecarSpecNumber,
-            $"<< /Type /Filespec /F ({SidecarFileName}) /UF ({SidecarFileName}) " +
-            $"/EF << /F {sidecarStreamNumber} 0 R >> >>");
+
+        // ------------------------------------------------------------------
+        // Document metadata: /Info, a file /ID and an XMP packet. PDF/A (which
+        // dominates the veraPDF corpus) requires all three.
+        // ------------------------------------------------------------------
+        int infoNumber = assembler.Allocate();
+        int metadataNumber = assembler.Allocate();
+        int iccNumber = assembler.Allocate();
+        int outputIntentNumber = assembler.Allocate();
 
         // ------------------------------------------------------------------
         // Content streams and page objects.
@@ -136,13 +143,35 @@ public static class PdfDocumentExporter
             pagesNumber,
             $"<< /Type /Pages /Kids [{kidList}] /Count {document.Artboards.Count} >>");
         assembler.SetBody(
-            namesNumber,
-            $"<< /EmbeddedFiles << /Names [({SidecarFileName}) {sidecarSpecNumber} 0 R] >> >>");
-        assembler.SetBody(
             catalogNumber,
-            $"<< /Type /Catalog /Pages {pagesNumber} 0 R /Names {namesNumber} 0 R >>");
+            $"<< /Type /Catalog /Pages {pagesNumber} 0 R " +
+            $"/VCCadDocument {sidecarStreamNumber} 0 R " +
+            $"/Metadata {metadataNumber} 0 R /OutputIntents [{outputIntentNumber} 0 R] >>");
 
-        byte[] bytes = assembler.Serialize(catalogNumber);
+        string now = DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+        assembler.SetBody(
+            infoNumber,
+            $"<< /Title ({EscapeText(document.Name)}) /Producer (VCCad) /Creator (VCCad) " +
+            $"/CreationDate (D:{now}Z) /ModDate (D:{now}Z) >>");
+        assembler.SetBody(
+            metadataNumber,
+            MakeStreamObject(Compress(Encoding.UTF8.GetBytes(BuildXmp(document.Name))),
+                " /Type /Metadata /Subtype /XML"));
+
+        // DeviceRGB is only allowed under PDF/A with an RGB output intent; embed
+        // the sRGB profile so the colour space is defined.
+        assembler.SetBody(iccNumber, MakeStreamObject(Compress(LoadSrgbProfile()), " /N 3"));
+        assembler.SetBody(
+            outputIntentNumber,
+            $"<< /Type /OutputIntent /S /GTS_PDFA1 " +
+            $"/OutputConditionIdentifier (sRGB IEC61966-2.1) /Info (sRGB IEC61966-2.1) " +
+            $"/DestOutputProfile {iccNumber} 0 R >>");
+
+        // File identifier: two byte strings. A stable first half makes repeated
+        // saves correlatable; the second half changes with the content.
+        string id = Convert.ToHexString(SHA256.HashData(modelJson)).ToLowerInvariant();
+
+        byte[] bytes = assembler.Serialize(catalogNumber, $"/Info {infoNumber} 0 R /ID [<{id}> <{id}>]");
         output.Write(bytes, 0, bytes.Length);
     }
 
@@ -634,6 +663,47 @@ public static class PdfDocumentExporter
     /// carrying a <c>/Filter /FlateDecode</c> entry, with the compressed length
     /// written into the dictionary.
     /// </summary>
+    /// <summary>Minimal but valid XMP packet carrying the document title.</summary>
+    private static string BuildXmp(string title)
+    {
+        string safe = EscapeXml(title);
+        return "<?xpacket begin=\"\uFEFF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n" +
+               "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n" +
+               " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n" +
+               "  <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\">\n" +
+               "   <pdfaid:part>2</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>\n" +
+               "  </rdf:Description>\n" +
+               "  <rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n" +
+               $"   <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{safe}</rdf:li></rdf:Alt></dc:title>\n" +
+               "  </rdf:Description>\n" +
+               "  <rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">\n" +
+               "   <xmp:CreatorTool>VCCad</xmp:CreatorTool>\n" +
+               "  </rdf:Description>\n" +
+               " </rdf:RDF>\n" +
+               "</x:xmpmeta>\n" +
+               "<?xpacket end=\"w\"?>";
+    }
+
+    private static byte[] LoadSrgbProfile()
+    {
+        using Stream? stream = typeof(PdfDocumentExporter).Assembly
+            .GetManifestResourceStream("VCCad.Pdf.Resources.sRGB.icc");
+        if (stream is null)
+        {
+            return Array.Empty<byte>();
+        }
+
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
+    }
+
+    private static string EscapeXml(string value) => value
+        .Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+
+    private static string EscapeText(string value) => value
+        .Replace("\\", "\\\\").Replace("(", "\\(").Replace(")", "\\)");
+
     internal static byte[] MakeStreamObject(byte[] data, string extraDict = "")
     {
         string dict = $"<< /Length {data.Length}{extraDict} /Filter /FlateDecode >>\nstream\n";
