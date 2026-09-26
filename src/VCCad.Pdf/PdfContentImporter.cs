@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using VCCad.Core.Model;
 using VCCad.Geometry;
+using VCCad.Pdf.Fonts;
 using VCCad.Pdf.Parsing;
 
 namespace VCCad.Pdf;
@@ -463,18 +464,27 @@ internal sealed class PdfContentImporter
         // ignoring the matrix scale renders everything at 1pt.
         AffineTransform matrix = ctm.Compose(textMatrix);
         double scale = Math.Sqrt((matrix.A * matrix.A) + (matrix.B * matrix.B));
+        if (scale <= 0)
+        {
+            scale = 1.0;
+        }
+
         double effectiveSize = fontSize * scale;
         double rotation = -Math.Atan2(matrix.B, matrix.A);
 
-        Point2D origin = matrix.Transform(new Point2D(0, 0));
-
-        // PDF text origins sit on the baseline; the model stores the block's
-        // top-left, so lift the origin by the font's ascent.
+        // PDF origins sit on the baseline; the model stores the block's top-left,
+        // which is one ascent up the text's *own* up axis (the matrix's second
+        // column, y-flipped). Applying it straight down breaks rotated labels.
+        Point2D baseline = matrix.Transform(new Point2D(0, 0));
         double ascentPoints = ascent * effectiveSize;
+        double upX = matrix.C / scale;
+        double upY = -matrix.D / scale;
         var item = new TextItem
         {
             Name = "Text",
-            Origin = new Point2D(origin.X, _pageHeight - origin.Y - ascentPoints),
+            Origin = new Point2D(
+                baseline.X + (ascentPoints * upX),
+                (_pageHeight - baseline.Y) + (ascentPoints * upY)),
             Color = color,
             RotationRadians = rotation,
         };
@@ -531,21 +541,11 @@ internal sealed class PdfContentImporter
         string fontName, Dictionary<string, object?> resources)
     {
         string baseFont = fontName;
-        double ascent = 0.8;
         if (_file.ResolveDict(resources.GetValueOrDefault("Font")) is { } fonts &&
-            _file.ResolveDict(fonts.GetValueOrDefault(fontName)) is { } fontDict)
+            _file.ResolveDict(fonts.GetValueOrDefault(fontName)) is { } fontDict &&
+            fontDict.GetValueOrDefault("BaseFont") is PdfName bf)
         {
-            if (fontDict.GetValueOrDefault("BaseFont") is PdfName bf)
-            {
-                baseFont = bf.Value;
-            }
-
-            // Ascent from the font descriptor, in thousandths of an em.
-            if (_file.ResolveDict(fontDict.GetValueOrDefault("FontDescriptor")) is { } descriptor &&
-                _file.ResolveNumber(descriptor.GetValueOrDefault("Ascent")) is double a && a > 0)
-            {
-                ascent = a / 1000.0;
-            }
+            baseFont = bf.Value;
         }
 
         bool bold = baseFont.Contains("Bold", StringComparison.OrdinalIgnoreCase) ||
@@ -562,6 +562,16 @@ internal sealed class PdfContentImporter
               baseFont.Contains("Annai", StringComparison.OrdinalIgnoreCase)
                 ? "DejaVu Serif"
                 : "DejaVu Sans";
+
+        // The origin lift must use the ascent of the font we will actually
+        // render with (the substituted bundled font), not the source font's
+        // descriptor — otherwise the baseline is misplaced.
+        double ascent = 0.8;
+        TrueTypeFont bundled = BundledFonts.Resolve(family, bold: false, italic: false);
+        if (bundled.UnitsPerEm > 0)
+        {
+            ascent = (double)bundled.Ascender / bundled.UnitsPerEm;
+        }
 
         return (family, bold, italic, ascent);
     }

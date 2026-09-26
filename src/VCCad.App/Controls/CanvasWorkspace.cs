@@ -2778,12 +2778,30 @@ public sealed class CanvasWorkspace : Control
     private static FormattedText CreateFormattedText(TextRun run, IBrush brush)
     {
         var typeface = new Typeface(
-            new FontFamily(run.FontFamily),
+            ResolveFontFamily(run),
             run.Italic ? FontStyle.Italic : FontStyle.Normal,
             run.Bold ? FontWeight.Bold : FontWeight.Normal);
 
         return new FormattedText(run.Text, CultureInfo.CurrentCulture,
             FlowDirection.LeftToRight, typeface, run.FontSize, brush);
+    }
+
+    /// <summary>Maps a model font family to the bundled DejaVu face so the canvas
+    /// uses the same metrics as the PDF exporter (Avalonia would otherwise fall
+    /// back to its default font and misalign text).</summary>
+    private static FontFamily ResolveFontFamily(TextRun run) => run.FontFamily switch
+    {
+        "DejaVu Sans" => BundledFace("DejaVu Sans", run,
+            "DejaVuSans.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans-Oblique.ttf"),
+        "DejaVu Serif" => BundledFace("DejaVu Serif", run, "DejaVuSerif.ttf", "DejaVuSerif.ttf", "DejaVuSerif.ttf"),
+        "DejaVu Sans Mono" => BundledFace("DejaVu Sans Mono", run, "DejaVuSansMono.ttf", "DejaVuSansMono.ttf", "DejaVuSansMono.ttf"),
+        _ => new FontFamily(run.FontFamily),
+    };
+
+    private static FontFamily BundledFace(string family, TextRun run, string regular, string bold, string italic)
+    {
+        string file = run.Bold ? bold : run.Italic ? italic : regular;
+        return new FontFamily($"avares://VCCad.App/Assets/Fonts/{file}#{family}");
     }
 
     /// <summary>Measured layout of a text block: per-character boundary positions
