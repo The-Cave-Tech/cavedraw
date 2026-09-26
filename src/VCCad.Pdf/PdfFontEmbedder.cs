@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using VCCad.Core.Model;
 using VCCad.Pdf.Fonts;
 
 namespace VCCad.Pdf;
@@ -17,11 +18,29 @@ internal sealed class PdfFontEmbedder
     private sealed record Entry(string Name, TrueTypeFont Font, int Type0Object);
 
     private readonly Dictionary<FontKey, Entry> _fonts = new();
+    private readonly Dictionary<EmbeddedFont, string> _embedded = new(ReferenceEqualityComparer.Instance);
     private readonly PdfAssembler _assembler;
 
-    public PdfFontEmbedder(PdfAssembler assembler, IReadOnlyDictionary<FontKey, HashSet<int>> usage)
+    public PdfFontEmbedder(PdfAssembler assembler, IReadOnlyDictionary<FontKey, HashSet<int>> usage,
+        IReadOnlyList<EmbeddedFont>? embeddedFonts = null)
     {
         _assembler = assembler;
+
+        int embeddedIndex = 0;
+        if (embeddedFonts is not null)
+        {
+            foreach (EmbeddedFont font in embeddedFonts)
+            {
+                if (_embedded.ContainsKey(font))
+                {
+                    continue;
+                }
+
+                string embeddedName = $"/FE{++embeddedIndex}";
+                _embedded[font] = embeddedName;
+                BuildEmbeddedFont(font, embeddedName);
+            }
+        }
 
         int index = 1;
         foreach ((FontKey key, HashSet<int> codePoints) in usage.OrderBy(k => k.Key.Family)
@@ -49,7 +68,7 @@ internal sealed class PdfFontEmbedder
     }
 
     /// <summary>True when no text fonts were used.</summary>
-    public bool IsEmpty => _fonts.Count == 0;
+    public bool IsEmpty => _fonts.Count == 0 && _embeddedObjectNames.Count == 0;
 
     /// <summary>Resource name (e.g. /F1) for a font key.</summary>
     public string NameFor(FontKey key) => _fonts[key].Name;
@@ -60,18 +79,126 @@ internal sealed class PdfFontEmbedder
     /// <summary>The <c>/Font</c> resource dictionary entry (or empty).</summary>
     public string FontDict()
     {
-        if (_fonts.Count == 0)
+        var sb = new StringBuilder();
+        foreach ((string name, int objectNumber) in _embeddedObjectNames)
         {
-            return string.Empty;
+            sb.Append(name).Append(' ').Append(objectNumber).Append(" 0 R ");
         }
 
-        var sb = new StringBuilder("/Font << ");
         foreach (Entry entry in _fonts.Values)
         {
             sb.Append(entry.Name).Append(' ').Append(entry.Type0Object).Append(" 0 R ");
         }
 
-        sb.Append(">> ");
+        if (sb.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        return "/Font << " + sb + ">> ";
+    }
+
+    /// <summary>Resource name for an imported embedded font.</summary>
+    public string NameForEmbedded(EmbeddedFont font) => _embedded[font];
+
+    /// <summary>Emits an imported programme verbatim so the re-export uses the
+    /// exact original face (no substitution).</summary>
+    private void BuildEmbeddedFont(EmbeddedFont font, string name)
+    {
+        int fontObj = _assembler.Allocate();
+        int descriptor = _assembler.Allocate();
+        int fontFile = _assembler.Allocate();
+        int toUnicode = font.ToUnicode is { Length: > 0 } ? _assembler.Allocate() : 0;
+
+        string fileKey = font.Format switch
+        {
+            EmbeddedFontFormat.Type1 => "FontFile",
+            EmbeddedFontFormat.TrueType => "FontFile2",
+            _ => "FontFile3",
+        };
+
+        string fileExtra = font.Format switch
+        {
+            EmbeddedFontFormat.Type1C => " /Subtype /Type1C",
+            EmbeddedFontFormat.OpenType => " /Subtype /OpenType",
+            _ => $"/Length1 {font.Program.Length}",
+        };
+        fileExtra = fileExtra.StartsWith("/Length1") ? " " + fileExtra : fileExtra;
+        _assembler.SetBody(fontFile,
+            PdfDocumentExporter.MakeStreamObject(PdfDocumentExporter.Compress(font.Program), fileExtra));
+
+        string bbox = $"[{Num(font.FontBBox[0])} {Num(font.FontBBox[1])} {Num(font.FontBBox[2])} {Num(font.FontBBox[3])}]";
+        _assembler.SetBody(descriptor,
+            $"<< /Type /FontDescriptor /FontName /{Sanitise(font.BaseFont)} /Flags {font.Flags} " +
+            $"/FontBBox {bbox} /ItalicAngle {Num(font.ItalicAngle)} /Ascent {Num(font.Ascent)} " +
+            $"/Descent {Num(font.Descent)} /CapHeight {Num(font.CapHeight)} /StemV {Num(font.StemV)} " +
+            $"/MissingWidth {Num(font.MissingWidth)} /{fileKey} {fontFile} 0 R >>");
+
+        if (toUnicode != 0)
+        {
+            _assembler.SetBody(toUnicode,
+                PdfDocumentExporter.MakeStreamObject(PdfDocumentExporter.Compress(font.ToUnicode!)));
+        }
+
+        string subtype = font.Format is EmbeddedFontFormat.TrueType or EmbeddedFontFormat.OpenType
+            ? "TrueType"
+            : "Type1";
+        string encoding = BuildEncoding(font);
+        int lastChar = font.FirstChar + Math.Max(0, font.Widths.Length) - 1;
+        string widths = "[" + string.Join(' ', font.Widths.Select(w => Num(w))) + "]";
+        string toUniRef = toUnicode != 0 ? $" /ToUnicode {toUnicode} 0 R" : string.Empty;
+
+        _assembler.SetBody(fontObj,
+            $"<< /Type /Font /Subtype /{subtype} /BaseFont /{Sanitise(font.BaseFont)} " +
+            $"/FirstChar {font.FirstChar} /LastChar {lastChar} /Widths {widths}{encoding} " +
+            $"/FontDescriptor {descriptor} 0 R{toUniRef} >>");
+
+        // Map the name to the object number for FontDict().
+        _embeddedObjectNames[name] = fontObj;
+    }
+
+    private readonly Dictionary<string, int> _embeddedObjectNames = new();
+
+    private static string BuildEncoding(EmbeddedFont font)
+    {
+        if (font.EncodingName is { Length: > 0 } name)
+        {
+            return $" /Encoding /{Sanitise(name)}";
+        }
+
+        if (font.Differences.Count == 0 && font.BaseEncoding is null)
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(" /Encoding << ");
+        if (font.BaseEncoding is { Length: > 0 } baseName)
+        {
+            sb.Append("/BaseEncoding /").Append(Sanitise(baseName)).Append(' ');
+        }
+
+        if (font.Differences.Count > 0)
+        {
+            sb.Append("/Differences [");
+            foreach ((int code, string glyph) in font.Differences)
+            {
+                sb.Append(code).Append(" /").Append(Sanitise(glyph)).Append(' ');
+            }
+
+            sb.Append("] ");
+        }
+
+        return sb.Append(">>").ToString();
+    }
+
+    private static string Sanitise(string name)
+    {
+        var sb = new StringBuilder(name.Length);
+        foreach (char c in name)
+        {
+            sb.Append(char.IsLetterOrDigit(c) || c is '+' or '-' or '_' ? c : '_');
+        }
+
         return sb.ToString();
     }
 

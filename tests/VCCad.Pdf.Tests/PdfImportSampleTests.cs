@@ -68,5 +68,9 @@ public class PdfImportSampleTests
 
         // The pattern has vertical (rotated) piece labels.
         Assert.Contains(texts, t => Math.Abs(t.RotationRadians) > 0.1);
+
+        // Embedded fonts are captured for pass-through, so text renders with the
+        // original face instead of a bundled substitute.
+        Assert.Contains(texts.SelectMany(t => t.Runs), r => r.EmbeddedFont is not null && r.RawCodes is { Length: > 0 });
     }
 }

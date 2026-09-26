@@ -25,6 +25,14 @@ public sealed class TextRun
     /// </summary>
     public double? AdvanceWidth { get; set; }
 
+    /// <summary>The embedded font programme this run was drawn with, when the
+    /// source PDF embedded one. Null means the renderer should substitute.</summary>
+    public EmbeddedFont? EmbeddedFont { get; set; }
+
+    /// <summary>Original glyph codes (one char per byte) for pass-through export
+    /// when <see cref="EmbeddedFont"/> is set.</summary>
+    public string? RawCodes { get; set; }
+
     public TextRun Clone() => new()
     {
         Text = Text,
@@ -33,6 +41,8 @@ public sealed class TextRun
         Bold = Bold,
         Italic = Italic,
         AdvanceWidth = AdvanceWidth,
+        EmbeddedFont = EmbeddedFont,
+        RawCodes = RawCodes,
     };
 }
 

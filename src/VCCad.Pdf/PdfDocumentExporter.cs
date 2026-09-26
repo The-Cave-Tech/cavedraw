@@ -76,12 +76,13 @@ public static class PdfDocumentExporter
         // Fonts: collect text usage and embed the bundled fonts (FontFile2).
         // ------------------------------------------------------------------
         var usage = new Dictionary<FontKey, HashSet<int>>();
+        var embeddedFonts = new List<EmbeddedFont>();
         foreach (Artboard artboard in document.Artboards)
         {
-            ScanText(artboard, usage);
+            ScanText(artboard, usage, embeddedFonts);
         }
 
-        var embedder = new PdfFontEmbedder(assembler, usage);
+        var embedder = new PdfFontEmbedder(assembler, usage, embeddedFonts);
 
         var alphas = new List<double>();
         foreach (Artboard artboard in document.Artboards)
@@ -480,12 +481,25 @@ public static class PdfDocumentExporter
         }
     }
 
-    private static void ScanText(Artboard artboard, Dictionary<FontKey, HashSet<int>> usage)
+    private static void ScanText(Artboard artboard, Dictionary<FontKey, HashSet<int>> usage,
+        List<EmbeddedFont> embeddedFonts)
     {
         foreach (TextItem text in AllTextItems(artboard))
         {
             foreach (TextRun run in text.Runs)
             {
+                // Imported runs that carry their original programme are emitted
+                // verbatim, so they need no bundled substitute.
+                if (run.EmbeddedFont is { Composite: false } embedded && run.RawCodes is { Length: > 0 })
+                {
+                    if (!embeddedFonts.Contains(embedded))
+                    {
+                        embeddedFonts.Add(embedded);
+                    }
+
+                    continue;
+                }
+
                 var key = new FontKey(run.FontFamily, run.Bold, run.Italic);
                 if (!usage.TryGetValue(key, out HashSet<int>? codes))
                 {
@@ -514,17 +528,19 @@ public static class PdfDocumentExporter
 
         foreach (TextRun run in text.Runs)
         {
+            EmbeddedFont? embeddedFont = run.EmbeddedFont is { Composite: false } ef2 ? ef2 : null;
+            bool embeddedRun = embeddedFont is not null && run.RawCodes is { Length: > 0 };
             var key = new FontKey(run.FontFamily, run.Bold, run.Italic);
-            TrueTypeFont font = embedder.FontFor(key);
-            string resource = embedder.NameFor(key);
+            TrueTypeFont? font = embeddedRun ? null : embedder.FontFor(key);
+            string resource = embeddedRun ? embedder.NameForEmbedded(embeddedFont!) : embedder.NameFor(key);
 
             var hex = new StringBuilder();
             // The model stores the block's top-left; PDF places text on the
             // baseline, so the baseline sits one ascent down the (rotated) text
             // axis. Ascent is per run.
-            double ascent = font.UnitsPerEm > 0 ? (double)font.Ascender / font.UnitsPerEm : 0.8;
-            double targetAdvance = run.AdvanceWidth ?? 0.0;
-            bool multiLine = run.Text.Contains('\n');
+            double ascent = font is null || font.UnitsPerEm == 0 ? 0.928 : (double)font.Ascender / font.UnitsPerEm;
+            double targetAdvance = embeddedRun ? 0.0 : run.AdvanceWidth ?? 0.0;
+            bool multiLine = !embeddedRun && run.Text.Contains('\n');
             double lineAdvance = 0;
             double yOffset = y - text.Origin.Y; // model units down the block
 
@@ -559,25 +575,37 @@ public static class PdfDocumentExporter
                 hex.Clear();
             }
 
-            foreach (char ch in run.Text)
+            if (embeddedRun)
             {
-                if (ch == '\n')
+                // Pass-through: write the original glyph codes so the embedded
+                // programme renders exactly as in the source document.
+                foreach (char code in run.RawCodes!)
                 {
-                    Flush();
-                    y += run.FontSize * 1.2;
-                    yOffset = y - text.Origin.Y;
-                    lineAdvance = 0;
-                    continue;
+                    hex.Append(((int)code & 0xFF).ToString("X2", CultureInfo.InvariantCulture));
                 }
-
-                int gid = font.GlyphFor(ch);
-                if (gid == 0)
+            }
+            else
+            {
+                foreach (char ch in run.Text)
                 {
-                    continue;
-                }
+                    if (ch == '\n')
+                    {
+                        Flush();
+                        y += run.FontSize * 1.2;
+                        yOffset = y - text.Origin.Y;
+                        lineAdvance = 0;
+                        continue;
+                    }
 
-                hex.Append(gid.ToString("X4", CultureInfo.InvariantCulture));
-                lineAdvance += font.Advance1000(gid) * run.FontSize / 1000.0;
+                    int gid = font!.GlyphFor(ch);
+                    if (gid == 0)
+                    {
+                        continue;
+                    }
+
+                    hex.Append(gid.ToString("X4", CultureInfo.InvariantCulture));
+                    lineAdvance += font.Advance1000(gid) * run.FontSize / 1000.0;
+                }
             }
 
             Flush();

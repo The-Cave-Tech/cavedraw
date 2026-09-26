@@ -26,6 +26,9 @@ internal sealed class PdfContentImporter
     // Font resource object → code→Unicode map from its /ToUnicode CMap.
     private readonly Dictionary<object, Dictionary<int, string>> _toUnicodeCache = new();
 
+    // Font resource object → extracted embedded programme (pass-through).
+    private readonly Dictionary<object, EmbeddedFont?> _embeddedFontCache = new();
+
     public PdfContentImporter(PdfFile file, double pageHeight)
     {
         _file = file;
@@ -576,6 +579,7 @@ internal sealed class PdfContentImporter
             Color = color,
             RotationRadians = rotation,
         };
+        EmbeddedFont? embedded = BuildEmbeddedFont(fontName, resources);
         var run = new TextRun
         {
             Text = decoded,
@@ -584,6 +588,8 @@ internal sealed class PdfContentImporter
             Bold = bold,
             Italic = italic,
             AdvanceWidth = MeasureAdvance(rawText, fontName, resources, effectiveSize),
+            EmbeddedFont = embedded,
+            RawCodes = embedded is not null ? rawText : null,
         };
         item.Runs.Add(run);
         items.Add(new PdfImportedItem(layer, item));
@@ -623,6 +629,127 @@ internal sealed class PdfContentImporter
         }
 
         return total / 1000.0 * effectiveSize;
+    }
+
+    /// <summary>
+    /// Extracts the embedded font programme (FontFile/FontFile2/FontFile3) plus
+    /// the metrics needed to re-emit it verbatim. Returns null when the font is
+    /// not embedded (or is a composite we do not yet pass through).
+    /// </summary>
+    private EmbeddedFont? BuildEmbeddedFont(string fontName, Dictionary<string, object?> resources)
+    {
+        Dictionary<string, object?>? font = FontDict(fontName, resources);
+        if (font is null)
+        {
+            return null;
+        }
+
+        if (_embeddedFontCache.TryGetValue(font, out EmbeddedFont? cached))
+        {
+            return cached;
+        }
+
+        EmbeddedFont? result = null;
+        string subtype = (font.GetValueOrDefault("Subtype") as PdfName)?.Value ?? string.Empty;
+        bool composite = subtype == "Type0";
+
+        Dictionary<string, object?>? descriptor;
+        if (composite)
+        {
+            var descendants = _file.Resolve(font.GetValueOrDefault("DescendantFonts")) as List<object?>;
+            Dictionary<string, object?>? descendant = descendants is { Count: > 0 }
+                ? _file.ResolveDict(descendants[0])
+                : null;
+            descriptor = descendant is null
+                ? null
+                : _file.ResolveDict(descendant.GetValueOrDefault("FontDescriptor"));
+        }
+        else
+        {
+            descriptor = _file.ResolveDict(font.GetValueOrDefault("FontDescriptor"));
+        }
+
+        if (descriptor is not null &&
+            (FindFontProgram(descriptor) is (EmbeddedFontFormat format, byte[] program)))
+        {
+            double[]? bbox = ReadNumbers(descriptor.GetValueOrDefault("FontBBox"));
+            result = new EmbeddedFont
+            {
+                Format = format,
+                Program = program,
+                Composite = composite,
+                BaseFont = (font.GetValueOrDefault("BaseFont") as PdfName)?.Value ?? "Embedded",
+                FirstChar = (int)(_file.ResolveNumber(font.GetValueOrDefault("FirstChar")) ?? 0),
+                Widths = ReadNumbers(font.GetValueOrDefault("Widths")) ?? Array.Empty<double>(),
+                MissingWidth = _file.ResolveNumber(descriptor.GetValueOrDefault("MissingWidth")) ?? 0,
+                ToUnicode = _file.Resolve(font.GetValueOrDefault("ToUnicode")) is PdfStream tu
+                    ? _file.GetStreamData(tu)
+                    : null,
+                EncodingName = font.GetValueOrDefault("Encoding") is PdfName encName ? encName.Value : null,
+                BaseEncoding = _file.ResolveDict(font.GetValueOrDefault("Encoding"))?.GetValueOrDefault("BaseEncoding")
+                    is PdfName be ? be.Value : null,
+                Differences = ReadEncodingDifferences(
+                    _file.ResolveDict(font.GetValueOrDefault("Encoding"))?.GetValueOrDefault("Differences")),
+                Flags = (int)(_file.ResolveNumber(descriptor.GetValueOrDefault("Flags")) ?? 4),
+                FontBBox = bbox is { Length: >= 4 } ? bbox : new double[] { 0, 0, 0, 0 },
+                ItalicAngle = _file.ResolveNumber(descriptor.GetValueOrDefault("ItalicAngle")) ?? 0,
+                Ascent = _file.ResolveNumber(descriptor.GetValueOrDefault("Ascent")) ?? 800,
+                Descent = _file.ResolveNumber(descriptor.GetValueOrDefault("Descent")) ?? -200,
+                CapHeight = _file.ResolveNumber(descriptor.GetValueOrDefault("CapHeight")) ?? 700,
+                StemV = _file.ResolveNumber(descriptor.GetValueOrDefault("StemV")) ?? 80,
+            };
+        }
+
+        _embeddedFontCache[font] = result;
+        return result;
+    }
+
+    private (EmbeddedFontFormat Format, byte[] Program)? FindFontProgram(Dictionary<string, object?> descriptor)
+    {
+        if (_file.Resolve(descriptor.GetValueOrDefault("FontFile")) is PdfStream type1)
+        {
+            return (EmbeddedFontFormat.Type1, _file.GetStreamData(type1));
+        }
+
+        if (_file.Resolve(descriptor.GetValueOrDefault("FontFile2")) is PdfStream trueType)
+        {
+            return (EmbeddedFontFormat.TrueType, _file.GetStreamData(trueType));
+        }
+
+        if (_file.Resolve(descriptor.GetValueOrDefault("FontFile3")) is PdfStream cff)
+        {
+            string kind = (cff.Dict.GetValueOrDefault("Subtype") as PdfName)?.Value ?? "Type1C";
+            EmbeddedFontFormat format = kind == "OpenType"
+                ? EmbeddedFontFormat.OpenType
+                : EmbeddedFontFormat.Type1C;
+            return (format, _file.GetStreamData(cff));
+        }
+
+        return null;
+    }
+
+    private static List<(int Code, string Name)> ReadEncodingDifferences(object? differences)
+    {
+        var result = new List<(int, string)>();
+        if (differences is not List<object?> list)
+        {
+            return result;
+        }
+
+        int code = 0;
+        foreach (object? entry in list)
+        {
+            if (entry is long l)
+            {
+                code = (int)l;
+            }
+            else if (entry is PdfName name)
+            {
+                result.Add((code++, name.Value));
+            }
+        }
+
+        return result;
     }
 
     private Dictionary<string, object?>? FontDict(string fontName, Dictionary<string, object?> resources)

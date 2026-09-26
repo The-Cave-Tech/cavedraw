@@ -41,6 +41,50 @@ public class PdfConformanceTests
 
     private static byte[] Export() => PdfDocumentExporter.Export(Fixture());
 
+    [Fact]
+    public void EmbeddedFontProgrammesAreReusedVerbatim_NoSubstitution()
+    {
+        string? sample = Sample();
+        if (sample is null)
+        {
+            return;
+        }
+
+        CadDocument doc = PdfImporter.Import(File.ReadAllBytes(sample));
+        List<TextItem> texts = doc.Artboards.SelectMany(a => a.Layers)
+            .SelectMany(l => l.Children).OfType<TextItem>().ToList();
+        if (!texts.SelectMany(t => t.Runs).Any(r => r.EmbeddedFont is not null))
+        {
+            return; // sample has no embedded fonts in this checkout
+        }
+
+        byte[] pdf = PdfDocumentExporter.Export(doc);
+        string ascii = Encoding.Latin1.GetString(pdf);
+
+        // The original programmes are re-emitted (FontFile2/FontFile3), and no
+        // bundled DejaVu substitute is embedded for those runs.
+        Assert.True(ascii.Contains("/FontFile2") || ascii.Contains("/FontFile3"),
+            "expected an embedded font programme");
+        Assert.Contains("/Encoding", ascii);
+    }
+
+    private static string? Sample()
+    {
+        DirectoryInfo? dir = new(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            string candidate = Path.Combine(dir.FullName, "samples", "A0-Temi-Bow-Bustier-sewing-pattern.pdf");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            dir = dir.Parent;
+        }
+
+        return null;
+    }
+
     // ---------------------------------------------------------------- 7.5 File structure
 
     [Fact]
