@@ -136,6 +136,9 @@ internal sealed record ImageDto(
     double[]? Decode = null,
     double[]? ColourKey = null) : ItemDto;
 
+/// <summary>A clip path as it travels in the sidecar: an outline and its rule.</summary>
+internal sealed record ClipDto(FillRule Rule, SubPathDto[] SubPaths);
+
 /// <summary>
 /// Discriminated union over the possible layer items. System.Text.Json picks the
 /// concrete type from the <c>$kind</c> property written by the converter below.
@@ -147,14 +150,56 @@ internal sealed record ImageDto(
 [JsonDerivedType(typeof(ImageDto), "image")]
 internal abstract record ItemDto
 {
+    /// <summary>
+    /// The clip paths that were in force when the item was painted, outermost first.
+    ///
+    /// On the base rather than on each kind, because every kind of item can be clipped —
+    /// a clipped photograph and a clipped paragraph are the same problem. Dropping it
+    /// would not fail anything; it would silently lose the clip on the next save.
+    /// </summary>
+    public ClipDto[]? Clips { get; init; }
+
     public static ItemDto From(LayerItem item) => item switch
     {
-        PathItem path => ToPath(path),
-        ArtGroup group => ToGroup(group),
-        TextItem text => ToText(text),
-        ImageItem image => ToImage(image),
+        PathItem path => ToPath(path) with { Clips = ToClips(item) },
+        ArtGroup group => ToGroup(group) with { Clips = ToClips(item) },
+        TextItem text => ToText(text) with { Clips = ToClips(item) },
+        ImageItem image => ToImage(image) with { Clips = ToClips(item) },
         _ => throw new NotSupportedException($"Unsupported layer item type {item.GetType().Name}."),
     };
+
+    private static ClipDto[]? ToClips(LayerItem item)
+        => item.Clips.Count == 0
+            ? null
+            : item.Clips.Select(c => new ClipDto(
+                c.Rule,
+                c.SubPaths.Select(sp => new SubPathDto(
+                    sp.IsClosed,
+                    sp.Nodes.Select(n => new NodeDto(n.Anchor, n.InHandle, n.OutHandle)).ToArray()))
+                    .ToArray())).ToArray();
+
+    /// <summary>Puts the clips back onto an item that has just been read.</summary>
+    internal static LayerItem WithClips(LayerItem item, ItemDto dto)
+    {
+        foreach (ClipDto clip in dto.Clips ?? Array.Empty<ClipDto>())
+        {
+            var spec = new ClipSpec { Rule = clip.Rule };
+            foreach (SubPathDto sub in clip.SubPaths)
+            {
+                var restored = new SubPath { IsClosed = sub.Closed };
+                foreach (NodeDto node in sub.Nodes)
+                {
+                    restored.Nodes.Add(new PathNode(node.Anchor, node.InHandle, node.OutHandle));
+                }
+
+                spec.SubPaths.Add(restored);
+            }
+
+            item.Clips.Add(spec);
+        }
+
+        return item;
+    }
 
     private static TextDto ToText(TextItem t) => new(
         t.Id,
@@ -266,10 +311,10 @@ internal static class ItemDtoExtensions
 {
     public static LayerItem ToModel(this ItemDto dto) => dto switch
     {
-        PathDto p => p.ToModel(),
-        GroupDto g => g.ToModel(),
-        TextDto t => t.ToModel(),
-        ImageDto i => i.ToModel(),
+        PathDto p => ItemDto.WithClips(p.ToModel(), p),
+        GroupDto g => ItemDto.WithClips(g.ToModel(), g),
+        TextDto t => ItemDto.WithClips(t.ToModel(), t),
+        ImageDto i => ItemDto.WithClips(i.ToModel(), i),
         _ => throw new NotSupportedException($"Unknown DTO kind {dto.GetType().Name}."),
     };
 

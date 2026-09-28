@@ -175,6 +175,10 @@ internal sealed class PdfContentImporter
         double horizontalScale = 1.0;
         double rise = 0.0;
 
+        // "W" marks the path just built as the clip rather than as paint; the clip only
+        // takes effect at the next painting operator, which is usually "n".
+        _pendingClip = false;
+
         AffineTransform textMatrix = AffineTransform.Identity;
         AffineTransform lineMatrix = AffineTransform.Identity;
         string fontName = string.Empty;
@@ -183,6 +187,29 @@ internal sealed class PdfContentImporter
 
         var operands = new List<object?>();
         var subPaths = new List<SubPath>();
+
+        void TakeClip()
+        {
+            if (!_pendingClip)
+            {
+                return;
+            }
+
+            _pendingClip = false;
+            if (subPaths.Count == 0)
+            {
+                return;
+            }
+
+            var clip = new ClipSpec { Rule = _pendingClipRule };
+            foreach (SubPath sub in subPaths)
+            {
+                clip.SubPaths.Add(sub.Clone());
+            }
+
+            _clips.Add(clip);
+        }
+
         SubPath? currentPath = null;
 
         // Optional-content (layer) state: BDC/BMC push, EMC pops.
@@ -220,6 +247,10 @@ internal sealed class PdfContentImporter
         /// </summary>
         void FlushPath(bool stroke, bool fill, FillRule rule = FillRule.NonZero)
         {
+            // A path marked by "W" is the clip, not paint, so it is taken before the
+            // subpaths are consumed by painting.
+            TakeClip();
+
             if (subPaths.Count > 0 && (stroke || fill))
             {
                 // A fill implicitly closes every open subpath (ISO 32000-1 §8.5.3.3);
@@ -258,6 +289,7 @@ internal sealed class PdfContentImporter
                 item.SourceFillCmyk = fill ? fillCmyk : null;
                 item.SourceStrokeCmyk = stroke ? strokeCmyk : null;
 
+                Attach(item);
                 items.Add(new PdfImportedItem(currentLayer, item));
             }
 
@@ -292,6 +324,7 @@ internal sealed class PdfContentImporter
             switch (op)
             {
                 case "q":
+                    _clipStack.Push(new List<ClipSpec>(_clips));
                     stack.Push((current, lineWidth, lineCap, lineJoin, miterLimit, dash,
                         strokeColor, fillColor, strokeSpace, fillSpace, strokeAlpha, fillAlpha,
                         fontName, fontSize, leading, fillCmyk, strokeCmyk,
@@ -300,6 +333,8 @@ internal sealed class PdfContentImporter
                 case "Q":
                     if (stack.Count > 0)
                     {
+                        _clips.Clear();
+                        _clips.AddRange(_clipStack.Pop());
                         (current, lineWidth, lineCap, lineJoin, miterLimit, dash,
                             strokeColor, fillColor, strokeSpace, fillSpace, strokeAlpha, fillAlpha,
                             fontName, fontSize, leading, fillCmyk, strokeCmyk,
@@ -461,6 +496,16 @@ internal sealed class PdfContentImporter
                 case "h" when currentPath is not null:
                     currentPath.IsClosed = true;
                     break;
+                case "W":
+                    // The outline just built becomes the clip. It takes effect at the next
+                    // painting operator, which in practice is the "n" that follows.
+                    _pendingClip = true;
+                    _pendingClipRule = FillRule.NonZero;
+                    break;
+                case "W*":
+                    _pendingClip = true;
+                    _pendingClipRule = FillRule.EvenOdd;
+                    break;
                 case "S":
                     FlushPath(stroke: true, fill: false);
                     break;
@@ -491,6 +536,7 @@ internal sealed class PdfContentImporter
                     FlushPath(stroke: true, fill: true, FillRule.EvenOdd);
                     break;
                 case "n":
+                    TakeClip();
                     subPaths.Clear();
                     currentPath = null;
                     break;
@@ -762,6 +808,7 @@ internal sealed class PdfContentImporter
             new Point2D(stencil0.X, _pageHeight - stencil0.Y),
             new Point2D(stencil1.X, _pageHeight - stencil1.Y));
 
+        Attach(image);
         items.Add(new PdfImportedItem(layer, image));
     }
 
@@ -856,6 +903,7 @@ internal sealed class PdfContentImporter
             new Point2D(corner0.X, _pageHeight - corner0.Y),
             new Point2D(corner1.X, _pageHeight - corner1.Y));
 
+        Attach(image);
         items.Add(new PdfImportedItem(layer, image));
     }
 
@@ -1014,6 +1062,7 @@ internal sealed class PdfContentImporter
         // The run is stored exactly as authored. A tiled PDF draws each label once per
         // sheet it touches and lets the page box clip it; rewriting the characters to
         // fit was tried and it butchered the labels. Clipping belongs at render time.
+        Attach(item);
         items.Add(new PdfImportedItem(layer, item));
     }
 
@@ -1748,6 +1797,31 @@ internal sealed class PdfContentImporter
     /// The program inside a type 4 function, which is a stream rather than a dictionary
     /// entry: the code is the stream's own data.
     /// </summary>
+    /// <summary>
+    /// The clip paths in force, in the order they were set. PDF accumulates them, so an
+    /// item painted under two clips is inside both, and q/Q restore them like the rest of
+    /// the graphics state.
+    /// </summary>
+    private readonly List<ClipSpec> _clips = new();
+
+    private readonly Stack<List<ClipSpec>> _clipStack = new();
+
+    /// <summary>Whether the path just built is a clip, and by which rule.</summary>
+    private bool _pendingClip;
+    private FillRule _pendingClipRule = FillRule.NonZero;
+
+    /// <summary>
+    /// Records the clips in force onto an item as it is created. Clipping is applied at
+    /// render and export time; the importer's job is to remember which outline applied.
+    /// </summary>
+    private void Attach(LayerItem item)
+    {
+        foreach (ClipSpec clip in _clips)
+        {
+            item.Clips.Add(clip.Clone());
+        }
+    }
+
     private string? StreamCode(object? function)
     {
         if (_file.Resolve(function) is PdfStream stream)

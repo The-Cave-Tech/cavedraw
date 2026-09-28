@@ -394,6 +394,19 @@ public static class PdfDocumentExporter
             return;
         }
 
+        // A clip is emitted around the item rather than baked into its geometry, because
+        // that is what it is: the item is drawn whole and the outline limits what shows.
+        // Several clips intersect, which is what successive W n operators do.
+        bool clipped = item.IsClipped;
+        if (clipped)
+        {
+            ops.Add("q");
+            foreach (ClipSpec clip in item.Clips)
+            {
+                AppendClip(ops, clip, toDoc);
+            }
+        }
+
         switch (item)
         {
             case PathItem path:
@@ -415,6 +428,51 @@ public static class PdfDocumentExporter
 
                 break;
         }
+
+        if (clipped)
+        {
+            ops.Add("Q");
+        }
+    }
+
+    /// <summary>
+    /// Emits one clip: the outline, then <c>W</c> (or <c>W*</c>) and <c>n</c>, which is how
+    /// PDF says to restrict painting to a path without painting the path itself.
+    /// </summary>
+    private static void AppendClip(List<string> ops, ClipSpec clip, AffineTransform toDoc)
+    {
+        foreach (SubPath sub in clip.SubPaths)
+        {
+            if (sub.Nodes.Count == 0)
+            {
+                continue;
+            }
+
+            Point2D start = toDoc.Transform(sub.Nodes[0].Anchor);
+            ops.Add($"{Num(start.X)} {Num(start.Y)} m");
+
+            // A straight segment is a cubic whose handles sit on its ends, so one form
+            // covers both without asking which it is.
+            int last = sub.IsClosed ? sub.Nodes.Count : sub.Nodes.Count - 1;
+            for (int i = 0; i < last; i++)
+            {
+                PathNode from = sub.Nodes[i];
+                PathNode to = sub.Nodes[(i + 1) % sub.Nodes.Count];
+                Point2D c1 = toDoc.Transform(from.OutHandle);
+                Point2D c2 = toDoc.Transform(to.InHandle);
+                Point2D end = toDoc.Transform(to.Anchor);
+                ops.Add($"{Num(c1.X)} {Num(c1.Y)} {Num(c2.X)} {Num(c2.Y)} "
+                        + $"{Num(end.X)} {Num(end.Y)} c");
+            }
+
+            if (sub.IsClosed)
+            {
+                ops.Add("h");
+            }
+        }
+
+        ops.Add(clip.Rule == FillRule.EvenOdd ? "W*" : "W");
+        ops.Add("n");
     }
 
     /// <summary>

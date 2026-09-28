@@ -88,7 +88,7 @@ public static class ModelDump
                     .Append(" subpaths=").Append(path.SubPaths.Count)
                     .Append(" fillCmyk=").Append(Cmyk(path.SourceFillCmyk))
                     .Append(" strokeCmyk=").Append(Cmyk(path.SourceStrokeCmyk))
-                    .AppendLine();
+                    .Append(Clips(item)).AppendLine();
 
                 for (int s = 0; s < path.SubPaths.Count; s++)
                 {
@@ -125,7 +125,7 @@ public static class ModelDump
                     .Append(" paragraph=").Append(Num(text.ParagraphSpacing))
                     .Append(" runs=").Append(text.Runs.Count)
                     .Append(" colourCmyk=").Append(Cmyk(text.SourceCmyk))
-                    .AppendLine();
+                    .Append(Clips(item)).AppendLine();
 
                 for (int r = 0; r < text.Runs.Count; r++)
                 {
@@ -165,7 +165,7 @@ public static class ModelDump
                     // the dump to show it.
                     .Append(" decode=").Append(Numbers(image.Decode))
                     .Append(" colourKey=").Append(Numbers(image.ColourKey))
-                    .AppendLine();
+                    .Append(Clips(item)).AppendLine();
                 break;
 
             case ArtGroup group:
@@ -181,7 +181,7 @@ public static class ModelDump
                     .Append(Num(group.Transform.E)).Append(',')
                     .Append(Num(group.Transform.F))
                     .Append(" children=").Append(group.Children.Count)
-                    .AppendLine();
+                    .Append(Clips(item)).AppendLine();
 
                 DumpItems(builder, group.Children, indent + 2);
                 break;
@@ -232,6 +232,18 @@ public static class ModelDump
 
     private static string Escape(string value)
         => value.Replace("\\", "\\\\").Replace("\n", "\\n").Replace("\r", "\\r");
+
+    /// <summary>
+    /// The clips in force on an item, or nothing when it was not clipped.
+    ///
+    /// Part of the dump because it is part of the picture: a round trip that dropped a clip
+    /// would export content the file had hidden, and nothing else in the dump would show it.
+    /// </summary>
+    private static string Clips(LayerItem item)
+        => item.Clips.Count == 0
+            ? string.Empty
+            : " clips=" + item.Clips.Count + "(" +
+              string.Join(';', item.Clips.Select(c => c.SubPaths.Count + ":" + c.Rule)) + ")";
 
     /// <summary>
     /// A stable fingerprint of a byte array. Samples can be hundreds of kilobytes, so the

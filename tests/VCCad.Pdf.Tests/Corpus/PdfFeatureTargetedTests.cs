@@ -192,11 +192,13 @@ public class PdfFeatureTargetedTests
         DocumentSanity.AssertSane(document, name);
         Assert.NotEmpty(DocumentSanity.Items(document));
 
-        // GAP (AGENTS.md §9, "clipping (W/Wn)"): PdfContentImporter has no case
-        // for W or W*, and VCCad.Core has no representation of a clip region, so
-        // a clip path changes nothing about the imported artwork — content that
-        // the source PDF clips away is painted in full.
-        AssertNoModelConcept("clip", "Clip");
+        // Was a gap (AGENTS.md §9): PdfContentImporter had no case for W or W*, and
+        // VCCad.Core had no representation of a clip region, so a clip path changed
+        // nothing and content the source clips away was painted in full. Clip paths are
+        // now read, carried on the item they limit, and written back out on export.
+        List<LayerItem> items = DocumentSanity.Items(document).ToList();
+        Assert.True(items.Any(item => item.IsClipped),
+            $"{name}: {clipOps} clip operators in the file, but no imported item carries one");
     }
 
     // ------------------------------------------------------------------

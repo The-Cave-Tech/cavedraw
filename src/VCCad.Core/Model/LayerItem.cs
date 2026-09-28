@@ -61,6 +61,20 @@ public abstract class LayerItem : CadObject
     }
 
     /// <summary>
+    /// The clip paths that were in force when this item was painted, outermost first, or
+    /// empty when it was not clipped.
+    ///
+    /// Clipping is part of the artwork, not a rendering detail to be applied later: a file
+    /// may draw the same paragraph several times and use a clip to show one copy, and
+    /// without the clip every copy paints. Several clips mean their intersection — PDF
+    /// accumulates clips as it goes, so an item inside two nested clips is inside both.
+    /// </summary>
+    public List<ClipSpec> Clips { get; } = new();
+
+    /// <summary>Whether any clip restricts this item.</summary>
+    public bool IsClipped => Clips.Count > 0;
+
+    /// <summary>
     /// Effective visibility: true only when this item AND every ancestor
     /// (groups, its layer, and the artboard) are visible. Hiding a parent
     /// therefore hides its whole subtree for display/selection/export without
