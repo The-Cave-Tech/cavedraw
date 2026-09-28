@@ -24,8 +24,25 @@ public sealed class TextRun
     /// PDF so a substituted font can be scaled horizontally to the original
     /// metrics (otherwise wide fallback fonts reflow/overlap the layout).
     /// <c>null</c> means "use the renderer's natural width".
+    ///
+    /// This is the whole distance to the next run, so it already includes
+    /// <see cref="GapAfter"/>.
     /// </summary>
     public double? AdvanceWidth { get; set; }
+
+    /// <summary>
+    /// The part of <see cref="AdvanceWidth"/> that is white space rather than glyphs: the
+    /// room a <c>TJ</c> array left before the next piece of the same line. Zero for text
+    /// that simply flows.
+    ///
+    /// Kept apart from the total because export has to put it back where the file had it.
+    /// A letter-spaced heading drawn as one show operation per pair of glyphs comes apart
+    /// on the way out otherwise: the pieces land in the right places but each is its own
+    /// text object, so an extractor reads "IN TR OD UC TI ON" where the file says
+    /// "INTRODUCTION". A negative adjustment before the next piece distributes the same
+    /// room between the glyphs, which is what the file did.
+    /// </summary>
+    public double GapAfter { get; set; }
 
     /// <summary>
     /// The font the document asked for (for example <c>Helvetica-Bold</c>), kept even
@@ -54,6 +71,7 @@ public sealed class TextRun
         Bold = Bold,
         Italic = Italic,
         AdvanceWidth = AdvanceWidth,
+        GapAfter = GapAfter,
         SourceFont = SourceFont,
         EmbeddedFont = EmbeddedFont,
         RawCodes = RawCodes,

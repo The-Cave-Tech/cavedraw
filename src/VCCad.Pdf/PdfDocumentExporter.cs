@@ -745,11 +745,118 @@ public static class PdfDocumentExporter
         }
     }
 
-    /// <summary>Emits a text object as BT/Tf/Tm/Tj/ET, advancing manually across
-    /// runs and newlines. The Tm flips Y so glyphs are upright despite the page's
-    /// global coordinate flip.</summary>
+    /// <summary>
+    /// Writes a block whose runs all carry their own embedded programme as a <em>single</em>
+    /// text object, with each run's trailing gap as a <c>TJ</c> adjustment.
+    ///
+    /// The reason is what an extractor sees. Runs written as separate <c>BT … ET</c> objects
+    /// are separate text objects, and a reader starts a new word at each; the
+    /// Transparency Guide, which letter-spaces a heading by drawing one show operation per
+    /// pair of glyphs, came out as "IN TR OD UC TI ON" where the file says "INTRODUCTION".
+    /// Inside one object the pen simply continues, and an adjustment puts the room back
+    /// between the glyphs rather than after them — which is exactly what the file did.
+    ///
+    /// Returns false when the block needs the general path: substituted fonts (whose
+    /// horizontal scaling is per run), explicit newlines, or runs the pass-through cannot
+    /// describe.
+    /// </summary>
+    private static bool TryWriteRunsAsOneTextObject(
+        List<string> ops, TextItem text, PdfFontEmbedder embedder, PdfAlphaStates alphaStates)
+    {
+        if (text.Runs.Count == 0)
+        {
+            return true;
+        }
+
+        foreach (TextRun run in text.Runs)
+        {
+            if (run.EmbeddedFont is null || run.RawCodes is not { Length: > 0 } ||
+                run.Text.Contains('\n'))
+            {
+                return false;
+            }
+        }
+
+        double cos = Math.Cos(text.RotationRadians);
+        double sin = Math.Sin(text.RotationRadians);
+
+        // The baseline of the first run: the block's top-left plus one ascent down the
+        // text's own up axis. Later runs continue that baseline, so only this one needs a
+        // matrix.
+        TextRun first = text.Runs[0];
+        double depth = (first.EmbeddedFont!.Ascent / 1000.0) * first.FontSize;
+        double ox = text.Origin.X - (sin * depth);
+        double oy = text.Origin.Y + (cos * depth);
+
+        ops.Add(ColorOperator(text.Color, text.SourceCmyk, stroke: false));
+        if (alphaStates.HasTransparency)
+        {
+            ops.Add($"{alphaStates.NameFor(text.Color.A)} gs");
+        }
+
+        ops.Add("BT");
+        ops.Add($"{Num(cos)} {Num(sin)} {Num(sin)} {Num(-cos)} {Num(ox)} {Num(oy)} Tm");
+
+        string? current = null;
+        double currentSize = 0;
+
+        foreach (TextRun run in text.Runs)
+        {
+            string resource = embedder.NameForEmbedded(run.EmbeddedFont!);
+            if (resource != current || Math.Abs(run.FontSize - currentSize) > 1e-9)
+            {
+                ops.Add($"{resource} {Num(run.FontSize)} Tf");
+                current = resource;
+                currentSize = run.FontSize;
+            }
+
+            // The room this run's glyphs are spread over, as character spacing.
+            //
+            // It goes on every glyph rather than in one lump at the end. A lump is what the
+            // file avoided in the first place: the Transparency Guide spaces its headings
+            // with an adjustment between every pair of glyphs, and a single 0.4 em jump after
+            // two of them is wide enough that a reader calls it a word break — which is why
+            // the page still read "IN TR OD UC TI ON" even once the whole block was one text
+            // object. Spread evenly, the spacing looks like the letter-spacing it is.
+            int glyphs = run.EmbeddedFont!.Composite
+                ? Math.Max(1, run.RawCodes!.Length / 2)
+                : Math.Max(1, run.RawCodes!.Length);
+            double spacing = run.GapAfter / glyphs;
+
+            if (Math.Abs(spacing) > 1e-9)
+            {
+                ops.Add($"{Num(spacing)} Tc");
+            }
+
+            var hex = new StringBuilder();
+            foreach (char code in run.RawCodes!)
+            {
+                hex.Append(((int)code & 0xFF).ToString("X2", CultureInfo.InvariantCulture));
+            }
+
+            ops.Add($"[<{hex}>] TJ");
+
+            if (Math.Abs(spacing) > 1e-9)
+            {
+                ops.Add("0 Tc");
+            }
+        }
+
+        ops.Add("ET");
+        return true;
+    }
+
+    /// <summary>
+    /// Writes a block's runs as separate text objects, one per run, each with its own
+    /// matrix. Used for everything the single-object path cannot describe.
+    /// </summary>
     private static void WriteText(List<string> ops, TextItem text, PdfFontEmbedder embedder, PdfAlphaStates alphaStates)
     {
+        if (TryWriteRunsAsOneTextObject(ops, text, embedder, alphaStates))
+        {
+            return;
+        }
+
         double cos = Math.Cos(text.RotationRadians);
         double sin = Math.Sin(text.RotationRadians);
         double y = text.Origin.Y;

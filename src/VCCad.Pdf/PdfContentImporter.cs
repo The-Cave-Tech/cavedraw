@@ -1082,8 +1082,12 @@ internal sealed class PdfContentImporter
             // begins, and the importer sees a line that continues rather than two fragments
             // with a hole between them. Without it a heading set at 0.2 em spacing came in
             // two glyphs at a time, and an extractor read "IN TR OD UC TI ON".
+            //
+            // Kept on the run as well, so export can put the room back between the glyphs
+            // rather than after them.
             AdvanceWidth = MeasureAdvance(rawText, fontName, resources, effectiveSize, state, composite)
                 + (gapAfter * effectiveSize),
+            GapAfter = gapAfter * effectiveSize,
             SourceFont = SourceFontName(fontName, resources),
             EmbeddedFont = embedded,
             RawCodes = embedded is not null ? rawText : null,

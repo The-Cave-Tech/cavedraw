@@ -138,6 +138,7 @@ public static class ModelDump
                         .Append(" bold=").Append(run.Bold)
                         .Append(" italic=").Append(run.Italic)
                         .Append(" advance=").Append(run.AdvanceWidth is { } a ? Num(a) : "-")
+                        .Append(" gap=").Append(Num(run.GapAfter))
                         .Append(" embedded=").Append(run.EmbeddedFont?.FamilyName ?? "-")
                         .Append(" rawCodes=").Append(run.RawCodes?.Length.ToString(CultureInfo.InvariantCulture) ?? "-")
                         .AppendLine();
