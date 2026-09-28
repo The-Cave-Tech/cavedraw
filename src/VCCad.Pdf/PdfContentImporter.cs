@@ -1737,6 +1737,20 @@ internal sealed class PdfContentImporter
 
     /// <summary>Evaluates a PDF function (type 2, and type 0/4 best-effort) for one
     /// input, returning its outputs. Used for Separation/DeviceN tint transforms.</summary>
+    /// <summary>
+    /// The program inside a type 4 function, which is a stream rather than a dictionary
+    /// entry: the code is the stream's own data.
+    /// </summary>
+    private string? StreamCode(object? function)
+    {
+        if (_file.Resolve(function) is PdfStream stream)
+        {
+            return System.Text.Encoding.Latin1.GetString(_file.GetStreamData(stream));
+        }
+
+        return function as string;
+    }
+
     private double[] ApplyFunction(object? function, IReadOnlyList<double> inputs,
         Dictionary<string, object?> resources)
     {
@@ -1764,6 +1778,28 @@ internal sealed class PdfContentImporter
             }
 
             return output;
+        }
+
+        if (type == 3)
+        {
+            // Stitching: pick the sub-function whose sub-domain the input falls in, then
+            // hand it the input through that part's encode range.
+            return PdfFunctions.Type3(dict, inputs.ToArray(),
+                (sub, inner) => ApplyFunction(sub, inner, resources), ReadNumbers);
+        }
+
+        if (type == 4)
+        {
+            // PostScript calculator. Used for spot-colour tint transforms and shadings,
+            // and missing entirely before now, which turned those colours black.
+            object? code = _file.Resolve(dict.GetValueOrDefault("Code"))
+                           ?? _file.Resolve(dict.GetValueOrDefault("Function"));
+            double[]? computed = PdfFunctions.Type4(code ?? StreamCode(function), inputs.ToArray(),
+                inputs.Count);
+            if (computed is not null)
+            {
+                return computed;
+            }
         }
 
         if (type == 0)
