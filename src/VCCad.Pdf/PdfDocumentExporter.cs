@@ -884,7 +884,7 @@ public static class PdfDocumentExporter
             // axis. Ascent is per run.
             double ascent = embeddedRun
                 ? embeddedFont!.Ascent / 1000.0
-                : font is null || font.UnitsPerEm == 0 ? 0.928 : (double)font.Ascender / font.UnitsPerEm;
+                : font is null || font.UnitsPerEm == 0 ? VCCad.Core.Text.TextMeasurement.TypicalAscentEm : (double)font.Ascender / font.UnitsPerEm;
             double targetAdvance = embeddedRun ? 0.0 : run.AdvanceWidth ?? 0.0;
             bool multiLine = !embeddedRun && run.Text.Contains('\n');
             double lineAdvance = 0;

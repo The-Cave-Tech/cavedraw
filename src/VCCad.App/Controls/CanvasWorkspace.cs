@@ -3156,7 +3156,8 @@ public sealed class CanvasWorkspace : Control
                 // the line's full height, so it sits behind the characters rather than
                 // floating above or below them.
                 Point2D p0 = text.Origin + offset + new Vector2D(
-                    metrics.X[i], metrics.Y[i] - metrics.Size[i] * 0.8);
+                    metrics.X[i],
+                    metrics.Y[i] - VCCad.Core.Text.TextMeasurement.EstimatedAscent(metrics.Size[i]));
                 double w = metrics.Y[i + 1] == metrics.Y[i]
                     ? metrics.X[i + 1] - metrics.X[i]
                     : metrics.Size[i] * 0.3;
@@ -3274,7 +3275,9 @@ public sealed class CanvasWorkspace : Control
             }
         }
 
-        double ascent = embedded.Ascent > 0 ? embedded.Ascent / 1000.0 : 0.928;
+        double ascent = embedded.Ascent > 0
+            ? embedded.Ascent / 1000.0
+            : VCCad.Core.Text.TextMeasurement.TypicalAscentEm;
         Point2D o = text.Origin + offset;
         var baseline = new Point(o.X, o.Y + (ascent * run.FontSize));
         var glyphRun = new GlyphRun(glyphTypeface, run.FontSize, run.Text.AsMemory(), glyphIds, baseline, 0);
@@ -4387,8 +4390,8 @@ public sealed class CanvasWorkspace : Control
         // The caret spans the line's full height (ymax to ymin), not a fixed multiple of
         // the font size, so it brackets the glyphs rather than floating inside them.
         double size = metrics.Size[index];
-        double ascent = size * 0.8;
-        double descent = size * 0.2;
+        double ascent = VCCad.Core.Text.TextMeasurement.EstimatedAscent(size);
+        double descent = VCCad.Core.Text.TextMeasurement.EstimatedDescent(size);
         double h = Math.Max((ascent + descent) * _layout.Zoom, 4);
 
         // Dark, because the page is white: a white caret on white paper is no caret.

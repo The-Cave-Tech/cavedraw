@@ -1768,7 +1768,7 @@ internal sealed class PdfContentImporter
         // The origin lift needs the ascent of the face we will actually render with.
         // The font's own descriptor is the best source; when it is missing, fall back to
         // the usual Latin ascent rather than borrowing a metric from a bundled font.
-        double ascent = 0.8;
+        double ascent = VCCad.Core.Text.TextMeasurement.TypicalAscentEm;
         if (fontDict?.GetValueOrDefault("FontDescriptor") is { } descriptorRef &&
             _file.ResolveDict(descriptorRef) is { } descriptor &&
             _file.ResolveNumber(descriptor.GetValueOrDefault("Ascent")) is { } ascentValue && ascentValue > 0)

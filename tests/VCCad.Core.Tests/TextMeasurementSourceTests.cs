@@ -95,10 +95,21 @@ public class TextMeasurementSourceTests
 
         // Anchored so the importer's "fontSize * 0.25" — the TJ kerning threshold, a
         // quarter of an em and nothing to do with measuring a glyph — is not a false hit.
+        //
+        // The first three patterns were all this guard caught, and they were not enough:
+        // six sites held their own copy of an ascent or a descent under names it did not
+        // look for — "size * 0.8" on a caret, "metrics.Size[i] * 0.8" on a selection
+        // highlight, a bare "0.928" in two places — while this class claimed there were
+        // only three numbers. A guard that only knows the names it was written for is how
+        // a single source of truth comes apart.
         string[] patterns =
         {
             @"FontSize \* 0\.6(?![0-9])", @"FontSize \* 0\.8(?![0-9])", @"FontSize \* 0\.2(?![0-9])",
             @"fontSize \* 0\.6(?![0-9])", @"fontSize \* 0\.8(?![0-9])", @"fontSize \* 0\.2(?![0-9])",
+            @"Size \* 0\.8(?![0-9])", @"Size \* 0\.2(?![0-9])",
+            @"size \* 0\.8(?![0-9])", @"size \* 0\.2(?![0-9])",
+            @"ascent = 0\.8(?![0-9])", @"descent = 0\.2(?![0-9])",
+            @"\b0\.928\b",
         };
 
         var offenders = new List<string>();

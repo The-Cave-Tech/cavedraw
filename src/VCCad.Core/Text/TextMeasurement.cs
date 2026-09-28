@@ -59,19 +59,50 @@ public static class TextMeasurement
     /// The last-resort advance for one character, used only when no measurer is
     /// installed (a headless deserialise or a unit test with no renderer).
     ///
-    /// Three numbers constitute the whole of the guessing in this codebase — this advance,
-    /// the ascent and the descent below — and they live here rather than scattered, so a
-    /// search for "0.6" finds all of it. Nothing outside this class estimates: callers ask
-    /// for an advance, an ascent or a descent, and get a real shaper's answer when a host
-    /// has installed one.
+    /// Four numbers constitute the whole of the guessing in this codebase — this advance,
+    /// the ascent and descent below, and <see cref="TypicalAscentEm"/> — and they live here
+    /// rather than scattered, so a search for any of them finds all of it. Nothing outside
+    /// this class estimates: callers ask for an advance, an ascent or a descent, and get a
+    /// real shaper's answer when a host has installed one.
+    ///
+    /// Every one of them has an overload taking a size, because half the callers have a
+    /// size and no run — a caret, a selection highlight, a face being resolved before its
+    /// text exists. Those callers used to write the constant out again, which is how this
+    /// class came to claim there were three numbers while six sites held their own copy.
     /// </summary>
     public static double Estimate(TextRun run) => run.FontSize * 0.6;
 
+    /// <summary>The last-resort advance, in em. See <see cref="Estimate"/>.</summary>
+    public const double EstimatedAdvanceEm = 0.6;
+
+    /// <summary>The last-resort ascent, in em. See <see cref="Estimate"/>.</summary>
+    public const double EstimatedAscentEm = 0.8;
+
+    /// <summary>The last-resort descent, in em. See <see cref="Estimate"/>.</summary>
+    public const double EstimatedDescentEm = 0.2;
+
+    /// <summary>
+    /// The ascent to assume for a face that declares none.
+    ///
+    /// A font's own descriptor is the right source and is used whenever it is present; this
+    /// is what a Latin face with no <c>/Ascent</c> is assumed to rise to, in em. It is
+    /// larger than <see cref="EstimatedAscentEm"/> because the two answer different
+    /// questions: this is where a <em>typographic</em> ascent sits, which is what places a
+    /// baseline, while that one is the box a line of text needs.
+    /// </summary>
+    public const double TypicalAscentEm = 0.928;
+
     /// <summary>The last-resort ascent. See <see cref="Estimate"/>.</summary>
-    public static double EstimatedAscent(TextRun run) => run.FontSize * 0.8;
+    public static double EstimatedAscent(TextRun run) => run.FontSize * EstimatedAscentEm;
+
+    /// <summary>The last-resort ascent for a size with no run to carry it.</summary>
+    public static double EstimatedAscent(double fontSize) => fontSize * EstimatedAscentEm;
 
     /// <summary>The last-resort descent. See <see cref="Estimate"/>.</summary>
-    public static double EstimatedDescent(TextRun run) => run.FontSize * 0.2;
+    public static double EstimatedDescent(TextRun run) => run.FontSize * EstimatedDescentEm;
+
+    /// <summary>The last-resort descent for a size with no run to carry it.</summary>
+    public static double EstimatedDescent(double fontSize) => fontSize * EstimatedDescentEm;
 
     /// <summary>Per-character advances, real when available and estimated otherwise.</summary>
     public static IReadOnlyList<double> Advances(TextRun run)
