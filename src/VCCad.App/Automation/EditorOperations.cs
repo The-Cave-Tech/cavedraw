@@ -8,6 +8,7 @@ using VCCad.App.Controls;
 using VCCad.App.Fonts;
 using VCCad.Pdf;
 using VCCad.App.ViewModels;
+using VCCad.App.Views.Panes;
 using VCCad.Core.Commands;
 using VCCad.Core.Model;
 using VCCad.Core.Serialization;
@@ -718,6 +719,51 @@ public static class EditorOperations
                 item.IsLocked = p.GetBool("locked", true);
                 ctx.ViewModel.NotifyDocumentChanged();
                 return DescribeOne(item);
+            });
+
+        Add("object.explorer",
+            "Every row the Layers panel shows, in the order it shows them, with the depth the " +
+            "panel draws its vertical rules from. This is the same traversal the panel uses, so " +
+            "what a driver reads here is what a person sees - a panel that cannot be read " +
+            "without pixels cannot be checked.",
+            "max?:number (default 500), group?:string (a page or layer name)",
+            (ctx, p) =>
+            {
+                int max = p.TryGetProperty("max", out JsonElement mv) && mv.TryGetInt32(out int m)
+                    ? Math.Clamp(m, 1, 20000)
+                    : 500;
+
+                string? group = p.GetString("group");
+                IReadOnlyList<LayerRow> all = LayerTree.Rows(ctx.Document);
+                List<LayerRow> rows = all.ToList();
+
+                if (group is not null)
+                {
+                    rows = SubTree(all, group)
+                        ?? throw new EditorOperationException(
+                            $"No page or layer named '{group}'.");
+                }
+
+                var listed = rows.Take(max).Select(r => new
+                {
+                    depth = r.Depth,
+                    kind = r.Kind.ToString().ToLowerInvariant(),
+                    label = r.Label,
+                    itemId = r.ItemId,
+                    userNamed = r.IsUserNamed,
+                    visible = r.Visible,
+                    expandable = r.Expandable,
+                    children = r.ChildCount,
+                }).ToArray();
+
+                return new
+                {
+                    rows = listed,
+                    count = rows.Count,
+                    total = all.Count,
+                    shown = listed.Length,
+                    truncated = rows.Count > listed.Length,
+                };
             });
 
         Add("object.rename",
@@ -1982,6 +2028,36 @@ public static class EditorOperations
     }
     private static Avalonia.Visual Root(AutomationContext ctx)
         => ctx.InputRoot?.Invoke() ?? throw new EditorOperationException("No window is available.");
+
+    /// <summary>
+    /// A named page or layer and everything beneath it, or null when nothing has that name.
+    ///
+    /// Taken by depth rather than by tracking parents: a row is inside the named one exactly
+    /// while the rows after it are deeper than it.
+    /// </summary>
+    private static List<LayerRow>? SubTree(IReadOnlyList<LayerRow> rows, string name)
+    {
+        for (int i = 0; i < rows.Count; i++)
+        {
+            LayerRow head = rows[i];
+            if (head.Kind is not (LayerRowKind.Artboard or LayerRowKind.Layer or LayerRowKind.Pasteboard) ||
+                !string.Equals(head.Label, name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var taken = new List<LayerRow> { head };
+
+            for (int j = i + 1; j < rows.Count && rows[j].Depth > head.Depth; j++)
+            {
+                taken.Add(rows[j]);
+            }
+
+            return taken;
+        }
+
+        return null;
+    }
 
     private static object FontReport(AutomationContext ctx)
     {

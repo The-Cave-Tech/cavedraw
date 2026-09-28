@@ -140,40 +140,12 @@ public partial class ObjectsPane : UserControl
     /// <summary>
     /// Which items belong to which layer, and which belong to no artboard at all.
     ///
-    /// Split out from <see cref="Rebuild"/> so the placement rule can be exercised without
-    /// an Avalonia visual tree — a tiled pattern laid out as a grid is the case that broke,
-    /// and it needs twelve artboards and a few hundred items to show up.
+    /// Delegates to <see cref="LayerTree.Classify"/>, which the object.explorer operation
+    /// also uses: the panel and the API must not be able to disagree about where an object
+    /// lives.
     /// </summary>
     internal static (Dictionary<Layer, List<LayerItem>> ByLayer, List<LayerItem> Pasteboard)
-        Classify(CadDocument document)
-    {
-        var byLayer = new Dictionary<Layer, List<LayerItem>>();
-        var pasteboard = new List<LayerItem>();
-
-        foreach (Artboard artboard in document.Artboards)
-        {
-            foreach (Layer layer in artboard.Layers)
-            {
-                var mine = new List<LayerItem>();
-                byLayer[layer] = mine;
-
-                foreach (LayerItem child in layer.Children)
-                {
-                    if (IntersectsArtboard(BoundsOf(child), child.ArtboardOffset(), artboard))
-                    {
-                        mine.Add(child);
-                    }
-                    else
-                    {
-                        pasteboard.Add(child);
-                    }
-                }
-            }
-        }
-
-        pasteboard.AddRange(document.Orphans.Children);
-        return (byLayer, pasteboard);
-    }
+        Classify(CadDocument document) => LayerTree.Classify(document);
 
     private static string FormatLayer(Layer layer)
     {
@@ -338,41 +310,12 @@ public partial class ObjectsPane : UserControl
         return 0;
     }
 
-    private static Rect2D BoundsOf(LayerItem item) => item switch
-    {
-        PathItem path => path.BoundingBox(),
-        TextItem text => text.BoundingBox(),
-        ArtGroup group => group.Transform.Transform(group.BoundingBox()),
-        _ => Rect2D.Empty,
-    };
+    // The traversal lives in LayerTree, which the object.explorer operation reports as well,
+    // so what a driver reads and what the panel draws cannot drift apart. These forward to it.
+    private static Rect2D BoundsOf(LayerItem item) => LayerTree.BoundsOf(item);
 
-    /// <summary>
-    /// Whether an item belongs to an artboard, in document space.
-    ///
-    /// Item coordinates are stored relative to their artboard, so an item's own bounds are
-    /// near the origin while an artboard's are its place in the sheet's grid. Comparing the
-    /// two directly asked "is this item near the top-left of the whole document", which is
-    /// only ever true of the first page: every item on every other page failed the test and
-    /// was filed under the Pasteboard. A tiled pattern - twelve sheets laid out in a grid -
-    /// showed one page's contents and a collapsed Pasteboard holding the rest.
-    ///
-    /// Takes the bounds rather than the item so the placement rule can be exercised without
-    /// an Avalonia visual tree.
-    /// </summary>
     internal static bool IntersectsArtboard(Rect2D bounds, Vector2D offset, Artboard artboard)
-    {
-        // Nothing to place: a group with no geometry, or bounds not yet computed. Showing it
-        // under its artboard is better than hiding it on the pasteboard.
-        if (bounds.IsEmpty)
-        {
-            return true;
-        }
-
-        var page = new Rect2D(
-            bounds.Left + offset.X, bounds.Top + offset.Y, bounds.Width, bounds.Height);
-
-        return page.Intersects(artboard.Bounds.Inflated(0.25));
-    }
+        => LayerTree.IntersectsArtboard(bounds, offset, artboard);
 
     private void SyncToSelection()
     {
