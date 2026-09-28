@@ -3288,26 +3288,52 @@ public sealed class CanvasWorkspace : Control
             laidOut.Add((run, formatted, natural, run.FontSize * text.LineSpacing, run.Text.Count(ch => ch == '\n') + 1));
         }
 
-        double yOffset = 0;
+        // Runs are pieces of a line, not lines. A PDF lays a heading out as separate pieces -
+        // "Jalie", "3464", "-", "LILLIE" - and the importer keeps them as runs of one text
+        // object. Advancing a line per run stacked them at the same x one line below each
+        // other, which printed every heading on the page on top of itself. Placement lives in
+        // the model so it can be tested without a canvas.
+        var measured = new List<VCCad.Core.Text.RunMetrics>(laidOut.Count);
         foreach ((TextRun run, FormattedText formatted, double natural, double lineHeight, int lines) in laidOut)
         {
-            if (run.EmbeddedFont is { } embedded && run.GlyphIds is { Length: > 0 } glyphIds &&
-                TryDrawEmbeddedGlyphs(context, brush, text, run, embedded, glyphIds, offset))
-            {
-                yOffset += lines * lineHeight;
-                continue;
-            }
+            double width = run.AdvanceWidth is > 0 ? run.AdvanceWidth.Value : natural;
+            measured.Add(new VCCad.Core.Text.RunMetrics(run.Text, width, lines * lineHeight));
+        }
 
-            double target = run.AdvanceWidth is > 0 ? run.AdvanceWidth.Value : natural;
+        IReadOnlyList<VCCad.Core.Text.RunPlacement> placed = VCCad.Core.Text.RunLayout.Place(measured);
+
+        // Alignment is a property of a line, so each line's width is needed before any of its
+        // runs can be shifted by it.
+        var lineWidth = new Dictionary<double, double>();
+        foreach (VCCad.Core.Text.RunPlacement p in placed)
+        {
+            double end = p.X + p.Width;
+            lineWidth[p.Y] = Math.Max(lineWidth.TryGetValue(p.Y, out double w) ? w : 0, end);
+        }
+
+        for (int i = 0; i < laidOut.Count; i++)
+        {
+            (TextRun run, FormattedText formatted, double natural, _, _) = laidOut[i];
+
+            double target = measured[i].Width;
             double scaleX = run.AdvanceWidth is > 0 && natural > 0 ? target / natural : 1.0;
             double alignX = text.Alignment switch
             {
-                ModelTextAlignment.Center => (blockWidth - target) / 2,
-                ModelTextAlignment.Right => blockWidth - target,
+                ModelTextAlignment.Center => (blockWidth - lineWidth[placed[i].Y]) / 2,
+                ModelTextAlignment.Right => blockWidth - lineWidth[placed[i].Y],
                 _ => 0,
             };
 
-            Point2D origin = text.Origin + offset + new Vector2D(alignX, yOffset);
+            Point2D origin = text.Origin + offset
+                + new Vector2D(alignX + placed[i].X, placed[i].Y);
+
+            // The glyph-by-id path needs the run's place in the line as much as the drawn-text
+            // path does, so it is resolved before either is taken.
+            if (run.EmbeddedFont is { } embedded && run.GlyphIds is { Length: > 0 } glyphIds &&
+                TryDrawEmbeddedGlyphs(context, brush, text, run, embedded, glyphIds, origin))
+            {
+                continue;
+            }
 
             if (Math.Abs(scaleX - 1.0) > 1e-9)
             {
@@ -3325,15 +3351,13 @@ public sealed class CanvasWorkspace : Control
             {
                 context.DrawText(formatted, new Point(origin.X, origin.Y));
             }
-
-            yOffset += lines * lineHeight;
         }
     }
 
     /// <summary>Draws a run with its imported embedded programme by glyph id.
     /// Returns false when the font is not registered, so the caller substitutes.</summary>
     private static bool TryDrawEmbeddedGlyphs(DrawingContext context, IBrush brush, TextItem text,
-        TextRun run, EmbeddedFont embedded, ushort[] glyphIds, Vector2D offset)
+        TextRun run, EmbeddedFont embedded, ushort[] glyphIds, Point2D origin)
     {
         // Resolve through the embedded collection itself, never the global font
         // manager: the latter answers with a fallback face (and reports success)
@@ -3358,8 +3382,11 @@ public sealed class CanvasWorkspace : Control
         double ascent = embedded.Ascent > 0
             ? embedded.Ascent / 1000.0
             : VCCad.Core.Text.TextMeasurement.TypicalAscentEm;
-        Point2D o = text.Origin + offset;
-        var baseline = new Point(o.X, o.Y + (ascent * run.FontSize));
+
+        // The run's own place in the line, handed in. Drawing every run at the text object's
+        // origin put each piece of a heading on top of the others - the pieces are separate
+        // runs, so a title of seven pieces printed as seven titles over each other.
+        var baseline = new Point(origin.X, origin.Y + (ascent * run.FontSize));
         var glyphRun = new GlyphRun(glyphTypeface, run.FontSize, run.Text.AsMemory(), glyphIds, baseline, 0);
 
         context.DrawGlyphRun(brush, glyphRun);
