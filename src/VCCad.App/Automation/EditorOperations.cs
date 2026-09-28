@@ -458,6 +458,61 @@ public static class EditorOperations
             });
 
         // ---- objects -----------------------------------------------------
+        Add("image.insert",
+            "Place an image file (PNG, JPEG, BMP, GIF) into the document. It becomes an " +
+            "ordinary image object: selectable, movable, scalable, and re-embedded on " +
+            "export in the same colour space.",
+            "path:string, x?,y?,width?,height? (defaults to the pixel size at the document origin), " +
+            "artboardId?:guid",
+            (ctx, p) =>
+            {
+                string path = p.GetString("path")
+                    ?? throw new EditorOperationException("Parameter 'path' is required.");
+                if (!File.Exists(path))
+                {
+                    throw new EditorOperationException($"No file at '{path}'.");
+                }
+
+                VCCad.Core.Model.ImageItem image = ImageLoader.Load(path);
+
+                if (p.TryGetProperty("x", out JsonElement xv) && xv.ValueKind == JsonValueKind.Number)
+                {
+                    double w = p.TryGetProperty("width", out JsonElement wv) && wv.ValueKind == JsonValueKind.Number
+                        ? wv.GetDouble()
+                        : image.PixelWidth;
+                    double h = p.TryGetProperty("height", out JsonElement hv) && hv.ValueKind == JsonValueKind.Number
+                        ? hv.GetDouble()
+                        : image.PixelHeight * (w / Math.Max(1, image.PixelWidth));
+
+                    image.Placement = new Rect2D(xv.GetDouble(), p.GetDouble("y"), w, h);
+                }
+
+                (Layer layer, Vector2D offset) = ctx.Session.TargetFor(image.Placement.Center);
+                var local = new Rect2D(
+                    image.Placement.X - offset.X, image.Placement.Y - offset.Y,
+                    image.Placement.Width, image.Placement.Height);
+                image.Placement = local;
+
+                ctx.Session.Execute(new AddItemCommand(layer, image));
+                ctx.Session.SelectRange(new[] { image }, additive: false);
+
+                return new
+                {
+                    itemId = image.Id,
+                    name = image.Name,
+                    pixelWidth = image.PixelWidth,
+                    pixelHeight = image.PixelHeight,
+                    hasAlpha = image.HasMask,
+                    placement = new
+                    {
+                        x = Math.Round(image.Placement.X, 3),
+                        y = Math.Round(image.Placement.Y, 3),
+                        width = Math.Round(image.Placement.Width, 3),
+                        height = Math.Round(image.Placement.Height, 3),
+                    },
+                };
+            });
+
         Add("image.exportPng",
             "Write an embedded raster image to a PNG file at its natural pixel size. " +
             "How to look at what was imported without the canvas in the way, and how to " +
