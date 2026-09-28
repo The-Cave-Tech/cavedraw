@@ -59,11 +59,19 @@ public static class TextMeasurement
     /// The last-resort advance for one character, used only when no measurer is
     /// installed (a headless deserialise or a unit test with no renderer).
     ///
-    /// This is the **only** estimate left in the codebase. Everything else asks a real
-    /// shaper, and naming it in one place means a search for "0.6" finds the whole of
-    /// the guessing rather than six copies of it.
+    /// Three numbers constitute the whole of the guessing in this codebase — this advance,
+    /// the ascent and the descent below — and they live here rather than scattered, so a
+    /// search for "0.6" finds all of it. Nothing outside this class estimates: callers ask
+    /// for an advance, an ascent or a descent, and get a real shaper's answer when a host
+    /// has installed one.
     /// </summary>
     public static double Estimate(TextRun run) => run.FontSize * 0.6;
+
+    /// <summary>The last-resort ascent. See <see cref="Estimate"/>.</summary>
+    public static double EstimatedAscent(TextRun run) => run.FontSize * 0.8;
+
+    /// <summary>The last-resort descent. See <see cref="Estimate"/>.</summary>
+    public static double EstimatedDescent(TextRun run) => run.FontSize * 0.2;
 
     /// <summary>Per-character advances, real when available and estimated otherwise.</summary>
     public static IReadOnlyList<double> Advances(TextRun run)
@@ -92,11 +100,33 @@ public static class TextMeasurement
         return index >= 0 && index < advances.Count ? advances[index] : TextMeasurement.Estimate(run);
     }
 
+    /// <summary>
+    /// The advance to use for a caret sitting past the last character, which is what the
+    /// end of a line needs.
+    ///
+    /// Callers used to reach for the estimate directly here, which meant a real shaper was
+    /// installed and ignored. The run's own last character is a better answer than a guess
+    /// about the font size, and it is the width the person already sees.
+    /// </summary>
+    public static double AdvanceAtEnd(TextRun run)
+    {
+        if (_current is { } metrics && run.Text.Length > 0)
+        {
+            IReadOnlyList<double> advances = metrics.Advances(run);
+            if (advances.Count > 0)
+            {
+                return advances[advances.Count - 1];
+            }
+        }
+
+        return Estimate(run);
+    }
+
     /// <summary>Ascent in document units, real when available.</summary>
     public static double Ascent(TextRun run)
-        => _current?.Ascent(run) ?? run.FontSize * 0.8;
+        => _current?.Ascent(run) ?? EstimatedAscent(run);
 
     /// <summary>Descent in document units, real when available.</summary>
     public static double Descent(TextRun run)
-        => _current?.Descent(run) ?? run.FontSize * 0.2;
+        => _current?.Descent(run) ?? EstimatedDescent(run);
 }

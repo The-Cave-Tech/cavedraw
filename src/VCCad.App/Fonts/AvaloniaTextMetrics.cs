@@ -87,8 +87,10 @@ public sealed class AvaloniaTextMetrics : ITextMetrics
             return cached;
         }
 
-        double ascent = run.FontSize * 0.8;
-        double descent = run.FontSize * 0.2;
+        // The same constants TextMeasurement uses, asked for rather than repeated: a
+        // second copy of the guessing is how the numbers drift apart.
+        double ascent = VCCad.Core.Text.TextMeasurement.EstimatedAscent(run);
+        double descent = VCCad.Core.Text.TextMeasurement.EstimatedDescent(run);
 
         try
         {

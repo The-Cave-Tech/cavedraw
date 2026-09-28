@@ -837,8 +837,12 @@ public static class EditorOperations
                     throw new EditorOperationException("No text object is selected.");
                 }
 
+                // The measured width is reported, not just the characters, so whether text
+                // is actually being measured can be checked from outside rather than
+                // taken on trust. A guessed width would show as measured=false.
                 return new
                 {
+                    measured = VCCad.Core.Text.TextMeasurement.IsReal,
                     runs = text.Runs.Select(r => new
                     {
                         text = r.Text,
@@ -846,6 +850,10 @@ public static class EditorOperations
                         size = r.FontSize,
                         bold = r.Bold,
                         italic = r.Italic,
+                        advance = Math.Round(
+                            VCCad.Core.Text.TextMeasurement.Advances(r).Sum(), 4),
+                        ascent = Math.Round(VCCad.Core.Text.TextMeasurement.Ascent(r), 4),
+                        descent = Math.Round(VCCad.Core.Text.TextMeasurement.Descent(r), 4),
                     }).ToArray(),
                     plain = text.PlainText,
                     caret = ctx.ViewModel.TextCaretRunIndex,

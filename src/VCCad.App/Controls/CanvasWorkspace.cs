@@ -3516,7 +3516,7 @@ public sealed class CanvasWorkspace : Control
         }
 
         // Only reached when the index is past every run, which callers guard against.
-        return TextMeasurement.Estimate(text.Runs.Count > 0 ? text.Runs[^1] : new TextRun());
+        return TextMeasurement.AdvanceAtEnd(text.Runs.Count > 0 ? text.Runs[^1] : new TextRun());
     }
 
     /// <summary>Builds world-space geometry for a path. When <paramref name="outsideClip"/>
