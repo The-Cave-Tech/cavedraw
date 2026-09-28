@@ -56,8 +56,16 @@ public class VeraPdfCorpusTests
         }
 
         // Deterministic order so failures are reproducible.
-        foreach (string path in Directory.EnumerateFiles(root, "*.pdf", SearchOption.AllDirectories)
-                     .OrderBy(p => p, StringComparer.Ordinal))
+        List<string> files = Directory.EnumerateFiles(root, "*.pdf", SearchOption.AllDirectories)
+            .OrderBy(p => p, StringComparer.Ordinal).ToList();
+        if (files.Count == 0)
+        {
+            // A theory with no data is an xunit error; emit a sentinel the test skips.
+            yield return new object[] { string.Empty };
+            yield break;
+        }
+
+        foreach (string path in files)
         {
             yield return new object[] { path };
         }
@@ -68,6 +76,11 @@ public class VeraPdfCorpusTests
     [Trait("Category", "Corpus")]
     public void CorpusPdfVectorImportIsRobust(string path)
     {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+        {
+            return; // corpus not present
+        }
+
         byte[] bytes = File.ReadAllBytes(path);
         bool ok;
         CadDocument? doc;
