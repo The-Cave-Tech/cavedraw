@@ -6,6 +6,16 @@
        list stranded in the middle of a resized panel instead of filling it. -->
   <TreeView x:Name="ObjectTree" Margin="6" SelectionMode="Multiple"
             SelectionChanged="OnTreeSelectionChanged">
+    <!-- One menu for the tree rather than one per row. A row can be recycled the moment it
+         scrolls out, so a menu owned by it would be pointing at whatever the row became. -->
+    <TreeView.ContextMenu>
+      <ContextMenu Name="RowMenu">
+        <MenuItem Header="Rename…" Click="OnRenameClicked"/>
+        <Separator/>
+        <MenuItem Header="Show" Click="OnShowClicked"/>
+        <MenuItem Header="Hide" Click="OnHideClicked"/>
+      </ContextMenu>
+    </TreeView.ContextMenu>
     <TreeView.Styles>
       <Style Selector="TreeViewItem">
         <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
@@ -14,17 +24,6 @@
     <TreeView.ItemTemplate>
       <TreeDataTemplate DataType="panes:ObjectNode" ItemsSource="{Binding Children}">
         <Grid ColumnDefinitions="Auto,Auto,*,Auto">
-          <!-- Every row can be renamed, as other editors allow, and the name is the person's
-               from then on. The eye already toggles visibility; these are the same two
-               actions reachable without aiming at a 14-pixel icon. -->
-          <Grid.ContextMenu>
-            <ContextMenu>
-              <MenuItem Header="Rename…" Click="OnRenameClicked"/>
-              <Separator/>
-              <MenuItem Header="Show" Click="OnShowClicked"/>
-              <MenuItem Header="Hide" Click="OnHideClicked"/>
-            </ContextMenu>
-          </Grid.ContextMenu>
           <!-- Vertical rules, one per level, so how deep a row sits can be read at a glance
                rather than counted from the indent. -->
           <ItemsControl Grid.Column="0" ItemsSource="{Binding DepthGuides}"

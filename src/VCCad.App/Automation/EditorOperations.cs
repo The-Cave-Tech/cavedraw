@@ -753,6 +753,41 @@ public static class EditorOperations
                 };
             });
 
+        Add("ui.popups",
+            "Every popup in the window and whether it is open. A menu, a tooltip and a combo " +
+            "box dropdown are Popups rather than Windows: they are outside the window's visual " +
+            "tree, so ui.find cannot read their contents and a screenshot cannot see them at " +
+            "all. Whether one is open is still answerable, which is the difference between " +
+            "knowing a menu opened and guessing that it did.",
+            "",
+            (ctx, _) =>
+            {
+                Avalonia.Visual root = Root(ctx);
+
+                var popups = UiAutomation.Flatten(root)
+                    .OfType<Avalonia.Controls.Primitives.Popup>()
+                    .Select(p => new
+                    {
+                        name = p.Name,
+                        open = p.IsOpen,
+                        child = p.Child?.GetType().Name,
+                        // How many controls the popup holds, so an empty menu can be told from
+                        // a populated one without being able to read it.
+                        items = p.Child is null
+                            ? 0
+                            : UiAutomation.Flatten(p.Child)
+                                .OfType<Avalonia.Controls.Control>().Count(),
+                    })
+                    .ToArray();
+
+                return new
+                {
+                    count = popups.Length,
+                    open = popups.Count(p => p.open),
+                    popups,
+                };
+            });
+
         Add("ui.windows",
             "Every top-level window the application has open, with its title and kind. Menus, " +
             "tooltips and combo-box dropdowns are separate top-level windows in Avalonia, so " +

@@ -201,6 +201,17 @@ public partial class ObjectsPane : UserControl
         _pressPoint = e.GetPosition(ObjectTree);
         _pressNode = FindNode(e.Source as Visual);
         _dragArmed = e.GetCurrentPoint(ObjectTree).Properties.IsLeftButtonPressed;
+
+        // The menu is opened here rather than left to Avalonia's ContextRequested. That event
+        // comes from the platform's own input manager, which synthetically raised pointer
+        // events never pass through - so a right click was delivered, the operation reported
+        // the control it hit, and no menu appeared. Opening it here means one code path for
+        // every way the click can arrive.
+        if (_pressNode is not null && e.GetCurrentPoint(ObjectTree).Properties.IsRightButtonPressed)
+        {
+            RowMenu.Open(ObjectTree);
+            e.Handled = true;
+        }
     }
 
     private void OnTreePointerMoved(object? sender, PointerEventArgs e)
