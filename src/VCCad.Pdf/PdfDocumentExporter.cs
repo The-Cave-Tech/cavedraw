@@ -266,9 +266,30 @@ public static class PdfDocumentExporter
         // Text objects (page-local coordinates, same frame as paths).
         foreach (TextItem text in AllTextItems(artboard))
         {
-            if (text.IsVisible)
+            if (!text.IsVisible)
             {
-                WriteText(ops, text, embedder, alphaStates);
+                continue;
+            }
+
+            // Text is clipped like anything else. It used to be painted with no clip at all,
+            // because paths and images go through PaintItem and text has its own loop — so a
+            // clipped label came out unclipped, showing text the file had hidden. The
+            // Transparency Guide clips its page furniture this way.
+            bool clipped = text.IsClipped;
+            if (clipped)
+            {
+                ops.Add("q");
+                foreach (ClipSpec clip in text.Clips)
+                {
+                    AppendClip(ops, clip, AffineTransform.Identity);
+                }
+            }
+
+            WriteText(ops, text, embedder, alphaStates);
+
+            if (clipped)
+            {
+                ops.Add("Q");
             }
         }
 
@@ -390,6 +411,16 @@ public static class PdfDocumentExporter
     private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfImageObjects? images = null)
     {
         if (!item.IsEffectivelyVisible())
+        {
+            return;
+        }
+
+        // Text is written by its own loop, not here. It used to reach this method anyway,
+        // because the clip is emitted before the switch that dispatches on the item's kind —
+        // so every text object opened a q with a clip and closed it again having drawn
+        // nothing, while the text itself was written with no clip at all. Text is clipped in
+        // the loop that writes it.
+        if (item is TextItem)
         {
             return;
         }
