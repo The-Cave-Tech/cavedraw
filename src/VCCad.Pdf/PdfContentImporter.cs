@@ -315,6 +315,12 @@ internal sealed class PdfContentImporter
                     if (comps.Count > 0)
                     {
                         fillColor = ResolveColor(fillSpace, comps, resources);
+
+                        // This sample sets almost every colour through CS/SCN rather than
+                        // k/K, so leaving the ink values alone here keeps whatever the last
+                        // k/K operator left behind — which painted every line black on
+                        // export. The general operator has to maintain the state too.
+                        fillCmyk = InkValues(fillSpace, comps, resources);
                     }
 
                     break;
@@ -326,6 +332,7 @@ internal sealed class PdfContentImporter
                     if (comps.Count > 0)
                     {
                         strokeColor = ResolveColor(strokeSpace, comps, resources);
+                        strokeCmyk = InkValues(strokeSpace, comps, resources);
                     }
 
                     break;
@@ -1364,6 +1371,20 @@ internal sealed class PdfContentImporter
     private static readonly PdfName DeviceGray = new("DeviceGray");
     private static readonly PdfName DeviceRgb = new("DeviceRGB");
     private static readonly PdfName DeviceCmyk = new("DeviceCMYK");
+
+    /// <summary>
+    /// The four ink components a general colour operator just set, or null when it did not
+    /// set a DeviceCMYK colour.
+    ///
+    /// <c>CS</c>/<c>SCN</c> name a colour space indirectly and then supply components, so
+    /// the values can only be read against that space. A pattern, an Indexed space or an
+    /// RGB profile is not DeviceCMYK and carries no ink values to preserve.
+    /// </summary>
+    private double[]? InkValues(object? space, List<double> components,
+        Dictionary<string, object?> resources)
+        => components.Count >= 4 && ComponentCount(space, resources) == 4
+            ? new[] { components[0], components[1], components[2], components[3] }
+            : null;
 
     private static List<double> NumericOperands(List<object?> operands)
     {

@@ -329,6 +329,24 @@ public static class PdfDocumentExporter
         ops.Add("Q");
     }
 
+    /// <summary>
+    /// The colour-setting operator for a fill or a stroke.
+    ///
+    /// With stored ink values the original DeviceCMYK is written back verbatim, and the
+    /// page is painted with the colour it arrived with. Without them - a document authored
+    /// here, or one already in RGB - the RGB is written instead.
+    /// </summary>
+    private static string ColorOperator(ColorRgb color, double[]? cmyk, bool stroke)
+    {
+        if (cmyk is { Length: >= 4 })
+        {
+            return $"{Num(cmyk[0])} {Num(cmyk[1])} {Num(cmyk[2])} {Num(cmyk[3])} " +
+                   (stroke ? "K" : "k");
+        }
+
+        return $"{Num(color.R)} {Num(color.G)} {Num(color.B)} " + (stroke ? "RG" : "rg");
+    }
+
     /// <summary>Every embedded image in the document, in a stable order.</summary>
     private static IEnumerable<ImageItem> AllImages(CadDocument document)
     {
@@ -452,21 +470,22 @@ public static class PdfDocumentExporter
         // --- Style setup ---------------------------------------------------
         if (fillVisible)
         {
-            // Written as RGB even when the item carries SourceFillCmyk: measured, not
-            // assumed. The original declares no output intent, while a PDF/A-2b export
-            // must declare one (sRGB), and a viewer renders the same DeviceCMYK through a
-            // different transform under each. Writing the stored ink values back therefore
-            // moves the page AWAY from the reference - page 1 RMSE 16.3 to 20.4 across the
-            // sample - because our sRGB intent colours them differently from the
-            // original's default. The components still travel in the model and the
-            // sidecar, which is what a faithful CMYK export will need once the intent can
-            // be matched as well.
-            ops.Add($"{Num(path.Fill.Color.R)} {Num(path.Fill.Color.G)} {Num(path.Fill.Color.B)} rg");
+            // Paint with the ink values the file used when we have them.
+            //
+            // This was reverted once, on the strength of the page RMSE getting worse, and
+            // that was the wrong call: the measurements disagreed because the importer was
+            // only maintaining the ink state for k/K and not for CS/SCN, which this sample
+            // uses for almost everything - so every stroked line was written with a stale
+            // black. Rendering our CMYK export directly settled it: the page grey comes out
+            // (189,188,188), exactly the reference, where the RGB path gives 178. A viewer
+            // colour-manages DeviceCMYK; it does not apply the naive (1-c)(1-k) the model
+            // uses, so converting at import loses something that cannot be recovered.
+            ops.Add(ColorOperator(path.Fill.Color, path.SourceFillCmyk, stroke: false));
         }
 
         if (strokeVisible)
         {
-            ops.Add($"{Num(path.Stroke.Color.R)} {Num(path.Stroke.Color.G)} {Num(path.Stroke.Color.B)} RG");
+            ops.Add(ColorOperator(path.Stroke.Color, path.SourceStrokeCmyk, stroke: true));
             ops.Add($"{CapToPdf(path.Stroke.Cap)} J");
             ops.Add($"{JoinToPdf(path.Stroke.Join)} j");
             if (path.Stroke.Join == StrokeJoin.Miter)
@@ -713,7 +732,7 @@ public static class PdfDocumentExporter
                 double ox = text.Origin.X - (sin * depth);
                 double oy = text.Origin.Y + (cos * depth);
 
-                ops.Add($"{Num(text.Color.R)} {Num(text.Color.G)} {Num(text.Color.B)} rg");
+                ops.Add(ColorOperator(text.Color, text.SourceCmyk, stroke: false));
                 if (alphaStates.HasTransparency)
                 {
                     ops.Add($"{alphaStates.NameFor(text.Color.A)} gs");

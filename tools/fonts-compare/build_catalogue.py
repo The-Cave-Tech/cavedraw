@@ -170,20 +170,19 @@ def main():
         "",
         "## Colour space",
         "",
-        "The reference file paints with **DeviceCMYK** exclusively (about 1,590 `k`/`K` "
-        "operators, no `rg`/`RG` at all). VCCad's model stores colours as RGB, so the "
-        "export paints with `rg`/`RG` exclusively.",
+        "The reference paints with **DeviceCMYK** exclusively (about 1,590 `k`/`K` "
+        "operators, and 153 `SCN`), and declares no output intent.",
         "",
-        "That conversion is not reversible. The importer uses `r = (1-c)(1-k)`, and "
-        "inverting it picks the maximum-black decomposition, which is generally not the "
-        "one the file used: a pixel of `07 04 04 00` comes back as `03 04 04 00`. "
-        "Re-encoding the RGB as CMYK therefore does not restore the original, and neither "
-        "does it render identically, because a viewer renders CMYK through a colour-"
-        "managed transform rather than the naive formula.",
+        "A viewer colour-manages DeviceCMYK rather than applying the naive "
+        "`r = (1-c)(1-k)` the importer used to. Measured with `tools/fonts-compare/"
+        "cmyk_probe.py`: `k=0.3` renders as 189/255 where the formula gives 178, `k=1` "
+        "as (35,31,32) rather than black, and pure cyan as (0,173,239) rather than "
+        "(0,255,255). Converting at import therefore loses something that cannot be "
+        "recovered. The original ink values are now kept on the model and written back "
+        "out, which improved every page.",
         "",
-        "Fixing this means keeping the original component values on the model rather "
-        "than converting at import. Everything else in this catalogue is small by "
-        "comparison: the mean absolute channel difference is about 3.8 of 255.",
+        "The same cause explains the grey page corners, which now match exactly, and most "
+        "of what is left on the embedded raster - the largest differing region remaining.",
         "",
     ]
     lines += stamp
