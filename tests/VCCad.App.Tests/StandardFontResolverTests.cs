@@ -29,6 +29,63 @@ public class StandardFontResolverTests
         };
 
     [AvaloniaFact]
+    public void TheReportNamesTheFaceNotJustTheFamily()
+    {
+        // "Nimbus Sans" for a bold run says the family and not the face, so a person cannot
+        // tell a real bold cut from a synthesised one. They look different.
+        string bold = StandardFontResolver.Describe(Run("Helvetica-Bold", source: "Helvetica-Bold", bold: true));
+        string plain = StandardFontResolver.Describe(Run("Helvetica", source: "Helvetica"));
+        string italic = StandardFontResolver.Describe(
+            Run("Helvetica-Oblique", source: "Helvetica-Oblique", italic: true));
+
+        Assert.Contains("Nimbus Sans", bold, StringComparison.Ordinal);
+        Assert.Contains("Bold", bold, StringComparison.Ordinal);
+        Assert.Contains("Nimbus Sans", italic, StringComparison.Ordinal);
+        Assert.Contains("Italic", italic, StringComparison.Ordinal);
+
+        // The regular run must not claim a weight it does not have.
+        Assert.DoesNotContain("Bold", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("Italic", plain, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact]
+    public void TheReportSaysWhenAFaceIsOnlyInstalledInItsRegularCut()
+    {
+        // Courier is a name a PDF may use without embedding, and the machine has it. The
+        // report must not claim a cut it would have to make up.
+        string described = StandardFontResolver.Describe(
+            Run("Courier-Bold", source: "Courier-Bold", bold: true));
+
+        Assert.DoesNotContain("unavailable", described, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact]
+    public void ThePickerOffersTheMachinesFontsAndTheStandardFacesFirst()
+    {
+        IReadOnlyList<string> offered = StandardFontResolver.OfferedFamilies();
+        IReadOnlyList<string> standard = StandardFontResolver.StandardFamilyNames();
+
+        Assert.NotEmpty(offered);
+
+        // Every standard face is offered, and offered before anything else.
+        Assert.All(standard, s => Assert.Contains(s, offered));
+        Assert.Equal(standard, offered.Take(standard.Count));
+
+        // The machine's own fonts are there too — offering three families would make the
+        // picker useless for setting type.
+        Assert.True(offered.Count > standard.Count,
+            $"expected the machine's fonts as well as {standard.Count} standard faces, " +
+            $"found {offered.Count} in total");
+    }
+
+    [AvaloniaFact]
+    public void TheOfferedListHasNoDuplicates()
+    {
+        IReadOnlyList<string> offered = StandardFontResolver.OfferedFamilies();
+        Assert.Equal(offered.Count, offered.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
+    [AvaloniaFact]
     public void AFaceThePersonChoseIsUsedAsChosen()
     {
         // No SourceFont means nobody's file asked for this: it is the person's choice.

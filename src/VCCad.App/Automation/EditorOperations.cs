@@ -1978,6 +1978,13 @@ public static class EditorOperations
         IReadOnlyList<string> missing = StandardFontResolver.Missing(ctx.Document);
         IReadOnlyList<string> unresolved = FontUsage.Unresolved(ctx.Document);
 
+        // The picker's own list, reported here so a driver can check it without seeing the
+        // screen. The font chooser is not an operation and its contents are not a control a
+        // dump can read, so without this "the picker offers the machine's fonts" would be
+        // an assertion about a dropdown nobody has looked inside.
+        IReadOnlyList<string> offered = StandardFontResolver.OfferedFamilies();
+        IReadOnlyList<string> standard = StandardFontResolver.StandardFamilyNames();
+
         return new
         {
             fonts = detail.Select(d => new
@@ -1986,6 +1993,13 @@ public static class EditorOperations
                 embedded = d.Font.Embedded,
                 drawingWith = d.Source,
             }).ToArray(),
+            picker = new
+            {
+                offered = offered.Count,
+                standardFaces = standard.Count,
+                systemFonts = Math.Max(0, offered.Count - standard.Count),
+                families = offered,
+            },
             missingStandardFonts = missing,
             embeddedNotResolved = unresolved,
             note = missing.Count > 0

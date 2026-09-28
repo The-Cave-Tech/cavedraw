@@ -101,26 +101,8 @@ public static class StandardFontResolver
     /// </summary>
     public static IReadOnlyList<string> OfferedFamilies()
     {
-        var families = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        // The faces a PDF is entitled to name without embedding, first.
-        foreach (StandardFontKind kind in new[]
-                 {
-                     StandardFontKind.Sans, StandardFontKind.Serif, StandardFontKind.Mono,
-                 })
-        {
-            var face = new StandardFace(kind, false, false);
-            string urw = StandardFonts.UrwFamily(face);
-            string family = StandardFontFiles.Exists(face)
-                ? urw
-                : StandardFonts.CloneFamily(face) is { } clone && IsAvailable(clone) ? clone : urw;
-
-            if (seen.Add(family))
-            {
-                families.Add(family);
-            }
-        }
+        var families = new List<string>(StandardFamilyNames());
+        var seen = new HashSet<string>(families, StringComparer.OrdinalIgnoreCase);
 
         // Then everything installed on this machine, by real family name.
         try
@@ -142,6 +124,40 @@ public static class StandardFontResolver
         return families;
     }
 
+    /// <summary>
+    /// The standard families the picker puts first, which are the ones a PDF may name
+    /// without embedding.
+    ///
+    /// Separate from <see cref="OfferedFamilies"/> so the two can be told apart: how many
+    /// of the offered names are standard faces and how many are the machine's own is the
+    /// question the font report has to answer, and subtracting a list from itself is how
+    /// that answer goes wrong.
+    /// </summary>
+    public static IReadOnlyList<string> StandardFamilyNames()
+    {
+        var families = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (StandardFontKind kind in new[]
+                 {
+                     StandardFontKind.Sans, StandardFontKind.Serif, StandardFontKind.Mono,
+                 })
+        {
+            var face = new StandardFace(kind, false, false);
+            string urw = StandardFonts.UrwFamily(face);
+            string family = StandardFontFiles.Exists(face)
+                ? urw
+                : StandardFonts.CloneFamily(face) is { } clone && IsAvailable(clone) ? clone : urw;
+
+            if (seen.Add(family))
+            {
+                families.Add(family);
+            }
+        }
+
+        return families;
+    }
+
     /// <summary>How a run's face was chosen, for the font report and the status bar.</summary>
     public static string Describe(TextRun run)
     {
@@ -152,18 +168,69 @@ public static class StandardFontResolver
 
         StandardFonts.TryResolve(run.SourceFont ?? run.FontFamily, run.Bold, run.Italic, out StandardFace face);
         string wanted = run.SourceFont ?? run.FontFamily;
+        string style = StyleSuffix(face);
 
         if (UrwFamilyFor(face) is { } urw)
         {
-            return $"URW {urw} (installed on this machine)";
+            // The weight is part of the answer. "Nimbus Sans" for a bold run says the
+            // family and not the face, so a person cannot tell whether the bold they asked
+            // for is a real cut or the shaper leaning the regular one — and those look
+            // different. Naming the face, and saying plainly when the machine has no such
+            // cut, is the difference between a report and a reassurance.
+            return FaceExists(urw, face)
+                ? $"URW {urw}{style} (installed on this machine)"
+                : IsAvailable(urw)
+                    ? $"URW {urw} (installed, but no {style.Trim().ToLowerInvariant()} face " +
+                      "— it is synthesised)"
+                    : $"unavailable — {wanted} is not embedded, and no standard font is installed";
         }
 
         if (StandardFonts.CloneFamily(face) is { } clone && IsAvailable(clone))
         {
-            return $"metric-compatible {clone} (installed on this machine)";
+            return FaceExists(clone, face)
+                ? $"metric-compatible {clone}{style} (installed on this machine)"
+                : $"metric-compatible {clone} (installed, but no {style.Trim().ToLowerInvariant()} " +
+                  "face — it is synthesised)";
         }
 
         return $"unavailable — {wanted} is not embedded, and no standard font is installed";
+    }
+
+    /// <summary>A face's weight and slant, as a family name suffix: " Bold Italic".</summary>
+    private static string StyleSuffix(StandardFace face)
+    {
+        var parts = new List<string>();
+        if (face.Bold)
+        {
+            parts.Add("Bold");
+        }
+
+        if (face.Italic)
+        {
+            parts.Add("Italic");
+        }
+
+        return parts.Count == 0 ? string.Empty : " " + string.Join(' ', parts);
+    }
+
+    /// <summary>
+    /// Whether the machine really has this weight and slant, rather than a family whose
+    /// bold or italic will be made up by the shaper.
+    /// </summary>
+    private static bool FaceExists(string family, StandardFace face)
+    {
+        try
+        {
+            var typeface = new Typeface(
+                family,
+                face.Italic ? FontStyle.Italic : FontStyle.Normal,
+                face.Bold ? FontWeight.Bold : FontWeight.Normal);
+            return FontManager.Current.TryGetGlyphTypeface(typeface, out _);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     /// <summary>True when the platform can resolve a family.</summary>
