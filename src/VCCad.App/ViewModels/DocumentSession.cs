@@ -951,6 +951,13 @@ public sealed class DocumentSession : INotifyPropertyChanged
             box = box.Union(text.WorldBounds());
         }
 
+        // Images count: without them a picture could be selected but its bounds would
+        // read as empty, so the transform pivot and the numeric readout would be wrong.
+        foreach (ImageItem image in _selectedObjects.OfType<ImageItem>())
+        {
+            box = box.Union(image.WorldBounds());
+        }
+
         return box;
     }
 
@@ -1126,7 +1133,9 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// selected, no point mode). Text blocks count: they have bounds, move, and
     /// scale with the same handles as paths.</summary>
     public bool HasTransformableSelection
-        => !HasPointSelection && (SelectedPaths().Any() || SelectedTextItems().Any());
+        => !HasPointSelection &&
+           (SelectedPaths().Any() || SelectedTextItems().Any() ||
+            _selectedObjects.OfType<ImageItem>().Any());
 
     /// <summary>Current bounds + principal-axis angle (degrees, 0..180) of the
     /// selected objects — the basis the numeric fields display.</summary>
@@ -1190,6 +1199,35 @@ public sealed class DocumentSession : INotifyPropertyChanged
         if (anyRotation)
         {
             _selectionRotationRadians += rotationDegrees * Math.PI / 180.0;
+        }
+
+        // An image's geometry is its placement box, so it scales by moving and resizing
+        // that box. Rotation is not supported for images yet: the model has no angle for
+        // one, and silently ignoring the request would be worse than saying so.
+        foreach (ImageItem image in _selectedObjects.OfType<ImageItem>())
+        {
+            Rect2D before = image.Placement;
+            Point2D localPivot = pivot - image.ArtboardOffset();
+
+            double x = localPivot.X + ((before.X - localPivot.X) * scaleX);
+            double y = localPivot.Y + ((before.Y - localPivot.Y) * scaleY);
+            double w = before.Width * Math.Abs(scaleX);
+            double h = before.Height * Math.Abs(scaleY);
+
+            if (scaleX < 0)
+            {
+                x -= w;
+            }
+
+            if (scaleY < 0)
+            {
+                y -= h;
+            }
+
+            image.Placement = new Rect2D(
+                x + translation.X, y + translation.Y, Math.Max(0.5, w), Math.Max(0.5, h));
+
+            edits.Add(new ImagePlacementCommand(image, before, image.Placement));
         }
 
         Execute(edits.Count == 1

@@ -73,6 +73,10 @@ public sealed class CanvasWorkspace : Control
     private readonly List<PathItem> _resizePaths = new();
     private readonly Dictionary<PathItem, PathItem> _resizeOriginals = new();
     private readonly List<TextItem> _resizeTexts = new();
+
+    // Images carry a placement rather than geometry, so they travel in their own lists.
+    private readonly List<ImageItem> _resizeImages = new();
+    private readonly Dictionary<ImageItem, Rect2D> _resizeImageBefore = new();
     private readonly Dictionary<TextItem, TextItem> _resizeTextBefore = new();
 
     // Oriented selection chrome: a base (unrotated) rectangle plus an angle, so
@@ -86,6 +90,8 @@ public sealed class CanvasWorkspace : Control
     private readonly List<PathItem> _dragPaths = new();
     private readonly Dictionary<PathItem, PathItem> _dragOriginals = new();
     private readonly List<TextItem> _dragTexts = new();
+    private readonly List<ImageItem> _dragImages = new();
+    private readonly Dictionary<ImageItem, Rect2D> _dragImageOrigins = new();
     private readonly Dictionary<TextItem, Point2D> _dragTextOrigins = new();
     private Point2D _dragStartModel;
 
@@ -680,6 +686,9 @@ public sealed class CanvasWorkspace : Control
         {
             PathItem path when PathPicking.HitTest(path, model, tolerance) != PickKind.None => path,
             TextItem text when text.BoundingBox().Contains(model) => text,
+            // An image has no outline to pick, so its box is its geometry and a click
+            // anywhere inside it selects it.
+            ImageItem image when image.Placement.Contains(model) => image,
             ArtGroup group => HitTestGroup(group, model, tolerance),
             _ => null,
         };
@@ -1241,6 +1250,14 @@ public sealed class CanvasWorkspace : Control
         _dragOriginals.Clear();
         _dragTexts.Clear();
         _dragTextOrigins.Clear();
+        _dragImages.Clear();
+        _dragImageOrigins.Clear();
+        foreach (ImageItem image in _vm!.SelectedObjects.OfType<ImageItem>())
+        {
+            _dragImages.Add(image);
+            _dragImageOrigins[image] = image.Placement;
+        }
+
         foreach (PathItem path in _vm!.SelectedPaths())
         {
             _dragPaths.Add(path);
@@ -1298,6 +1315,15 @@ public sealed class CanvasWorkspace : Control
         foreach (TextItem text in _dragTexts)
         {
             text.Origin = _dragTextOrigins[text] + delta;
+        }
+
+        // An image's geometry is its placement, so dragging shifts the box and the
+        // picture travels with it.
+        foreach (ImageItem image in _dragImages)
+        {
+            Rect2D start = _dragImageOrigins[image];
+            image.Placement = new Rect2D(
+                start.X + delta.X, start.Y + delta.Y, start.Width, start.Height);
         }
 
         if (!_chromeRect0.IsEmpty)
@@ -1490,6 +1516,11 @@ public sealed class CanvasWorkspace : Control
             case ArtGroup group:
                 Rect2D g = group.Transform.Transform(group.BoundingBox());
                 return g.IsEmpty ? g : new Rect2D(g.X + offset.X, g.Y + offset.Y, g.Width, g.Height);
+            case ImageItem image:
+                // The placement is the image's box, so selection chrome and the resize
+                // handles land on the picture itself.
+                Rect2D i = image.Placement;
+                return i.IsEmpty ? i : new Rect2D(i.X + offset.X, i.Y + offset.Y, i.Width, i.Height);
             default:
                 return Rect2D.Empty;
         }
@@ -1565,6 +1596,14 @@ public sealed class CanvasWorkspace : Control
             _resizeTextBefore[text] = (TextItem)text.Clone();
         }
 
+        _resizeImages.Clear();
+        _resizeImageBefore.Clear();
+        foreach (ImageItem image in _vm!.SelectedObjects.OfType<ImageItem>())
+        {
+            _resizeImages.Add(image);
+            _resizeImageBefore[image] = image.Placement;
+        }
+
         _dragStartModel = model;
         InvalidateVisual();
     }
@@ -1628,6 +1667,35 @@ public sealed class CanvasWorkspace : Control
             {
                 run.FontSize *= fontScale;
             }
+        }
+
+        // An image scales by moving and resizing its placement box. Scaling is not
+        // uniform unless the handle (or Shift) made it so: the pixels stretch to fill the
+        // box, which is what a person sees happen to a picture they drag a corner of.
+        foreach (ImageItem image in _resizeImages)
+        {
+            Rect2D start = _resizeImageBefore[image];
+            Vector2D offset = image.ArtboardOffset();
+            Point2D pivotLocal = _resizePivot - offset;
+
+            double x = pivotLocal.X + ((start.X - pivotLocal.X) * sx);
+            double y = pivotLocal.Y + ((start.Y - pivotLocal.Y) * sy);
+            double w = start.Width * Math.Abs(sx);
+            double h = start.Height * Math.Abs(sy);
+
+            // A negative scale mirrors the image; the placement box stays positive and the
+            // origin moves to the far corner.
+            if (sx < 0)
+            {
+                x -= w;
+            }
+
+            if (sy < 0)
+            {
+                y -= h;
+            }
+
+            image.Placement = new Rect2D(x, y, Math.Max(0.5, w), Math.Max(0.5, h));
         }
 
         // Shift + a group selection scales each object in place (about its own

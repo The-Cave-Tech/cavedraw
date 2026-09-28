@@ -583,6 +583,34 @@ public sealed class TextStyleCommand : IUndoableCommand
     }
 }
 
+/// <summary>
+/// Moves and resizes an image's placement as one undo step.
+///
+/// An image carries a placement box rather than geometry, so it needs its own command;
+/// the geometry-replace commands used for paths have nothing to snapshot.
+/// </summary>
+public sealed class ImagePlacementCommand : IUndoableCommand
+{
+    private readonly ImageItem _image;
+    private readonly Rect2D _before;
+    private readonly Rect2D _after;
+
+    public string Description { get; }
+
+    public ImagePlacementCommand(ImageItem image, Rect2D before, Rect2D after,
+        string? description = null)
+    {
+        _image = image;
+        _before = before;
+        _after = after;
+        Description = description ?? "Move image";
+    }
+
+    public void Do() => _image.Placement = _after;
+
+    public void Undo() => _image.Placement = _before;
+}
+
 /// <summary>Moves a text item's origin as one undo step.</summary>
 public sealed class SetTextOriginCommand : IUndoableCommand
 {
