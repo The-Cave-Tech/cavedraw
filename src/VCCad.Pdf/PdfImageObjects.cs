@@ -31,23 +31,38 @@ internal sealed class PdfImageObjects
             string name = $"Im{++index}";
 
             int maskObject = 0;
-            if (image.HasMask)
+
+            // A colour key is resolved into coverage here rather than at import, so the
+            // exact range the file specified survives in the model and a page that keys
+            // out white still keys out white after a save and reload.
+            byte[]? mask = image.HasMask
+                ? image.Mask
+                : image.ColourKey is not null ? ResolveColourKey(image) : null;
+
+            if (mask is not null)
             {
                 maskObject = assembler.Allocate();
                 assembler.SetBody(maskObject, PdfDocumentExporter.MakeStreamObject(
-                    PdfDocumentExporter.CompressBytes(image.Mask),
+                    PdfDocumentExporter.CompressBytes(mask),
                     $" /Type /XObject /Subtype /Image /Width {image.PixelWidth}" +
                     $" /Height {image.PixelHeight} /BitsPerComponent 8 /ColorSpace /DeviceGray"));
             }
 
             string smask = maskObject != 0 ? $" /SMask {maskObject} 0 R" : string.Empty;
 
+            // Both of these change what the picture looks like, and the samples are
+            // written exactly as they arrived, so leaving either out would export a
+            // different image from the one that was read.
+            string decode = image.Decode is { Length: >= 2 } d
+                ? $" /Decode [{string.Join(' ', d.Select(v => v.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture)))}]"
+                : string.Empty;
+
             int objectNumber = assembler.Allocate();
             assembler.SetBody(objectNumber, PdfDocumentExporter.MakeStreamObject(
                 PdfDocumentExporter.CompressBytes(image.Samples),
                 $" /Type /XObject /Subtype /Image /Width {image.PixelWidth}" +
                 $" /Height {image.PixelHeight} /BitsPerComponent {image.BitsPerComponent}" +
-                $" /ColorSpace {ColorSpaceOf(image)}{smask}"));
+                $" /ColorSpace {ColorSpaceOf(image)}{smask}{decode}"));
 
             _names[image] = name;
             _entries.Add((name, objectNumber));
@@ -56,6 +71,25 @@ internal sealed class PdfImageObjects
 
     /// <summary>True once at least one image was written.</summary>
     public bool Any => _entries.Count > 0;
+
+    /// <summary>
+    /// The colour key as per-pixel coverage, one byte each: 0 where the pixel matches the
+    /// key and so does not paint, 255 where it does.
+    /// </summary>
+    private static byte[] ResolveColourKey(ImageItem image)
+    {
+        var coverage = new byte[image.PixelWidth * image.PixelHeight];
+        for (int y = 0; y < image.PixelHeight; y++)
+        {
+            for (int x = 0; x < image.PixelWidth; x++)
+            {
+                coverage[(y * image.PixelWidth) + x] =
+                    image.IsColourKeyed(x, y) ? (byte)0 : (byte)255;
+            }
+        }
+
+        return coverage;
+    }
 
     /// <summary>The <c>/XObject</c> entry for the page resource dictionary.</summary>
     public string Dict()

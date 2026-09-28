@@ -96,6 +96,8 @@ public sealed class ImageItem : LayerItem
             Palette = (byte[])Palette.Clone(),
             Mask = (byte[])Mask.Clone(),
             Placement = Placement,
+            Decode = Decode is null ? null : (double[])Decode.Clone(),
+            ColourKey = ColourKey is null ? null : (double[])ColourKey.Clone(),
         };
 
         return copy;
@@ -170,7 +172,79 @@ public sealed class ImageItem : LayerItem
             max = 65535;
         }
 
-        return max <= 0 ? 0.0 : (double)RawSampleAt(x, y, component) / max;
+        if (max <= 0)
+        {
+            return 0.0;
+        }
+
+        double value = (double)RawSampleAt(x, y, component) / max;
+
+        // The file's decode maps the stored value onto the range it stands for, which is
+        // how an image is inverted. A short array repeats its last pair.
+        if (Decode is { Length: >= 2 } decode)
+        {
+            int at = Math.Min(component * 2, decode.Length - 2);
+            value = decode[at] + (value * (decode[at + 1] - decode[at]));
+        }
+
+        return value;
+    }
+
+    /// <summary>
+    /// The file's <c>/Decode</c> array, or null.
+    ///
+    /// A decode maps each component's stored value onto the 0..1 range it stands for, and
+    /// it is how an image is inverted: <c>[1 0 1 0 1 0]</c> turns a photograph negative.
+    /// The samples stay exactly as the file wrote them, so this is applied when a value is
+    /// read rather than by rewriting them — and it is written back out, or the export
+    /// would come out a negative of a negative.
+    /// </summary>
+    public double[]? Decode { get; set; }
+
+    /// <summary>
+    /// The file's colour key, as component min/max pairs, or null.
+    ///
+    /// Declared rather than resolved into coverage so the key survives a save and a
+    /// reload: a resolved mask is 8-bit, and quantising a key at import would lose the
+    /// exact range the file specified.
+    /// </summary>
+    public double[]? ColourKey { get; set; }
+
+    /// <summary>
+    /// Whether one pixel matches the file's colour key, and so does not paint.
+    ///
+    /// <c>/Mask [min max min max min max]</c> makes a colour transparent, which is how a
+    /// logo drawn on a white card is placed over coloured artwork. The key is expressed in
+    /// the same 0..1 range the components decode into, which is why this asks
+    /// <see cref="SampleAt"/> rather than reading raw samples.
+    /// </summary>
+    public bool IsColourKeyed(int x, int y)
+    {
+        if (ColourKey is not { Length: >= 2 } key)
+        {
+            return false;
+        }
+
+        // The specification puts the key in the same range as the decoded components,
+        // 0..1. Files in the wild write 0..255 instead — the same numbers as the samples
+        // they were copied from — and a key of 255 read against a value of 1 matches
+        // nothing, so the whole picture stays opaque and the transparent background the
+        // file asked for never appears. A key that reaches past 1 is that mistake.
+        double scale = key.Any(v => v > 1.0) ? 255.0 : 1.0;
+
+        for (int component = 0; component < Components; component++)
+        {
+            int at = Math.Min(component * 2, key.Length - 2);
+            double value = SampleAt(x, y, component);
+            if (value < key[at] / scale || value > key[at + 1] / scale)
+            {
+                // One component outside its range is enough to keep the pixel: the key
+                // covers pixels where EVERY component is in range.
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>One component of one pixel, as the integer the file stored.</summary>
@@ -216,14 +290,22 @@ public sealed class ImageItem : LayerItem
         }
     }
 
-    /// <summary>Coverage of one pixel: the soft mask when present, opaque otherwise.</summary>
+    /// <summary>
+    /// Coverage of one pixel: nothing where the colour key matches, then the soft mask
+    /// when present, opaque otherwise.
+    /// </summary>
     public double CoverageAt(int x, int y)
     {
-        if (!HasMask || x < 0 || y < 0 || x >= PixelWidth || y >= PixelHeight)
+        if (x < 0 || y < 0 || x >= PixelWidth || y >= PixelHeight)
         {
             return 1.0;
         }
 
-        return Mask[(y * PixelWidth) + x] / 255.0;
+        if (IsColourKeyed(x, y))
+        {
+            return 0.0;
+        }
+
+        return HasMask ? Mask[(y * PixelWidth) + x] / 255.0 : 1.0;
     }
 }

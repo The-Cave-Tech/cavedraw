@@ -795,6 +795,12 @@ internal sealed class PdfContentImporter
             ColorSpace = space,
             Palette = palette,
             Samples = samples,
+
+            // Both of these change what the picture looks like and neither is optional.
+            // Decode inverts or remaps the samples; a colour-key Mask makes one colour
+            // transparent, which is how a logo drawn on white is placed over artwork.
+            Decode = ReadNumbers(dict.GetValueOrDefault("Decode")),
+            ColourKey = ReadNumbers(dict.GetValueOrDefault("Mask")),
         };
 
         // A soft mask is a second image; only its coverage is needed.

@@ -132,7 +132,9 @@ internal sealed record ImageDto(
     string Samples,
     string Palette,
     string Mask,
-    Rect2D Placement) : ItemDto;
+    Rect2D Placement,
+    double[]? Decode = null,
+    double[]? ColourKey = null) : ItemDto;
 
 /// <summary>
 /// Discriminated union over the possible layer items. System.Text.Json picks the
@@ -223,7 +225,9 @@ internal abstract record ItemDto
         Convert.ToBase64String(i.Samples),
         Convert.ToBase64String(i.Palette),
         Convert.ToBase64String(i.Mask),
-        i.Placement);
+        i.Placement,
+        i.Decode,
+        i.ColourKey);
 
     private static PathDto ToPath(PathItem p) => new(
         p.Id,
@@ -339,6 +343,8 @@ internal static class ItemDtoExtensions
             Palette = Convert.FromBase64String(i.Palette),
             Mask = Convert.FromBase64String(i.Mask),
             Placement = i.Placement,
+            Decode = i.Decode,
+            ColourKey = i.ColourKey,
         };
         item.RestoreIdentity(i.Id);
         return item;

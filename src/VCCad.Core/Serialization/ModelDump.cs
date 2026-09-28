@@ -159,6 +159,12 @@ public static class ModelDump
                     .Append(" palette=").Append(image.Palette.Length)
                     .Append(" mask=").Append(image.Mask.Length)
                     .Append(" maskHash=").Append(Hash(image.Mask))
+
+                    // Both change what the picture looks like, so a round trip that
+                    // dropped either would export a different image with nothing else in
+                    // the dump to show it.
+                    .Append(" decode=").Append(Numbers(image.Decode))
+                    .Append(" colourKey=").Append(Numbers(image.ColourKey))
                     .AppendLine();
                 break;
 
@@ -207,6 +213,10 @@ public static class ModelDump
     /// would export a different colour from the one that went in, and none of the other
     /// fields would show it.
     /// </summary>
+    /// <summary>Every value of a numeric array, or "-"; used for decode and colour keys.</summary>
+    private static string Numbers(double[]? values)
+        => values is { Length: > 0 } ? string.Join(",", values.Select(Num)) : "-";
+
     private static string Cmyk(double[]? components)
         => components is { Length: >= 4 }
             ? string.Join(",", components.Take(4).Select(Num))
