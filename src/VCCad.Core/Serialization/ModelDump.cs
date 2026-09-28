@@ -167,6 +167,8 @@ public static class ModelDump
                     // the dump to show it.
                     .Append(" decode=").Append(Numbers(image.Decode))
                     .Append(" colourKey=").Append(Numbers(image.ColourKey))
+                    .Append(" filter=").Append(image.Filter ?? "-")
+                    .Append(" maskFilter=").Append(image.MaskFilter ?? "-")
                     .Append(Clips(item)).AppendLine();
                 break;
 

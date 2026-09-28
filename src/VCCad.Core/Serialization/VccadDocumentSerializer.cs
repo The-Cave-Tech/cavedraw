@@ -136,7 +136,9 @@ internal sealed record ImageDto(
     string Mask,
     Rect2D Placement,
     double[]? Decode = null,
-    double[]? ColourKey = null) : ItemDto;
+    double[]? ColourKey = null,
+    string? Filter = null,
+    string? MaskFilter = null) : ItemDto;
 
 /// <summary>A clip path as it travels in the sidecar: an outline and its rule.</summary>
 internal sealed record ClipDto(FillRule Rule, SubPathDto[] SubPaths);
@@ -276,7 +278,9 @@ internal abstract record ItemDto
         Convert.ToBase64String(i.Mask),
         i.Placement,
         i.Decode,
-        i.ColourKey);
+        i.ColourKey,
+        i.Filter,
+        i.MaskFilter);
 
     private static PathDto ToPath(PathItem p) => new(
         p.Id,
@@ -396,6 +400,8 @@ internal static class ItemDtoExtensions
             Placement = i.Placement,
             Decode = i.Decode,
             ColourKey = i.ColourKey,
+            Filter = i.Filter,
+            MaskFilter = i.MaskFilter,
         };
         item.RestoreIdentity(i.Id);
         return item;

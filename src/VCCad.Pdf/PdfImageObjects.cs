@@ -42,13 +42,37 @@ internal sealed class PdfImageObjects
             if (mask is not null)
             {
                 maskObject = assembler.Allocate();
+
+                // The mask's own compressor, for the same reason as the image's: a JPEG mask
+                // is not grey samples, and writing it as though it were leaves the viewer to
+                // guess. Flate is what this exporter applies to samples it holds.
+                bool maskPassThrough = image.MaskFilter is { Length: > 0 };
                 assembler.SetBody(maskObject, PdfDocumentExporter.MakeStreamObject(
-                    PdfDocumentExporter.CompressBytes(mask),
+                    maskPassThrough ? mask : PdfDocumentExporter.CompressBytes(mask),
                     $" /Type /XObject /Subtype /Image /Width {image.PixelWidth}" +
-                    $" /Height {image.PixelHeight} /BitsPerComponent 8 /ColorSpace /DeviceGray"));
+                    $" /Height {image.PixelHeight} /BitsPerComponent 8 /ColorSpace /DeviceGray"
+                    + (maskPassThrough ? $" /Filter /{image.MaskFilter}" : string.Empty)));
             }
 
             string smask = maskObject != 0 ? $" /SMask {maskObject} 0 R" : string.Empty;
+
+            // A JPEG's bytes are not samples, they are a picture in a compressor. Writing
+            // them out without saying which one turns a 6 kB photograph into 6 kB of raw RGB
+            // for an image that needs 96 kB, and a viewer draws whatever it likes with the
+            // difference - one leaves the area blank, another fills it black.
+            if (image.Filter is { Length: > 0 } compressor)
+            {
+                int passThroughNumber = assembler.Allocate();
+                assembler.SetBody(passThroughNumber, PdfDocumentExporter.MakeStreamObject(
+                    image.Samples,
+                    $" /Type /XObject /Subtype /Image /Width {image.PixelWidth}" +
+                    $" /Height {image.PixelHeight} /BitsPerComponent {image.BitsPerComponent}" +
+                    $" /ColorSpace {ColorSpaceOf(image)}{smask} /Filter /{compressor}"));
+
+                _names[image] = name;
+                _entries.Add((name, passThroughNumber));
+                continue;
+            }
 
             // Both of these change what the picture looks like, and the samples are
             // written exactly as they arrived, so leaving either out would export a

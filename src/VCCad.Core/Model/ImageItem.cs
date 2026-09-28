@@ -48,6 +48,27 @@ public sealed class ImageItem : LayerItem
     public byte[] Samples { get; set; } = Array.Empty<byte>();
 
     /// <summary>
+    /// The compressor the samples are still in, when they were not decoded — <c>DCTDecode</c>
+    /// for a JPEG, and the others this reader cannot open.
+    ///
+    /// A JPEG cannot be decoded here, so its bytes are kept exactly as they arrived. They
+    /// only mean anything alongside the filter that produced them: written out as raw RGB
+    /// they are a fraction of the bytes a picture needs, and a viewer draws whatever it
+    /// likes — one engine left the area blank and the other filled it black. Null means the
+    /// bytes are samples.
+    /// </summary>
+    public string? Filter { get; set; }
+
+    /// <summary>
+    /// The compressor the soft mask's bytes are still in, when they were not decoded.
+    ///
+    /// Separate from <see cref="Filter"/> because a file may compress the two differently,
+    /// and a JPEG mask written out as raw grey is a mask no viewer can read — which is what
+    /// made one engine leave the picture out and another fill its place with black.
+    /// </summary>
+    public string? MaskFilter { get; set; }
+
+    /// <summary>
     /// Palette for <see cref="ImageColorSpace.Indexed"/>, three bytes per entry, or
     /// empty. Kept so an indexed image round-trips without being expanded.
     /// </summary>
@@ -93,6 +114,8 @@ public sealed class ImageItem : LayerItem
             BitsPerComponent = BitsPerComponent,
             ColorSpace = ColorSpace,
             Samples = (byte[])Samples.Clone(),
+            Filter = Filter,
+            MaskFilter = MaskFilter,
             Palette = (byte[])Palette.Clone(),
             Mask = (byte[])Mask.Clone(),
             Placement = Placement,

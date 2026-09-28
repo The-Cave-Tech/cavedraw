@@ -838,6 +838,34 @@ internal sealed class PdfContentImporter
     }
 
     /// <summary>
+    /// The compressor an image stream is still in, when this reader has no way to decode it.
+    ///
+    /// Flate is opened on the way in, so its bytes really are samples and no filter is
+    /// recorded. JPEG and JPEG2000 are not, so their bytes are passed through and the name
+    /// of the compression travels with them.
+    /// </summary>
+    private string? UnopenedFilter(Dictionary<string, object?> dict)
+    {
+        object? filter = _file.Resolve(dict.GetValueOrDefault("Filter"));
+        var names = filter switch
+        {
+            PdfName name => new[] { name.Value },
+            List<object?> list => list.OfType<PdfName>().Select(n => n.Value).ToArray(),
+            _ => Array.Empty<string>(),
+        };
+
+        foreach (string name in names)
+        {
+            if (name is "DCTDecode" or "JPXDecode" or "CCITTFaxDecode" or "JBIG2Decode" or "RunLengthDecode")
+            {
+                return name;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Records an image mask — a one-bit stencil painted in the current fill colour.
     ///
     /// Kept as an Indexed image of two palette entries rather than as a greyscale one,
@@ -952,6 +980,12 @@ internal sealed class PdfContentImporter
         (ImageColorSpace space, byte[] palette) = ResolveImageColorSpace(dict);
         byte[] samples = _file.GetStreamData(stream);
 
+        // A JPEG cannot be decoded here, so what came back is the compressed stream itself.
+        // Saying so on the image is what keeps it a picture: written out as raw samples it is
+        // a fifth of the bytes a 185x174 RGB image needs, and viewers make of that what they
+        // will — one drew nothing where it should be and another drew a black square.
+        string? compressor = UnopenedFilter(dict);
+
         // The declared colour space can be indirect, inherited or simply absent, and
         // getting it wrong is not subtle: CMYK samples read as RGB turn a pale magenta
         // tint into black. The byte count per pixel is unambiguous for 8-bit images, so
@@ -978,6 +1012,7 @@ internal sealed class PdfContentImporter
             ColorSpace = space,
             Palette = palette,
             Samples = samples,
+            Filter = compressor,
 
             // Both of these change what the picture looks like and neither is optional.
             // Decode inverts or remaps the samples; a colour-key Mask makes one colour
@@ -992,12 +1027,20 @@ internal sealed class PdfContentImporter
             byte[] mask = _file.GetStreamData(maskStream);
             image.Mask = mask;
 
+            Dictionary<string, object?>? maskDict = _file.ResolveDict(maskStream.Dict);
+
             // A 1-bit or sub-byte mask has to be widened before it can be used as alpha.
-            if (_file.ResolveDict(maskStream.Dict) is { } maskDict &&
+            if (maskDict is not null &&
                 maskDict.TryGetValue("BitsPerComponent", out object? mbpc) &&
                 (int)Math.Round(ToDouble(_file.Resolve(mbpc))) is > 0 and < 8 and var maskBits)
             {
                 image.Mask = ExpandMask(mask, width, height, maskBits);
+            }
+            else if (maskDict is not null)
+            {
+                // Left alone, so its compressor has to travel with it: a JPEG mask written as
+                // raw grey bytes is a mask no viewer can read.
+                image.MaskFilter = UnopenedFilter(maskDict);
             }
         }
 
