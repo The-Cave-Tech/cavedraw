@@ -289,6 +289,7 @@ internal sealed class PdfContentImporter
                 item.SourceFillCmyk = fill ? fillCmyk : null;
                 item.SourceStrokeCmyk = stroke ? strokeCmyk : null;
 
+                EndTextLine();
                 Attach(item);
                 items.Add(new PdfImportedItem(currentLayer, item));
             }
@@ -333,6 +334,7 @@ internal sealed class PdfContentImporter
                 case "Q":
                     if (stack.Count > 0)
                     {
+                        EndTextLine();
                         _clips.Clear();
                         _clips.AddRange(_clipStack.Pop());
                         (current, lineWidth, lineCap, lineJoin, miterLimit, dash,
@@ -808,6 +810,7 @@ internal sealed class PdfContentImporter
             new Point2D(stencil0.X, _pageHeight - stencil0.Y),
             new Point2D(stencil1.X, _pageHeight - stencil1.Y));
 
+        EndTextLine();
         Attach(image);
         items.Add(new PdfImportedItem(layer, image));
     }
@@ -903,6 +906,7 @@ internal sealed class PdfContentImporter
             new Point2D(corner0.X, _pageHeight - corner0.Y),
             new Point2D(corner1.X, _pageHeight - corner1.Y));
 
+        EndTextLine();
         Attach(image);
         items.Add(new PdfImportedItem(layer, image));
     }
@@ -1051,7 +1055,7 @@ internal sealed class PdfContentImporter
             FontSize = effectiveSize,
             Bold = bold,
             Italic = italic,
-            AdvanceWidth = MeasureAdvance(rawText, fontName, resources, effectiveSize, state),
+            AdvanceWidth = MeasureAdvance(rawText, fontName, resources, effectiveSize, state, composite),
             SourceFont = SourceFontName(fontName, resources),
             EmbeddedFont = embedded,
             RawCodes = embedded is not null ? rawText : null,
@@ -1062,8 +1066,128 @@ internal sealed class PdfContentImporter
         // The run is stored exactly as authored. A tiled PDF draws each label once per
         // sheet it touches and lets the page box clip it; rewriting the characters to
         // fit was tried and it butchered the labels. Clipping belongs at render time.
+
+        // Does this fragment continue the line the last one was on? If it starts where
+        // that one ended, along the same baseline and in the same colour, the two are one
+        // line of text that the file happened to split, and they belong in one block.
+        Point2D baselineModel = new(baseline.X, _pageHeight - baseline.Y);
+        double theta = -rotation;
+        Point2D right = new(Math.Cos(theta), Math.Sin(theta));
+        double advance = run.AdvanceWidth ?? 0.0;
+        Point2D end = new(
+            baselineModel.X + (advance * right.X),
+            baselineModel.Y + (advance * right.Y));
+
+        bool continues = _lastTextValid && _lastText is { } previous
+            && Math.Abs(previous.RotationRadians - rotation) < 1e-6
+            && previous.Color == color
+            && Math.Abs(baselineModel.X - _lastTextEnd.X) < 0.5
+            && Math.Abs(baselineModel.Y - _lastTextEnd.Y) < 0.5;
+
+        if (continues)
+        {
+            _lastText!.Runs.Add(run);
+            _lastTextEnd = end;
+            return;
+        }
+
         Attach(item);
         items.Add(new PdfImportedItem(layer, item));
+        _lastText = item;
+        _lastTextEnd = end;
+        _lastTextRotation = rotation;
+        _lastTextColor = color;
+        _lastTextValid = true;
+    }
+
+    /// <summary>
+    /// The advance of text set in a composite (Type0) font.
+    ///
+    /// Two bytes per code in an Identity-H document, so the codes are read as pairs rather
+    /// than as characters. Widths come from the descendant CIDFont's <c>/W</c>, which has
+    /// two forms — a list per starting code, or a range with one width — and fall back to
+    /// <c>/DW</c>, which defaults to 1000/1000 em.
+    /// </summary>
+    private double? MeasureCompositeAdvance(string text, Dictionary<string, object?> fontDict,
+        double effectiveSize, TextState? state)
+    {
+        object? descendants = _file.Resolve(fontDict.GetValueOrDefault("DescendantFonts"));
+        if (descendants is not List<object?> list || list.Count == 0 ||
+            _file.ResolveDict(list[0]) is not { } cidFont)
+        {
+            return null;
+        }
+
+        double fallback = _file.ResolveNumber(cidFont.GetValueOrDefault("DW")) ?? 1000.0;
+        List<object?>? w = _file.Resolve(cidFont.GetValueOrDefault("W")) as List<object?>;
+
+        // /W is a flat array of two shapes, so it is walked once into a lookup rather than
+        // scanned per code.
+        var widths = new Dictionary<int, double>();
+        if (w is not null)
+        {
+            int i = 0;
+            while (i < w.Count)
+            {
+                int first = (int)ToDouble(_file.Resolve(w[i]));
+                if (i + 1 < w.Count && _file.Resolve(w[i + 1]) is List<object?> run)
+                {
+                    for (int k = 0; k < run.Count; k++)
+                    {
+                        widths[first + k] = ToDouble(_file.Resolve(run[k]));
+                    }
+
+                    i += 2;
+                    continue;
+                }
+
+                if (i + 2 < w.Count)
+                {
+                    int last = (int)ToDouble(_file.Resolve(w[i + 1]));
+                    double width = ToDouble(_file.Resolve(w[i + 2]));
+                    for (int code = first; code <= last && code - first < 65536; code++)
+                    {
+                        widths[code] = width;
+                    }
+
+                    i += 3;
+                    continue;
+                }
+
+                break;
+            }
+        }
+
+        double total = 0;
+        int glyphs = 0;
+        int spaces = 0;
+
+        // Two bytes to a code. An odd trailing byte is a damaged string, not a character.
+        for (int at = 0; at + 1 < text.Length; at += 2)
+        {
+            int code = (text[at] << 8) | text[at + 1];
+            total += widths.TryGetValue(code, out double width) ? width : fallback;
+            glyphs++;
+            if (code == 32)
+            {
+                spaces++;
+            }
+        }
+
+        if (glyphs == 0)
+        {
+            return null;
+        }
+
+        double advance = total / 1000.0 * effectiveSize;
+
+        if (state is { } ts)
+        {
+            advance += (glyphs * ts.CharSpacing) + (spaces * ts.WordSpacing);
+            advance *= ts.HorizontalScale;
+        }
+
+        return advance;
     }
 
     /// <summary>
@@ -1082,11 +1206,27 @@ internal sealed class PdfContentImporter
         double CharSpacing, double WordSpacing, double HorizontalScale, double Rise);
 
     private double? MeasureAdvance(string text, string fontName,
-        Dictionary<string, object?> resources, double effectiveSize, TextState? state = null)
+        Dictionary<string, object?> resources, double effectiveSize, TextState? state = null,
+        bool composite = false)
     {
         if (_file.ResolveDict(resources.GetValueOrDefault("Font")) is not { } fonts ||
-            _file.ResolveDict(fonts.GetValueOrDefault(fontName)) is not { } fontDict ||
-            _file.Resolve(fontDict.GetValueOrDefault("Widths")) is not List<object?> widths)
+            _file.ResolveDict(fonts.GetValueOrDefault(fontName)) is not { } fontDict)
+        {
+            return null;
+        }
+
+        // A composite font has no /Widths. Its widths live in the descendant CIDFont as
+        // /W with a /DW default, and returning null for them left every run in a document
+        // of CID fonts with no advance at all — so the model had no width, the text could
+        // not be laid out, and one line arrived as a scatter of separately positioned
+        // fragments. That is the whole of the scrambled reading order on the Transparency
+        // Guide, whose fourteen fonts are all Type0.
+        if (composite || _file.Resolve(fontDict.GetValueOrDefault("Widths")) is not List<object?>)
+        {
+            return MeasureCompositeAdvance(text, fontDict, effectiveSize, state);
+        }
+
+        if (_file.Resolve(fontDict.GetValueOrDefault("Widths")) is not List<object?> widths)
         {
             return null;
         }
@@ -1809,6 +1949,26 @@ internal sealed class PdfContentImporter
     /// <summary>Whether the path just built is a clip, and by which rule.</summary>
     private bool _pendingClip;
     private FillRule _pendingClipRule = FillRule.NonZero;
+
+    /// <summary>
+    /// The text block the last show operation added, and where it ended in model space.
+    ///
+    /// A file may split one line across many show operations — the Transparency Guide
+    /// writes a single glyph per Tj, each in its own BT/ET, so a page of twenty-five lines
+    /// arrived as a hundred and thirty-one text objects and the reading order was whatever
+    /// order they happened to land in. Two fragments that continue each other along the
+    /// same baseline are one line, and merging them is what makes the block read as text
+    /// rather than as a scatter of glyphs.
+    /// </summary>
+    private TextItem? _lastText;
+
+    private Point2D _lastTextEnd;
+    private double _lastTextRotation;
+    private ColorRgb _lastTextColor;
+    private bool _lastTextValid;
+
+    /// <summary>Ends the current text line, so the next show starts a block of its own.</summary>
+    private void EndTextLine() => _lastTextValid = false;
 
     /// <summary>
     /// Records the clips in force onto an item as it is created. Clipping is applied at
