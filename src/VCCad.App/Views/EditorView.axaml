@@ -16,9 +16,16 @@
       <MenuItem Header="_File">
         <MenuItem Header="_New" Click="OnNew"/>
         <MenuItem Header="New _Artboard" Click="OnNewArtboard"/>
-        <MenuItem Header="_Import PDF…" Click="OnImportPdf"/>
+        <!-- We standardise on PDF, so this is Open, not Import: there is no other
+             format to import from. -->
+        <MenuItem Header="_Open…" Click="OnImportPdf" InputGesture="Ctrl+O"/>
+        <MenuItem Name="OpenRecentMenu" Header="Open _Recent">
+          <MenuItem Header="(nothing yet)" IsEnabled="False"/>
+        </MenuItem>
+        <MenuItem Header="_Close" Click="OnCloseDocument" InputGesture="Ctrl+W"/>
+        <Separator/>
         <MenuItem Header="_Open from Server…" Click="OnOpen"/>
-        <MenuItem Header="_Save to Server" Click="OnSave"/>
+        <MenuItem Header="_Save to Server" Click="OnSave" InputGesture="Ctrl+S"/>
         <Separator/>
         <MenuItem Header="_Export PDF…" Click="OnExportPdf"/>
         <Separator/>
@@ -208,6 +215,28 @@
                     Click="OnFontInstallAgree"/>
             <Button Name="FontInstallLater" Content="Not now"
                     Click="OnFontInstallLater"/>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+    </Grid>
+
+    <!-- Asking before throwing work away. Closing a document or quitting with unsaved
+         changes is the one place an editor must stop and ask. -->
+    <Grid Name="ConfirmOverlay" Grid.Row="0" Grid.RowSpan="3" IsVisible="False"
+          Background="#99000000">
+      <Border Background="{DynamicResource VcPanel}" BorderBrush="{DynamicResource VcBorder}"
+              BorderThickness="1" CornerRadius="8" Padding="20" MaxWidth="460"
+              HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel Spacing="12">
+          <TextBlock Name="ConfirmTitle" Text="Save changes?"
+                     FontWeight="SemiBold" FontSize="15" TextWrapping="Wrap"
+                     Foreground="{DynamicResource VcText}"/>
+          <TextBlock Name="ConfirmMessage" TextWrapping="Wrap"
+                     Foreground="{DynamicResource VcText}"/>
+          <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+            <Button Name="ConfirmSave" Content="Save" Click="OnConfirmSave"/>
+            <Button Name="ConfirmDiscard" Content="Discard" Click="OnConfirmDiscard"/>
+            <Button Name="ConfirmCancel" Content="Cancel" Click="OnConfirmCancel"/>
           </StackPanel>
         </StackPanel>
       </Border>

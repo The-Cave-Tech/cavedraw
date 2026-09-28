@@ -72,6 +72,18 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// it regardless.
     /// </summary>
     /// <summary>
+    /// Whether the document has been changed since it was last saved or opened.
+    ///
+    /// Closing or exiting with unsaved changes is the one place an editor must stop and
+    /// ask, and it can only ask if it knows. Any undoable edit sets this; saving, and
+    /// loading a document, clear it.
+    /// </summary>
+    public bool IsModified { get; private set; }
+
+    /// <summary>Records that the current state is on disk, so nothing needs saving.</summary>
+    public void MarkSaved() => IsModified = false;
+
+    /// <summary>
     /// The face new text is created with, set by the font picker when nothing is
     /// selected. Kept per session so switching documents does not carry a choice across.
     /// </summary>
@@ -1249,6 +1261,9 @@ public sealed class DocumentSession : INotifyPropertyChanged
     public void Execute(IUndoableCommand command)
     {
         _stack.Execute(command);
+
+        // Every undoable edit is an unsaved change until something writes it out.
+        IsModified = true;
         NotifyCanvas();
     }
 

@@ -138,11 +138,34 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public void NewDocument(string? name = null) => AddDocument(CadDocument.CreateDefault(name));
 
     /// <summary>Imports a PDF (vector content) as a new document tab.</summary>
-    public DocumentSession ImportPdf(byte[] pdfBytes)
+    public DocumentSession ImportPdf(byte[] pdfBytes, string? path = null)
     {
         CadDocument document = VCCad.Pdf.PdfImporter.Import(pdfBytes);
-        Status = $"Imported PDF ({document.Artboards.Count} page(s))";
-        return AddDocument(document);
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            document.Name = System.IO.Path.GetFileNameWithoutExtension(path);
+        }
+
+        Status = $"Opened {document.Name} ({document.Artboards.Count} page(s))";
+
+        DocumentSession session = AddDocument(document);
+
+        // An opened document matches what is on disk, so nothing needs saving yet.
+        session.MarkSaved();
+        return session;
+    }
+
+    /// <summary>Whether the active document has changes that are not on disk.</summary>
+    public bool IsActiveModified => _active.IsModified;
+
+    /// <summary>Closes the active document, keeping at least one open.</summary>
+    public void CloseActiveDocument() => CloseSession(_active);
+
+    /// <summary>Saves the active document to the server as a background action.</summary>
+    public void SaveActiveToServer()
+    {
+        _ = SaveToServerAsync();
+        _active.MarkSaved();
     }
 
     public void CloseSession(DocumentSession session)
@@ -233,6 +256,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     {
         byte[] pdf = VCCad.Pdf.PdfDocumentExporter.Export(Document);
         Status = $"Exported {pdf.Length:N0} bytes of PDF";
+
+        // Writing the document out is what "saved" means, so nothing is pending afterwards.
+        _active.MarkSaved();
         return pdf;
     }
 

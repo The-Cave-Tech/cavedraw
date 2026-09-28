@@ -208,6 +208,7 @@ public partial class EditorView : UserControl
         PromptForMissingFonts(force: true);
         _textToolbar = new TextToolbar(this);
         _textToolbar.Sync();
+        RebuildRecentMenu();
     }
 
     /// <summary>The contextual type controls, shown while a text block is edited.</summary>
@@ -726,7 +727,15 @@ public partial class EditorView : UserControl
             await using Stream stream = await files[0].OpenReadAsync();
             using var buffer = new MemoryStream();
             await stream.CopyToAsync(buffer);
-            _viewModel.ImportPdf(buffer.ToArray());
+
+            string? path = files[0].TryGetLocalPath();
+            _viewModel.ImportPdf(buffer.ToArray(), path);
+
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                RecentFiles.Add(path);
+                RebuildRecentMenu();
+            }
         }
         catch (Exception ex)
         {
@@ -737,6 +746,130 @@ public partial class EditorView : UserControl
     }
 
     private void OnOpen(object? sender, RoutedEventArgs e) => FireAndForget(_viewModel.LoadFromServerAsync(), "Opening…");
+
+    // ------------------------------------------------------------------
+    // Recent files, closing, and asking before discarding work
+    // ------------------------------------------------------------------
+
+    /// <summary>Where the pending confirmation should go once the person answers.</summary>
+    private Action? _pendingConfirm;
+
+    /// <summary>Rebuilds File → Open Recent from the remembered paths.</summary>
+    private void RebuildRecentMenu()
+    {
+        MenuItem? menu = this.FindControl<MenuItem>("OpenRecentMenu");
+        if (menu is null)
+        {
+            return;
+        }
+
+        menu.Items.Clear();
+        IReadOnlyList<string> paths = RecentFiles.Load();
+
+        if (paths.Count == 0)
+        {
+            menu.Items.Add(new MenuItem { Header = "(nothing yet)", IsEnabled = false });
+            return;
+        }
+
+        foreach (string path in paths)
+        {
+            var item = new MenuItem { Header = Path.GetFileName(path) };
+            ToolTip.SetTip(item, path);
+            string captured = path;
+
+            item.Click += async (_, _) =>
+            {
+                try
+                {
+                    byte[] bytes = await File.ReadAllBytesAsync(captured);
+                    _viewModel.ImportPdf(bytes, captured);
+                    RebuildRecentMenu();
+                }
+                catch (Exception ex)
+                {
+                    StatusText.Text = $"Could not open {captured}: {ex.Message}";
+
+                    // A path that no longer opens should stop being offered.
+                    RecentFiles.Remove(captured);
+                    RebuildRecentMenu();
+                }
+
+                UpdateStatus();
+            };
+
+            menu.Items.Add(item);
+        }
+
+        menu.Items.Add(new Separator());
+        var clear = new MenuItem { Header = "Clear the list" };
+        clear.Click += (_, _) =>
+        {
+            foreach (string path in RecentFiles.Load())
+            {
+                RecentFiles.Remove(path);
+            }
+
+            RebuildRecentMenu();
+        };
+        menu.Items.Add(clear);
+    }
+
+    /// <summary>
+    /// Asks before doing something that would lose unsaved changes. The action runs only
+    /// if the person chooses to save it first, or to discard it deliberately.
+    /// </summary>
+    private void AskBeforeDiscarding(string title, string message, Action proceed)
+    {
+        if (!_viewModel.ActiveSession.IsModified)
+        {
+            proceed();
+            return;
+        }
+
+        _pendingConfirm = proceed;
+        this.FindControl<TextBlock>("ConfirmTitle")!.Text = title;
+        this.FindControl<TextBlock>("ConfirmMessage")!.Text = message;
+        this.FindControl<Grid>("ConfirmOverlay")!.IsVisible = true;
+    }
+
+    private void CloseConfirmOverlay()
+    {
+        this.FindControl<Grid>("ConfirmOverlay")!.IsVisible = false;
+        _pendingConfirm = null;
+    }
+
+    private void OnConfirmSave(object? sender, RoutedEventArgs e)
+    {
+        Action? proceed = _pendingConfirm;
+        CloseConfirmOverlay();
+        _viewModel.SaveActiveToServer();
+        proceed?.Invoke();
+    }
+
+    private void OnConfirmDiscard(object? sender, RoutedEventArgs e)
+    {
+        Action? proceed = _pendingConfirm;
+        CloseConfirmOverlay();
+        proceed?.Invoke();
+    }
+
+    private void OnConfirmCancel(object? sender, RoutedEventArgs e) => CloseConfirmOverlay();
+
+    private void OnCloseDocument(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel.Sessions.Count == 0)
+        {
+            return;
+        }
+
+        string name = _viewModel.ActiveSession.Document.Name;
+        AskBeforeDiscarding(
+            "Save changes?",
+            $"\"{name}\" has unsaved changes, and closing it will lose them.",
+            () => _viewModel.CloseActiveDocument());
+    }
+
     private void OnSave(object? sender, RoutedEventArgs e) => FireAndForget(_viewModel.SaveToServerAsync(), "Saving…");
     private void OnUndo(object? sender, RoutedEventArgs e) => _viewModel.Undo();
     private void OnRedo(object? sender, RoutedEventArgs e) => _viewModel.Redo();

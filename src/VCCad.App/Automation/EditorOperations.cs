@@ -8,6 +8,7 @@ using VCCad.App.Controls;
 using VCCad.App.Fonts;
 using VCCad.Pdf;
 using VCCad.App.ViewModels;
+using VCCad.Core.Commands;
 using VCCad.Core.Model;
 using VCCad.Core.Serialization;
 using VCCad.Geometry;
@@ -2251,7 +2252,11 @@ public static class EditorOperations
             layer = RequireLayer(ctx.Document, layerId);
         }
 
-        layer.AddItem(item);
+        // Through the command stack, not straight onto the layer: a shape a person draws
+        // can be undone, so one the assistant creates must be too - and an edit that
+        // bypasses the stack never marks the document as having unsaved changes, so the
+        // save prompt would not fire for it.
+        ctx.Session.Execute(new AddItemCommand(layer, item));
         ctx.Session.SelectObject(item);
         ctx.ViewModel.NotifyDocumentChanged();
         return DescribeOne(item);
@@ -2402,6 +2407,10 @@ public static class EditorOperations
         objects = AllItems(ctx.Document).Count(),
         selected = ctx.Session.SelectedObjects.Select(i => i.Id).ToArray(),
         canUndo = true,
+
+        // Unsaved changes decide whether closing or exiting has to ask first, so how much
+        // there is to lose should be visible rather than inferred.
+        modified = ctx.Session.IsModified,
     };
 
     private static IEnumerable<object> Describe(IEnumerable<LayerItem> items) => items.Select(DescribeOne);
