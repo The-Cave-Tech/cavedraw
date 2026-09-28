@@ -1619,6 +1619,107 @@ public static class EditorOperations
             "",
             (ctx, _) => FontReport(ctx));
 
+        Add("fonts.families",
+            "The families the font chooser offers, each with the faces it really has and how " +
+            "many there are. This is the picker's own list, so a driver can check what the " +
+            "chooser shows without seeing it - every row is drawn in its own face, and a face " +
+            "is listed only when the font itself provides it rather than one the renderer " +
+            "would fake.",
+            "category?:all|favourites (default all), max?:number (default 500), search?:string",
+            (ctx, p) =>
+            {
+                int max = p.TryGetProperty("max", out JsonElement mv) && mv.TryGetInt32(out int m)
+                    ? Math.Clamp(m, 1, 5000)
+                    : 500;
+
+                string? search = p.GetString("search");
+                bool favouritesOnly = string.Equals(p.GetString("category"), "favourites",
+                    StringComparison.OrdinalIgnoreCase);
+
+                IEnumerable<FontFamilyEntry> families = FontCatalog.Families();
+
+                if (favouritesOnly)
+                {
+                    families = families.Where(f => FontFavourites.Shared.IsFavourite(f.Name));
+                }
+
+                if (!string.IsNullOrWhiteSpace(search))
+                {
+                    families = families.Where(f => f.Name.Contains(
+                        search, StringComparison.OrdinalIgnoreCase));
+                }
+
+                List<FontFamilyEntry> list = families.ToList();
+
+                return new
+                {
+                    count = list.Count,
+                    shown = Math.Min(list.Count, max),
+                    category = favouritesOnly ? "favourites" : "all",
+                    favouriteCount = FontFavourites.Shared.Count,
+                    families = list.Take(max).Select(f => new
+                    {
+                        name = f.Name,
+                        label = f.Label,
+                        faceCount = f.FaceCount,
+                        standard = f.IsStandard,
+                        favourite = FontFavourites.Shared.IsFavourite(f.Name),
+                        faces = f.Faces.Select(face => new
+                        {
+                            style = face.Style,
+                            bold = face.Bold,
+                            italic = face.Italic,
+                        }).ToArray(),
+                    }).ToArray(),
+                };
+            });
+
+        Add("fonts.faces",
+            "The faces one family really has, as the chooser lists them when the family is " +
+            "opened.",
+            "family:string",
+            (ctx, p) =>
+            {
+                string family = p.GetString("family")
+                    ?? throw new EditorOperationException("Parameter 'family' is required.");
+
+                IReadOnlyList<FontFace> faces = FontCatalog.FacesOf(family);
+
+                return new
+                {
+                    family,
+                    faceCount = faces.Count,
+                    favourite = FontFavourites.Shared.IsFavourite(family),
+                    faces = faces.Select(f => new
+                    {
+                        style = f.Style,
+                        bold = f.Bold,
+                        italic = f.Italic,
+                    }).ToArray(),
+                };
+            });
+
+        Add("fonts.favourite",
+            "Star a font family, or unstar it. Favourites last between sessions, which is the " +
+            "point of them: a list of two hundred families is not one anybody reads to the end.",
+            "family:string, favourite?:bool (omit to toggle)",
+            (ctx, p) =>
+            {
+                string family = p.GetString("family")
+                    ?? throw new EditorOperationException("Parameter 'family' is required.");
+
+                bool? wanted = p.TryGetProperty("favourite", out JsonElement fv) &&
+                               fv.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? fv.GetBoolean()
+                    : null;
+
+                bool starred = wanted is { } state
+                    ? FontFavourites.Shared.Set(family, state)
+                    : FontFavourites.Shared.Toggle(family);
+
+                return new { family, favourite = starred, count = FontFavourites.Shared.Count };
+            });
+
         Add("tool.set", "Select the active tool, as clicking it in the toolbar would.",
             "tool:string (select|node|pen|rectangle|ellipse|artboard|text)",
             (ctx, p) =>
