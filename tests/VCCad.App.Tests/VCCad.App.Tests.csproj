@@ -15,6 +15,9 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\VCCad.App\VCCad.App.csproj" />
+    <!-- The desktop host is referenced only so its entry point and lifetime
+         bootstrap can be smoke tested headlessly (DesktopBootstrapTests). -->
+    <ProjectReference Include="..\..\src\VCCad.App.Desktop\VCCad.App.Desktop.csproj" />
     <ProjectReference Include="..\..\src\VCCad.Pdf\VCCad.Pdf.csproj" />
     <ProjectReference Include="..\..\src\VCCad.Core\VCCad.Core.csproj" />
     <ProjectReference Include="..\..\src\VCCad.Geometry\VCCad.Geometry.csproj" />

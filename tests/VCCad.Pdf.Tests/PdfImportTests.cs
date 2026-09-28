@@ -40,8 +40,14 @@ public class PdfImportTests
         Assert.Equal(400.0, doc.Artboards[0].Height, 6);
         Assert.Equal(600.0, doc.Artboards[1].Width, 6);
         Assert.Equal(200.0, doc.Artboards[1].Height, 6);
-        // Pages are laid out left-to-right, not overlapping.
-        Assert.True(doc.Artboards[1].X > doc.Artboards[0].X);
+
+        // Pages are laid out in reading order without overlapping. The axis is not
+        // fixed: the layout picks the grid shape closest to a working area, so two
+        // very differently-shaped pages stack (600x640) rather than form a 940x400
+        // strip. Two equal A4 pages do sit side by side — see PageLayoutTests.
+        Assert.False(doc.Artboards[0].Bounds.Intersects(doc.Artboards[1].Bounds));
+        Assert.Equal(new Point2D(0, 0), new Point2D(doc.Artboards[0].X, doc.Artboards[0].Y));
+        Assert.True(doc.Artboards[1].X > 0 || doc.Artboards[1].Y > 0);
     }
 
     [Fact]

@@ -36,17 +36,37 @@ public class EmbeddedFontCanvasTests
         Assert.NotEmpty(fonts);
         EmbeddedFontManager.Register(fonts);
 
+        Assert.True(EmbeddedFontManager.IsInitialized,
+            "Avalonia never initialised the embedded font collection, so no imported " +
+            "programme can resolve and the canvas would draw through a fallback face.");
+        // The registry is process-wide, so the meaningful property is that this
+        // document's programmes are all present — not an exact global count.
+        Assert.True(EmbeddedFontManager.RegisteredCount >= fonts.Count,
+            $"registered {EmbeddedFontManager.RegisteredCount} programme(s), expected at least {fonts.Count}");
+
         int resolved = 0;
+        var unresolved = new List<string>();
         foreach (EmbeddedFont font in fonts)
         {
-            if (FontManager.Current.TryGetGlyphTypeface(
-                    new Typeface(new FontFamily(font.FamilyName)), out IGlyphTypeface gtf) && gtf.GlyphCount > 0)
+            if (EmbeddedFontManager.TryGetEmbeddedGlyphTypeface(font.FamilyName, out IGlyphTypeface gtf) &&
+                gtf.GlyphCount > 0)
             {
                 resolved++;
             }
+            else
+            {
+                unresolved.Add($"{font.FamilyName} ({Convert.ToHexString(font.Program.Take(4).ToArray())})");
+            }
         }
 
-        Assert.Equal(fonts.Count, resolved);
+        // Every programme the platform *can* load must resolve, and every glyph id
+        // must be valid for it. Programmes it cannot load must be reported as
+        // unresolved so the canvas substitutes readable text — never silently
+        // resolved to a fallback face, which is what garbled the canvas.
+        Assert.True(resolved >= 1, "no embedded programme resolved at all");
+        Assert.True(resolved == fonts.Count,
+            $"{fonts.Count - resolved} embedded programme(s) did not resolve: {string.Join(", ", unresolved)}");
+        Assert.DoesNotContain(fonts, f => !EmbeddedFontManager.IsRegistered(f.FamilyName));
 
         // Every computed glyph id must be a valid index in the loaded typeface,
         // and the drawn runs must be non-empty.
@@ -60,11 +80,48 @@ public class EmbeddedFontCanvasTests
                     continue;
                 }
 
-                Assert.True(FontManager.Current.TryGetGlyphTypeface(
-                    new Typeface(new FontFamily(run.EmbeddedFont.FamilyName)), out IGlyphTypeface gtf));
+                if (!EmbeddedFontManager.TryGetEmbeddedGlyphTypeface(
+                        run.EmbeddedFont.FamilyName, out IGlyphTypeface gtf))
+                {
+                    continue; // canvas substitutes the decoded text for this run
+                }
+
                 Assert.All(ids, id => Assert.True(id < gtf.GlyphCount,
                     $"glyph {id} out of range for {run.EmbeddedFont.FamilyName} ({gtf.GlyphCount})"));
             }
+        }
+
+        if (unresolved.Count > 0)
+        {
+            // Documented gap: bare CFF programmes are not an sfnt container, so the
+            // platform font manager rejects them. They currently render substituted.
+            Assert.True(
+                unresolved.All(u => u.Contains("01000402")),
+                "unexpected unresolved programmes (not bare CFF): " + string.Join(", ", unresolved));
+        }
+    }
+
+    /// <summary>
+    /// The canvas draws imported text by glyph id, so it must resolve the
+    /// programme it imported rather than let the global font manager answer with
+    /// a fallback face. Avalonia's global lookup reports success for an unknown
+    /// family (returning the default typeface), which indexed the imported glyph
+    /// ids into an unrelated font and painted garbage on the Win32 backend.
+    /// </summary>
+    [AvaloniaFact]
+    public void UnknownFamilyIsRejectedRatherThanFallingBack()
+    {
+        Assert.False(EmbeddedFontManager.TryGetEmbeddedGlyphTypeface(
+            "VCCadEmbDefinitelyNotRegistered", out _));
+
+        // The global manager is happy to answer with something else — that is the
+        // hazard the strict lookup exists to avoid.
+        bool globalFallback = FontManager.Current.TryGetGlyphTypeface(
+            new Typeface(new FontFamily("VCCadEmbDefinitelyNotRegistered")), out IGlyphTypeface? fallback);
+
+        if (globalFallback)
+        {
+            Assert.NotNull(fallback);
         }
     }
 }

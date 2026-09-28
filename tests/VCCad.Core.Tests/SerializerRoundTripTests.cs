@@ -104,14 +104,14 @@ public class SerializerRoundTripTests
     {
         CadDocument doc = CadDocument.CreateDefault("text-doc");
         var text = new TextItem { Name = "caption", Origin = new Point2D(20, 40), Color = ColorRgb.Blue };
-        text.Runs.Add(new TextRun { Text = "Hello", FontFamily = "DejaVu Serif", FontSize = 18, Bold = true });
+        text.Runs.Add(new TextRun { Text = "Hello", FontFamily = "Times-Roman", FontSize = 18, Bold = true });
         doc.Artboards[0].Layers[0].AddItem(text);
 
         CadDocument revived = VccadDocumentSerializer.Deserialize(VccadDocumentSerializer.Serialize(doc));
         var copy = (TextItem)revived.Artboards[0].Layers[0].Children[0];
 
         Assert.Equal("Hello", copy.PlainText);
-        Assert.Equal("DejaVu Serif", copy.Runs[0].FontFamily);
+        Assert.Equal("Times-Roman", copy.Runs[0].FontFamily);
         Assert.Equal(18.0, copy.Runs[0].FontSize, 9);
         Assert.True(copy.Runs[0].Bold);
         Assert.Equal(ColorRgb.Blue, copy.Color);
