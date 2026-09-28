@@ -1,0 +1,655 @@
+{
+ "corpus_root": "ai",
+ "count": 66,
+ "failures": [],
+ "fixtures": [
+  {
+   "blocks": 0,
+   "bytes": 1659090,
+   "file": "brush_divider.ai",
+   "format": "postscript-only",
+   "payload_bytes": 1659090,
+   "payload_sha256": "5edd714df0baca77a49486535e81e02f9ec230ca9eba51ccd153863f61606121",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 1754153,
+   "file": "brush_stroke.ai",
+   "format": "postscript-only",
+   "payload_bytes": 1754153,
+   "payload_sha256": "45264293b0fa123725174c115247c40361eee21964c23b063423d4b061469bd6",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 12,
+   "bytes": 1205562,
+   "file": "circle.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.1.1\r\n%%For: (Chr",
+   "payload_bytes": 2228224,
+   "payload_sha256": "0e2794fe75d0e7a4350433d09be90b918211d0216d105bcbf2c4b7182c59b48e",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 1,
+   "bytes": 43037,
+   "file": "cmyk_rectangle.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.1.1\r\n%%For: (Chr",
+   "payload_bytes": 121938,
+   "payload_sha256": "ed78a2458d98e43da0fcd491cd5e41290c65d2831105b3a833d7bbc1bb52b78e",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 23,
+   "bytes": 1256883,
+   "file": "empty_cs.ai",
+   "format": "ai9-zlib",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 11.0\r\n%%AI8_CreatorVersion: 27.3.1\r\n%%For: (Jon",
+   "payload_bytes": 1394559,
+   "payload_sha256": "824b413728e40dbae754b3b2f4d6b28d01c161094f0b1ab94f4cb859a40ace4f",
+   "prolog_bytes": 67
+  },
+  {
+   "blocks": 18,
+   "bytes": 1103064,
+   "file": "empty_cs2.ai",
+   "format": "ai12-zlib",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 12.0\r\n%%AI8_CreatorVersion: 27.3.1\r\n%%For: (Jon",
+   "payload_bytes": 2096204,
+   "payload_sha256": "679c896233e149d5f07b125d1f4b37124ea813c0cd35aa8a9878023e2ad65897",
+   "prolog_bytes": 67
+  },
+  {
+   "blocks": 0,
+   "bytes": 996339,
+   "file": "fill_stroke_test.ai",
+   "format": "postscript-only",
+   "payload_bytes": 996339,
+   "payload_sha256": "66fbe8cbf9f893d7a4bceddac30dac28d5f485224c280e52ab11670319b62fe0",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 993967,
+   "file": "fill_stroke_test_cc.ai",
+   "format": "postscript-only",
+   "payload_bytes": 993967,
+   "payload_sha256": "c3d7e775587afba3b8be9c9d1a10b364a96cd239899f2d252087d805bdbca0a1",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 959251,
+   "file": "fill_stroke_test_cs.ai",
+   "format": "postscript-only",
+   "payload_bytes": 959251,
+   "payload_sha256": "1382f74b4331f3488a88841e5b67d3272820bbc69562c15db376164e797a57aa",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 5,
+   "bytes": 352039,
+   "file": "flowtext.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.3.1\r\n%%For: (Jon",
+   "payload_bytes": 1515356,
+   "payload_sha256": "ca5f2de722e5d62240fc99e61d401113cf7bf2e1c45ee8e7ece844bb8a7eab9a",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 3,
+   "bytes": 222618,
+   "file": "gradient_linear.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 29.3.1\r\n%%For: (Man",
+   "payload_bytes": 1056328,
+   "payload_sha256": "876f4deafb4ca9a16de599bbf53de2001428799e2be4710752f333d1fd5fdecc",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 3,
+   "bytes": 240256,
+   "file": "gradient_linear_random_test.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 29.3.1\r\n%%For: (Man",
+   "payload_bytes": 1031190,
+   "payload_sha256": "99cbbabae5686e7c483c2a8ed1a87b821ef0eb4c60d5ef96ae4c2885ee68fef4",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 3,
+   "bytes": 229887,
+   "file": "gradient_radial.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 29.3.1\r\n%%For: (Man",
+   "payload_bytes": 994905,
+   "payload_sha256": "96c509728d57f244d96a5375882ac04eaee7ced9cf13728b51e729b85cca88d2",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 3,
+   "bytes": 227664,
+   "file": "gradient_radial_origin.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 29.3.1\r\n%%For: (Man",
+   "payload_bytes": 1071103,
+   "payload_sha256": "900d73937064d9d9e4e533cd5541ab68fd21229526099db6f0a132523c7d5141",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 3,
+   "bytes": 240686,
+   "file": "gradient_radial_random_test.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 29.3.1\r\n%%For: (Man",
+   "payload_bytes": 917504,
+   "payload_sha256": "87ccf74c9d78a596bf8b10e94d8a87b2bc9ed45498ab332a02198c461d58c731",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 3,
+   "bytes": 219757,
+   "file": "grid.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 29.2.1\r\n%%For: (Man",
+   "payload_bytes": 955611,
+   "payload_sha256": "041776f1642a359c91ef61dd1b64eacc47c2e383407b2ff49aa2e08ab01ca396",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 3,
+   "bytes": 220219,
+   "file": "grid2.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 29.2.1\r\n%%For: (Man",
+   "payload_bytes": 955863,
+   "payload_sha256": "4c6fef420f6da8916d784a05031bb2279ae9a44790dd07be4c37ca5aa7cf2cc7",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 3,
+   "bytes": 223838,
+   "file": "guide_styles.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 29.2.1\r\n%%For: (Man",
+   "payload_bytes": 955027,
+   "payload_sha256": "cd6b807d3e039c4111eb922ae0cba02002611e1e8071c63c3ca1656c9e504b1b",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 3,
+   "bytes": 220699,
+   "file": "guides.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 29.2.1\r\n%%For: (Man",
+   "payload_bytes": 955512,
+   "payload_sha256": "6c73d9e29c1b41082829d1cf73737f07aab230e53f272e64e72d2d8d1be06c6f",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 3351264,
+   "file": "image_linked.ai",
+   "format": "postscript-only",
+   "payload_bytes": 3351264,
+   "payload_sha256": "1a908c422378d15c5031b62f8a900a68f962aa3be6a59c52d0fdbcccb261d442",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 414680,
+   "file": "image_linked_ai8.ai",
+   "format": "postscript-only",
+   "payload_bytes": 414680,
+   "payload_sha256": "68b7584dd765c3dc3d37e81e8dbe5c9c2ce8cf586b3241ff4e58f63dbc4a6663",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 12,
+   "bytes": 1204269,
+   "file": "irregular_closed_shape.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.1.1\r\n%%For: (Chr",
+   "payload_bytes": 2269853,
+   "payload_sha256": "18f1d09eb8caace9ad1ed371f212c1f443a562f85c8192708fcf408254fab4ad",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 12,
+   "bytes": 1207988,
+   "file": "irregular_line.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.1.1\r\n%%For: (Chr",
+   "payload_bytes": 2269882,
+   "payload_sha256": "cb2438cb7c5336c2c9498db3a95a3c3c7ee4c95f8efb01de8953faf99c519547",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 12,
+   "bytes": 1195202,
+   "file": "layers_and_sublayers.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.3.1\r\n%%For: (Jon",
+   "payload_bytes": 2271798,
+   "payload_sha256": "bfad8ab48724678315ad1d5498986f7ccba28b1182a48eadb3848eb0a258a2d4",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 2244164,
+   "file": "layers_and_sublayers_extracted.ai",
+   "format": "postscript-only",
+   "payload_bytes": 2244164,
+   "payload_sha256": "d19db71fa05a952e7477c9d6c669bc3f2a062cfc69a87086be667f6e5d939b20",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 12,
+   "bytes": 1194063,
+   "file": "line_broken_in_middle.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.1.1\r\n%%For: (Chr",
+   "payload_bytes": 2269793,
+   "payload_sha256": "8c34971f434a2c340f84e49984b92df125b1d75aa49301a4df895f060d011920",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 978622,
+   "file": "live_paint.ai",
+   "format": "postscript-only",
+   "payload_bytes": 978622,
+   "payload_sha256": "5fb73743a38a81a08675eb6a8b12f06cb55b92f588ea711289c75b5e3edbefdb",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 3,
+   "bytes": 220012,
+   "file": "opacity.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 29.2.1\r\n%%For: (Man",
+   "payload_bytes": 992165,
+   "payload_sha256": "15ec49bac9ad5815f54e887c445c0606301cd83959f177afbe3c7af4018c8673",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 16,
+   "bytes": 393641,
+   "file": "opacity_cs.ai",
+   "format": "ai9-zlib",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 11.0\r\n%%AI8_CreatorVersion: 29.2.1\r\n%%For: (Man",
+   "payload_bytes": 963036,
+   "payload_sha256": "62e570f39eca40833925b9f27c9c36ad10345ddf91b679e6d258a4bbdbd6849d",
+   "prolog_bytes": 9356
+  },
+  {
+   "blocks": 0,
+   "bytes": 2347504,
+   "file": "opacity_group_50_rectangle_40_rectangle_30.ai",
+   "format": "postscript-only",
+   "payload_bytes": 2347504,
+   "payload_sha256": "afa4a91cb40df9836800acbac84b94e1a46048569b3166e1d6a8bb7c359ef690",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 2346217,
+   "file": "opacity_layer_50_rectangle_45.ai",
+   "format": "postscript-only",
+   "payload_bytes": 2346217,
+   "payload_sha256": "cb0395a80beadc56bbb9ceaee005bd3ddf84cc445a6878aeaa25365c071807a9",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 2347452,
+   "file": "opacity_layer_70_layer_60_rectangle_40x2.ai",
+   "format": "postscript-only",
+   "payload_bytes": 2347452,
+   "payload_sha256": "6c3bccf67390d80950b5ad19ed51712e920e42bc39118279b5bb170a2c502b70",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 34,
+   "bytes": 1062861,
+   "file": "VectorApple.ai",
+   "format": "ai9-zlib",
+   "head": "%!PS-Adobe-3.0 \r%%Creator: Adobe Illustrator(R) 11.0\r%%AI8_CreatorVersion: 14.0.0\r%%For: (Ray iM",
+   "payload_bytes": 2113253,
+   "payload_sha256": "8dc36d732fc45610ab3e72959b485f8f70bf38ec2d327071cdb924b0ae132776",
+   "prolog_bytes": 18705
+  },
+  {
+   "blocks": 3,
+   "bytes": 204049,
+   "file": "one.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r%%Creator: Adobe Illustrator(R) 24.0\r%%AI8_CreatorVersion: 24.1.3\r%%For: (macmin",
+   "payload_bytes": 825317,
+   "payload_sha256": "a5ba5ab9568e43ee8822c614f55585ff3dbedab8e4a01d165aa99c691eb18240",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 2,
+   "bytes": 211072,
+   "file": "raster_ai8.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.4.1\r\n%%For: (Jon",
+   "payload_bytes": 3730312,
+   "payload_sha256": "d6215ea4be3d5669f637e58667a524319beb731a441a31e7b3a91aaa0a9362ed",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 32,
+   "bytes": 3838047,
+   "file": "raster_stretched.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 29.3.1\r\n%%For: (Anu",
+   "payload_bytes": 5094028,
+   "payload_sha256": "a1297fd1b65d9521dc47b5e80ab8e5936cfa2859ea212ed06985fe849f572aee",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 5059169,
+   "file": "raster_v2020.ai",
+   "format": "postscript-only",
+   "payload_bytes": 5059169,
+   "payload_sha256": "efb40b3ecac82fd012cfb5768f170ca730c2b561c1f4949f23bac84ad0cfdda8",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 12,
+   "bytes": 1200045,
+   "file": "rectangle-rounded-corners-all-different.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.4.0\r\n%%For: (Mak",
+   "payload_bytes": 2271579,
+   "payload_sha256": "f5bcb0f09ef03a41dde8d8b49ba76b65c6eb4cb48aa9e99676495ca4d2d389c6",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 12,
+   "bytes": 1199631,
+   "file": "rectangle.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.1.1\r\n%%For: (Chr",
+   "payload_bytes": 2270852,
+   "payload_sha256": "eb7207c2d9a057fdbbcd96293924ba2aa9b4e69d3740acbc9802da4565da2b8d",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 12,
+   "bytes": 1200783,
+   "file": "rectangle_with_rounded_corners.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.1.1\r\n%%For: (Chr",
+   "payload_bytes": 2271101,
+   "payload_sha256": "48ccf838e0547170a179a6ed21a9a350af9ae6702c046f472eea33b1c1aeabcc",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 1,
+   "bytes": 44244,
+   "file": "rgb_rectangle.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.1.1\r\n%%For: (Chr",
+   "payload_bytes": 122096,
+   "payload_sha256": "de35b1a1dde3c8bd4fd9c8bfccf3a05ce228a1621636fe79cce9520bebafd4cc",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 6,
+   "bytes": 360655,
+   "file": "simple_cc_legacy.ai",
+   "format": "ai12-zlib",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 17.0\r\n%%AI8_CreatorVersion: 26.1.0\r\n%%For: (Ada",
+   "payload_bytes": 846822,
+   "payload_sha256": "cdf0065177a46e151327896426003db0848125dff3a50897fb44b5598bf47482",
+   "prolog_bytes": 6653
+  },
+  {
+   "blocks": 13,
+   "bytes": 367824,
+   "file": "simple_cs.ai",
+   "format": "ai9-zlib",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 11.0\r\n%%AI8_CreatorVersion: 26.1.0\r\n%%For: (Ada",
+   "payload_bytes": 781381,
+   "payload_sha256": "19711f67db83b3bf76f3a9281cb8c35cc485464b1619463e9c5e8dec687f9d48",
+   "prolog_bytes": 6643
+  },
+  {
+   "blocks": 6,
+   "bytes": 330675,
+   "file": "simple_cs2.ai",
+   "format": "ai12-zlib",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 12.0\r\n%%AI8_CreatorVersion: 26.1.0\r\n%%For: (Ada",
+   "payload_bytes": 776498,
+   "payload_sha256": "e96eab7fdb4dfd9565253923402b720f9a71e12f463407b9c3c8560767b4f156",
+   "prolog_bytes": 6643
+  },
+  {
+   "blocks": 6,
+   "bytes": 331203,
+   "file": "simple_cs3.ai",
+   "format": "ai12-zlib",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 13.0\r\n%%AI8_CreatorVersion: 26.1.0\r\n%%For: (Ada",
+   "payload_bytes": 776713,
+   "payload_sha256": "3bfdba0668e9db3bc2d6fd59637bf8e4af2d857839742e53b111aff004ea4cb6",
+   "prolog_bytes": 6643
+  },
+  {
+   "blocks": 6,
+   "bytes": 329834,
+   "file": "simple_cs4.ai",
+   "format": "ai12-zlib",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 14.0\r\n%%AI8_CreatorVersion: 26.1.0\r\n%%For: (Ada",
+   "payload_bytes": 770444,
+   "payload_sha256": "ce2803d8b0d8ab065920515e051ea6421c65f74378ec3309b97e1ee633e2b9c9",
+   "prolog_bytes": 6643
+  },
+  {
+   "blocks": 6,
+   "bytes": 330422,
+   "file": "simple_cs5.ai",
+   "format": "ai12-zlib",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 15.0\r\n%%AI8_CreatorVersion: 26.1.0\r\n%%For: (Ada",
+   "payload_bytes": 773146,
+   "payload_sha256": "786d345557dfa73082f265c27d7595ab500ae7d3b4a781b829fb4c66da4399ca",
+   "prolog_bytes": 6643
+  },
+  {
+   "blocks": 6,
+   "bytes": 331424,
+   "file": "simple_cs6.ai",
+   "format": "ai12-zlib",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 16.0\r\n%%AI8_CreatorVersion: 26.1.0\r\n%%For: (Ada",
+   "payload_bytes": 777034,
+   "payload_sha256": "4c8cbc794835bbd3b844c325e26717fd2b4e8a349f08dc859c1c1bb9b01124e7",
+   "prolog_bytes": 6643
+  },
+  {
+   "blocks": 3,
+   "bytes": 280149,
+   "file": "simple_raster.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.4.1\r\n%%For: (Jon",
+   "payload_bytes": 4247614,
+   "payload_sha256": "a433a207dc5a45409db5b04ef05336b460277d9968dc96fac109324b7090c0e0",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 988572,
+   "file": "simple_shapes.ai",
+   "format": "postscript-only",
+   "payload_bytes": 988572,
+   "payload_sha256": "bf4e49291ec8aca6ed10dd7e5df78712eb33bc8ea127e9d304da6d5e4fa32084",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 988056,
+   "file": "simple_shapes_cc.ai",
+   "format": "postscript-only",
+   "payload_bytes": 988056,
+   "payload_sha256": "6feae140f767a7a8593e7d9d9336c98bc2eb0c5ff76bf3e698685ba63b9d31dc",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 953806,
+   "file": "simple_shapes_cs.ai",
+   "format": "postscript-only",
+   "payload_bytes": 953806,
+   "payload_sha256": "d9e1be1f51732fcd2222b00ab17c3600a5120402daf113621ff4e2eb7db52676",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 12,
+   "bytes": 299926,
+   "file": "simple_v10.ai",
+   "format": "ai9-zlib",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 10.0\r\n%%AI8_CreatorVersion: 26.1.0\r\n%%For: (Ada",
+   "payload_bytes": 677334,
+   "payload_sha256": "95ea8844ac93cf44e98e1773a3c07d5fbde905f37b1eb56caee2c52fc5ee0362",
+   "prolog_bytes": 6643
+  },
+  {
+   "blocks": 3,
+   "bytes": 215259,
+   "file": "simple_v2020.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 26.1.0\r\n%%For: (Ada",
+   "payload_bytes": 849153,
+   "payload_sha256": "d4aab67632b22b8a65a18ded2ebe378e0a8555c03eac852c0e0ac409a0d5f229",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 3,
+   "bytes": 218743,
+   "file": "simple_v2020_no_pdf_data.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 26.1.0\r\n%%For: (Ada",
+   "payload_bytes": 849157,
+   "payload_sha256": "964be56c42738235ff94c03712a406d7021adba83f4df535a2a40cb326b8490a",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 117993,
+   "file": "simple_v3.ai",
+   "format": "postscript-only",
+   "payload_bytes": 117993,
+   "payload_sha256": "65dd2edd5f9ab50d76205d297f606b950cd2bd20cdd2568817bda01c103f1cef",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 118059,
+   "file": "simple_v3_jp.ai",
+   "format": "postscript-only",
+   "payload_bytes": 118059,
+   "payload_sha256": "c236be2e7f38e444d9536562370f0a5ee2c62cb706f41e0f8d46aa8ab2808321",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 115406,
+   "file": "simple_v3_with_newlines.ai",
+   "format": "postscript-only",
+   "payload_bytes": 115406,
+   "payload_sha256": "688faa9407b026c372dffc6333144d64da665e6591c57fdf69d3c839021e083a",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 747344,
+   "file": "simple_v8.ai",
+   "format": "postscript-only",
+   "payload_bytes": 747344,
+   "payload_sha256": "19a5cc219152da20ad4def5bd392a5a61cfc9295fd5cd8185582c34b8bac1c07",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 9,
+   "bytes": 278187,
+   "file": "simple_v9.ai",
+   "format": "ai9-zlib",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 9.0\r\n%%AI8_CreatorVersion: 26.1.0\r\n%%For: (Adam",
+   "payload_bytes": 491644,
+   "payload_sha256": "9ace72d85355b4fcda3a8cc35b721b3f4bfaec2da0ddc95b7b5a5b2b607410fb",
+   "prolog_bytes": 6643
+  },
+  {
+   "blocks": 2,
+   "bytes": 2684,
+   "file": "simplified_corel_export.ai",
+   "format": "plain",
+   "head": "%AI7_Thumbnail: 96 128 8789c53550c08d6754cc94f4ad535d633e05255752e4a4d2cc92fb252000b2a78e6e49416",
+   "payload_bytes": 255,
+   "payload_sha256": "29d0c4716c073f70387247a41589753bd8440ddc16e3b58540c3b73d8063175b",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 3,
+   "bytes": 245509,
+   "file": "stroke_styles.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 29.2.1\r\n%%For: (Man",
+   "payload_bytes": 1038710,
+   "payload_sha256": "706a9dd9bf19ac422f6f2c25877ce4b55acf009bf0a77b05d452502164487ddf",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 17,
+   "bytes": 419298,
+   "file": "stroke_styles_cs.ai",
+   "format": "ai9-zlib",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 11.0\r\n%%AI8_CreatorVersion: 29.2.1\r\n%%For: (Man",
+   "payload_bytes": 996483,
+   "payload_sha256": "02da09e21430d4593cfddbdc3ad2d2649f6fe9bf9e8a54976d2ff86d326c87fa",
+   "prolog_bytes": 9045
+  },
+  {
+   "blocks": 3,
+   "bytes": 220262,
+   "file": "styles.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.4.1\r\n%%For: (Jon",
+   "payload_bytes": 876212,
+   "payload_sha256": "049e310a1f3c630dd5a809a49029a8a327640af7b8c03034fdef5d89607e099a",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 4,
+   "bytes": 260268,
+   "file": "text_transforms.ai",
+   "format": "ai24-zstd",
+   "head": "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(R) 24.0\r\n%%AI8_CreatorVersion: 27.4.1\r\n%%For: (Jon",
+   "payload_bytes": 993322,
+   "payload_sha256": "5f3a56944e2c2f199a6039b3566fcd5cdc32af26ca0dbb4bdbb294d386d95ada",
+   "prolog_bytes": 0
+  },
+  {
+   "blocks": 0,
+   "bytes": 5000428,
+   "file": "transparent_image.ai",
+   "format": "postscript-only",
+   "payload_bytes": 5000428,
+   "payload_sha256": "4656e3d46e4571f07b50bf88da383832e589b0a69a9db9aaa72bff4302526082",
+   "prolog_bytes": 0
+  }
+ ],
+ "formats": {
+  "ai12-zlib": 7,
+  "ai24-zstd": 30,
+  "ai9-zlib": 7,
+  "plain": 1,
+  "postscript-only": 21
+ },
+ "generator": "tools/ai-private-data/decode-ai-private-data.py",
+ "zstd_backend": "zstd-cli"
+}

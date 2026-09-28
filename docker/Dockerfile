@@ -29,6 +29,7 @@ COPY src/VCCad.Pdf/VCCad.Pdf.csproj src/VCCad.Pdf/
 COPY src/VCCad.Api/VCCad.Api.csproj src/VCCad.Api/
 COPY src/VCCad.App/VCCad.App.csproj src/VCCad.App/
 COPY src/VCCad.App.Browser/VCCad.App.Browser.csproj src/VCCad.App.Browser/
+COPY src/VCCad.App.Desktop/VCCad.App.Desktop.csproj src/VCCad.App.Desktop/
 COPY tests/VCCad.Geometry.Tests/VCCad.Geometry.Tests.csproj tests/VCCad.Geometry.Tests/
 COPY tests/VCCad.Core.Tests/VCCad.Core.Tests.csproj tests/VCCad.Core.Tests/
 COPY tests/VCCad.Pdf.Tests/VCCad.Pdf.Tests.csproj tests/VCCad.Pdf.Tests/

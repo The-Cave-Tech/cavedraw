@@ -15,8 +15,36 @@ PDF-lossless**:
 - **Faithful, lossless PDF.** Export a **PDF/A-2b** document (validated by
   veraPDF) that renders like other compliant tools and carries the full model as
   a sidecar, so round-trips are bit-exact.
-- **100% automatable.** A REST surface for document lifecycle plus JSON-RPC 2.0
-  over WebSocket for everything the UI does — through the *same* command stack.
+- **Illustrator private data, preserved.** `.ai` files (and Illustrator-saved
+  PDFs) carry a private data stream holding the styling, layer and text
+  structures PDF content streams flatten away. VCCad decodes it, keeps it
+  losslessly, and **re-emits it on export**, so import and export stay in sync
+  even where our own model does not yet cover a feature — see
+  [`docs/ai-private-data.md`](docs/ai-private-data.md).
+- **Web *and* desktop.** The same Avalonia shell runs in the browser
+  (WebAssembly) and as a native window on **Windows and Linux**.
+- **100% automatable, API-first.** The running desktop app serves a loopback HTTP
+  endpoint that exposes *every* editor operation; the built-in assistant drives that
+  same registry, so the model can do anything a person can — and the person can run
+  any operation from the diagnostics window. Point-and-click automation exists but
+  API calls are always preferred.
+- **Paginated PDFs import correctly.** Pages are laid out as a grid and the content
+  stream's clipping (`W`/`W*`) is honoured, so a pattern tiled across eight A4 sheets
+  arrives as eight readable pages with the pieces cut at the sheet edges — not as
+  full-size copies spilling across every page.
+- **A diary you can learn from.** Every pointer, hover, drag, keystroke, operation and
+  model request is timestamped and stored as searchable JSON (`history.search`,
+  `history.tail`, `history.sessions`). Finished work can be distilled into a **skill**
+  (`history.learn`), which the assistant recalls automatically on later, similar
+  requests — so a task only has to be worked out once.
+- **The chrome is scriptable too.** `ui.find` / `ui.click` / `ui.setValue` / `ui.keys`
+  drive the real menus, toolbar and panes — "open File and click Import" is an API
+  call. File dialogs, which cannot be automated, have dialog-free equivalents
+  (`document.openFile`, `document.savePdfToFile`).
+- **Legible without vision.** `ui.dump` serialises the entire Avalonia visual tree and
+  the document tree to text; `ui.describe` asks the vision model to describe the
+  window, a named layer, the selection or a region. A tool with no screenshot support
+  can still see what the user sees.
 
 > Roadmap/milestones/ADRs: [`projectplan.md`](projectplan.md).
 > Operating manual (setup, commands, gotchas for humans and AI agents): [`AGENTS.md`](AGENTS.md).
@@ -31,10 +59,13 @@ PDF-lossless**:
 | `src/VCCad.Api` | Automation host: REST + JSON-RPC over WebSocket; serves the published editor |
 | `src/VCCad.App` | Avalonia editor shell (menus, toolbar, docking panes, workspace canvas, font collection) |
 | `src/VCCad.App.Browser` | WebAssembly host (`net8.0-browser`) |
-| `tests/*` | xUnit suites (Geometry, Core, Pdf, Api, App headless) — ~3,080 tests |
+| `src/VCCad.App.Desktop` | Native desktop host (Windows/Linux) for the same editor shell |
+| `tests/*` | xUnit suites (Geometry, Core, Pdf, Api, App headless incl. desktop bootstrap) |
 | `tools/qwen-corpus-tracker` | qwen vision-model render-fidelity progress tracker |
+| `tools/ai-private-data` | Independent reference decoder + golden manifest for `.ai` private data |
+| `docs/` | Format and design notes (start with `ai-private-data.md`) |
 | `docker/` | Multi-stage Dockerfile (tests run in-image) |
-| `scripts/` | `dev.sh` (build/test/run), `deploy-remote.sh`, `bootstrap-dev.sh` |
+| `scripts/` | `dev.sh`, `deploy-remote.sh`, `bootstrap-dev.sh`, `publish-desktop.sh`, `fetch-corpora.sh` |
 | `samples/` | Real-world Illustrator PDF fixture (A0 sewing pattern) |
 
 ## Prerequisites
@@ -58,11 +89,32 @@ See [`AGENTS.md`](AGENTS.md) §3 for the full matrix and env vars.
 dotnet build VCCad.sln -c Release
 dotnet test  VCCad.sln -c Release          # all suites
 
-# Enable the optional external checks:
-VCCAD_VERAPDF=/tmp/opencode/vpdf/install/verapdf \
-VCCAD_VERAPDF_CORPUS=/tmp/opencode/veraPDF-corpus \
+# Fetch the optional reference corpora (not vendored; ~650 MB, cached under
+# ${XDG_CACHE_HOME:-$HOME/.cache}/vccad-corpora), then enable the externals:
+./scripts/fetch-corpora.sh
+
+export VCCAD_GS_CORPUS=$HOME/.cache/vccad-corpora/ghostscript   # Ghostscript/MuPDF + Ghent suite
+export VCCAD_AI_CORPUS=$HOME/.cache/vccad-corpora/ai            # 66 real Illustrator files
+export VCCAD_VERAPDF_CORPUS=$HOME/.cache/vccad-corpora/verapdf
+export VCCAD_VERAPDF=/path/to/verapdf
 dotnet test VCCad.sln -c Release
 ```
+
+Every corpus-backed test **skips cleanly** when its corpus directory is
+absent, so the suite is green on a machine with no network and no cache.
+
+### Windows (native, no WSL)
+
+The desktop app builds and runs as an ordinary Windows process:
+
+```powershell
+dotnet run --project src/VCCad.App.Desktop     # opens the VCCad window
+./scripts/publish-desktop.ps1 -Run             # self-contained win-x64 bundle + launch
+./scripts/publish-desktop.ps1 -Rids win-x64,linux-x64 -Tag 0.2.0
+```
+
+Only `VCCad.App.Browser` (WebAssembly) needs the `wasm-tools` workload; the
+desktop app, libraries and test projects build without it.
 
 Run the editor + API from one process:
 
@@ -70,6 +122,13 @@ Run the editor + API from one process:
 ./scripts/dev.sh run        # → http://127.0.0.1:5099
 ./scripts/dev.sh test       # build + test
 ./scripts/dev.sh wasm       # publish just the wasm bundle
+```
+
+Build native desktop applications:
+
+```bash
+./scripts/publish-desktop.sh          # self-contained win-x64 + linux-x64 under artifacts/desktop/
+./scripts/publish-desktop.sh 0.1.0    # optional version tag
 ```
 
 ## Docker (docker host `user@host`)
@@ -108,6 +167,27 @@ session (same commands the UI runs, same undo stack):
 
 Discovery: the method catalog is in `EditorApi.ListMethods()`.
 
+## Automation and the built-in assistant
+
+```bash
+# start with a task already queued and the diagnostics window open
+src/VCCad.App.Desktop/bin/Release/net8.0/VCCad.App.Desktop.exe \
+    --chat "draw a red circle centred on the artboard" --diagnostics
+
+curl http://127.0.0.1:5099/api/v1/operations        # everything that can be done
+curl -X POST http://127.0.0.1:5099/api/v1/invoke -H 'Content-Type: application/json' \
+     -d '{"op":"ui.describe","params":{"target":"layer","layerName":"UK 14"}}'
+```
+
+**F12** toggles the diagnostics overlay — a wide, short, semi-transparent strip across
+the bottom of the canvas, showing the assistant conversation, an operations runner, the
+full API call log and the endpoint settings without hiding the artwork. The window opens
+docked to the right half of the screen (`--no-dock` to disable). The model defaults
+to `qwen3.8-27b` at `https://your-endpoint.example/v1`.
+
+See [`AGENTS.md`](AGENTS.md) §1.1 for the non-negotiables (test-first, CI/CD,
+user/assistant capability parity, API-first, no-vision introspection).
+
 ## Verification tooling
 
 - **PDF/A-2b** via the real veraPDF engine — `PdfAValidationTests` (gated by
@@ -116,12 +196,28 @@ Discovery: the method catalog is in `EditorApi.ListMethods()`.
   whole veraPDF corpus (gated by `VCCAD_VERAPDF_CORPUS`); `tools/qwen-corpus-tracker`
   scores our render against poppler with a vision model.
 - Structural checks with `qpdf --check` and content-stream assertions.
+- **Corpus sweeps.** `scripts/fetch-corpora.sh` populates the Ghostscript/MuPDF
+  public test files ([`ArtifexSoftware/tests`](https://github.com/ArtifexSoftware/tests),
+  incl. the Ghent PDF Output Suite), real `.ai` fixtures from Inkscape's
+  `extension-ai`, the pdf.js corpus and the veraPDF corpus. The PDF feature probe
+  and importer sweeps are gated by `VCCAD_GS_CORPUS`; the Illustrator private-data
+  sweeps by `VCCAD_AI_CORPUS`.
+- **`.ai` private data** — `tools/ai-private-data/decode-ai-private-data.py` is an
+  independent reference decoder with a golden manifest of expected format, size and
+  SHA-256 per fixture, so the C# decoder is checked against a second implementation
+  rather than only against itself.
 
 ## Status
 
 - ~3,080 tests green; exports validate as **PDF/A-2b**; 2,906-file corpus sweep.
 - Embedded fonts are preserved on import and reused verbatim (simple + Type0),
   and rendered on the canvas by glyph id (no substitution).
+- Adobe Illustrator **private data** is decoded (AI8 PostScript, AI9-CS zlib,
+  CC-Legacy zlib, AI24 zstd and uncompressed variants), kept losslessly on the
+  document model, and re-emitted into exported PDFs — 66 real `.ai` fixtures are
+  covered by corpus tests.
+- The editor publishes as a **web app and as native Windows/Linux desktop apps**.
 - Known gaps toward full import fidelity: Type3 fonts, fonts without an embedded
   programme, text outside page content, and non-text constructs (patterns,
-  images, clipping, transparency groups). See [`AGENTS.md`](AGENTS.md) §9.
+  images, clipping, transparency groups). See [`AGENTS.md`](AGENTS.md) §9 and the
+  feature inventory produced by the corpus probe.

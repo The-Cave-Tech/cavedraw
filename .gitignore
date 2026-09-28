@@ -40,6 +40,10 @@ TestResults/
 coverage/
 *.coverage
 
+# Python tooling
+__pycache__/
+*.pyc
+
 # OS noise
 .DS_Store
 Thumbs.db

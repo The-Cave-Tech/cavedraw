@@ -66,3 +66,45 @@ jobs:
         with:
           name: vccad-wasm
           path: artifacts/wasm/wwwroot
+
+  # Cross-publishes the self-contained Windows and Linux desktop bundles from
+  # the Linux runner (the desktop host is not wasm, so wasm-tools is not
+  # needed) and asserts each launcher is the right binary format.
+  desktop-publish:
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_NOLOGO: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-desktop-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      # Only tag builds have a version; branch/PR refs would not be a valid
+      # version, so the tag argument stays empty there.
+      - name: Publish desktop bundles (win-x64 + linux-x64)
+        run: scripts/publish-desktop.sh "${{ github.ref_type == 'tag' && github.ref_name || '' }}"
+
+      - name: Verify desktop artifacts
+        run: |
+          test -f artifacts/desktop/win-x64/VCCad.App.Desktop.exe
+          test -x artifacts/desktop/linux-x64/VCCad.App.Desktop
+          file artifacts/desktop/win-x64/VCCad.App.Desktop.exe | grep -q 'PE32'
+          file artifacts/desktop/linux-x64/VCCad.App.Desktop | grep -q 'ELF'
+          echo "desktop bundles OK"
+
+      - name: Upload desktop bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: vccad-desktop
+          path: artifacts/desktop

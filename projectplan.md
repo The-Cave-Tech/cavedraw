@@ -4,10 +4,13 @@
 > Web-hosted (Avalonia UI compiled to WebAssembly), C# / .NET 8, fully automatable
 > through a scriptable API, storing documents losslessly as PDF.
 >
-> Status: **Accuracy / import-fidelity pass** — ~3,080 tests green, exports
-> validate as PDF/A-2b (veraPDF), veraPDF-corpus sweep at 2,906 files, embedded
-> fonts preserved and rendered without substitution.
-> Plan revision: 0.2 · **See [`AGENTS.md`](AGENTS.md) for environment + commands.**
+> Status: **Accuracy / import-fidelity pass** — tests green, exports validate as
+> PDF/A-2b (veraPDF), embedded fonts preserved and rendered without substitution.
+> The corpus harness now sweeps the Ghostscript/MuPDF public test files (208 PDFs,
+> incl. the Ghent PDF Output Suite), the pdf.js corpus and the veraPDF corpus, and
+> Illustrator **private data** is parsed *and* re-emitted (66 real `.ai` fixtures).
+> The editor now also ships as a native **Windows/Linux** desktop application.
+> Plan revision: 0.3 · **See [`AGENTS.md`](AGENTS.md) for environment + commands.**
 
 ---
 
@@ -17,8 +20,10 @@ Build a vector graphics editor whose core interactions, object model, and toolin
 track Adobe Illustrator as closely as the modern **Illustrator CC** surface area,
 with three deliberate differences:
 
-1. **Web-based, not desktop.** The editor UI is an Avalonia application compiled to
-   WebAssembly and served from a container so it runs in an ordinary browser.
+1. **Web-first, not web-only.** The editor UI is one Avalonia application: compiled
+   to WebAssembly and served from a container so it runs in an ordinary browser, and
+   built natively for Windows and Linux (with macOS nearly free) for users who want
+   local rendering performance and native file dialogs.
 2. **Headless-first automation.** *Every* user operation is available through a
    documented, deterministic automation API (JSON-RPC 2.0 over WebSocket, plus a
    REST surface for document lifecycle), enabling scripting, tests, and CI-driven
@@ -45,6 +50,10 @@ with three deliberate differences:
 | 13 | **CI/CD** and **git** from the start | GitHub Actions + this repo |
 | 14 | **Thoroughly commented** code, esp. math | Code review gate |
 | 15 | **Unit + integration tests** minimum | M1+ gates, coverage budget |
+| 16 | **Every human action is an operation**, reachable from the API and the chatbot alike, and runnable by hand from the diagnostics window | `EditorOperations` registry (ADR-20) |
+| 17 | **The built-in assistant can do anything the user can, and vice versa** | Shared registry + diagnostics Operations tab |
+| 18 | **A driver with no vision can still work**: full UI/document text dump and a model-assisted "what do you see" | `ui.dump`, `ui.describe` (ADR-22) |
+| 19 | **API-first automation**, point-and-click as a fallback | ADR-21 |
 
 ---
 
@@ -68,8 +77,13 @@ with three deliberate differences:
   shaping and layout are deferred.
 - Live trace, image-swatches, perspective, Puppet Warp, and similar AI power tools.
 - Concurrent multi-user editing.
-- Native desktop packaging for Windows/macOS/Linux (Avalonia makes this nearly
-  free later, but v1 ships only the web target).
+- *(Moved into scope — see ADR-06/ADR-15.)* Native desktop packaging for
+  Windows/Linux now ships from the same editor code; macOS packaging remains a
+  small follow-up.
+- Full Adobe private-data coverage: we parse the private data losslessly and
+  re-emit it, but only the subset the document model understands is *interpreted*.
+  Gradients, brushes, live shapes, symbols and text-on-path stay opaque-but-preserved
+  until their model lands.
 
 ---
 
@@ -161,7 +175,7 @@ depends on Avalonia, ASP.NET, or the UI; everything testable headless.
 | ADR-03 | Lossless sidecar inside PDF (not pure PDF) | Pure PDF cannot round-trip editing semantics | If a viewer-required strict subset appears |
 | ADR-04 | Commands are first-class, serializable, shared by UI + API | Single code path → automation = UI | Live-collab sessions |
 | ADR-05 | REST for lifecycle, WS JSON-RPC for interactions | Matches request; JSON-RPC is simple to script | gRPC perf need |
-| ADR-06 | Avalonia → WebAssembly only for v1 | Brief demands web + Avalonia windowing | Desktop packaging v2 |
+| ADR-06 | Avalonia → WebAssembly for v1, **plus native desktop hosts** (superseded by ADR-15) | Brief demands web + Avalonia windowing; desktop adds local perf and native dialogs | — |
 | ADR-07 | Third-party **AvaloniaDock** (Dock) for docking panes | Hand-rolling docking is large; Dock is the OSS standard port | If Dock proves unstable on WASM → in-house `DockHost` |
 | ADR-08 | SkiaSharp rendering of the design surface | Avalonia's renderer is Skia; direct `DrawingContext` keeps it fast & testable | GPU filter chains |
 | ADR-09 | z-order index at layer/group level; sort stable | Simple, matches Illustrator layering semantics | Multi-select drag reorder perf |
@@ -170,6 +184,14 @@ depends on Avalonia, ASP.NET, or the UI; everything testable headless.
 | ADR-12 | PDF export targets **PDF/A-2b** | Measurable accuracy via the real veraPDF engine | If a strict PDF 1.7-only mode is needed |
 | ADR-13 | Lossless sidecar stored as a **catalog stream** (`/VCCadDocument`) | PDF/A forbids arbitrary `/EmbeddedFiles` payloads | — |
 | ADR-14 | Accuracy is measured against the **veraPDF corpus** + qwen render scoring | Objective, regression-guarded import fidelity | — |
+| ADR-15 | One editor shell, three hosts: `VCCad.App.Browser` (WASM) and `VCCad.App.Desktop` (Windows/Linux; macOS capable via `Avalonia.Native` but not published) both boot the same `VCCad.App` application | Avoids a second UI; desktop is a host, not a fork | A platform-specific feature forces a split |
+| ADR-16 | Adobe **Illustrator private data is parsed losslessly and re-emitted on export**; uninterpreted constructs are preserved verbatim | PDF page content is a flattened projection — styling, layers and text structure only exist in the private stream. Preserving beats losing, and keeps import/export in sync while the model grows | A feature is modelled natively end-to-end |
+| ADR-17 | Reference corpora are **fetched, never vendored** (`scripts/fetch-corpora.sh`), and every corpus test skips cleanly when its corpus is absent | The Ghostscript/MuPDF, Inkscape `extension-ai` and veraPDF corpora are AGPL/GPL/CC — incompatible with our MIT repo — and CI must stay green offline | A permissively licensed corpus is adopted |
+| ADR-18 | The `.ai` decoder is validated against an **independent reference implementation** + golden manifest (`tools/ai-private-data/`) | A decoder compared only with itself cannot reveal a systematic misreading of an undocumented format | Adobe publishes a specification |
+| ADR-19 | **Test-first development with corpus-backed sinks**; failing-on-improvement tests record known gaps until they are closed | The document model must track Adobe's; a test that describes the gap is the cheapest way to keep it visible and to know when it closes | — |
+| ADR-20 | **One operation registry is the single source of truth**; UI, HTTP API and chatbot all execute through it, and the person can run any operation from the diagnostics window | Guarantees user/assistant capability parity in both directions, and makes "everything is scriptable" structurally true rather than aspirational | — |
+| ADR-21 | **API-first automation**; synthetic pointer/keyboard automation is supported but only used when the gesture itself is the thing under test | Operations are deterministic, typed, logged and replayable; clicks are not | — |
+| ADR-22 | **No-vision introspection**: `ui.dump` (full Avalonia + document tree as text) and `ui.describe` (model-assisted description of the window, a named layer, the selection or a region) | Development tools frequently cannot see; the app must be understandable from text and, when needed, describable by the vision model | — |
 
 ---
 
@@ -194,6 +216,8 @@ depends on Avalonia, ASP.NET, or the UI; everything testable headless.
 /docker/               Dockerfile · compose.yaml
 /scripts/              dev.sh · deploy-remote.sh · bootstrap-dev.sh
 /tools/qwen-corpus-tracker/  vision-model render-fidelity tracker
+/tools/ai-private-data/      independent .ai private-data decoder + golden manifest
+/docs/                       format/design notes (ai-private-data.md)
 /samples/              real-world Illustrator PDF fixture
 /src/
   VCCad.Geometry/      pure math primitives + Bézier algebra
@@ -202,6 +226,7 @@ depends on Avalonia, ASP.NET, or the UI; everything testable headless.
   VCCad.Api/           ASP.NET host (REST + WS JSON-RPC + static WASM)
   VCCad.App/           Avalonia WebAssembly editor shell
   VCCad.App.Browser/   net8.0-browser WASM host
+  VCCad.App.Desktop/   net8.0 native Windows/Linux host (same shell as the browser)
 /tests/
   VCCad.Geometry.Tests/    unit
   VCCad.Core.Tests/        unit
@@ -304,9 +329,28 @@ Make the document programmable. UI and scripts converge on one command language.
 | 8 | `[x]` PDF validation harness: veraPDF (PDF/A-2b) + poppler/mupdf/ghostscript render diff | 3 | M |
 | 9 | `[x]` Fonts/text export **and import**: embedded-font pass-through (simple + Type0) | 5 | M |
 | 10 | `[ ]` XObject groups & dash pattern, transparency group nesting | 3 | S |
+| 11 | `[x]` **Illustrator private-data codec**: locate `/PieceInfo` blocks, AI9-CS zlib / CS2-CC zlib / AI24 zstd / plain / legacy-PostScript decode | 5 | M |
+| 12 | `[x]` **Private-data parser + writer**: lossless tokenizer, structured header/layer view, byte-exact re-emission | 5 | M |
+| 13 | `[x]` **Private-data round-trip in the model**: captured on import, carried by the sidecar, re-emitted into page `/PieceInfo` on export | 3 | M |
+| 14 | `[ ]` Interpret private data into native model objects (gradients, appearance stacks, live shapes, text-on-path) | 13 | S |
 
 **Accept:** round-trip `doc → pdf → sidecar → doc` is structurally equal for the
 M2 reference document; exported PDF renders identically in reference viewers.
+
+### M4b — Automation, assistant and diagnostics  `(done)`
+
+| # | Task | SP | MoSCoW |
+|---|------|----|--------|
+| 1 | `[x]` Operation registry covering the human surface (selection, objects, transforms, styles, text, layers, artboards, paths, z-order) | 8 | M |
+| 2 | `[x]` Loopback HTTP automation endpoint (`invoke`, `chat`, `diagnostics`, `operations`, `screenshot`) | 5 | M |
+| 3 | `[x]` In-app assistant: tool-calling loop over the registry, vision on request | 8 | M |
+| 4 | `[x]` Diagnostics **overlay** (semi-transparent strip across the bottom of the canvas): assistant, operations runner, API call log, endpoint info; window docks to the right half of the screen | 5 | M |
+| 5 | `[x]` No-vision introspection: `ui.dump` (Avalonia + document tree as text) and `ui.describe` (model-assisted, per layer/selection/region) | 5 | M |
+| 6 | `[ ]` Point-and-click automation surface (synthetic pointer/keyboard) for gesture-level testing | 5 | S |
+| 7 | `[ ]` Operation catalog published for the WASM/web build and the JSON-RPC transport | 3 | S |
+
+**Accept:** every human action has an operation; the assistant completes a multi-step
+task through the same registry; a blind driver can dump and describe the screen.
 
 ### M5 — Application shell & workspace  `(shell scaffolded)`
 Avalonia WASM editor chrome around the workspace.
@@ -404,7 +448,14 @@ regressions gated in `ci.yml`.
 - **Integration**: `WebApplicationFactory` REST tests; real WebSocket JSON-RPC
   sessions driving the full command catalog (the "golden script" suite).
 - **Round-trip**: `model → PDF → sidecar → model` equality; PDF opened by external
-  renderer snapshot tests once a render oracle is chosen.
+  renderer snapshot tests once a render oracle is chosen. Illustrator private data
+  round-trips `payload → parse → write → payload` byte-exactly.
+- **Corpus-driven**: a byte/object-level **feature probe** classifies every PDF in
+  the Ghostscript/MuPDF, pdf.js and veraPDF corpora (fonts, clips, ExtGState,
+  soft masks, blend modes, patterns, shadings, image filters, OCG layers, XMP,
+  encryption, PDF/A markers, Illustrator `/PieceInfo`), and aggregate coverage
+  floors turn capability drift into a single summarised failure. Corpora are
+  fetched, never vendored (ADR-17).
 - **E2E (M9)**: Playwright driving the WASM build in real Chrome for gold flows.
 - Mouse-stream replay tests: hand-recorded pointer scripts assert the same command
   sequence the UI emits (proves UI == automation == tests).
