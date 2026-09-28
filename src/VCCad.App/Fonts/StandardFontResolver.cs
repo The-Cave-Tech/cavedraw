@@ -175,9 +175,13 @@ public static class StandardFontResolver
             // The weight is part of the answer. "Nimbus Sans" for a bold run says the
             // family and not the face, so a person cannot tell whether the bold they asked
             // for is a real cut or the shaper leaning the regular one — and those look
-            // different. Naming the face, and saying plainly when the machine has no such
-            // cut, is the difference between a report and a reassurance.
-            return FaceExists(urw, face)
+            // different.
+            //
+            // Whether the cut is installed is asked of the file system, not of the font
+            // manager. A family whose bold face is present but not yet registered would
+            // otherwise be reported as synthesised — a false alarm about the very thing this
+            // report exists to be right about, and one that came and went between runs.
+            return StandardFontFiles.Exists(face)
                 ? $"URW {urw}{style} (installed on this machine)"
                 : IsAvailable(urw)
                     ? $"URW {urw} (installed, but no {style.Trim().ToLowerInvariant()} face " +
