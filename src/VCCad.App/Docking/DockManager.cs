@@ -18,7 +18,7 @@ public sealed class DockManager
     private readonly Dictionary<string, DockSide> _toolbarSides = new();
 
     public DockManager(
-        StackPanel leftPanelHost, StackPanel rightPanelHost,
+        Grid leftPanelHost, Grid rightPanelHost,
         StackPanel leftToolbarHost, StackPanel rightToolbarHost,
         StackPanel topToolbarHost, StackPanel bottomToolbarHost)
     {
@@ -31,9 +31,9 @@ public sealed class DockManager
     }
 
     // Panels and toolbars are separate kinds and never share a zone.
-    public StackPanel LeftPanelHost { get; }
+    public Grid LeftPanelHost { get; }
 
-    public StackPanel RightPanelHost { get; }
+    public Grid RightPanelHost { get; }
 
     public StackPanel LeftToolbarHost { get; }
 
@@ -51,6 +51,20 @@ public sealed class DockManager
 
     /// <summary>Raised when a toolbar handle drag starts (id of the toolbar).</summary>
     public event EventHandler<string>? ToolbarDragRequested;
+
+    /// <summary>The view for a panel, created once and reused across rebuilds.</summary>
+    private DockTabPanelView PanelView(DockPanelModel panel)
+    {
+        if (!_panelViews.TryGetValue(panel.Id, out DockTabPanelView? view))
+        {
+            view = new DockTabPanelView(panel, this);
+            view.DragRequested += (_, id) => PanelDragRequested?.Invoke(this, id);
+            _panelViews[panel.Id] = view;
+        }
+
+        view.Rebuild();
+        return view;
+    }
 
     public void RegisterPanel(DockPanelModel panel)
     {
@@ -146,6 +160,69 @@ public sealed class DockManager
         return view;
     }
 
+    /// <summary>
+    /// Every dockable panel with its current arrangement: whether it is stretchable and
+    /// the numbers the layout uses for it.
+    /// </summary>
+    public IReadOnlyList<(string Id, string Title, bool Stretchable, double Height, double Weight)> PanelSizes()
+        => _panels.Values
+            .Where(p => p.IsVisible)
+            .Select(p => (p.Id, p.Title, p.IsStretchable, p.Height, p.Weight))
+            .ToArray();
+
+    /// <summary>Makes a panel fixed at a pixel height, or stretchable again.</summary>
+    public bool SetPanelStretchable(string pane, bool stretchable, double? height)
+    {
+        DockPanelModel? panel = FindPanel(pane);
+        if (panel is null)
+        {
+            return false;
+        }
+
+        panel.IsStretchable = stretchable;
+        if (height is { } h)
+        {
+            panel.Height = Math.Max(DockPanelModel.MinimumHeight, h);
+        }
+
+        Build();
+        return true;
+    }
+
+    /// <summary>
+    /// Sizes a panel: the pixel height when it is fixed, or its share of the slack when it
+    /// is stretchable.
+    /// </summary>
+    public bool SetPanelSize(string pane, double size)
+    {
+        DockPanelModel? panel = FindPanel(pane);
+        if (panel is null)
+        {
+            return false;
+        }
+
+        if (panel.IsStretchable)
+        {
+            panel.Weight = Math.Max(0.01, size);
+        }
+        else
+        {
+            panel.Height = Math.Max(DockPanelModel.MinimumHeight, size);
+        }
+
+        Build();
+        return true;
+    }
+
+    private DockPanelModel? FindPanel(string pane)
+        => _panels.Values.FirstOrDefault(p =>
+               string.Equals(p.Id, pane, StringComparison.OrdinalIgnoreCase)) ??
+           _panels.Values.FirstOrDefault(p =>
+               string.Equals(p.Title, pane, StringComparison.OrdinalIgnoreCase)) ??
+           _panels.Values.FirstOrDefault(p => p.Tabs.Any(t =>
+               string.Equals(t.Id, pane, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(t.Title, pane, StringComparison.OrdinalIgnoreCase)));
+
     /// <summary>Recreates the host contents from the current model.</summary>
     public void Build()
     {
@@ -156,24 +233,16 @@ public sealed class DockManager
         TopToolbarHost.Children.Clear();
         BottomToolbarHost.Children.Clear();
 
-        foreach (DockPanelModel panel in _panels.Values)
-        {
-            if (!panel.IsVisible)
-            {
-                continue;
-            }
+        // Panels are stacked as sized rows with a draggable separator between neighbours,
+        // so a person can make one taller or shorter. The separator says whether dragging
+        // it rebalances two stretchable panels or resizes a fixed one.
+        DockStackLayout.Build(RightPanelHost,
+            _panels.Values.Where(p => p.IsVisible && p.Side == DockSide.Right).ToList(),
+            PanelView, Build);
 
-            StackPanel host = panel.Side == DockSide.Right ? RightPanelHost : LeftPanelHost;
-            if (!_panelViews.TryGetValue(panel.Id, out DockTabPanelView? view))
-            {
-                view = new DockTabPanelView(panel, this);
-                view.DragRequested += (_, id) => PanelDragRequested?.Invoke(this, id);
-                _panelViews[panel.Id] = view;
-            }
-
-            view.Rebuild();
-            host.Children.Add(view);
-        }
+        DockStackLayout.Build(LeftPanelHost,
+            _panels.Values.Where(p => p.IsVisible && p.Side != DockSide.Right).ToList(),
+            PanelView, Build);
 
         foreach (ToolbarModel toolbar in _toolbars.Values)
         {

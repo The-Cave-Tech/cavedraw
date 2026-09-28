@@ -20,6 +20,17 @@ public static class InputInjection
     /// <summary>Next synthetic pointer id, so successive gestures are distinct devices.</summary>
     private static int _pointerId = 900;
 
+    /// <summary>
+    /// The pointer currently down, reused across press/move/release.
+    ///
+    /// A fresh <see cref="Pointer"/> per event loses the capture a drag depends on: a
+    /// control that captures on press only receives the moves that follow if they carry
+    /// the same pointer, so a synthetic drag would move the pointer across the window
+    /// while the captured control never heard about it. Real drags - a dock separator, a
+    /// slider, a scrollbar - silently did nothing.
+    /// </summary>
+    private static Pointer? _activePointer;
+
     /// <summary>Press, optionally twice, and release at a window point.</summary>
     public static string Click(Visual root, double x, double y, int clickCount, bool shift)
     {
@@ -30,6 +41,7 @@ public static class InputInjection
         }
 
         var pointer = new Pointer(++_pointerId, PointerType.Mouse, true);
+        _activePointer = pointer;
         Point position = root.TranslatePoint(new Point(x, y), control) ?? new Point(x, y);
         var properties = new PointerPointProperties(RawInputModifiers.LeftMouseButton,
             PointerUpdateKind.LeftButtonPressed);
@@ -58,6 +70,7 @@ public static class InputInjection
         Visual target = HitTest(root, x, y)
             ?? throw new EditorOperationException($"Nothing is at ({x},{y}).");
         var pointer = new Pointer(++_pointerId, PointerType.Mouse, true);
+        _activePointer = pointer;
         Point position = root.TranslatePoint(new Point(x, y), target) ?? new Point(x, y);
 
         (target as InputElement)?.RaiseEvent(new PointerPressedEventArgs(
@@ -76,9 +89,12 @@ public static class InputInjection
     /// </summary>
     public static string Move(Visual root, double x, double y, bool leftDown)
     {
-        Visual target = HitTest(root, x, y)
+        // While a button is down the captured element gets the moves, exactly as a real
+        // pointer behaves - otherwise the capture made on press is meaningless.
+        Pointer pointer = _activePointer ?? new Pointer(++_pointerId, PointerType.Mouse, true);
+        Visual target = pointer.Captured as Visual
+            ?? HitTest(root, x, y)
             ?? throw new EditorOperationException($"Nothing is at ({x},{y}).");
-        var pointer = new Pointer(_pointerId, PointerType.Mouse, true);
         Point position = root.TranslatePoint(new Point(x, y), target) ?? new Point(x, y);
 
         RawInputModifiers modifiers = leftDown
@@ -96,15 +112,21 @@ public static class InputInjection
     /// <summary>Releases the left button at a window point - the end of a drag.</summary>
     public static string Release(Visual root, double x, double y)
     {
-        Visual target = HitTest(root, x, y)
+        // While a button is down the captured element gets the moves, exactly as a real
+        // pointer behaves - otherwise the capture made on press is meaningless.
+        Pointer pointer = _activePointer ?? new Pointer(++_pointerId, PointerType.Mouse, true);
+        Visual target = pointer.Captured as Visual
+            ?? HitTest(root, x, y)
             ?? throw new EditorOperationException($"Nothing is at ({x},{y}).");
-        var pointer = new Pointer(_pointerId, PointerType.Mouse, true);
         Point position = root.TranslatePoint(new Point(x, y), target) ?? new Point(x, y);
 
         (target as InputElement)?.RaiseEvent(new PointerReleasedEventArgs(
             target, pointer, target, position, 0,
             new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.LeftButtonReleased),
             KeyModifiers.None, MouseButton.Left));
+
+        // The drag is over, so the next press starts a fresh pointer.
+        _activePointer = null;
 
         return $"released at ({x:F0},{y:F0})";
     }

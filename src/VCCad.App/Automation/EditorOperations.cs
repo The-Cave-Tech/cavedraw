@@ -81,13 +81,27 @@ public sealed class AutomationContext
 /// <param name="IsOpen">Whether it is currently shown.</param>
 public sealed record PaneInfo(string Id, string Title, bool IsOpen);
 
+/// <summary>How a docked panel is sized: fixed by pixel height, or sharing the slack.</summary>
+/// <param name="Id">Panel id.</param>
+/// <param name="Title">Title shown on the tab strip.</param>
+/// <param name="Stretchable">True when it shares the leftover space with its neighbours.</param>
+/// <param name="Height">Its height in pixels when fixed.</param>
+/// <param name="Weight">Its share of the slack when stretchable.</param>
+public sealed record PaneSize(string Id, string Title, bool Stretchable, double Height, double Weight);
+
 /// <summary>Shell-level actions the automation surface exposes.</summary>
 /// <param name="Panes">Lists the dockable panes.</param>
 /// <param name="SetPaneOpen">Shows/hides a pane by id or title; returns the new state.</param>
+/// <param name="PanelSizes">How each open panel is currently sized.</param>
+/// <param name="SetPaneStretchable">Makes a panel fixed or stretchable; false if unknown.</param>
+/// <param name="SetPaneSize">Sizes a panel; false if unknown.</param>
 /// <param name="Exit">Closes the application.</param>
 public sealed record HostActions(
     Func<IReadOnlyList<PaneInfo>> Panes,
     Func<string, bool?, bool> SetPaneOpen,
+    Func<IReadOnlyList<PaneSize>> PanelSizes,
+    Func<string, bool, double?, bool> SetPaneStretchable,
+    Func<string, double, bool> SetPaneSize,
     Action Exit);
 
 /// <summary>Viewport actions exposed to automation (the toolbar's zoom controls).</summary>
@@ -1309,9 +1323,67 @@ public static class EditorOperations
         Add("tool.get", "The active tool.", "",
             (ctx, _) => new { tool = ctx.ViewModel.Tool.ToString().ToLowerInvariant() });
 
-        Add("pane.list", "Dockable panes and whether each is open (the Windows menu).", "",
-            (ctx, _) => RequireHost(ctx).Panes()
-                .Select(p => new { id = p.Id, title = p.Title, open = p.IsOpen }).ToArray());
+        Add("pane.list",
+            "Dockable panes: whether each is open, and how the stacked ones are sized. A " +
+            "panel is either fixed (a height in pixels) or stretchable (it shares the " +
+            "slack with its neighbours), which is what the separator between two panels " +
+            "reflects.",
+            "",
+            (ctx, _) =>
+            {
+                var sizes = RequireHost(ctx).PanelSizes().ToDictionary(s => s.Id, s => s);
+
+                return RequireHost(ctx).Panes()
+                    .Select(p => new
+                    {
+                        id = p.Id,
+                        title = p.Title,
+                        open = p.IsOpen,
+                        stretchable = sizes.TryGetValue(p.Id, out var s) ? s.Stretchable : (bool?)null,
+                        height = sizes.TryGetValue(p.Id, out var h) ? Math.Round(h.Height, 1) : (double?)null,
+                        weight = sizes.TryGetValue(p.Id, out var w) ? Math.Round(w.Weight, 1) : (double?)null,
+                    })
+                    .ToArray();
+            });
+
+        Add("pane.setStretch",
+            "Make a docked panel fixed or stretchable. A fixed pane keeps a height in " +
+            "pixels and its neighbour absorbs the slack; stretchable panes share it. The " +
+            "separator between two panels changes appearance to show which is in force.",
+            "pane:string, stretchable:bool, height?:number",
+            (ctx, p) =>
+            {
+                string pane = p.GetString("pane")
+                    ?? throw new EditorOperationException("Parameter 'pane' is required.");
+                bool stretchable = p.TryGetProperty("stretchable", out JsonElement sv) &&
+                                   sv.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? sv.GetBoolean()
+                    : true;
+                double? height = p.TryGetProperty("height", out JsonElement hv) &&
+                                 hv.ValueKind == JsonValueKind.Number
+                    ? hv.GetDouble()
+                    : null;
+
+                bool ok = RequireHost(ctx).SetPaneStretchable(pane, stretchable, height);
+                return new { pane, stretchable, height, applied = ok };
+            });
+
+        Add("pane.setSize",
+            "Size a docked panel: its height in pixels when fixed, or its share of the " +
+            "slack when stretchable. The equivalent of dragging the separator.",
+            "pane:string, size:number",
+            (ctx, p) =>
+            {
+                string pane = p.GetString("pane")
+                    ?? throw new EditorOperationException("Parameter 'pane' is required.");
+                double size = p.TryGetProperty("size", out JsonElement v) &&
+                              v.ValueKind == JsonValueKind.Number
+                    ? v.GetDouble()
+                    : throw new EditorOperationException("Parameter 'size' is required.");
+
+                bool ok = RequireHost(ctx).SetPaneSize(pane, size);
+                return new { pane, size, applied = ok };
+            });
 
         Add("pane.set", "Show or hide a dockable pane by id or title; omit 'visible' to toggle.",
             "pane:string, visible?:bool",

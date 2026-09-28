@@ -52,6 +52,22 @@ public partial class EditorView : UserControl
         => _tabDefs.Select(kv => (kv.Key, kv.Value.Title, _manager.IsTabOpen(kv.Key))).ToArray();
 
     /// <summary>
+    /// The panels that can be resized, with their current arrangement. A panel is either
+    /// fixed (it has a height in pixels) or stretchable (it shares the slack with its
+    /// neighbours), and the separator between two panels behaves according to which.
+    /// </summary>
+    public IReadOnlyList<(string Id, string Title, bool Stretchable, double Height, double Weight)> PanelSizes
+        => _manager.PanelSizes();
+
+    /// <summary>Makes a panel fixed at a height, or stretchable so it shares the slack.</summary>
+    public bool SetPaneStretchable(string pane, bool stretchable, double? height)
+        => _manager.SetPanelStretchable(pane, stretchable, height);
+
+    /// <summary>Sets a fixed panel's height, or a stretchable panel's share of the slack.</summary>
+    public bool SetPaneSize(string pane, double size)
+        => _manager.SetPanelSize(pane, size);
+
+    /// <summary>
     /// Shows or hides a pane by id or title. Passing <c>null</c> toggles it.
     /// Returns the pane's new visibility.
     /// </summary>

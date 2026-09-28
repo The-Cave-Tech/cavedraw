@@ -119,6 +119,11 @@ public partial class App : Application
             host: new HostActions(
                 Panes: () => view.Panes.Select(p => new PaneInfo(p.Id, p.Title, p.IsOpen)).ToArray(),
                 SetPaneOpen: view.SetPaneOpen,
+                PanelSizes: () => view.PanelSizes
+                    .Select(s => new PaneSize(s.Id, s.Title, s.Stretchable, s.Height, s.Weight))
+                    .ToArray(),
+                SetPaneStretchable: view.SetPaneStretchable,
+                SetPaneSize: view.SetPaneSize,
                 Exit: () => desktop.Shutdown()),
             history: diary);
 

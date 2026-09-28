@@ -54,7 +54,10 @@
       <StackPanel Name="TopHost" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="7" Orientation="Vertical"/>
 
       <StackPanel Name="LeftToolbarHost" Grid.Row="1" Grid.Column="0" Orientation="Vertical"/>
-      <StackPanel Name="LeftPanelHost" Grid.Row="1" Grid.Column="1" Orientation="Vertical" MinWidth="120"/>
+      <!-- Panel hosts are grids: stacked panels are sized rows with a draggable
+             separator between neighbours, so a person can make a panel taller or
+             shorter. -->
+      <Grid Name="LeftPanelHost" Grid.Row="1" Grid.Column="1" MinWidth="120"/>
       <GridSplitter Name="LeftSplitter" Grid.Row="1" Grid.Column="2"
                     ResizeDirection="Columns" Background="{DynamicResource VcBorder}"
                     HorizontalAlignment="Stretch"/>
@@ -118,7 +121,7 @@
       <GridSplitter Name="RightSplitter" Grid.Row="1" Grid.Column="4"
                     ResizeDirection="Columns" Background="{DynamicResource VcBorder}"
                     HorizontalAlignment="Stretch"/>
-      <StackPanel Name="RightPanelHost" Grid.Row="1" Grid.Column="5" Orientation="Vertical" MinWidth="120"/>
+      <Grid Name="RightPanelHost" Grid.Row="1" Grid.Column="5" MinWidth="120"/>
       <StackPanel Name="RightToolbarHost" Grid.Row="1" Grid.Column="6" Orientation="Vertical"/>
 
       <StackPanel Name="BottomHost" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="7" Orientation="Vertical"/>
