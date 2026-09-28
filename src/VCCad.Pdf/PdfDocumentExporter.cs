@@ -754,6 +754,15 @@ public static class PdfDocumentExporter
         double sin = Math.Sin(text.RotationRadians);
         double y = text.Origin.Y;
 
+        // How far along the text's own baseline the next run starts.
+        //
+        // Every run is emitted as its own BT/ET with an explicit Tm, and that Tm used to be
+        // the block's origin for each of them — so a block with more than one run drew every
+        // run at the same place, one on top of the other. A glyph-per-show-operation file
+        // arrives with runs to merge, so this is not a rare shape: the doubled text on the
+        // Transparency Guide's page 6 was exactly it.
+        double pen = 0.0;
+
         foreach (TextRun run in text.Runs)
         {
             EmbeddedFont? embeddedFont = run.EmbeddedFont;
@@ -785,10 +794,11 @@ public static class PdfDocumentExporter
                     ? targetAdvance / lineAdvance
                     : 1.0;
 
-                // Baseline origin in model space: top-left + R(rot)*(0, y + ascent).
+                // Baseline origin in model space: top-left + R(rot)*(0, y + ascent),
+                // moved along the baseline by everything already set on this line.
                 double depth = yOffset + (ascent * run.FontSize);
-                double ox = text.Origin.X - (sin * depth);
-                double oy = text.Origin.Y + (cos * depth);
+                double ox = text.Origin.X - (sin * depth) + (cos * pen);
+                double oy = text.Origin.Y + (cos * depth) + (sin * pen);
 
                 ops.Add(ColorOperator(text.Color, text.SourceCmyk, stroke: false));
                 if (alphaStates.HasTransparency)
@@ -865,7 +875,40 @@ public static class PdfDocumentExporter
             }
 
             Flush();
+
+            // The pen moves by what this run takes to set. For a wrapped run the lines are
+            // stacked rather than continued, so only the last line's width carries forward
+            // — which is what a person reading the block expects of the next run.
+            pen += multiLine
+                ? LastLineAdvance(text, run)
+                : run.AdvanceWidth ?? 0.0;
         }
+    }
+
+    /// <summary>
+    /// How wide the last display line of a wrapped run is, in model units, so the run
+    /// after it starts where that line ended rather than at the run's beginning.
+    /// </summary>
+    private static double LastLineAdvance(TextItem text, TextRun run)
+    {
+        List<TextWrapping.LineRange> lines = TextWrapping.Lines(text);
+        if (lines.Count == 0)
+        {
+            return run.AdvanceWidth ?? 0.0;
+        }
+
+        int charBase = FlattenedOffsetOf(text, run);
+        TextWrapping.LineRange last = lines[^1];
+        int from = Math.Max(last.Start, charBase);
+        int to = Math.Min(last.Start + last.Length, charBase + run.Text.Length);
+        if (to <= from)
+        {
+            return 0.0;
+        }
+
+        // Measured with the same source the model uses, so the pen matches the layout.
+        return VCCad.Core.Text.TextMeasurement.AdvanceOf(run, to - charBase)
+             - VCCad.Core.Text.TextMeasurement.AdvanceOf(run, from - charBase);
     }
 
     /// <summary>Where a run begins in the block's flattened text.</summary>
