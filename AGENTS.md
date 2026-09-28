@@ -139,7 +139,12 @@ describe when a visual judgement is needed.
 
 ## 2. Golden rules
 
-1. **Do not commit unless the user explicitly asks.** Then use conventional
+1. **Commit constantly — a standing instruction, not a per-task one.** The project
+   wants a readable history, so each self-contained piece of work is its own commit
+   with a conventional message (`feat:`, `fix:`, `test:`, `docs:`, `build:`,
+   `chore:`). Commit *before* starting the next item, not at the end of a session: an
+   uncommitted tree is invisible history, and a change that is not in `git log` cannot
+   be reviewed, bisected or reverted. Keep the tree clean when handing off.
    commit messages (`feat:`, `fix:`, `test:`, `docs:`, `build:`, `chore:`).
 2. **Never add comments to code unless asked** — but this repo *does* want
    explanatory comments on math/formulas and public APIs; match surrounding style.
