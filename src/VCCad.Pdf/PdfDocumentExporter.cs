@@ -1131,10 +1131,22 @@ public static class PdfDocumentExporter
     /// <summary>Formats a number for PDF (PDF numbers do not allow exponents).</summary>
     internal static string Num(double value)
     {
-        string text = value.ToString("R", CultureInfo.InvariantCulture);
-        return text.Contains('E', StringComparison.OrdinalIgnoreCase)
-            ? value.ToString("0.##########", CultureInfo.InvariantCulture)
-            : text;
+        // Six decimals, which is a millionth of a point — about 1/72,000,000 inch, far below
+        // any device resolution and far below the tolerances this project measures itself
+        // against. Round-trip formatting wrote every digit a double can carry, and a
+        // coordinate came out as "453.9427933037": correct, and eleven digits of noise on
+        // every number in a document of three thousand objects. The export was 54 times the
+        // size of the original file it came from, and this was most of the reason.
+        if (double.IsNaN(value) || double.IsInfinity(value))
+        {
+            return "0";
+        }
+
+        string text = value.ToString("0.######", CultureInfo.InvariantCulture);
+
+        // "-0" is a legitimate rounding result and a needless surprise; PDF readers accept
+        // it, but nothing reads better for it.
+        return text == "-0" ? "0" : text;
     }
 
     /// <summary>
