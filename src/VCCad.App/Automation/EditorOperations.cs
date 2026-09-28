@@ -753,6 +753,70 @@ public static class EditorOperations
                 };
             });
 
+        Add("ui.menu",
+            "Open the context menu a control carries, as right-clicking it does. Synthetic " +
+            "pointer events do not reach the handlers Avalonia opens menus from - a right " +
+            "click is delivered but the menu stays shut - so this is how a driver opens the " +
+            "menu a person would. Use ui.menuItem to choose from it.",
+            "handle?:number, name?:string",
+            (ctx, p) =>
+            {
+                Avalonia.Visual root = Root(ctx);
+                var target = ResolveControl(ctx, (Avalonia.Controls.Control)root, p)
+                    as Avalonia.Controls.Control
+                    ?? throw new EditorOperationException("No control matched.");
+
+                Avalonia.Controls.ContextMenu? menu = target.ContextMenu;
+                if (menu is null)
+                {
+                    throw new EditorOperationException(
+                        $"{target.GetType().Name} carries no context menu.");
+                }
+
+                menu.Open(target);
+
+                // Kept, because a ContextMenu lives in a popup host rather than the window's
+                // visual tree: it cannot be found by walking the tree, so the menu that was
+                // opened is the only handle on it.
+                OpenMenu = menu;
+
+                return new
+                {
+                    opened = menu.IsOpen,
+                    target = target.Name ?? target.GetType().Name,
+                    items = menu.Items.OfType<Avalonia.Controls.MenuItem>()
+                        .Select(i => i.Header?.ToString())
+                        .Where(h => h is not null)
+                        .ToArray(),
+                };
+            });
+
+        Add("ui.menuItem",
+            "Choose an item from the open context menu by its header, as clicking it does.",
+            "text:string",
+            (ctx, p) =>
+            {
+                string text = p.GetString("text")
+                    ?? throw new EditorOperationException("Parameter 'text' is required.");
+
+                Avalonia.Controls.MenuItem? found = OpenMenu is { IsOpen: true } menu
+                    ? menu.Items.OfType<Avalonia.Controls.MenuItem>()
+                        .FirstOrDefault(i => (i.Header?.ToString() ?? string.Empty).StartsWith(
+                            text, StringComparison.OrdinalIgnoreCase))
+                    : null;
+
+                if (found is null)
+                {
+                    throw new EditorOperationException(
+                        $"No open menu has an item starting \u201c{text}\u201d. Open one with ui.menu.");
+                }
+
+                found.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(
+                    Avalonia.Controls.MenuItem.ClickEvent));
+
+                return new { clicked = found.Header?.ToString() };
+            });
+
         Add("ui.popups",
             "Every popup in the window and whether it is open. A menu, a tooltip and a combo " +
             "box dropdown are Popups rather than Windows: they are outside the window's visual " +
@@ -2271,6 +2335,9 @@ public static class EditorOperations
 
         return null;
     }
+
+    /// <summary>The context menu ui.menu opened, which cannot be found by walking.</summary>
+    private static Avalonia.Controls.ContextMenu? OpenMenu { get; set; }
 
     private static object FontReport(AutomationContext ctx)
     {

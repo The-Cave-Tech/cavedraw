@@ -364,15 +364,29 @@ public partial class ObjectsPane : UserControl
     }
 
     /// <summary>
+    /// The row a menu action applies to: the one it was opened over, or the one that is
+    /// selected.
+    ///
+    /// One menu serves the whole tree rather than one per row, because a row can be recycled
+    /// the moment it scrolls out and a menu owned by it would end up acting on whatever the
+    /// row became. That means the menu has no row of its own, so the press that opened it -
+    /// or the selection, when it was opened through the API - is what says which.
+    /// </summary>
+    private ObjectNode? ActionRow() =>
+        _pressNode
+        ?? ObjectTree.SelectedItems.OfType<ObjectNode>().FirstOrDefault()
+        ?? ObjectTree.SelectedItem as ObjectNode;
+
+    /// <summary>
     /// Renames the row the menu was opened on, through the command stack so it undoes.
     ///
-    /// The prompt is a small inline window rather than an edit box in the row: the tree is
+    /// The prompt is a small window rather than an edit box in the row: the tree is
     /// virtualised, so a row can be recycled the moment it scrolls out, and an editor living
     /// inside one would lose what had been typed into it.
     /// </summary>
     private async void OnRenameClicked(object? sender, RoutedEventArgs e)
     {
-        if (_vm is null || RowOf(sender) is not { } node)
+        if (_vm is null || ActionRow() is not { } node)
         {
             return;
         }
@@ -390,21 +404,17 @@ public partial class ObjectsPane : UserControl
         }
     }
 
-    private void OnShowClicked(object? sender, RoutedEventArgs e) => SetRowVisible(sender, true);
+    private void OnShowClicked(object? sender, RoutedEventArgs e) => SetRowVisible(true);
 
-    private void OnHideClicked(object? sender, RoutedEventArgs e) => SetRowVisible(sender, false);
+    private void OnHideClicked(object? sender, RoutedEventArgs e) => SetRowVisible(false);
 
-    private void SetRowVisible(object? sender, bool visible)
+    private void SetRowVisible(bool visible)
     {
-        if (RowOf(sender) is { } node)
+        if (ActionRow() is { } node)
         {
             node.IsVisible = visible;
         }
     }
-
-    /// <summary>The node a context-menu item was opened over.</summary>
-    private static ObjectNode? RowOf(object? sender)
-        => (sender as MenuItem)?.DataContext as ObjectNode;
 
     /// <summary>Asks for a name. Returns null when the person cancelled.</summary>
     private async Task<string?> PromptForName(string current)
