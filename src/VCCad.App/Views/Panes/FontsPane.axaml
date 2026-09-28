@@ -1,0 +1,52 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:fonts="clr-namespace:VCCad.App.Fonts"
+             x:Class="VCCad.App.Views.Panes.FontsPane">
+  <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="6">
+    <!-- Categories, a search, the list, and a sample of the highlighted family.
+         A pane rather than a dropdown because a popup is outside the window's visual tree:
+         it cannot be read, clicked or screenshotted by the automation surface, and a list
+         nobody can read is a list nobody can check. The toolbar keeps its quick combo for
+         choosing in one step. -->
+    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="4" Margin="0,0,0,6">
+      <Button Name="CatAll" Content="All" Click="OnCategory" Tag="all" Padding="8,2"/>
+      <Button Name="CatRecent" Content="Recent" Click="OnCategory" Tag="recent" Padding="8,2"/>
+      <Button Name="CatUsed" Content="Used" Click="OnCategory" Tag="used" Padding="8,2"/>
+      <Button Name="CatFavourites" Content="Favourites" Click="OnCategory" Tag="favourites" Padding="8,2"/>
+    </StackPanel>
+
+    <TextBox Grid.Row="1" Name="Search" Watermark="Search families" Height="26"
+             Margin="0,0,0,6" TextChanged="OnSearchChanged"/>
+
+    <ListBox Grid.Row="2" Name="Rows" SelectionMode="Single" SelectionChanged="OnRowSelected">
+      <ListBox.ItemTemplate>
+        <DataTemplate DataType="fonts:FontRow">
+          <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+            <!-- The triangle points the way the row will go. -->
+            <TextBlock Grid.Column="0" Width="14" VerticalAlignment="Center"
+                       Text="{Binding Chevron}" PointerPressed="OnChevronPressed"/>
+
+            <!-- The row is drawn in the face it offers, which is what makes the list a
+                 specimen sheet rather than a list of names. -->
+            <TextBlock Grid.Column="1" Text="{Binding Label}"
+                       Margin="{Binding Indent}"
+                       FontFamily="{Binding Face}"
+                       FontWeight="{Binding Weight}"
+                       FontStyle="{Binding Slant}"
+                       VerticalAlignment="Center" Padding="0,2"/>
+
+            <TextBlock Grid.Column="3" Width="16" Text="&#x2665;" VerticalAlignment="Center"
+                       Opacity="{Binding HeartOpacity}" PointerPressed="OnHeartPressed"/>
+          </Grid>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+
+    <!-- A live sample of the highlighted family, so hovering the list previews a font
+         without committing to it. -->
+    <Border Grid.Row="3" Margin="0,6,0,0" Padding="6" MinHeight="34"
+            BorderThickness="1" BorderBrush="{DynamicResource VcBorder}">
+      <TextBlock Name="Preview" TextWrapping="NoWrap" FontSize="15" VerticalAlignment="Center"/>
+    </Border>
+  </Grid>
+</UserControl>

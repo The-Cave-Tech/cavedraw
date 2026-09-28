@@ -311,12 +311,17 @@ public partial class EditorView : UserControl
         objects.Attach(_viewModel);
         var text = new TextPane();
         text.Attach(_viewModel);
+        var fonts = new FontsPane();
+        fonts.Attach(_viewModel);
 
         var appearance = new DockPanelModel { Id = "appearance", Title = "Appearance", Side = DockSide.Right };
         appearance.Tabs.Add(new DockTab { Id = "colors", Title = "Color", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => colors, IsOpen = true });
         appearance.Tabs.Add(new DockTab { Id = "swatches", Title = "Swatches", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => swatches });
         appearance.Tabs.Add(new DockTab { Id = "stroke", Title = "Stroke", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => stroke, IsOpen = true });
         appearance.Tabs.Add(new DockTab { Id = "text", Title = "Text", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => text });
+        // The chooser is a tab of its own so it can be left open beside the canvas while
+        // somebody works through families, which a dropdown cannot.
+        appearance.Tabs.Add(new DockTab { Id = "fonts", Title = "Fonts", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => fonts });
         appearance.ActiveTabId = "colors";
 
         var objectsPanel = new DockPanelModel { Id = "objects", Title = "Layers", Side = DockSide.Right };

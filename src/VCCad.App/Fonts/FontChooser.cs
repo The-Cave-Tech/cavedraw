@@ -109,4 +109,68 @@ public static class FontChooser
     /// </summary>
     public static FontFace? RowFace(FontFamilyEntry family)
         => family.FaceCount > 0 ? family.RegularFace : null;
+
+    /// <summary>
+    /// The list to show, as one column of rows.
+    ///
+    /// A family with more than one face can be opened, and when it is, its faces follow it.
+    /// They are rows of the same list rather than children of a tree, so the whole thing stays
+    /// one scrollable column and a driver can read it.
+    /// </summary>
+    /// <param name="expanded">Which families are open, by name.</param>
+    public static IReadOnlyList<FontRow> Rows(
+        CadDocument? document,
+        FontCategory category,
+        string? search = null,
+        IReadOnlySet<string>? expanded = null)
+    {
+        var rows = new List<FontRow>();
+
+        foreach (FontFamilyEntry family in Select(document, category, search))
+        {
+            FontFace? face = RowFace(family);
+            bool canOpen = family.FaceCount > 1;
+            bool open = canOpen && expanded is not null && expanded.Contains(family.Name);
+            bool starred = FontFavourites.Shared.IsFavourite(family.Name);
+
+            rows.Add(new FontRow
+            {
+                Kind = FontRowKind.Family,
+                Family = family.Name,
+                Label = face is null ? $"{family.Label} \u00b7 unavailable" : family.Label,
+                Face = face is null ? null : new Avalonia.Media.FontFamily(face.Family),
+                Depth = 0,
+                Expandable = canOpen,
+                Expanded = open,
+                FaceCount = family.FaceCount,
+                Drawable = face is not null,
+                Favourite = starred,
+            });
+
+            if (!open)
+            {
+                continue;
+            }
+
+            foreach (FontFace one in family.Faces)
+            {
+                rows.Add(new FontRow
+                {
+                    Kind = FontRowKind.Face,
+                    Family = family.Name,
+                    Label = one.Style,
+                    Face = new Avalonia.Media.FontFamily(one.Family),
+                    Style = one.Style,
+                    Weight = one.Bold ? Avalonia.Media.FontWeight.Bold : Avalonia.Media.FontWeight.Normal,
+                    Slant = one.Italic ? Avalonia.Media.FontStyle.Italic : Avalonia.Media.FontStyle.Normal,
+                    Depth = 1,
+                    FaceCount = family.FaceCount,
+                    Drawable = true,
+                    Favourite = starred,
+                });
+            }
+        }
+
+        return rows;
+    }
 }
