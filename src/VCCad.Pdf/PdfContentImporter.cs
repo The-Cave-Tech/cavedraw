@@ -788,6 +788,16 @@ internal sealed class PdfContentImporter
         Dictionary<string, object?> childResources =
             _file.ResolveDict(dict.GetValueOrDefault("Resources")) ?? resources;
 
+        // What the form draws is a group, not a scattering of loose objects.
+        //
+        // A form XObject is the file's own grouping: it names a piece of artwork and draws it
+        // as one thing. Inlining its contents into the page flattened that away, so a panel
+        // that should show Layer 1 holding a group holding a clipping mask showed 227 objects
+        // in one list, and nothing about the document's shape survived the import.
+        //
+        // The children keep page coordinates and the group's transform is identity, so this
+        // changes the tree and not the picture. The exporter already composes a group's
+        // transform on the way down, so both ends agree.
         // A form's /BBox clips everything it draws. It is the parent object's rectangle: the
         // file says "this artwork belongs inside this box", and a viewer that ignores it lets
         // the artwork spill. The LILLIE sample has a form whose box is one line of header
@@ -823,9 +833,11 @@ internal sealed class PdfContentImporter
             _clips.Add(bounds);
         }
 
+        var drawn = new List<PdfImportedItem>();
+
         try
         {
-            Interpret(_file.GetStreamData(stream), childResources, toPage, items, depth + 1, layer);
+            Interpret(_file.GetStreamData(stream), childResources, toPage, drawn, depth + 1, layer);
         }
         finally
         {
@@ -835,6 +847,36 @@ internal sealed class PdfContentImporter
                 _clips.Remove(bounds);
             }
         }
+
+        if (drawn.Count == 0)
+        {
+            return;
+        }
+
+        // A group of one is noise: it adds a level to every page whose content is a single
+        // form, and says nothing a person needs.
+        //
+        // And a form whose contents span optional-content layers is not one group either. The
+        // layer an item belongs to is carried on the item and a group can only sit in one
+        // layer, so grouping across a boundary moves every content-layer object into whichever
+        // layer came first - which silently lost a layer per page of the sample on the first
+        // attempt. Where the form draws into one layer, the group is that layer's.
+        string? only = drawn[0].Layer;
+
+        if (drawn.Count == 1 ||
+            drawn.Any(d => !string.Equals(d.Layer, only, StringComparison.Ordinal)))
+        {
+            items.AddRange(drawn);
+            return;
+        }
+
+        var group = new ArtGroup { Name = "Group" };
+        foreach (PdfImportedItem item in drawn)
+        {
+            group.AddItem(item.Item);
+        }
+
+        items.Add(new PdfImportedItem(only, group));
     }
 
     /// <summary>
