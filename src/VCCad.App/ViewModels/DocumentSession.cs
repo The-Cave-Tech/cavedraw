@@ -459,6 +459,26 @@ public sealed class DocumentSession : INotifyPropertyChanged
             rotationDegrees, frameWidth, alignment));
     }
 
+    /// <summary>
+    /// Records that the person chose a run's face, rather than the document having asked
+    /// for it.
+    ///
+    /// A run imported from a PDF keeps <see cref="TextRun.SourceFont"/> — the name the
+    /// file used — so a font it did not embed can be supplied from the standard chain.
+    /// Once someone picks a face, that name no longer describes what should be drawn, and
+    /// leaving it in place would quietly override their choice.
+    /// </summary>
+    private static void ChoseFace(TextRun run, string family)
+    {
+        run.SourceFont = null;
+
+        // The embedded programme belonged to the face we just replaced.
+        run.EmbeddedFont = null;
+        run.RawCodes = null;
+        run.GlyphIds = null;
+        _ = family;
+    }
+
     /// <summary>Updates the content and uniform style of the selected text
     /// object(s). One undo step.</summary>
     public void UpdateSelectedText(string content, string family, double fontSize, bool bold, bool italic,
@@ -475,6 +495,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 TextEditing.ApplyStyle(text, TextSelectionStart, TextSelectionEnd, run =>
                 {
                     run.FontFamily = family;
+                    ChoseFace(run, family);
                     run.FontSize = fontSize;
                     run.Bold = bold;
                     run.Italic = italic;
@@ -485,6 +506,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 // Style just the run under the caret.
                 TextRun run = text.Runs[r];
                 run.FontFamily = family;
+                ChoseFace(run, family);
                 run.FontSize = fontSize;
                 run.Bold = bold;
                 run.Italic = italic;
@@ -495,6 +517,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 foreach (TextRun run in text.Runs)
                 {
                     run.FontFamily = family;
+                    ChoseFace(run, family);
                     run.FontSize = fontSize;
                     run.Bold = bold;
                     run.Italic = italic;

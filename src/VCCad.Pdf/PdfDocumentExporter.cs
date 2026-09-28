@@ -314,8 +314,10 @@ public static class PdfDocumentExporter
         Point2D topRight = toDoc.Transform(new Point2D(box.Right, box.Top));
         Point2D bottomLeft = toDoc.Transform(new Point2D(box.Left, box.Bottom));
 
-        // (0,0) of the unit square is the image's bottom-left, and the model's is its
-        // top-left, so the two axes run in opposite directions on the way down.
+        // The unit square's origin goes to the placement's top-left, and the v axis runs
+        // the other way down the box — which is what the original file does too: it draws
+        // this image with "136.726 0 0 241.516", a positive d. Mapping (0,0) to the
+        // bottom-left instead flips the picture, and measurably makes page 1 worse.
         double a = topRight.X - topLeft.X;
         double b = topRight.Y - topLeft.Y;
         double c = bottomLeft.X - topLeft.X;

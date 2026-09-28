@@ -47,6 +47,22 @@ public static class StandardFontResolver
     }
 
     /// <summary>The family to draw a run with.</summary>
+    /// <summary>
+    /// The family to draw a run with.
+    ///
+    /// Three cases, and telling them apart is the whole job:
+    ///
+    ///  * **The run carries a programme.** Draw with it. A PDF's own font is never replaced.
+    ///  * **The document asked for a name it did not embed.** Supply it from the standard
+    ///    chain — the machine's URW faces, else a metric-compatible clone. A PDF is
+    ///    entitled to name Helvetica and embed nothing, and every viewer supplies it.
+    ///  * **The person chose the face.** Use it. Someone who picks Consolas from the font
+    ///    list means Consolas, and routing their choice through the standard chain would
+    ///    draw every one of the couple of hundred fonts we offer as the same face.
+    ///
+    /// The distinction between the last two is <see cref="TextRun.SourceFont"/>: it records
+    /// the name the *document* asked for, and styling a run clears it.
+    /// </summary>
     public static string FamilyFor(TextRun run)
     {
         if (run.EmbeddedFont is not null)
@@ -54,7 +70,12 @@ public static class StandardFontResolver
             return run.FontFamily;
         }
 
-        StandardFonts.TryResolve(run.SourceFont ?? run.FontFamily, run.Bold, run.Italic, out StandardFace face);
+        if (run.SourceFont is not { Length: > 0 } source)
+        {
+            return run.FontFamily;
+        }
+
+        StandardFonts.TryResolve(source, run.Bold, run.Italic, out StandardFace face);
 
         if (UrwFamilyFor(face) is { } urw)
         {
