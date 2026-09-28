@@ -17,6 +17,145 @@ namespace VCCad.Pdf;
 internal static class PdfFunctions
 {
     /// <summary>
+    /// A type 0 function: a table of samples, interpolated.
+    ///
+    /// The samples run with the LAST input varying fastest, and each output is
+    /// interpolated between the two surrounding samples along each axis. A table of one
+    /// sample per axis is a constant, which is legitimate and common.
+    /// </summary>
+    public static double[]? Sampled(byte[] table, double[]? size, double[]? domain,
+        double[]? encode, double[]? range, int bitsPerSample, double[] inputs)
+    {
+        if (size is not { Length: >= 1 } || domain is not { Length: >= 2 } ||
+            inputs.Length == 0)
+        {
+            return null;
+        }
+
+        int dimensions = size.Length;
+        if (domain.Length < dimensions * 2 || inputs.Length < dimensions)
+        {
+            return null;
+        }
+
+        // Range gives two numbers per output; half its length is how many there are.
+        int outputs = range is { Length: >= 2 } ? range.Length / 2 : 1;
+        if (outputs < 1)
+        {
+            return null;
+        }
+
+        long samples = 1;
+        foreach (double n in size)
+        {
+            long count = (long)Math.Round(n);
+            if (count < 1)
+            {
+                return null;
+            }
+
+            samples *= count;
+        }
+
+        // One bit packs eight samples to a byte, so the table has to be addressed in bits
+        // and read back the way the file packed it.
+        long bitCount = samples * outputs * bitsPerSample;
+        if (bitCount > (long)table.Length * 8)
+        {
+            return null;
+        }
+
+        var result = new double[outputs];
+        var low = new int[dimensions];
+        var high = new int[dimensions];
+        var fraction = new double[dimensions];
+
+        for (int axis = 0; axis < dimensions; axis++)
+        {
+            int count = (int)Math.Round(size[axis]);
+            double lo = domain[axis * 2];
+            double hi = domain[(axis * 2) + 1];
+
+            double value = Math.Clamp(inputs[axis], Math.Min(lo, hi), Math.Max(lo, hi));
+            value = hi > lo ? (value - lo) / (hi - lo) : 0.0;
+
+            // Encode maps the input straight onto sample indices; without one the whole
+            // table is spanned. Scaling again after encoding would read the wrong sample
+            // — with Encode [0 2] over three samples, a half lands on the last one.
+            double position = encode is { Length: >= 2 } && (axis * 2) + 1 < encode.Length
+                ? encode[axis * 2] + (value * (encode[(axis * 2) + 1] - encode[axis * 2]))
+                : value * (count - 1);
+
+            low[axis] = Math.Clamp((int)Math.Floor(position), 0, count - 1);
+            high[axis] = Math.Clamp(low[axis] + 1, 0, count - 1);
+            fraction[axis] = Math.Max(0.0, position - low[axis]);
+        }
+
+        // Interpolate over the 2^dimensions corners of the cell the input falls in.
+        int corners = 1 << dimensions;
+        for (int corner = 0; corner < corners; corner++)
+        {
+            double weight = 1.0;
+            long index = 0;
+
+            for (int axis = 0; axis < dimensions; axis++)
+            {
+                bool upper = (corner & (1 << axis)) != 0;
+                weight *= upper ? fraction[axis] : 1.0 - fraction[axis];
+                index = (index * (long)Math.Round(size[axis])) + (upper ? high[axis] : low[axis]);
+            }
+
+            if (weight == 0.0)
+            {
+                continue;
+            }
+
+            for (int output = 0; output < outputs; output++)
+            {
+                double raw = ReadBits(table, (index * outputs) + output, bitsPerSample);
+                double max = (1 << bitsPerSample) - 1;
+                result[output] += weight * (max > 0 ? raw / max : 0.0);
+            }
+        }
+
+        // Decode through Range, which maps the interpolated 0..1 onto the output's range.
+        if (range is { Length: >= 2 })
+        {
+            for (int output = 0; output < outputs; output++)
+            {
+                int at = Math.Min(output * 2, range.Length - 2);
+                result[output] = range[at] + (result[output] * (range[at + 1] - range[at]));
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// One sample out of a packed table. Samples are stored most significant bit first,
+    /// which matters at one or two bits per sample where eight and four share a byte.
+    /// </summary>
+    private static double ReadBits(byte[] table, long sample, int bits)
+    {
+        long bitOffset = sample * bits;
+        int value = 0;
+        for (int i = 0; i < bits; i++)
+        {
+            long at = bitOffset + i;
+            long index = at >> 3;
+            if (index >= table.Length)
+            {
+                return 0;
+            }
+
+            int bit = (table[index] >> (7 - (int)(at & 7))) & 1;
+            value = (value << 1) | bit;
+        }
+
+        return value;
+    }
+
+    /// <summary>
     /// A type 3 function: split the input at the boundaries, scale it into the chosen
     /// sub-domain, and hand it to that sub-function through its own encode range.
     /// </summary>

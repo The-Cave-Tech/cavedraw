@@ -1738,6 +1738,13 @@ internal sealed class PdfContentImporter
     /// <summary>Evaluates a PDF function (type 2, and type 0/4 best-effort) for one
     /// input, returning its outputs. Used for Separation/DeviceN tint transforms.</summary>
     /// <summary>
+    /// The bytes of a function's stream, which is where a sampled function keeps its
+    /// table and a type 4 keeps its program.
+    /// </summary>
+    private byte[]? StreamBytes(object? function)
+        => _file.Resolve(function) is PdfStream stream ? _file.GetStreamData(stream) : null;
+
+    /// <summary>
     /// The program inside a type 4 function, which is a stream rather than a dictionary
     /// entry: the code is the stream's own data.
     /// </summary>
@@ -1804,12 +1811,25 @@ internal sealed class PdfContentImporter
 
         if (type == 0)
         {
-            // Sampled function: best effort — return the first sample scaled.
-            object? range = dict.GetValueOrDefault("Range");
-            double[]? r = ReadNumbers(range);
-            if (r is { Length: >= 2 })
+            // A sampled function is a table, and the table is the whole function. The
+            // previous version read the first sample and scaled the range, which is not an
+            // approximation of a sampled function — it ignores every sample but one, so a
+            // tint transform built from a table came out as a straight ramp from nothing.
+            byte[]? table = StreamBytes(function);
+            if (table is not null)
             {
-                return new[] { r[0] + (x * (r[1] - r[0])) };
+                double[]? sampled = PdfFunctions.Sampled(
+                    table,
+                    ReadNumbers(dict.GetValueOrDefault("Size")),
+                    ReadNumbers(dict.GetValueOrDefault("Domain")),
+                    ReadNumbers(dict.GetValueOrDefault("Encode")),
+                    ReadNumbers(dict.GetValueOrDefault("Range")),
+                    (int)(_file.ResolveNumber(dict.GetValueOrDefault("BitsPerSample")) ?? 8),
+                    inputs.ToArray());
+                if (sampled is not null)
+                {
+                    return sampled;
+                }
             }
         }
 
