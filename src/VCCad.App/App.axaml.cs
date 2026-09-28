@@ -7,6 +7,7 @@ using Avalonia.Platform;
 using VCCad.App.Automation;
 using VCCad.App.Fonts;
 using VCCad.App.Views;
+using VCCad.Core.Model;
 
 namespace VCCad.App;
 
@@ -90,6 +91,7 @@ public partial class App : Application
             view.PromptBeforeExit(() =>
             {
                 exitConfirmed = true;
+                SessionJournal.Clear();
                 desktop.Shutdown();
             });
         }
@@ -234,7 +236,24 @@ public partial class App : Application
             RequestExit();
         };
 
-        desktop.ShutdownRequested += (_, _) => host.Server?.Dispose();
+        desktop.ShutdownRequested += (_, _) =>
+        {
+            // A clean exit means there is nothing to recover next time.
+            SessionJournal.Clear();
+            host.Server?.Dispose();
+        };
+
+        // If the last run ended badly, the journal is still there: offer the work back,
+        // with the command queue that produced it.
+        if (SessionJournal.HasRecoverableSession)
+        {
+            CadDocument? recovered = SessionJournal.TryRecover();
+            if (recovered is not null)
+            {
+                IReadOnlyList<string> queue = SessionJournal.ReadQueue();
+                view.OfferRecovery(recovered, queue.Count);
+            }
+        }
 
         if (options.ShowDiagnostics)
         {

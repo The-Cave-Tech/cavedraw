@@ -9,6 +9,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using VCCad.App.Docking;
+using VCCad.App.Automation;
 using VCCad.App.Fonts;
 using VCCad.App.ViewModels;
 using VCCad.App.Views.Panes;
@@ -837,6 +838,10 @@ public partial class EditorView : UserControl
     {
         this.FindControl<Grid>("ConfirmOverlay")!.IsVisible = false;
         _pendingConfirm = null;
+
+        // The overlay is shared, so its buttons go back to their usual labels.
+        this.FindControl<Button>("ConfirmSave")!.Content = "Save";
+        this.FindControl<Button>("ConfirmDiscard")!.Content = "Discard";
     }
 
     private void OnConfirmSave(object? sender, RoutedEventArgs e)
@@ -855,6 +860,33 @@ public partial class EditorView : UserControl
     }
 
     private void OnConfirmCancel(object? sender, RoutedEventArgs e) => CloseConfirmOverlay();
+
+    /// <summary>
+    /// Offers work left behind by a run that ended badly. Recovery is the person's choice,
+    /// not automatic: the snapshot may be a second or two behind, and silently replacing
+    /// whatever is open with it would be a worse surprise than asking.
+    /// </summary>
+    public void OfferRecovery(VCCad.Core.Model.CadDocument recovered, int commands)
+    {
+        _recovered = recovered;
+        _pendingConfirm = () =>
+        {
+            _viewModel.AddDocument(recovered);
+            SessionJournal.Clear();
+            UpdateStatus();
+        };
+
+        this.FindControl<TextBlock>("ConfirmTitle")!.Text = "Recover unsaved work?";
+        this.FindControl<TextBlock>("ConfirmMessage")!.Text =
+            $"A previous session ended unexpectedly. {commands} command(s) were recorded " +
+            $"since the last save of \u0022{recovered.Name}\u0022.";
+        this.FindControl<Button>("ConfirmSave")!.Content = "Recover";
+        this.FindControl<Button>("ConfirmDiscard")!.Content = "Discard";
+        this.FindControl<Grid>("ConfirmOverlay")!.IsVisible = true;
+    }
+
+    /// <summary>The document offered for recovery, so a discard can drop it.</summary>
+    private VCCad.Core.Model.CadDocument? _recovered;
 
     /// <summary>Whether anything open has changes that are not on disk.</summary>
     public bool HasUnsavedChanges => _viewModel.Sessions.Any(s => s.IsModified);

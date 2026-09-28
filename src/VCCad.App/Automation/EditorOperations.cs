@@ -194,6 +194,15 @@ public static class EditorOperations
                 ? await asyncHandler(context, parameters, cancellationToken).ConfigureAwait(false)
                 : await Dispatcher.UIThread.InvokeAsync(() => operation.Handler!(context, parameters));
 
+            // Journal the command, not just its effect. A list of operation calls is a
+            // complete description of an edit because every edit goes through this one
+            // registry, and it is what lets a crash be recovered rather than merely
+            // noticed.
+            if (SessionJournal.IsMutation(name))
+            {
+                SessionJournal.Record(name, json, context.Document);
+            }
+
             DiagnosticsLog.Add(source, name, json, result, success: true,
                 durationMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - start);
             return result;
@@ -244,6 +253,15 @@ public static class EditorOperations
         try
         {
             object? result = operation.Handler(context, parameters);
+            // Journal the command, not just its effect. A list of operation calls is a
+            // complete description of an edit because every edit goes through this one
+            // registry, and it is what lets a crash be recovered rather than merely
+            // noticed.
+            if (SessionJournal.IsMutation(name))
+            {
+                SessionJournal.Record(name, json, context.Document);
+            }
+
             DiagnosticsLog.Add(source, name, json, result, success: true,
                 durationMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - start);
             return result;
