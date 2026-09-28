@@ -27,4 +27,10 @@
     <ProjectReference Include="../VCCad.Pdf/VCCad.Pdf.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The dock's drag arithmetic is worth testing on its own: it needs a laid-out grid to
+         read row heights from, which a test can build but a pointer event cannot. -->
+    <InternalsVisibleTo Include="VCCad.App.Tests" />
+  </ItemGroup>
+
 </Project>

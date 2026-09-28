@@ -130,6 +130,7 @@ public static class DockStackLayout
         double startBelow = 0;
         double startWeightAbove = 0;
         double startWeightBelow = 0;
+        Dictionary<int, double> startStars = new();
         bool dragging = false;
 
         separator.PointerPressed += (_, e) =>
@@ -139,6 +140,7 @@ public static class DockStackLayout
             startBelow = host.RowDefinitions[belowRow].ActualHeight;
             startWeightAbove = above.Weight;
             startWeightBelow = below.Weight;
+            startStars = StarHeights(host);
             dragging = true;
             e.Pointer.Capture(separator);
             e.Handled = true;
@@ -152,7 +154,7 @@ public static class DockStackLayout
             }
 
             ApplyDrag(host, above, below, aboveRow, belowRow, startAbove, startBelow,
-                startWeightAbove + startWeightBelow, e.GetPosition(host).Y - startY);
+                startWeightAbove + startWeightBelow, startStars, e.GetPosition(host).Y - startY);
             e.Handled = true;
         };
 
@@ -174,52 +176,109 @@ public static class DockStackLayout
     }
 
     /// <summary>
+    /// The height every stretchable row has right now, by row index.
+    ///
+    /// Taken when the drag begins, because it is what the rows that are <em>not</em> being
+    /// dragged have to be put back to.
+    /// </summary>
+    internal static Dictionary<int, double> StarHeights(Grid host)
+    {
+        var heights = new Dictionary<int, double>();
+
+        for (int i = 0; i < host.RowDefinitions.Count; i++)
+        {
+            RowDefinition row = host.RowDefinitions[i];
+            if (row.Height.IsStar && row.ActualHeight > 0)
+            {
+                heights[i] = row.ActualHeight;
+            }
+        }
+
+        return heights;
+    }
+
+    /// <summary>
+    /// Gives the stretchable rows the heights they are meant to have, and leaves every other
+    /// stretchable row exactly where it was.
+    ///
+    /// Star rows divide the slack between them, so resizing a fixed panel moves all of them:
+    /// dragging the bar above the Objects panel shrank Objects <em>and</em> the panel below
+    /// it. Writing each row's own height back as its weight pins the ones the drag does not
+    /// touch, which is what dragging a bar between two panels is supposed to do.
+    /// </summary>
+    internal static void SetStarHeights(Grid host, IReadOnlyDictionary<int, double> desired)
+    {
+        foreach ((int row, double height) in desired)
+        {
+            if (row >= 0 && row < host.RowDefinitions.Count)
+            {
+                host.RowDefinitions[row].Height =
+                    new GridLength(Math.Max(0.01, height), GridUnitType.Star);
+            }
+        }
+    }
+
+    /// <summary>
     /// Moves the boundary by <paramref name="delta"/> live, without touching the model
     /// until the drag ends.
     ///
-    /// With both ends stretchable the pair is treated as a fixed number of pixels being
-    /// divided differently; otherwise only the fixed panel's row changes and the
-    /// stretchable neighbour absorbs the difference.
+    /// The row either side of the bar takes the whole change and every other stretchable row
+    /// keeps its height, so a bar moves its own boundary and nothing else. Only the panels
+    /// either side of it change.
     /// </summary>
-    private static void ApplyDrag(Grid host, DockPanelModel above, DockPanelModel below,
+    internal static void ApplyDrag(Grid host, DockPanelModel above, DockPanelModel below,
         int aboveRow, int belowRow, double startAbove, double startBelow,
-        double pairWeight, double delta)
+        double pairWeight, IReadOnlyDictionary<int, double> startStars, double delta)
     {
-        double total = startAbove + startBelow;
-        if (total <= 0)
-        {
-            return;
-        }
-
         double lowest = DockPanelModel.MinimumHeight;
-        double highest = Math.Max(lowest, total - DockPanelModel.MinimumHeight);
+        var desired = new Dictionary<int, double>(startStars);
 
         if (above.IsStretchable && below.IsStretchable)
         {
+            double total = startAbove + startBelow;
+            if (total <= 0)
+            {
+                return;
+            }
+
+            double highest = Math.Max(lowest, total - lowest);
             double newAbove = Math.Clamp(startAbove + delta, lowest, highest);
             double newBelow = total - newAbove;
 
-            // The two panels' combined weight is preserved, so panels further down the
-            // stack keep their share. Handing the raw pixel counts in as weights would
-            // silently rebalance every other stretchable panel in the host.
+            // The pair's combined weight is preserved, so panels elsewhere in the stack keep
+            // their share. Handing the raw pixel counts in as weights would silently
+            // rebalance every other stretchable panel in the host.
             double scale = pairWeight / total;
             above.Weight = Math.Max(0.01, newAbove * scale);
             below.Weight = Math.Max(0.01, newBelow * scale);
 
-            host.RowDefinitions[aboveRow].Height = new GridLength(above.Weight, GridUnitType.Star);
-            host.RowDefinitions[belowRow].Height = new GridLength(below.Weight, GridUnitType.Star);
+            desired[aboveRow] = newAbove;
+            desired[belowRow] = newBelow;
+            SetStarHeights(host, desired);
             return;
         }
+
+        double span = Math.Max(lowest, startAbove + startBelow - lowest);
 
         if (above.IsStretchable)
         {
-            double newBelow = Math.Clamp(startBelow - delta, lowest, highest);
+            // The panel below is fixed: it takes the drag, and the panel above absorbs the
+            // difference so nothing beyond this bar moves.
+            double newBelow = Math.Clamp(startBelow - delta, lowest, span);
             host.RowDefinitions[belowRow].Height = new GridLength(newBelow);
+            desired[aboveRow] = Math.Max(lowest, startAbove + (startBelow - newBelow));
+            SetStarHeights(host, desired);
             return;
         }
 
-        host.RowDefinitions[aboveRow].Height =
-            new GridLength(Math.Clamp(startAbove + delta, lowest, highest));
+        double newAboveFixed = Math.Clamp(startAbove + delta, lowest, span);
+        host.RowDefinitions[aboveRow].Height = new GridLength(newAboveFixed);
+
+        if (startStars.ContainsKey(belowRow))
+        {
+            desired[belowRow] = Math.Max(lowest, startBelow + (startAbove - newAboveFixed));
+            SetStarHeights(host, desired);
+        }
     }
 
     /// <summary>
