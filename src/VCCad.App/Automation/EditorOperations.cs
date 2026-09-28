@@ -720,11 +720,22 @@ public static class EditorOperations
                 return DescribeOne(item);
             });
 
-        Add("object.rename", "Rename an object.", "itemId:guid, name:string",
+        Add("object.rename",
+            "Rename an object, as the Layers panel's context menu does. The name is then the " +
+            "person's: it is shown instead of the one derived from the object's geometry, and " +
+            "it stays put when that geometry changes.",
+            "itemId:guid, name:string",
             (ctx, p) =>
             {
                 LayerItem item = RequireItem(ctx.Document, p.RequireGuid("itemId"));
-                item.Name = p.GetString("name") ?? item.Name;
+                string? name = p.GetString("name");
+
+                if (name is not null)
+                {
+                    item.Name = name;
+                    item.NameIsUserSet = true;
+                }
+
                 ctx.ViewModel.NotifyDocumentChanged();
                 return DescribeOne(item);
             });

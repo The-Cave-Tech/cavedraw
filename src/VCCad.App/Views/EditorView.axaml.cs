@@ -319,8 +319,8 @@ public partial class EditorView : UserControl
         appearance.Tabs.Add(new DockTab { Id = "text", Title = "Text", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => text });
         appearance.ActiveTabId = "colors";
 
-        var objectsPanel = new DockPanelModel { Id = "objects", Title = "Objects", Side = DockSide.Right };
-        objectsPanel.Tabs.Add(new DockTab { Id = "objects", Title = "Objects", PanelId = "objects", DefaultSide = DockSide.Right, ContentFactory = () => objects, IsOpen = true });
+        var objectsPanel = new DockPanelModel { Id = "objects", Title = "Layers", Side = DockSide.Right };
+        objectsPanel.Tabs.Add(new DockTab { Id = "objects", Title = "Layers", PanelId = "objects", DefaultSide = DockSide.Right, ContentFactory = () => objects, IsOpen = true });
         objectsPanel.ActiveTabId = "objects";
 
         var transformPanel = new DockPanelModel { Id = "transform", Title = "Transform", Side = DockSide.Right };

@@ -40,6 +40,22 @@ public abstract class CadObject : INotifyPropertyChanged
         set => SetField(ref _name, value);
     }
 
+    private bool _nameIsUserSet;
+
+    /// <summary>
+    /// Whether a person gave this object its name.
+    ///
+    /// A name that was typed is theirs and lasts. A name that was not is a guess at what the
+    /// thing is, and is recomputed as the geometry changes — a path that began as a line and
+    /// was dragged into a curve should read "Curve", but one somebody called "Left sleeve"
+    /// should keep saying so.
+    /// </summary>
+    public bool NameIsUserSet
+    {
+        get => _nameIsUserSet;
+        set => SetField(ref _nameIsUserSet, value);
+    }
+
     /// <summary>
     /// The object that directly contains this one (a <see cref="Layer"/> or an
     /// <see cref="ArtGroup"/>), or <c>null</c> when detached. Maintained by the

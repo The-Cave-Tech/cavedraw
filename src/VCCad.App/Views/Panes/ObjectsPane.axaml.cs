@@ -203,12 +203,12 @@ public partial class ObjectsPane : UserControl
         parent.Children.Add(node);
     }
 
-    private static string DescribeItem(LayerItem item) => item switch
-    {
-        PathItem path => $"{path.Name} · {path.SubPaths.Sum(sp => sp.SegmentCount)} seg · {(path.IsFullyClosed ? "closed" : "open")}",
-        ArtGroup group => $"▸ {group.Name}",
-        _ => item.Name,
-    };
+    /// <summary>
+    /// What the row reads. A name somebody typed, or what the object is: a panel of "Path",
+    /// "Path", "Path" tells the person nothing, and the geometry already says which is a line,
+    /// a rectangle or an ellipse.
+    /// </summary>
+    private static string DescribeItem(LayerItem item) => ObjectNaming.DisplayName(item);
 
     private void OnTreePointerPressed(object? sender, PointerPressedEventArgs e)
     {
