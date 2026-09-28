@@ -788,6 +788,12 @@ internal sealed class PdfContentImporter
         Dictionary<string, object?> childResources =
             _file.ResolveDict(dict.GetValueOrDefault("Resources")) ?? resources;
 
+        // A form's /BBox clips everything it draws, and that is not applied yet. It was
+        // implemented and reverted: attaching the box took the LILLIE pages from showing
+        // their artwork to showing almost nothing, and the cause is not yet understood. The
+        // boxes themselves are real and small — /BBox [0 -9 124.084 0.900055] belongs to a
+        // form holding one line of header text — so the mistake is in how the box was taken
+        // into page space, not in whether it should be used.
         Interpret(_file.GetStreamData(stream), childResources, ctm.Compose(matrix), items, depth + 1, layer);
     }
 

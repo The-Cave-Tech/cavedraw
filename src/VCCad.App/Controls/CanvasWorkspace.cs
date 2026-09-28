@@ -2988,6 +2988,86 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        // An item keeps the clips the file put on it, and the canvas has to honour them or
+        // the person sees artwork the document says is hidden. They were imported, dumped,
+        // round-tripped and exported, and drawn nowhere: the view clipped each page to its
+        // box and left it at that.
+        //
+        // One clip per scope, pushed in turn, because several clips intersect — a file that
+        // sets two means "inside both". Putting them in one geometry would union them and
+        // show more than the file allows.
+        var scopes = new List<DrawingContext.PushedState>();
+        try
+        {
+            foreach (StreamGeometry clip in ClipGeometries(item))
+            {
+                scopes.Add(context.PushGeometryClip(clip));
+            }
+
+            PaintItemCore(context, item, opacity);
+        }
+        finally
+        {
+            for (int i = scopes.Count - 1; i >= 0; i--)
+            {
+                scopes[i].Dispose();
+            }
+        }
+    }
+
+    /// <summary>One geometry per clip on the item, in the order the file set them.</summary>
+    private static IEnumerable<StreamGeometry> ClipGeometries(LayerItem item)
+    {
+        if (!item.IsClipped)
+        {
+            yield break;
+        }
+
+        Vector2D offset = item.ArtboardOffset();
+
+        foreach (ClipSpec clip in item.Clips)
+        {
+            var geometry = new StreamGeometry();
+
+            using (StreamGeometryContext g = geometry.Open())
+            {
+                g.SetFillRule(clip.Rule == ModelFillRule.EvenOdd
+                    ? MediaFillRule.EvenOdd
+                    : MediaFillRule.NonZero);
+
+                foreach (SubPath sub in clip.SubPaths)
+                {
+                    if (sub.Nodes.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    g.BeginFigure(
+                        new Point(sub.Nodes[0].Anchor.X + offset.X, sub.Nodes[0].Anchor.Y + offset.Y),
+                        sub.IsClosed);
+
+                    int last = sub.IsClosed ? sub.Nodes.Count : sub.Nodes.Count - 1;
+                    for (int i = 0; i < last; i++)
+                    {
+                        PathNode from = sub.Nodes[i];
+                        PathNode to = sub.Nodes[(i + 1) % sub.Nodes.Count];
+                        g.CubicBezierTo(
+                            new Point(from.OutHandle.X + offset.X, from.OutHandle.Y + offset.Y),
+                            new Point(to.InHandle.X + offset.X, to.InHandle.Y + offset.Y),
+                            new Point(to.Anchor.X + offset.X, to.Anchor.Y + offset.Y));
+                    }
+
+                    g.EndFigure(sub.IsClosed);
+                }
+            }
+
+            yield return geometry;
+        }
+    }
+
+    private void PaintItemCore(DrawingContext context, LayerItem item, double opacity)
+    {
+
         switch (item)
         {
             case PathItem path when path.IsVisible:
