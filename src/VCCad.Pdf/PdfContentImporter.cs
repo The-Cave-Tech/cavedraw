@@ -611,7 +611,7 @@ internal sealed class PdfContentImporter
 
                     break;
                 case "Do" when operands.Count >= 1 && operands[0] is PdfName xname:
-                    DrawXObject(resources, xname.Value, current, items, depth, currentLayer);
+                    DrawXObject(resources, xname.Value, current, items, depth, currentLayer, fillColor);
                     break;
             }
 
@@ -620,7 +620,8 @@ internal sealed class PdfContentImporter
     }
 
     private void DrawXObject(Dictionary<string, object?> resources, string name,
-        AffineTransform ctm, List<PdfImportedItem> items, int depth, string? layer)
+        AffineTransform ctm, List<PdfImportedItem> items, int depth, string? layer,
+        ColorRgb fillColor)
     {
         if (_file.ResolveDict(resources.GetValueOrDefault("XObject")) is not { } xobjects ||
             _file.Resolve(xobjects.GetValueOrDefault(name)) is not PdfStream stream ||
@@ -632,7 +633,7 @@ internal sealed class PdfContentImporter
         // Images are painted, not interpreted: the CTM maps the unit square onto the page.
         if (dict.GetValueOrDefault("Subtype") is PdfName { Value: "Image" })
         {
-            AddImage(dict, stream, ctm, items, layer);
+            AddImage(dict, stream, ctm, items, layer, fillColor);
             return;
         }
 
@@ -656,6 +657,85 @@ internal sealed class PdfContentImporter
     }
 
     /// <summary>
+    /// Records an image mask — a one-bit stencil painted in the current fill colour.
+    ///
+    /// Kept as an Indexed image of two palette entries rather than as a greyscale one,
+    /// because the interesting part is the colour the stencil paints in, and greyscale
+    /// samples would paint black and white instead. Coverage comes from the stencil:
+    /// opaque where the file says paint, transparent where it does not, so the page shows
+    /// through rather than a white rectangle appearing.
+    /// </summary>
+    private void AddStencil(Dictionary<string, object?> dict, PdfStream stream,
+        AffineTransform ctm, List<PdfImportedItem> items, string? layer, ColorRgb fillColor,
+        int width, int height)
+    {
+        byte[] samples = _file.GetStreamData(stream);
+
+        // Decode [0 1] paints where the sample is 0; [1 0] inverts that. The default is
+        // the former, so only an explicit inversion changes the reading.
+        bool inverted = false;
+        if (_file.Resolve(dict.GetValueOrDefault("Decode")) is List<object?> decode &&
+            decode.Count >= 2 &&
+            ToDouble(_file.Resolve(decode[0])) > ToDouble(_file.Resolve(decode[1])))
+        {
+            inverted = true;
+        }
+
+        var coverage = new byte[width * height];
+        var probe = new ImageItem
+        {
+            PixelWidth = width,
+            PixelHeight = height,
+            BitsPerComponent = 1,
+            ColorSpace = ImageColorSpace.Gray,
+            Samples = samples,
+        };
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                bool paint = probe.RawSampleAt(x, y) == 0;
+                if (inverted)
+                {
+                    paint = !paint;
+                }
+
+                coverage[(y * width) + x] = paint ? (byte)255 : (byte)0;
+            }
+        }
+
+        var image = new ImageItem
+        {
+            Name = dict.GetValueOrDefault("Name") is PdfName { Value: var n } ? n : "Stencil",
+            PixelWidth = width,
+            PixelHeight = height,
+            BitsPerComponent = 1,
+            ColorSpace = ImageColorSpace.Indexed,
+            Samples = samples,
+
+            // Entry 0 is the colour the stencil paints; entry 1 is never seen, because
+            // coverage is zero wherever the sample selects it.
+            Palette = new byte[]
+            {
+                (byte)Math.Clamp(Math.Round(fillColor.R * 255.0), 0, 255),
+                (byte)Math.Clamp(Math.Round(fillColor.G * 255.0), 0, 255),
+                (byte)Math.Clamp(Math.Round(fillColor.B * 255.0), 0, 255),
+                0, 0, 0,
+            },
+            Mask = coverage,
+        };
+
+        Point2D stencil0 = ctm.Transform(new Point2D(0, 0));
+        Point2D stencil1 = ctm.Transform(new Point2D(1, 1));
+        image.Placement = Rect2D.FromPoints(
+            new Point2D(stencil0.X, _pageHeight - stencil0.Y),
+            new Point2D(stencil1.X, _pageHeight - stencil1.Y));
+
+        items.Add(new PdfImportedItem(layer, image));
+    }
+
+    /// <summary>
     /// Records an embedded raster image.
     ///
     /// Samples are kept decoded but otherwise untouched, in the colour space the file
@@ -663,12 +743,22 @@ internal sealed class PdfContentImporter
     /// placement comes from the CTM, which maps the image's unit square onto the page.
     /// </summary>
     private void AddImage(Dictionary<string, object?> dict, PdfStream stream,
-        AffineTransform ctm, List<PdfImportedItem> items, string? layer)
+        AffineTransform ctm, List<PdfImportedItem> items, string? layer, ColorRgb fillColor)
     {
         int width = (int)Math.Round(ToDouble(_file.Resolve(dict.GetValueOrDefault("Width"))));
         int height = (int)Math.Round(ToDouble(_file.Resolve(dict.GetValueOrDefault("Height"))));
         if (width <= 0 || height <= 0)
         {
+            return;
+        }
+
+        // A stencil has no colour space of its own: it paints the current fill colour
+        // wherever its one bit says to. Treating it as a greyscale image instead gives a
+        // 1-bit RGB image with three components per pixel where the file has one, which
+        // is not merely wrong but unrenderable.
+        if (_file.Resolve(dict.GetValueOrDefault("ImageMask")) is true)
+        {
+            AddStencil(dict, stream, ctm, items, layer, fillColor, width, height);
             return;
         }
 
