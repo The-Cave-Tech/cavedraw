@@ -4,6 +4,7 @@ using System.Text.Json;
 using Avalonia;
 using Avalonia.VisualTree;
 using Avalonia.Threading;
+using VCCad.App.Controls;
 using VCCad.App.Fonts;
 using VCCad.Pdf;
 using VCCad.App.ViewModels;
@@ -372,6 +373,39 @@ public static class EditorOperations
             });
 
         // ---- objects -----------------------------------------------------
+        Add("image.exportPng",
+            "Write an embedded raster image to a PNG file at its natural pixel size. " +
+            "How to look at what was imported without the canvas in the way, and how to " +
+            "get a scan back out of a document.",
+            "itemId?:guid (default: selected image), path:string",
+            (ctx, p) =>
+            {
+                LayerItem? target = p.TryGetProperty("itemId", out JsonElement iv) &&
+                                    Guid.TryParse(iv.GetString(), out Guid id)
+                    ? FindItem(ctx.Document, id)
+                    : ctx.ViewModel.SelectedObjects.FirstOrDefault();
+
+                if (target is not ImageItem image)
+                {
+                    throw new EditorOperationException("No image object is selected.");
+                }
+
+                string path = p.GetString("path")
+                    ?? throw new EditorOperationException("A path is required.");
+
+                using Avalonia.Media.Imaging.Bitmap bitmap = ImageRenderer.BitmapFor(image);
+                bitmap.Save(path);
+
+                return new
+                {
+                    path,
+                    pixelWidth = image.PixelWidth,
+                    pixelHeight = image.PixelHeight,
+                    colorSpace = image.ColorSpace.ToString(),
+                    hasMask = image.HasMask,
+                };
+            });
+
         Add("object.list", "Every object with id, type, parent, bounds and flags. Paged: a real-world " +
                            "document can hold thousands of objects, so prefer object.find when you know " +
                            "what you are looking for.",
