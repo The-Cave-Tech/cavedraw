@@ -188,6 +188,29 @@ internal sealed class PdfContentImporter
         var operands = new List<object?>();
         var subPaths = new List<SubPath>();
 
+        /// <summary>
+        /// Moves the text matrix on by the width of what was just shown, which is what a
+        /// viewer does after every show operation.
+        ///
+        /// Without it a line drawn as several show operations — the usual shape when the
+        /// font changes mid-line, for a trademark symbol or a product name — put every
+        /// piece back at the line's start. The Transparency Guide's page 2 laid its legal
+        /// notice out that way: 'Adobe, the Adobe logo, ' and 'Illustrator' arrived at the
+        /// same origin, and reading the page back gave the two lines interleaved.
+        /// </summary>
+        void AdvanceTextMatrixBy(double textSpaceWidth)
+        {
+            if (Math.Abs(textSpaceWidth) > 1e-9)
+            {
+                textMatrix = textMatrix.Compose(AffineTransform.CreateTranslation(textSpaceWidth, 0));
+            }
+        }
+
+        void AdvanceTextMatrix(string shown) => AdvanceTextMatrixBy(MeasureAdvance(
+            shown, fontName, resources, fontSize,
+            new TextState(charSpacing, wordSpacing, horizontalScale, rise),
+            IsCompositeFont(fontName, resources)) ?? 0);
+
         void TakeClip()
         {
             if (!_pendingClip)
@@ -622,6 +645,7 @@ internal sealed class PdfContentImporter
                     break;
                 case "Tj" when operands.Count >= 1 && operands[0] is string text:
                     ShowText(text, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer, fillCmyk, new TextState(charSpacing, wordSpacing, horizontalScale, rise));
+                    AdvanceTextMatrix(text);
                     break;
                 case "TJ" when operands.Count >= 1 && operands[0] is List<object?> array:
                     // A TJ array interleaves strings with positioning adjustments, in
@@ -706,6 +730,18 @@ internal sealed class PdfContentImporter
                                 new TextState(charSpacing, wordSpacing, horizontalScale, rise),
                                 gap);
                         }
+
+                        // The whole array has now moved the pen; the next show operation
+                        // continues from there, exactly as it would in a viewer.
+                        double shown = 0;
+                        foreach ((string part, double offset) in segments)
+                        {
+                            shown = offset + (MeasureAdvance(part, fontName, resources, fontSize,
+                                new TextState(charSpacing, wordSpacing, horizontalScale, rise),
+                                IsCompositeFont(fontName, resources)) ?? 0);
+                        }
+
+                        AdvanceTextMatrixBy(shown + pendingShift);
                     }
 
                     break;
