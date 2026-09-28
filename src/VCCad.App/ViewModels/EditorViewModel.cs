@@ -254,7 +254,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     public byte[] ExportPdf()
     {
-        byte[] pdf = VCCad.Pdf.PdfDocumentExporter.Export(Document);
+// The command queue travels with the file as our own private data, so the
+        // document remembers how it was made as well as what it looks like.
+        byte[] pdf = VCCad.Pdf.PdfDocumentExporter.Export(
+            Document, VCCad.App.Automation.SessionJournal.ReadQueue());
         Status = $"Exported {pdf.Length:N0} bytes of PDF";
 
         // Writing the document out is what "saved" means, so nothing is pending afterwards.

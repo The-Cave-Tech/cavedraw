@@ -43,15 +43,24 @@ public static class PdfDocumentExporter
     public const string SidecarFileName = "vccad-document";
 
     /// <summary>Exports the document and returns the complete PDF bytes.</summary>
-    public static byte[] Export(CadDocument document)
+    public static byte[] Export(CadDocument document, IReadOnlyList<string>? history = null)
     {
         using var buffer = new MemoryStream();
-        Export(document, buffer);
+        Export(document, buffer, history);
         return buffer.ToArray();
     }
 
-    /// <summary>Exports the document into <paramref name="output"/>.</summary>
-    public static void Export(CadDocument document, Stream output)
+    /// <summary>
+    /// Exports the document into <paramref name="output"/>.
+    ///
+    /// <paramref name="history"/> is our own private data: the command queue that produced
+    /// the document. Carrying it in the file means a document remembers how it was made,
+    /// not just what it looks like, and a session restored from a file can show the steps
+    /// that built it. Stored as a separate catalog stream beside the model sidecar, so a
+    /// reader that does not care about it can ignore both.
+    /// </summary>
+    public static void Export(CadDocument document, Stream output,
+        IReadOnlyList<string>? history = null)
     {
         var assembler = new PdfAssembler();
 
@@ -132,6 +141,15 @@ public static class PdfDocumentExporter
         // that are themselves PDF/A, and our model JSON is not.
         assembler.SetBody(sidecarStreamNumber, MakeStreamObject(sidecarStream));
 
+        // The command queue, in our own catalog stream. Absent when there is nothing to
+        // record, so an export of a freshly opened file stays as small as it was.
+        int historyStreamNumber = history is { Count: > 0 } ? assembler.Allocate() : 0;
+        if (historyStreamNumber != 0)
+        {
+            byte[] historyBytes = Compress(Encoding.UTF8.GetBytes(string.Join("\n", history!)));
+            assembler.SetBody(historyStreamNumber, MakeStreamObject(historyBytes));
+        }
+
         // ------------------------------------------------------------------
         // Document metadata: /Info, a file /ID and an XMP packet. PDF/A (which
         // dominates the veraPDF corpus) requires all three.
@@ -183,6 +201,7 @@ public static class PdfDocumentExporter
             catalogNumber,
             $"<< /Type /Catalog /Pages {pagesNumber} 0 R " +
             $"/VCCadDocument {sidecarStreamNumber} 0 R " +
+            (historyStreamNumber != 0 ? $"/VCCadHistory {historyStreamNumber} 0 R " : string.Empty) +
             catalogCreatorInfo +
             $"/Metadata {metadataNumber} 0 R /OutputIntents [{outputIntentNumber} 0 R] >>");
 
