@@ -145,7 +145,8 @@ internal sealed class PdfContentImporter
         var stack = new Stack<(AffineTransform Ctm, double LineWidth, int LineCap, int LineJoin,
             double MiterLimit, DashPattern Dash, ColorRgb Stroke, ColorRgb Fill,
             object? StrokeSpace, object? FillSpace, double StrokeAlpha, double FillAlpha,
-            string FontName, double FontSize, double Leading, double[]? FillCmyk, double[]? StrokeCmyk)>();
+            string FontName, double FontSize, double Leading, double[]? FillCmyk, double[]? StrokeCmyk,
+            double CharSpacing, double WordSpacing, double HorizontalScale, double Rise)>();
         AffineTransform current = ctm;
         double lineWidth = 1.0;
         int lineCap = 0;
@@ -164,6 +165,15 @@ internal sealed class PdfContentImporter
         object? fillSpace = null;
         double strokeAlpha = 1.0;
         double fillAlpha = 1.0;
+
+        // Text state. None of this is decoration: spacing and horizontal scale change how
+        // wide the text is, and rise moves it off the baseline, so a run measured without
+        // them is a run the file did not draw. They are part of the graphics state, so
+        // q/Q save and restore them along with everything else.
+        double charSpacing = 0.0;
+        double wordSpacing = 0.0;
+        double horizontalScale = 1.0;
+        double rise = 0.0;
 
         AffineTransform textMatrix = AffineTransform.Identity;
         AffineTransform lineMatrix = AffineTransform.Identity;
@@ -284,14 +294,16 @@ internal sealed class PdfContentImporter
                 case "q":
                     stack.Push((current, lineWidth, lineCap, lineJoin, miterLimit, dash,
                         strokeColor, fillColor, strokeSpace, fillSpace, strokeAlpha, fillAlpha,
-                        fontName, fontSize, leading, fillCmyk, strokeCmyk));
+                        fontName, fontSize, leading, fillCmyk, strokeCmyk,
+                        charSpacing, wordSpacing, horizontalScale, rise));
                     break;
                 case "Q":
                     if (stack.Count > 0)
                     {
                         (current, lineWidth, lineCap, lineJoin, miterLimit, dash,
                             strokeColor, fillColor, strokeSpace, fillSpace, strokeAlpha, fillAlpha,
-                            fontName, fontSize, leading, fillCmyk, strokeCmyk) = stack.Pop();
+                            fontName, fontSize, leading, fillCmyk, strokeCmyk,
+                            charSpacing, wordSpacing, horizontalScale, rise) = stack.Pop();
                     }
 
                     break;
@@ -507,12 +519,28 @@ internal sealed class PdfContentImporter
                 case "'" when operands.Count >= 1 && operands[0] is string sq:
                     lineMatrix = lineMatrix.Compose(AffineTransform.CreateTranslation(0, -leading));
                     textMatrix = lineMatrix;
-                    ShowText(sq, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer, fillCmyk);
+                    ShowText(sq, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer, fillCmyk, new TextState(charSpacing, wordSpacing, horizontalScale, rise));
                     break;
                 case "\"" when operands.Count >= 3 && operands[2] is string dq:
                     lineMatrix = lineMatrix.Compose(AffineTransform.CreateTranslation(0, -leading));
                     textMatrix = lineMatrix;
-                    ShowText(dq, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer, fillCmyk);
+                    ShowText(dq, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer, fillCmyk, new TextState(charSpacing, wordSpacing, horizontalScale, rise));
+                    break;
+
+                // Text state. A run measured without these is a run the file did not
+                // draw: spacing widens it, horizontal scale condenses or expands it, and
+                // rise moves it off the baseline.
+                case "Tc" when operands.Count >= 1:
+                    charSpacing = Number(0);
+                    break;
+                case "Tw" when operands.Count >= 1:
+                    wordSpacing = Number(0);
+                    break;
+                case "Tz" when operands.Count >= 1:
+                    horizontalScale = Number(0) / 100.0;
+                    break;
+                case "Ts" when operands.Count >= 1:
+                    rise = Number(0);
                     break;
                 case "Tf" when operands.Count >= 2:
                     fontName = operands[0] is PdfName pn ? pn.Value : string.Empty;
@@ -540,7 +568,7 @@ internal sealed class PdfContentImporter
                     textMatrix = lineMatrix;
                     break;
                 case "Tj" when operands.Count >= 1 && operands[0] is string text:
-                    ShowText(text, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer, fillCmyk);
+                    ShowText(text, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer, fillCmyk, new TextState(charSpacing, wordSpacing, horizontalScale, rise));
                     break;
                 case "TJ" when operands.Count >= 1 && operands[0] is List<object?> array:
                     // A TJ array interleaves strings with positioning adjustments, in
@@ -585,7 +613,8 @@ internal sealed class PdfContentImporter
                                 {
                                     // The pen also advances by the glyphs just shown; without
                                     // that the next piece lands one advance too far left.
-                                    pen += MeasureAdvance(buffer.ToString(), fontName, resources, fontSize) ?? 0;
+                                    pen += MeasureAdvance(buffer.ToString(), fontName, resources, fontSize,
+                new TextState(charSpacing, wordSpacing, horizontalScale, rise)) ?? 0;
                                     pen += pendingShift;
                                     segments.Add((buffer.ToString(), segmentStart));
                                     buffer.Clear();
@@ -605,7 +634,8 @@ internal sealed class PdfContentImporter
                                 ? textMatrix
                                 : textMatrix.Compose(AffineTransform.CreateTranslation(offset, 0));
                             ShowText(part, resources, fontName, fontSize, current, segmentMatrix,
-                                fillColor, items, currentLayer);
+                                fillColor, items, currentLayer, fillCmyk,
+                                new TextState(charSpacing, wordSpacing, horizontalScale, rise));
                         }
                     }
 
@@ -909,7 +939,8 @@ internal sealed class PdfContentImporter
 
     private void ShowText(string text, Dictionary<string, object?> resources, string fontName,
         double fontSize, AffineTransform ctm, AffineTransform textMatrix, ColorRgb color,
-        List<PdfImportedItem> items, string? layer, double[]? cmyk = null)
+        List<PdfImportedItem> items, string? layer, double[]? cmyk = null,
+        TextState? state = null)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -953,7 +984,7 @@ internal sealed class PdfContentImporter
         // which is one ascent up the text's *own* up axis (the matrix's second
         // column, y-flipped). Applying it straight down breaks rotated labels.
         Point2D baseline = matrix.Transform(new Point2D(0, 0));
-        double ascentPoints = ascent * effectiveSize;
+        double ascentPoints = (ascent * effectiveSize) + (state?.Rise ?? 0.0);
         double upX = matrix.C / scale;
         double upY = -matrix.D / scale;
         var item = new TextItem
@@ -972,7 +1003,7 @@ internal sealed class PdfContentImporter
             FontSize = effectiveSize,
             Bold = bold,
             Italic = italic,
-            AdvanceWidth = MeasureAdvance(rawText, fontName, resources, effectiveSize),
+            AdvanceWidth = MeasureAdvance(rawText, fontName, resources, effectiveSize, state),
             SourceFont = SourceFontName(fontName, resources),
             EmbeddedFont = embedded,
             RawCodes = embedded is not null ? rawText : null,
@@ -992,8 +1023,17 @@ internal sealed class PdfContentImporter
     /// layout from reflowing under a wider fallback font). Returns null when the
     /// font exposes no simple /Widths array (e.g. CID fonts).
     /// </summary>
+    /// <summary>
+    /// The text-state parameters that change how wide a run is or where it sits:
+    /// character spacing, word spacing, horizontal scale and rise. Taken together because
+    /// they travel together — a caller either has all of them from the graphics state or
+    /// is measuring text that has none.
+    /// </summary>
+    private readonly record struct TextState(
+        double CharSpacing, double WordSpacing, double HorizontalScale, double Rise);
+
     private double? MeasureAdvance(string text, string fontName,
-        Dictionary<string, object?> resources, double effectiveSize)
+        Dictionary<string, object?> resources, double effectiveSize, TextState? state = null)
     {
         if (_file.ResolveDict(resources.GetValueOrDefault("Font")) is not { } fonts ||
             _file.ResolveDict(fonts.GetValueOrDefault(fontName)) is not { } fontDict ||
@@ -1005,6 +1045,8 @@ internal sealed class PdfContentImporter
         double missing = _file.ResolveNumber(fontDict.GetValueOrDefault("MissingWidth")) ?? 0;
         int first = (int)(_file.ResolveNumber(fontDict.GetValueOrDefault("FirstChar")) ?? 0);
         double total = 0;
+        int glyphs = 0;
+        int spaces = 0;
         foreach (char ch in text)
         {
             if (ch == '\n')
@@ -1017,9 +1059,26 @@ internal sealed class PdfContentImporter
                 ? ToDouble(_file.Resolve(widths[index]))
                 : missing;
             total += width;
+            glyphs++;
+            if (ch == ' ')
+            {
+                spaces++;
+            }
         }
 
-        return total / 1000.0 * effectiveSize;
+        double advance = (total / 1000.0 * effectiveSize);
+
+        if (state is { } ts)
+        {
+            // Word spacing applies to the single-byte code 32, and character spacing to
+            // every glyph including spaces. Both are in unscaled text space, so they are
+            // added after the glyph widths and before the horizontal scale, which then
+            // stretches the whole line.
+            advance += (glyphs * ts.CharSpacing) + (spaces * ts.WordSpacing);
+            advance *= ts.HorizontalScale;
+        }
+
+        return advance;
     }
 
     /// <summary>
