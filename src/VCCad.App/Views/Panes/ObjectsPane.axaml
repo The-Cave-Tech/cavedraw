@@ -39,7 +39,7 @@
                   BorderBrush="{DynamicResource VcBorder}">
             <Path Data="{Binding Thumbnail}" Stretch="None"
                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                  Fill="{DynamicResource VcForeground}" Opacity="0.85"
+                  Fill="{DynamicResource VcText}" Opacity="0.85"
                   IsVisible="{Binding HasThumbnail}"/>
           </Border>
 
