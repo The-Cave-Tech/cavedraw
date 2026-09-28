@@ -712,6 +712,38 @@ public static class EditorOperations
                 return DescribeOne(item);
             });
 
+        Add("ui.windows",
+            "Every top-level window the application has open, with its title and kind. Menus, " +
+            "tooltips and combo-box dropdowns are separate top-level windows in Avalonia, so " +
+            "they are not in the main window's visual tree and neither ui.find nor a " +
+            "screenshot of the window can see them. This is what makes a popup checkable.",
+            "",
+            (ctx, _) =>
+            {
+                var windows = new List<object>();
+
+                if (Avalonia.Application.Current?.ApplicationLifetime
+                    is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+                {
+                    foreach (Avalonia.Controls.Window window in desktop.Windows)
+                    {
+                        windows.Add(new
+                        {
+                            title = window.Title,
+                            type = window.GetType().Name,
+                            visible = window.IsVisible,
+                            active = window.IsActive,
+                            x = Math.Round((double)window.Position.X),
+                            y = Math.Round((double)window.Position.Y),
+                            width = Math.Round(window.Bounds.Width),
+                            height = Math.Round(window.Bounds.Height),
+                        });
+                    }
+                }
+
+                return new { count = windows.Count, windows };
+            });
+
         Add("object.setLocked", "Lock or unlock an object.", "itemId:guid, locked:bool",
             (ctx, p) =>
             {

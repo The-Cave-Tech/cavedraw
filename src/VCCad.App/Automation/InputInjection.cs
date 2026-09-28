@@ -55,6 +55,15 @@ public static class InputInjection
             Release(control, pointer, position, modifiers, right);
         }
 
+        if (right)
+        {
+            // Avalonia opens a context menu from ContextRequested, which its own input manager
+            // raises. Synthetic pointer events do not pass through that manager, so a right
+            // click was delivered - the operation reported the control it hit - and no menu
+            // ever appeared. Raising the request here is what makes the gesture complete.
+            control.RaiseEvent(new ContextRequestedEventArgs());
+        }
+
         return $"{(clickCount >= 2 ? "double-" : string.Empty)}clicked {control.GetType().Name} " +
                $"at ({x:F0},{y:F0})";
     }
