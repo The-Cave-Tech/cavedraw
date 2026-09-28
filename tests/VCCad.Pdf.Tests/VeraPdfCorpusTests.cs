@@ -52,6 +52,7 @@ public class VeraPdfCorpusTests
         string? root = CorpusRoot();
         if (root is null)
         {
+            yield return new object[] { string.Empty }; // skip cleanly when absent
             yield break;
         }
 
