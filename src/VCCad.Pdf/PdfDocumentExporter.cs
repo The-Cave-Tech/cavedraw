@@ -315,9 +315,9 @@ public static class PdfDocumentExporter
         Point2D bottomLeft = toDoc.Transform(new Point2D(box.Left, box.Bottom));
 
         // The unit square's origin goes to the placement's top-left, and the v axis runs
-        // the other way down the box — which is what the original file does too: it draws
-        // this image with "136.726 0 0 241.516", a positive d. Mapping (0,0) to the
-        // bottom-left instead flips the picture, and measurably makes page 1 worse.
+        // the other way down the box - which is what the original file does too. Mapping
+        // (0,0) to the bottom-left instead measures worse on page 1 (RMSE 15.4 to 17.1),
+        // so this orientation is the one that reproduces the reference.
         double a = topRight.X - topLeft.X;
         double b = topRight.Y - topLeft.Y;
         double c = bottomLeft.X - topLeft.X;
