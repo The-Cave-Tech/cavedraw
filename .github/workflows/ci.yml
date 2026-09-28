@@ -49,6 +49,7 @@ jobs:
           dotnet test tests/VCCad.Core.Tests -c Release --no-build --no-restore
           dotnet test tests/VCCad.Pdf.Tests -c Release --no-build --no-restore
           dotnet test tests/VCCad.Api.Integration.Tests -c Release --no-build --no-restore
+          dotnet test tests/VCCad.App.Tests -c Release --no-build --no-restore
 
       - name: Publish WebAssembly editor (smoke)
         run: dotnet publish src/VCCad.App.Browser -c Release -o artifacts/wasm

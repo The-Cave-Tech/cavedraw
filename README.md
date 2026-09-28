@@ -9,67 +9,79 @@ PDF-lossless**:
   in every direction.
 - **Illustrator-style document model.** Documents hold **artboards** (A4
   landscape by default) → **layers** → **groups** → **paths**. Paths are open or
-  closed, made of line segments and cubic Bézier curves (stored as nodes with
-  in/out handles). Paths carry stroke widths/colours; closed paths carry fills.
-- **Lossless PDF.** Save/export a faithful PDF (one page per artboard, native
-  `m/l/c` operators) that carries the full model as an embedded sidecar, so
-  round-trips are bit-exact.
+  closed, made of line segments and cubic Bézier curves. Paths carry stroke
+  widths/colours/dash patterns; closed paths carry fills. Text is rich runs with
+  embedded-font fidelity.
+- **Faithful, lossless PDF.** Export a **PDF/A-2b** document (validated by
+  veraPDF) that renders like other compliant tools and carries the full model as
+  a sidecar, so round-trips are bit-exact.
 - **100% automatable.** A REST surface for document lifecycle plus JSON-RPC 2.0
   over WebSocket for everything the UI does — through the *same* command stack.
 
-> Full roadmap, milestones/sprints/tasks and architecture decisions:
-> see [`projectplan.md`](projectplan.md).
+> Roadmap/milestones/ADRs: [`projectplan.md`](projectplan.md).
+> Operating manual (setup, commands, gotchas for humans and AI agents): [`AGENTS.md`](AGENTS.md).
 
 ## Repository layout
 
 | Path | What it is |
 |------|------------|
-| `src/VCCad.Geometry` | Pure math kernel: points, vectors, rects, affine transforms, cubic-Bézier algebra (split/flatten/length/tight bounds), root solvers |
-| `src/VCCad.Core` | Document model, styling, undo/redo command bus, lossless serializer, pasteboard panning math |
-| `src/VCCad.Pdf` | PDF 1.7 exporter (page per artboard, native curves) + embedded lossless sidecar, and the reader for round-trips |
+| `src/VCCad.Geometry` | Pure math kernel: points, vectors, rects, affine transforms, cubic-Bézier algebra |
+| `src/VCCad.Core` | Document model, styling, undo/redo command bus, lossless serializer |
+| `src/VCCad.Pdf` | PDF 1.7 **writer + reader**, vector importer, font embedding/pass-through, PDF/A-2b metadata, sidecar |
 | `src/VCCad.Api` | Automation host: REST + JSON-RPC over WebSocket; serves the published editor |
-| `src/VCCad.App` | Avalonia editor shell (menus, toolbar, docking panes, workspace canvas) |
+| `src/VCCad.App` | Avalonia editor shell (menus, toolbar, docking panes, workspace canvas, font collection) |
 | `src/VCCad.App.Browser` | WebAssembly host (`net8.0-browser`) |
-| `tests/*` | Unit + integration tests (xUnit). Geometry ≥95% coverage target |
-| `docker/` | Multi-stage Dockerfile (tests run in-image) + compose |
-| `.github/workflows/` | CI (`ci.yml`) and CD / deployment (`docker.yml`) |
+| `tests/*` | xUnit suites (Geometry, Core, Pdf, Api, App headless) — ~3,080 tests |
+| `tools/qwen-corpus-tracker` | qwen vision-model render-fidelity progress tracker |
+| `docker/` | Multi-stage Dockerfile (tests run in-image) |
+| `scripts/` | `dev.sh` (build/test/run), `deploy-remote.sh`, `bootstrap-dev.sh` |
+| `samples/` | Real-world Illustrator PDF fixture (A0 sewing pattern) |
 
-## Quickstart (local)
+## Prerequisites
 
-Prerequisites: .NET 8 SDK.
+Required: **.NET 8 SDK** and the **`wasm-tools` workload** (browser host).
+Bootstrap:
+
+```bash
+./scripts/bootstrap-dev.sh                 # installs wasm-tools
+./scripts/bootstrap-dev.sh --with-corpus   # + veraPDF corpus (optional, ~2 GB)
+```
+
+Optional verification tools (tests skip cleanly when absent): `qpdf`,
+`pdftoppm`/`pdftotext` (poppler), `mutool` (MuPDF), `gs` (Ghostscript), Java +
+**veraPDF** (PDF/A validation), Python 3 + Pillow/numpy/fontTools.
+See [`AGENTS.md`](AGENTS.md) §3 for the full matrix and env vars.
+
+## Build, test, run
 
 ```bash
 dotnet build VCCad.sln -c Release
-dotnet test tests/VCCad.Geometry.Tests   -c Release --no-build
-dotnet test tests/VCCad.Core.Tests       -c Release --no-build
-dotnet test tests/VCCad.Pdf.Tests        -c Release --no-build
-dotnet test tests/VCCad.Api.Integration.Tests -c Release --no-build
+dotnet test  VCCad.sln -c Release          # all suites
 
-# Serve the editor + API from one process:
-dotnet publish src/VCCad.Api -c Release -o /tmp/vccad-run/api
-dotnet publish src/VCCad.App.Browser -c Release -o /tmp/vccad-wasm
-cp -r /tmp/vccad-wasm/wwwroot /tmp/vccad-run/api/wwwroot
-ASPNETCORE_URLS=http://127.0.0.1:5099 dotnet /tmp/vccad-run/api/VCCad.Api.dll
-# → open http://127.0.0.1:5099
+# Enable the optional external checks:
+VCCAD_VERAPDF=/tmp/opencode/vpdf/install/verapdf \
+VCCAD_VERAPDF_CORPUS=/tmp/opencode/veraPDF-corpus \
+dotnet test VCCad.sln -c Release
 ```
 
-`scripts/dev.sh` wraps the same flow.
+Run the editor + API from one process:
+
+```bash
+./scripts/dev.sh run        # → http://127.0.0.1:5099
+./scripts/dev.sh test       # build + test
+./scripts/dev.sh wasm       # publish just the wasm bundle
+```
 
 ## Docker (docker host `user@host`)
 
-The image builds, runs the full test suite, publishes the API and the wasm
-editor, then serves everything from Kestrel on port 8080:
-
 ```bash
-git archive --format=tar.gz HEAD -o /tmp/vccad-src.tgz
-scp /tmp/vccad-src.tgz user@host:/tmp/
-ssh user@host 'rm -rf ~/vccad-build && mkdir ~/vccad-build && \
-  tar -xzf /tmp/vccad-src.tgz -C ~/vccad-build && \
-  cd ~/vccad-build && docker build -f docker/Dockerfile -t vccad:0.1.0 .'
-ssh user@host 'docker rm -f vccad || true; \
-  docker run -d --name vccad -p 8080:8080 vccad:0.1.0'
-# → http://<host>:8080
+# Commit first: the deploy script archives HEAD.
+./scripts/deploy-remote.sh            # build image on the host + restart container
+# → http://<host>:8080   (health: /api/v1/health)
 ```
+
+The multi-stage image restores, builds, runs the test suite, publishes the API
+and the wasm editor, then serves everything from Kestrel on port 8080.
 
 ## Automating VCCad (the API)
 
@@ -78,6 +90,7 @@ REST (document lifecycle):
 ```
 GET    /api/v1/health
 POST   /api/v1/documents            {"name":"hello"}
+POST   /api/v1/documents/import     (Content-Type: application/pdf, raw body)
 GET    /api/v1/documents/{id}       → lossless model JSON
 GET    /api/v1/documents/{id}/pdf   → PDF with embedded sidecar
 DELETE /api/v1/documents/{id}
@@ -95,18 +108,20 @@ session (same commands the UI runs, same undo stack):
 
 Discovery: the method catalog is in `EditorApi.ListMethods()`.
 
-## Design notes
+## Verification tooling
 
-- **All code, especially math, is commented** with formulas and rationale.
-- **Determinism is load-bearing**: identical documents serialize to identical
-  bytes; PDF output is byte-stable; command replay reproduces documents.
-- Coordinates are stored in **PDF points**, model space is top-left origin with
-  +Y down; the PDF exporter applies the y-flip per artboard.
-- Straight segments are degenerate cubics (handles collapsed), so geometry code
-  has a single primitive.
+- **PDF/A-2b** via the real veraPDF engine — `PdfAValidationTests` (gated by
+  `VCCAD_VERAPDF`). Our exports validate as PDF/A-2b.
+- **Import fidelity** — `VeraPdfCorpusTests` runs the vector importer over the
+  whole veraPDF corpus (gated by `VCCAD_VERAPDF_CORPUS`); `tools/qwen-corpus-tracker`
+  scores our render against poppler with a vision model.
+- Structural checks with `qpdf --check` and content-stream assertions.
 
 ## Status
 
-Foundation milestone (M0–M4 seeds, M5 shell seed): 109 tests green, exports
-validated by `qpdf`/Ghostscript. Interactive tooling, full path editing and
-docking drag-out are scheduled — see `projectplan.md`.
+- ~3,080 tests green; exports validate as **PDF/A-2b**; 2,906-file corpus sweep.
+- Embedded fonts are preserved on import and reused verbatim (simple + Type0),
+  and rendered on the canvas by glyph id (no substitution).
+- Known gaps toward full import fidelity: Type3 fonts, fonts without an embedded
+  programme, text outside page content, and non-text constructs (patterns,
+  images, clipping, transparency groups). See [`AGENTS.md`](AGENTS.md) §9.

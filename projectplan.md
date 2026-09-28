@@ -4,7 +4,10 @@
 > Web-hosted (Avalonia UI compiled to WebAssembly), C# / .NET 8, fully automatable
 > through a scriptable API, storing documents losslessly as PDF.
 >
-> Status: **Kickoff / foundation in progress** · Plan revision: 0.1 (2026-09-08)
+> Status: **Accuracy / import-fidelity pass** — ~3,080 tests green, exports
+> validate as PDF/A-2b (veraPDF), veraPDF-corpus sweep at 2,906 files, embedded
+> fonts preserved and rendered without substitution.
+> Plan revision: 0.2 · **See [`AGENTS.md`](AGENTS.md) for environment + commands.**
 
 ---
 
@@ -60,7 +63,9 @@ with three deliberate differences:
 ### Explicitly deferred (v2+ / non-goals)
 - Raster (bitmap) image placement, filters/effects, transparency blend modes
   beyond simple opacity, gradients (stretch), mesh/pattern, symbol libraries.
-- Type/text engine (rich text, glyph outlines) — placeholder architecture only.
+- Full type/text engine (shaping, typesetting, glyph outlines) — rich-text runs
+  exist and PDF text is imported/exported with embedded-font pass-through; full
+  shaping and layout are deferred.
 - Live trace, image-swatches, perspective, Puppet Warp, and similar AI power tools.
 - Concurrent multi-user editing.
 - Native desktop packaging for Windows/macOS/Linux (Avalonia makes this nearly
@@ -95,11 +100,13 @@ The PDF produced by VCCad is:
 - A faithful, standards-compliant PDF 1.7 that renders identically in any viewer
   (each artboard → a MediaBox page; each path → `m/l/c` operators; stroke/fill
   with color + width + cap/join).
-- Carries the full VCCad document (sidecar `vccad-document` JSON in the
-  EmbeddedFiles name tree, FlateDecode-compressed). Opening a VCCad PDF in
-  VCCad restores the exact model, including data PDF cannot natively express
-  (node handles on "line" segments, etc.). Opening in a plain viewer still shows
-  the correct artwork.
+- Carries the full VCCad document (sidecar `vccad-document` JSON, FlateDecode
+  compressed) as a **plain catalog stream** (`/VCCadDocument`) — not an
+  `/EmbeddedFiles` attachment, which PDF/A forbids for non-PDF/A payloads.
+  Opening a VCCad PDF in VCCad restores the exact model, including data PDF
+  cannot natively express (node handles on "line" segments, styles, text runs,
+  embedded font programmes). Opening in a plain viewer still shows the correct
+  artwork, and the file validates as PDF/A-2b.
 
 ### 3.4 Workspace / panning
 The pasteboard behaves like Illustrator: you may scroll until the union of all
@@ -159,6 +166,10 @@ depends on Avalonia, ASP.NET, or the UI; everything testable headless.
 | ADR-08 | SkiaSharp rendering of the design surface | Avalonia's renderer is Skia; direct `DrawingContext` keeps it fast & testable | GPU filter chains |
 | ADR-09 | z-order index at layer/group level; sort stable | Simple, matches Illustrator layering semantics | Multi-select drag reorder perf |
 | ADR-10 | Everything in PDF points internally | Lossless PDF math; no unit drift | User-preference unit systems (M7) |
+| ADR-11 | Imported embedded fonts are **pass-through**, never substituted | Fidelity with other compliant renderers; honours the source programme | When a font engine is embedded |
+| ADR-12 | PDF export targets **PDF/A-2b** | Measurable accuracy via the real veraPDF engine | If a strict PDF 1.7-only mode is needed |
+| ADR-13 | Lossless sidecar stored as a **catalog stream** (`/VCCadDocument`) | PDF/A forbids arbitrary `/EmbeddedFiles` payloads | — |
+| ADR-14 | Accuracy is measured against the **veraPDF corpus** + qwen render scoring | Objective, regression-guarded import fidelity | — |
 
 ---
 
@@ -178,20 +189,25 @@ depends on Avalonia, ASP.NET, or the UI; everything testable headless.
 
 ### Repository layout
 ```
-/                      .gitignore · Directory.Build.props · LICENSE · README.md · projectplan.md
+/                       .gitignore · Directory.Build.props · LICENSE · README.md · projectplan.md · AGENTS.md
 /.github/workflows/    ci.yml · docker.yml
 /docker/               Dockerfile · compose.yaml
+/scripts/              dev.sh · deploy-remote.sh · bootstrap-dev.sh
+/tools/qwen-corpus-tracker/  vision-model render-fidelity tracker
+/samples/              real-world Illustrator PDF fixture
 /src/
   VCCad.Geometry/      pure math primitives + Bézier algebra
   VCCad.Core/          document model, commands/undo, sidecar serializer
-  VCCad.Pdf/           PDF writer/reader + lossless embedding
+  VCCad.Pdf/           PDF writer/reader + lossless embedding + font pass-through
   VCCad.Api/           ASP.NET host (REST + WS JSON-RPC + static WASM)
   VCCad.App/           Avalonia WebAssembly editor shell
+  VCCad.App.Browser/   net8.0-browser WASM host
 /tests/
   VCCad.Geometry.Tests/    unit
   VCCad.Core.Tests/        unit
-  VCCad.Pdf.Tests/         unit + round-trip
+  VCCad.Pdf.Tests/         unit + round-trip + corpus sweep + PDF/A
   VCCad.Api.Integration.Tests/  integration (WebApplicationFactory + real WS)
+  VCCad.App.Tests/         Avalonia headless (embedded fonts / glyph ids)
 /docs/                 ADRs, tool-spec, API reference (grows over time)
 ```
 
@@ -283,10 +299,10 @@ Make the document programmable. UI and scripts converge on one command language.
 | 3 | `[x]` Path→content stream (`m/l/c`), fill/stroke, width, cap/join, color spaces | 3 | M |
 | 4 | `[x]` Embedded sidecar (Filespec + EmbeddedFiles + Names tree) | 2 | M |
 | 5 | `[x]` Minimal reader: xref parse + sidecar extraction (round-trip test) | 3 | M |
-| 6 | `[ ]` Reader: full vector content → model (paths, styles) | 8 | S |
+| 6 | `[x]` Reader: full vector content → model (paths, styles, text, embedded fonts) | 8 | S |
 | 7 | `[ ]` Reader: preserve unknown constructs in sidecar cache (import-in-place) | 3 | S |
-| 8 | `[ ]` PDF validation harness: open exported files in 3rd-party renderers (golden snapshots) | 3 | M |
-| 9 | `[ ]` Fonts/text export (Type1→`/Tj` where glyph data available) | 5 | C (v2) |
+| 8 | `[x]` PDF validation harness: veraPDF (PDF/A-2b) + poppler/mupdf/ghostscript render diff | 3 | M |
+| 9 | `[x]` Fonts/text export **and import**: embedded-font pass-through (simple + Type0) | 5 | M |
 | 10 | `[ ]` XObject groups & dash pattern, transparency group nesting | 3 | S |
 
 **Accept:** round-trip `doc → pdf → sidecar → doc` is structurally equal for the
