@@ -89,6 +89,11 @@ def main():
         "is produced by VCCad. **Ours** is our engine's exported output; **reference** is the",
         "original file.",
         "",
+        "Read these numbers against the noise between two renderers first — see",
+        "[docs/render-fidelity-notes.md](../../docs/render-fidelity-notes.md). Most of an RMSE here is two rasterisers disagreeing about",
+        "antialiasing rather than content we get wrong, and this file is regenerated, so",
+        "anything written by hand belongs in that file.",
+        "",
         "| page | RMSE | strongly-different px | worst region (px) |",
         "|---|---|---|---|",
     ]
