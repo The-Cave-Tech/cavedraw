@@ -109,7 +109,15 @@ public static class PdfDocumentExporter
         }
 
         var alphaStates = new PdfAlphaStates(assembler, alphas);
-        string resources = $"/Resources << {embedder.FontDict()}{alphaStates.Dict()}>>";
+
+        // Every embedded image is written back into the file as its own XObject, keeping
+        // the colour space the document stores — a CMYK scan stays a CMYK scan. The
+        // resource dictionary is shared across pages, so an image is written once however
+        // many pages place it; unused entries in a resource dictionary are legal.
+        var imageObjects = new PdfImageObjects(assembler, AllImages(document));
+
+        string resources =
+            $"/Resources << {embedder.FontDict()}{alphaStates.Dict()}{imageObjects.Dict()}>>";
 
         // ------------------------------------------------------------------
         // Sidecar: lossless model JSON, zlib (RFC 1950) compressed — the PDF
@@ -140,7 +148,7 @@ public static class PdfDocumentExporter
         for (int i = 0; i < document.Artboards.Count; i++)
         {
             Artboard artboard = document.Artboards[i];
-            byte[] content = BuildArtboardContent(artboard, embedder, alphaStates);
+            byte[] content = BuildArtboardContent(artboard, embedder, alphaStates, imageObjects);
             // Content streams are FlateDecode-filtered like the sidecar; the raw
             // operator text is compressed here before being wrapped.
             assembler.SetBody(contentNumbers[i], MakeStreamObject(Compress(content)));
@@ -210,7 +218,7 @@ public static class PdfDocumentExporter
     /// mapping rules. The returned bytes are the plain content (uncompressed);
     /// callers wrap them via <see cref="MakeStreamObject"/>.
     /// </summary>
-    private static byte[] BuildArtboardContent(Artboard artboard, PdfFontEmbedder embedder, PdfAlphaStates alphaStates)
+    private static byte[] BuildArtboardContent(Artboard artboard, PdfFontEmbedder embedder, PdfAlphaStates alphaStates, PdfImageObjects? images = null)
     {
         var ops = new List<string>();
 
@@ -231,7 +239,7 @@ public static class PdfDocumentExporter
 
                 foreach (LayerItem item in layer.Children)
                 {
-                    PaintItem(ops, item, AffineTransform.Identity, 1.0, alphaStates);
+                    PaintItem(ops, item, AffineTransform.Identity, 1.0, alphaStates, images);
                 }
             }
         }
@@ -260,7 +268,87 @@ public static class PdfDocumentExporter
     /// product of ancestor opacities (reserved: emitted in a later sprint when the
     /// ExtGState task lands, see project plan M4).
     /// </summary>
-    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates)
+    /// <summary>
+    /// Emits the placement operators for one embedded image.
+    ///
+    /// A PDF image is painted into the unit square, so the placement becomes the CTM. The
+    /// four model-space corners are taken through the current transform and the matrix is
+    /// built from them, which keeps images inside transformed groups correct — and the
+    /// vertical flip is folded in, because the unit square's origin is the image's
+    /// bottom-left while the model's origin is its top-left.
+    /// </summary>
+    private static void PaintImage(List<string> ops, ImageItem image, AffineTransform toDoc,
+        PdfImageObjects? images)
+    {
+        if (images is null || !images.TryName(image, out string name))
+        {
+            return;
+        }
+
+        Rect2D box = image.Placement;
+        if (box.IsEmpty)
+        {
+            return;
+        }
+
+        Point2D topLeft = toDoc.Transform(new Point2D(box.Left, box.Top));
+        Point2D topRight = toDoc.Transform(new Point2D(box.Right, box.Top));
+        Point2D bottomLeft = toDoc.Transform(new Point2D(box.Left, box.Bottom));
+
+        // (0,0) of the unit square is the image's bottom-left, and the model's is its
+        // top-left, so the two axes run in opposite directions on the way down.
+        double a = topRight.X - topLeft.X;
+        double b = topRight.Y - topLeft.Y;
+        double c = bottomLeft.X - topLeft.X;
+        double d = bottomLeft.Y - topLeft.Y;
+
+        ops.Add("q");
+        ops.Add($"{Num(a)} {Num(b)} {Num(c)} {Num(d)} {Num(topLeft.X)} {Num(topLeft.Y)} cm");
+        ops.Add($"/{name} Do");
+        ops.Add("Q");
+    }
+
+    /// <summary>Every embedded image in the document, in a stable order.</summary>
+    private static IEnumerable<ImageItem> AllImages(CadDocument document)
+    {
+        foreach (Artboard artboard in document.Artboards)
+        {
+            foreach (Layer layer in artboard.Layers)
+            {
+                foreach (ImageItem image in FlattenImages(layer.Children))
+                {
+                    yield return image;
+                }
+            }
+        }
+
+        foreach (ImageItem image in FlattenImages(document.Orphans.Children))
+        {
+            yield return image;
+        }
+    }
+
+    private static IEnumerable<ImageItem> FlattenImages(IReadOnlyList<LayerItem> items)
+    {
+        foreach (LayerItem item in items)
+        {
+            switch (item)
+            {
+                case ImageItem image:
+                    yield return image;
+                    break;
+                case ArtGroup group:
+                    foreach (ImageItem nested in FlattenImages(group.Children))
+                    {
+                        yield return nested;
+                    }
+
+                    break;
+            }
+        }
+    }
+
+    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfImageObjects? images = null)
     {
         if (!item.IsEffectivelyVisible())
         {
@@ -273,13 +361,17 @@ public static class PdfDocumentExporter
                 PaintPath(ops, path, toDoc, opacity, alphaStates);
                 break;
 
+            case ImageItem image:
+                PaintImage(ops, image, toDoc, images);
+                break;
+
             case ArtGroup group:
                 // Compose is defined as "apply argument first, then this", which is
                 // exactly local→parent→doc as the walk descends.
                 AffineTransform childToDoc = toDoc.Compose(group.Transform);
                 foreach (LayerItem child in group.Children)
                 {
-                    PaintItem(ops, child, childToDoc, opacity * group.Opacity, alphaStates);
+                    PaintItem(ops, child, childToDoc, opacity * group.Opacity, alphaStates, images);
                 }
 
                 break;
@@ -823,6 +915,9 @@ public static class PdfDocumentExporter
 
     private static string EscapeText(string value) => value
         .Replace("\\", "\\\\").Replace("(", "\\(").Replace(")", "\\)");
+
+    /// <summary>zlib compression, for helpers that write their own stream objects.</summary>
+    internal static byte[] CompressBytes(byte[] data) => Compress(data);
 
     internal static byte[] MakeStreamObject(byte[] data, string extraDict = "")
     {
