@@ -856,6 +856,30 @@ public partial class EditorView : UserControl
 
     private void OnConfirmCancel(object? sender, RoutedEventArgs e) => CloseConfirmOverlay();
 
+    /// <summary>Whether anything open has changes that are not on disk.</summary>
+    public bool HasUnsavedChanges => _viewModel.Sessions.Any(s => s.IsModified);
+
+    /// <summary>
+    /// Asks about unsaved work before the application exits. Quitting is the one action
+    /// that can lose everything at once, so it has to be the one that asks.
+    /// </summary>
+    public void PromptBeforeExit(Action proceed)
+    {
+        List<DocumentSession> dirty = _viewModel.Sessions.Where(s => s.IsModified).ToList();
+        if (dirty.Count == 0)
+        {
+            proceed();
+            return;
+        }
+
+        string subject = dirty.Count == 1
+            ? $"\u0022{dirty[0].Document.Name}\u0022 has unsaved changes"
+            : $"{dirty.Count} documents have unsaved changes";
+
+        AskBeforeDiscarding(
+            "Save changes before quitting?", subject + ", and quitting will lose them.", proceed);
+    }
+
     private void OnCloseDocument(object? sender, RoutedEventArgs e)
     {
         if (_viewModel.Sessions.Count == 0)

@@ -74,6 +74,27 @@ public partial class App : Application
     {
         DesktopStartupOptions options = DesktopStartup.Options;
 
+        // Quitting asks first when anything has unsaved changes. Both routes go through
+        // this: the menu and app.exit call it directly, and closing the window is
+        // intercepted below - stopping at only one of them would let the other one lose
+        // the work without a word.
+        bool exitConfirmed = false;
+        void RequestExit()
+        {
+            if (exitConfirmed)
+            {
+                desktop.Shutdown();
+                return;
+            }
+
+            view.PromptBeforeExit(() =>
+            {
+                exitConfirmed = true;
+                desktop.Shutdown();
+            });
+        }
+
+
         if (!options.NoDock)
         {
             DockRightHalf(window);
@@ -124,7 +145,7 @@ public partial class App : Application
                     .ToArray(),
                 SetPaneStretchable: view.SetPaneStretchable,
                 SetPaneSize: view.SetPaneSize,
-                Exit: () => desktop.Shutdown()),
+                Exit: RequestExit),
             history: diary);
 
         // Record what the person does, including hover, drag and drop and keystrokes.
@@ -199,6 +220,18 @@ public partial class App : Application
                 e.Handled = true;
                 ToggleDiagnostics();
             }
+        };
+
+        // Closing the window (the X, Alt+F4) is the other way out, so it must ask too.
+        window.Closing += (_, e) =>
+        {
+            if (exitConfirmed || !view.HasUnsavedChanges)
+            {
+                return;
+            }
+
+            e.Cancel = true;
+            RequestExit();
         };
 
         desktop.ShutdownRequested += (_, _) => host.Server?.Dispose();
