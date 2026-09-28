@@ -3035,6 +3035,11 @@ public sealed class CanvasWorkspace : Control
     /// <summary>
     /// Draws an embedded raster image. The samples live in the model in the colour space
     /// the file used, so the conversion to pixels happens here rather than on import.
+    ///
+    /// The destination is in **model** coordinates, not screen ones: everything painted
+    /// under <see cref="Render"/> is already inside the world transform, so converting to
+    /// screen space here would apply the zoom twice and draw the image tiny and in the
+    /// wrong place. Paths and text are drawn in model space for the same reason.
     /// </summary>
     private void PaintImage(DrawingContext context, ImageItem image, double opacity)
     {
@@ -3044,14 +3049,7 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        double scale = _layout.Zoom;
-        Point origin = ModelToScreen(new Point2D(bounds.X, bounds.Y));
-
-        var destination = new Rect(
-            origin.X,
-            origin.Y,
-            Math.Max(0.5, bounds.Width * scale),
-            Math.Max(0.5, bounds.Height * scale));
+        var destination = new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height);
 
         using (context.PushOpacity(Math.Clamp(opacity, 0, 1)))
         {
