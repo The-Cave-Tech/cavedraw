@@ -784,7 +784,10 @@ public static class PdfDocumentExporter
         // text's own up axis. Later runs continue that baseline, so only this one needs a
         // matrix.
         TextRun first = text.Runs[0];
-        double depth = (first.EmbeddedFont!.Ascent / 1000.0) * first.FontSize;
+        double firstAscent = first.PlacedAscentEm > 0
+            ? first.PlacedAscentEm
+            : first.EmbeddedFont!.Ascent / 1000.0;
+        double depth = firstAscent * first.FontSize;
         double ox = text.Origin.X - (sin * depth);
         double oy = text.Origin.Y + (cos * depth);
 
@@ -882,9 +885,16 @@ public static class PdfDocumentExporter
             // The model stores the block's top-left; PDF places text on the
             // baseline, so the baseline sits one ascent down the (rotated) text
             // axis. Ascent is per run.
-            double ascent = embeddedRun
-                ? embeddedFont!.Ascent / 1000.0
-                : font is null || font.UnitsPerEm == 0 ? VCCad.Core.Text.TextMeasurement.TypicalAscentEm : (double)font.Ascender / font.UnitsPerEm;
+            //
+            // An imported run carries the ascent it was placed with, and that is the one to
+            // subtract. Working it out again from the face gets a different number for a
+            // substituted font — the importer used the standard-font table, this would use
+            // the installed TrueType's ascender — and the text lands beside where it was.
+            double ascent = run.PlacedAscentEm > 0
+                ? run.PlacedAscentEm
+                : embeddedRun
+                    ? embeddedFont!.Ascent / 1000.0
+                    : font is null || font.UnitsPerEm == 0 ? VCCad.Core.Text.TextMeasurement.TypicalAscentEm : (double)font.Ascender / font.UnitsPerEm;
             double targetAdvance = embeddedRun ? 0.0 : run.AdvanceWidth ?? 0.0;
             bool multiLine = !embeddedRun && run.Text.Contains('\n');
             double lineAdvance = 0;

@@ -78,7 +78,8 @@ internal sealed record TextRunDto(
     string? RawCodes = null,
     ushort[]? GlyphIds = null,
     EmbeddedFontDto? Embedded = null,
-    double GapAfter = 0);
+    double GapAfter = 0,
+    double PlacedAscentEm = 0);
 
 internal sealed record PathDto(
     Guid Id,
@@ -228,7 +229,8 @@ internal abstract record ItemDto
         r.RawCodes,
         r.GlyphIds,
         r.EmbeddedFont is { } font ? ToEmbedded(font) : null,
-        r.GapAfter);
+        r.GapAfter,
+        r.PlacedAscentEm);
 
     private static EmbeddedFontDto ToEmbedded(EmbeddedFont f) => new(
         f.Format,
@@ -335,6 +337,7 @@ internal static class ItemDtoExtensions
             GlyphIds = dto.GlyphIds,
             EmbeddedFont = dto.Embedded is { } e ? ToModel(e) : null,
             GapAfter = dto.GapAfter,
+            PlacedAscentEm = dto.PlacedAscentEm,
         };
 
         return run;

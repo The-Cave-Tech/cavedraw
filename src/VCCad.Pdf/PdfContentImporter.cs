@@ -1124,6 +1124,11 @@ internal sealed class PdfContentImporter
             AdvanceWidth = MeasureAdvance(rawText, fontName, resources, effectiveSize, state, composite)
                 + (gapAfter * effectiveSize),
             GapAfter = gapAfter * effectiveSize,
+            // What the origin was actually lifted by, as a fraction of the size, so export
+            // can put the baseline back exactly. The rise belongs in it: the placement added
+            // that lift, and a run recovered without it sits low by the rise - which is how
+            // the LILLIE licence block stayed 0.448pt out after the ascent itself was fixed.
+            PlacedAscentEm = ascentPoints / effectiveSize,
             SourceFont = SourceFontName(fontName, resources),
             EmbeddedFont = embedded,
             RawCodes = embedded is not null ? rawText : null,

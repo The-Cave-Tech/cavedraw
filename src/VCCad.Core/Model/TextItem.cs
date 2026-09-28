@@ -45,6 +45,21 @@ public sealed class TextRun
     public double GapAfter { get; set; }
 
     /// <summary>
+    /// The ascent the block's top-left was placed with, as a fraction of the em, when it was
+    /// imported. Zero means "not recorded — work it out from the face".
+    ///
+    /// The model stores a block's top-left, but PDF places text on the baseline, so getting
+    /// back to the baseline means subtracting an ascent. That has to be the <em>same</em>
+    /// ascent on the way out as on the way in, or the text lands beside where it was: a
+    /// substituted face takes its ascent from the standard-font table while the exporter was
+    /// taking one from the installed TrueType's ascender, and the licence block on the
+    /// LILLIE sample sat 1.468pt too high on eleven pages because of it.
+    ///
+    /// Kept per run because the face, and so the ascent, is per run.
+    /// </summary>
+    public double PlacedAscentEm { get; set; }
+
+    /// <summary>
     /// The font the document asked for (for example <c>Helvetica-Bold</c>), kept even
     /// when the file does not embed it and the run is drawn with a substitute. Without
     /// it a substitution cannot be reported in terms the person recognises.
@@ -72,6 +87,7 @@ public sealed class TextRun
         Italic = Italic,
         AdvanceWidth = AdvanceWidth,
         GapAfter = GapAfter,
+        PlacedAscentEm = PlacedAscentEm,
         SourceFont = SourceFont,
         EmbeddedFont = EmbeddedFont,
         RawCodes = RawCodes,
