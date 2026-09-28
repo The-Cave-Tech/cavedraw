@@ -247,12 +247,20 @@ public sealed class TextItem : LayerItem
         FrameWidth = other.FrameWidth;
         LineSpacing = other.LineSpacing;
         ParagraphSpacing = other.ParagraphSpacing;
+        SourceCmyk = other.SourceCmyk is null ? null : (double[])other.SourceCmyk.Clone();
         Alignment = other.Alignment;
         Runs.Clear();
         Runs.AddRange(other.Runs.Select(r => r.Clone()));
     }
 
     /// <inheritdoc/>
+    /// <summary>
+    /// The CMYK components the file painted this text with, when it used DeviceCMYK, or
+    /// null. See <see cref="PathItem.SourceFillCmyk"/> for why the original ink values are
+    /// kept rather than derived back from the RGB.
+    /// </summary>
+    public double[]? SourceCmyk { get; set; }
+
     public override LayerItem Clone()
     {
         var copy = new TextItem
@@ -266,6 +274,7 @@ public sealed class TextItem : LayerItem
             FrameWidth = FrameWidth,
             LineSpacing = LineSpacing,
             ParagraphSpacing = ParagraphSpacing,
+            SourceCmyk = SourceCmyk is null ? null : (double[])SourceCmyk.Clone(),
             Alignment = Alignment,
         };
         copy.Runs.AddRange(Runs.Select(r => r.Clone()));

@@ -243,6 +243,21 @@ public sealed class PathItem : LayerItem
     }
 
     /// <inheritdoc/>
+    /// <summary>
+    /// The CMYK components the file painted this path's fill and stroke with, when it used
+    /// DeviceCMYK, or null.
+    ///
+    /// The model stores colours as RGB, and that conversion is not reversible: the importer
+    /// computes r = (1-c)(1-k), so inverting it picks the maximum-black decomposition
+    /// rather than the one the file used, and a viewer renders CMYK through a
+    /// colour-managed transform besides. Keeping the original components is the only way
+    /// an exported page can paint with the same ink values it arrived with.
+    /// </summary>
+    public double[]? SourceFillCmyk { get; set; }
+
+    /// <summary>See <see cref="SourceFillCmyk"/>.</summary>
+    public double[]? SourceStrokeCmyk { get; set; }
+
     public override LayerItem Clone()
     {
         var copy = new PathItem
@@ -253,6 +268,11 @@ public sealed class PathItem : LayerItem
             Fill = _fill,
             Stroke = _stroke,
             Opacity = _opacity,
+
+            // The original ink values are part of what the item is; a copy that dropped
+            // them would export a different colour from the one it was cloned from.
+            SourceFillCmyk = SourceFillCmyk is null ? null : (double[])SourceFillCmyk.Clone(),
+            SourceStrokeCmyk = SourceStrokeCmyk is null ? null : (double[])SourceStrokeCmyk.Clone(),
         };
         copy.SubPaths.AddRange(SubPaths.Select(sp => sp.Clone()));
         return copy;

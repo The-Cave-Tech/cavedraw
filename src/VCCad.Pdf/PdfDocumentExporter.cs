@@ -452,6 +452,15 @@ public static class PdfDocumentExporter
         // --- Style setup ---------------------------------------------------
         if (fillVisible)
         {
+            // Written as RGB even when the item carries SourceFillCmyk: measured, not
+            // assumed. The original declares no output intent, while a PDF/A-2b export
+            // must declare one (sRGB), and a viewer renders the same DeviceCMYK through a
+            // different transform under each. Writing the stored ink values back therefore
+            // moves the page AWAY from the reference - page 1 RMSE 16.3 to 20.4 across the
+            // sample - because our sRGB intent colours them differently from the
+            // original's default. The components still travel in the model and the
+            // sidecar, which is what a faithful CMYK export will need once the intent can
+            // be matched as well.
             ops.Add($"{Num(path.Fill.Color.R)} {Num(path.Fill.Color.G)} {Num(path.Fill.Color.B)} rg");
         }
 

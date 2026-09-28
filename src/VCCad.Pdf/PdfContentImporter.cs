@@ -145,7 +145,7 @@ internal sealed class PdfContentImporter
         var stack = new Stack<(AffineTransform Ctm, double LineWidth, int LineCap, int LineJoin,
             double MiterLimit, DashPattern Dash, ColorRgb Stroke, ColorRgb Fill,
             object? StrokeSpace, object? FillSpace, double StrokeAlpha, double FillAlpha,
-            string FontName, double FontSize, double Leading)>();
+            string FontName, double FontSize, double Leading, double[]? FillCmyk, double[]? StrokeCmyk)>();
         AffineTransform current = ctm;
         double lineWidth = 1.0;
         int lineCap = 0;
@@ -154,6 +154,12 @@ internal sealed class PdfContentImporter
         DashPattern dash = DashPattern.None;
         ColorRgb strokeColor = ColorRgb.Black;
         ColorRgb fillColor = ColorRgb.Black;
+
+        // The ink values behind those RGB colours, when the file painted with DeviceCMYK.
+        // Kept alongside rather than recomputed later, because the conversion cannot be
+        // undone — see PathItem.SourceFillCmyk.
+        double[]? fillCmyk = null;
+        double[]? strokeCmyk = null;
         object? strokeSpace = null;
         object? fillSpace = null;
         double strokeAlpha = 1.0;
@@ -236,6 +242,12 @@ internal sealed class PdfContentImporter
                         Math.Max(0.01, lineWidth * ScaleOf(current)), ToCap(lineCap), ToJoin(lineJoin), miterLimit,
                         StrokeAlignment.Center, dash)
                     : StrokeSpec.None;
+
+                // The ink values the file used, kept so export can paint with the same
+                // colour rather than a converted approximation of it.
+                item.SourceFillCmyk = fill ? fillCmyk : null;
+                item.SourceStrokeCmyk = stroke ? strokeCmyk : null;
+
                 items.Add(new PdfImportedItem(currentLayer, item));
             }
 
@@ -272,14 +284,14 @@ internal sealed class PdfContentImporter
                 case "q":
                     stack.Push((current, lineWidth, lineCap, lineJoin, miterLimit, dash,
                         strokeColor, fillColor, strokeSpace, fillSpace, strokeAlpha, fillAlpha,
-                        fontName, fontSize, leading));
+                        fontName, fontSize, leading, fillCmyk, strokeCmyk));
                     break;
                 case "Q":
                     if (stack.Count > 0)
                     {
                         (current, lineWidth, lineCap, lineJoin, miterLimit, dash,
                             strokeColor, fillColor, strokeSpace, fillSpace, strokeAlpha, fillAlpha,
-                            fontName, fontSize, leading) = stack.Pop();
+                            fontName, fontSize, leading, fillCmyk, strokeCmyk) = stack.Pop();
                     }
 
                     break;
@@ -371,26 +383,32 @@ internal sealed class PdfContentImporter
                 case "RG" when operands.Count >= 3:
                     strokeColor = Color3(0);
                     strokeSpace = DeviceRgb;
+                    strokeCmyk = null;
                     break;
                 case "rg" when operands.Count >= 3:
                     fillColor = Color3(0);
                     fillSpace = DeviceRgb;
+                    fillCmyk = null;
                     break;
                 case "G" when operands.Count >= 1:
                     strokeColor = Gray(0);
                     strokeSpace = DeviceGray;
+                    strokeCmyk = null;
                     break;
                 case "g" when operands.Count >= 1:
                     fillColor = Gray(0);
                     fillSpace = DeviceGray;
+                    fillCmyk = null;
                     break;
                 case "K" when operands.Count >= 4:
                     strokeColor = Cmyk(0);
                     strokeSpace = DeviceCmyk;
+                    strokeCmyk = new[] { Number(0), Number(1), Number(2), Number(3) };
                     break;
                 case "k" when operands.Count >= 4:
                     fillColor = Cmyk(0);
                     fillSpace = DeviceCmyk;
+                    fillCmyk = new[] { Number(0), Number(1), Number(2), Number(3) };
                     break;
                 case "m" when operands.Count >= 2:
                     currentPath = new SubPath();
@@ -482,12 +500,12 @@ internal sealed class PdfContentImporter
                 case "'" when operands.Count >= 1 && operands[0] is string sq:
                     lineMatrix = lineMatrix.Compose(AffineTransform.CreateTranslation(0, -leading));
                     textMatrix = lineMatrix;
-                    ShowText(sq, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer);
+                    ShowText(sq, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer, fillCmyk);
                     break;
                 case "\"" when operands.Count >= 3 && operands[2] is string dq:
                     lineMatrix = lineMatrix.Compose(AffineTransform.CreateTranslation(0, -leading));
                     textMatrix = lineMatrix;
-                    ShowText(dq, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer);
+                    ShowText(dq, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer, fillCmyk);
                     break;
                 case "Tf" when operands.Count >= 2:
                     fontName = operands[0] is PdfName pn ? pn.Value : string.Empty;
@@ -515,7 +533,7 @@ internal sealed class PdfContentImporter
                     textMatrix = lineMatrix;
                     break;
                 case "Tj" when operands.Count >= 1 && operands[0] is string text:
-                    ShowText(text, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer);
+                    ShowText(text, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer, fillCmyk);
                     break;
                 case "TJ" when operands.Count >= 1 && operands[0] is List<object?> array:
                     // A TJ array interleaves strings with positioning adjustments, in
@@ -788,7 +806,7 @@ internal sealed class PdfContentImporter
 
     private void ShowText(string text, Dictionary<string, object?> resources, string fontName,
         double fontSize, AffineTransform ctm, AffineTransform textMatrix, ColorRgb color,
-        List<PdfImportedItem> items, string? layer)
+        List<PdfImportedItem> items, string? layer, double[]? cmyk = null)
     {
         if (string.IsNullOrEmpty(text))
         {

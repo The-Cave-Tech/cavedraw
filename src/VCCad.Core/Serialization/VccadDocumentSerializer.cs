@@ -87,7 +87,9 @@ internal sealed record PathDto(
     FillDto Fill,
     StrokeDto Stroke,
     double Opacity,
-    SubPathDto[] SubPaths) : ItemDto;
+    SubPathDto[] SubPaths,
+    double[]? SourceFillCmyk = null,
+    double[]? SourceStrokeCmyk = null) : ItemDto;
 
 internal sealed record GroupDto(
     Guid Id,
@@ -110,7 +112,8 @@ internal sealed record TextDto(
     double FrameWidth,
     double LineSpacing,
     double ParagraphSpacing,
-    TextRunDto[] Runs) : ItemDto;
+    TextRunDto[] Runs,
+    double[]? SourceCmyk = null) : ItemDto;
 
 /// <summary>
 /// An embedded raster image. Samples travel as base64 because they are bytes, not text;
@@ -163,7 +166,8 @@ internal abstract record ItemDto
         t.FrameWidth,
         t.LineSpacing,
         t.ParagraphSpacing,
-        t.Runs.Select(ToRun).ToArray());
+        t.Runs.Select(ToRun).ToArray(),
+        t.SourceCmyk);
 
     private static TextRunDto ToRun(TextRun r) => new(
         r.Text,
@@ -231,7 +235,9 @@ internal abstract record ItemDto
         p.Opacity,
         p.SubPaths.Select(sp => new SubPathDto(
             sp.IsClosed,
-            sp.Nodes.Select(n => new NodeDto(n.Anchor, n.InHandle, n.OutHandle)).ToArray())).ToArray());
+            sp.Nodes.Select(n => new NodeDto(n.Anchor, n.InHandle, n.OutHandle)).ToArray())).ToArray(),
+        p.SourceFillCmyk,
+        p.SourceStrokeCmyk);
 
     private static GroupDto ToGroup(ArtGroup g) => new(
         g.Id,
@@ -353,6 +359,7 @@ internal static class ItemDtoExtensions
         item.FrameWidth = t.FrameWidth;
         item.LineSpacing = t.LineSpacing;
         item.ParagraphSpacing = t.ParagraphSpacing;
+        item.SourceCmyk = t.SourceCmyk;
         item.RestoreIdentity(t.Id);
         foreach (TextRunDto run in t.Runs)
         {
@@ -372,6 +379,8 @@ internal static class ItemDtoExtensions
             Fill = p.Fill.ToModel(),
             Stroke = p.Stroke.ToModel(),
             Opacity = p.Opacity,
+            SourceFillCmyk = p.SourceFillCmyk,
+            SourceStrokeCmyk = p.SourceStrokeCmyk,
         };
         path.RestoreIdentity(p.Id);
         foreach (SubPathDto sp in p.SubPaths)

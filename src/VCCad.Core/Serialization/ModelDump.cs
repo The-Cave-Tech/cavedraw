@@ -86,6 +86,8 @@ public static class ModelDump
                     .Append(" fill=").Append(Fill(path.Fill))
                     .Append(" stroke=").Append(Stroke(path.Stroke))
                     .Append(" subpaths=").Append(path.SubPaths.Count)
+                    .Append(" fillCmyk=").Append(Cmyk(path.SourceFillCmyk))
+                    .Append(" strokeCmyk=").Append(Cmyk(path.SourceStrokeCmyk))
                     .AppendLine();
 
                 for (int s = 0; s < path.SubPaths.Count; s++)
@@ -122,6 +124,7 @@ public static class ModelDump
                     .Append(" leading=").Append(Num(text.LineSpacing))
                     .Append(" paragraph=").Append(Num(text.ParagraphSpacing))
                     .Append(" runs=").Append(text.Runs.Count)
+                    .Append(" colourCmyk=").Append(Cmyk(text.SourceCmyk))
                     .AppendLine();
 
                 for (int r = 0; r < text.Runs.Count; r++)
@@ -196,6 +199,18 @@ public static class ModelDump
 
     private static string Colour(ColorRgb colour)
         => $"{colour.R:0.####},{colour.G:0.####},{colour.B:0.####},{colour.A:0.####}";
+
+    /// <summary>
+    /// The original ink values, when the item carries them, or "-".
+    ///
+    /// Part of the dump because it is part of the document: a round trip that lost it
+    /// would export a different colour from the one that went in, and none of the other
+    /// fields would show it.
+    /// </summary>
+    private static string Cmyk(double[]? components)
+        => components is { Length: >= 4 }
+            ? string.Join(",", components.Take(4).Select(Num))
+            : "-";
 
     private static string Point(VCCad.Geometry.Point2D p) => $"{Num(p.X)},{Num(p.Y)}";
 
