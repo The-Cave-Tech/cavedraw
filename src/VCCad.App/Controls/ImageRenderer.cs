@@ -56,7 +56,9 @@ internal static class ImageRenderer
         int height = Math.Max(1, image.PixelHeight);
         var pixels = new byte[width * height * 4];
 
-        bool usable = image.Samples.Length > 0 && image.BitsPerComponent == 8;
+        // Any depth the model can hold, not just 8: the model now decodes 1, 2, 4 and 16
+        // bit samples, and requiring 8 here left a 1-bit scan or logo invisible.
+        bool usable = image.Samples.Length > 0;
 
         for (int y = 0; y < height; y++)
         {

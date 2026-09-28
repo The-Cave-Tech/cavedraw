@@ -121,14 +121,7 @@ public sealed class ImageItem : LayerItem
     /// </summary>
     public ColorRgb PixelAt(int x, int y)
     {
-        if (x < 0 || y < 0 || x >= PixelWidth || y >= PixelHeight || BitsPerComponent != 8)
-        {
-            return ColorRgb.Black;
-        }
-
-        int components = Components;
-        int at = ((y * PixelWidth) + x) * components;
-        if (at + components > Samples.Length)
+        if (x < 0 || y < 0 || x >= PixelWidth || y >= PixelHeight)
         {
             return ColorRgb.Black;
         }
@@ -136,18 +129,20 @@ public sealed class ImageItem : LayerItem
         switch (ColorSpace)
         {
             case ImageColorSpace.Gray:
-                double g = Samples[at] / 255.0;
+                double g = SampleAt(x, y, 0);
                 return new ColorRgb(g, g, g);
 
             case ImageColorSpace.Cmyk:
-                double c = Samples[at] / 255.0;
-                double m = Samples[at + 1] / 255.0;
-                double yl = Samples[at + 2] / 255.0;
-                double k = Samples[at + 3] / 255.0;
+                double c = SampleAt(x, y, 0);
+                double m = SampleAt(x, y, 1);
+                double yl = SampleAt(x, y, 2);
+                double k = SampleAt(x, y, 3);
                 return new ColorRgb((1 - c) * (1 - k), (1 - m) * (1 - k), (1 - yl) * (1 - k));
 
             case ImageColorSpace.Indexed:
-                int entry = Samples[at] * 3;
+                // The sample is a palette index, not an intensity, so it is the raw value
+                // that is wanted rather than the scaled one.
+                int entry = RawSampleAt(x, y, 0) * 3;
                 return entry + 2 < Palette.Length
                     ? new ColorRgb(Palette[entry] / 255.0, Palette[entry + 1] / 255.0,
                         Palette[entry + 2] / 255.0)
@@ -155,7 +150,69 @@ public sealed class ImageItem : LayerItem
 
             default:
                 return new ColorRgb(
-                    Samples[at] / 255.0, Samples[at + 1] / 255.0, Samples[at + 2] / 255.0);
+                    SampleAt(x, y, 0), SampleAt(x, y, 1), SampleAt(x, y, 2));
+        }
+    }
+
+    /// <summary>
+    /// One component of one pixel, normalised to 0..1.
+    ///
+    /// PDF packs sub-byte samples: a 1, 2 or 4 bit image holds several components in a
+    /// byte, most significant first. Reading those as one byte per component does not
+    /// merely round the picture, it reads the wrong pixel entirely — so a 1-bit scan, a
+    /// logo or a fax came out as nothing at all.
+    /// </summary>
+    public double SampleAt(int x, int y, int component = 0)
+    {
+        int max = (1 << BitsPerComponent) - 1;
+        if (BitsPerComponent == 16)
+        {
+            max = 65535;
+        }
+
+        return max <= 0 ? 0.0 : (double)RawSampleAt(x, y, component) / max;
+    }
+
+    /// <summary>One component of one pixel, as the integer the file stored.</summary>
+    public int RawSampleAt(int x, int y, int component = 0)
+    {
+        if (x < 0 || y < 0 || x >= PixelWidth || y >= PixelHeight ||
+            component < 0 || component >= Components)
+        {
+            return 0;
+        }
+
+        int index = ((y * PixelWidth) + x) * Components + component;
+
+        switch (BitsPerComponent)
+        {
+            case 16:
+            {
+                int at = index * 2;
+                return at + 1 < Samples.Length ? (Samples[at] << 8) | Samples[at + 1] : 0;
+            }
+
+            case 8:
+                return index < Samples.Length ? Samples[index] : 0;
+
+            case 1:
+            case 2:
+            case 4:
+            {
+                int bits = BitsPerComponent;
+                int bitOffset = index * bits;
+                int at = bitOffset >> 3;
+                if (at >= Samples.Length)
+                {
+                    return 0;
+                }
+
+                int shift = 8 - bits - (bitOffset & 7);
+                return (Samples[at] >> shift) & ((1 << bits) - 1);
+            }
+
+            default:
+                return 0;
         }
     }
 
