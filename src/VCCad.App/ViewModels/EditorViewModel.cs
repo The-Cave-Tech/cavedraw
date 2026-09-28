@@ -249,6 +249,16 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public bool HasSegmentSelection => _active.HasSegmentSelection;
     public bool HasTransformableSelection => _active.HasTransformableSelection;
     public Point2D? PointPosition => _active.PointPosition;
+    /// <summary>
+    /// The face new text is created with. Chosen from the font picker when no block is
+    /// selected, so picking a font always means something.
+    /// </summary>
+    public string DefaultFontFamily
+    {
+        get => _active.DefaultFontFamily;
+        set => _active.DefaultFontFamily = value;
+    }
+
     /// <summary>The text block being edited, if any; the target of styling operations.</summary>
     public TextItem? EditingText
     {

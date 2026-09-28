@@ -85,33 +85,63 @@
           <Border Name="TextToolbar" DockPanel.Dock="Top" IsVisible="False"
                   Background="{DynamicResource VcPanel}" BorderBrush="{DynamicResource VcBorder}"
                   BorderThickness="0,0,0,1" Padding="6,4">
+            <Border.Styles>
+              <!-- The numeric fields sit centred in their own height with the value
+                   centred too. Small, top-left-justified boxes read as broken: the number
+                   floats in the corner of a box that is taller than it needs to be. -->
+              <Style Selector="TextBox.TtNumber">
+                <Setter Property="Width" Value="58"/>
+                <Setter Property="Height" Value="28"/>
+                <Setter Property="MinHeight" Value="28"/>
+                <Setter Property="VerticalContentAlignment" Value="Center"/>
+                <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                <Setter Property="FontSize" Value="13"/>
+                <Setter Property="Padding" Value="6,0"/>
+              </Style>
+              <Style Selector="TextBlock.TtLabel">
+                <Setter Property="VerticalAlignment" Value="Center"/>
+                <Setter Property="Foreground" Value="{DynamicResource VcTextDim}"/>
+                <Setter Property="FontSize" Value="12"/>
+              </Style>
+            </Border.Styles>
+
             <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-              <TextBlock Text="Text" FontWeight="SemiBold" VerticalAlignment="Center"
-                         Foreground="{DynamicResource VcTextDim}"/>
-              <ComboBox Name="TtFont" Width="150" ToolTip.Tip="Font"/>
-              <TextBox Name="TtSize" Width="52" ToolTip.Tip="Size"/>
-              <ToggleButton Name="TtBold" Content="B" FontWeight="Bold" Width="32"
+              <TextBlock Classes="TtLabel" Text="Text" FontWeight="SemiBold"/>
+              <ComboBox Name="TtFont" Width="180" Height="28" VerticalContentAlignment="Center"
+                        ToolTip.Tip="Font — hover to preview, click to apply">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate>
+                    <!-- Each entry is drawn in its own face, so the list shows what it
+                         offers instead of naming it and leaving you to imagine. -->
+                    <TextBlock Text="{Binding}" FontFamily="{Binding}" FontSize="15"
+                               VerticalAlignment="Center" Padding="0,2"/>
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <TextBox Name="TtSize" Classes="TtNumber" ToolTip.Tip="Size in points"/>
+              <ToggleButton Name="TtBold" Content="B" FontWeight="Bold" Width="32" Height="28"
                             ToolTip.Tip="Bold"/>
-              <ToggleButton Name="TtItalic" Content="I" FontStyle="Italic" Width="32"
+              <ToggleButton Name="TtItalic" Content="I" FontStyle="Italic" Width="32" Height="28"
                             ToolTip.Tip="Italic"/>
-              <ComboBox Name="TtAlign" Width="96" ToolTip.Tip="Alignment">
+              <ComboBox Name="TtAlign" Width="100" Height="28" VerticalContentAlignment="Center"
+                        ToolTip.Tip="Alignment">
                 <ComboBoxItem Content="Left"/>
                 <ComboBoxItem Content="Center"/>
                 <ComboBoxItem Content="Right"/>
               </ComboBox>
-              <TextBlock Text="Leading" VerticalAlignment="Center"
-                         Foreground="{DynamicResource VcTextDim}"/>
-              <TextBox Name="TtLineSpacing" Width="44" ToolTip.Tip="Line spacing (multiple of font size)"/>
-              <TextBlock Text="Space" VerticalAlignment="Center"
-                         Foreground="{DynamicResource VcTextDim}"/>
-              <TextBox Name="TtParagraphSpacing" Width="44" ToolTip.Tip="Space between paragraphs"/>
-              <TextBlock Text="Rot" VerticalAlignment="Center"
-                         Foreground="{DynamicResource VcTextDim}"/>
-              <TextBox Name="TtRotation" Width="46" ToolTip.Tip="Rotation in degrees"/>
-              <TextBlock Text="Colour" VerticalAlignment="Center"
-                         Foreground="{DynamicResource VcTextDim}"/>
-              <TextBox Name="TtColor" Width="80" ToolTip.Tip="Colour as R,G,B"/>
-              <Button Name="TtWidth" Content="Box…" ToolTip.Tip="Set the frame width the text wraps in"/>
+              <TextBlock Classes="TtLabel" Text="Leading"/>
+              <TextBox Name="TtLineSpacing" Classes="TtNumber"
+                       ToolTip.Tip="Line spacing (multiple of the font size)"/>
+              <TextBlock Classes="TtLabel" Text="Space"/>
+              <TextBox Name="TtParagraphSpacing" Classes="TtNumber"
+                       ToolTip.Tip="Space between paragraphs"/>
+              <TextBlock Classes="TtLabel" Text="Rot"/>
+              <TextBox Name="TtRotation" Classes="TtNumber" ToolTip.Tip="Rotation in degrees"/>
+              <TextBlock Classes="TtLabel" Text="Colour"/>
+              <TextBox Name="TtColor" Width="92" Height="28" VerticalContentAlignment="Center"
+                       HorizontalContentAlignment="Center" FontSize="13" Padding="6,0"
+                       ToolTip.Tip="Colour as R,G,B"/>
+              <Button Name="TtWidth" Content="Box…" Height="28" ToolTip.Tip="Set the frame width the text wraps in"/>
             </StackPanel>
           </Border>
 

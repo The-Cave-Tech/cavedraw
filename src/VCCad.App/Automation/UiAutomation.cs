@@ -230,6 +230,14 @@ public static class UiAutomation
                 toggle.IsChecked = toggle.IsChecked != true;
                 return $"toggled {(toggle.Name ?? toggle.GetType().Name)} to {toggle.IsChecked}";
 
+            // A person can click a dropdown to see what is in it, so a driver can too.
+            // Refusing here made every ComboBox — including the font list — unreachable
+            // by clicking, which is exactly how you choose a font.
+            case ComboBox combo:
+                combo.IsDropDownOpen = !combo.IsDropDownOpen;
+                return $"{(combo.IsDropDownOpen ? "opened" : "closed")} dropdown " +
+                       $"{combo.Name ?? combo.GetType().Name}";
+
             case Button button:
                 if (button.Command is { } command && command.CanExecute(button.CommandParameter))
                 {

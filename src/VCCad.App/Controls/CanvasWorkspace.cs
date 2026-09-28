@@ -839,7 +839,10 @@ public sealed class CanvasWorkspace : Control
                     break;
                 }
 
-                TextItem created = _vm!.CreateTextAt(model, TextItem.DefaultFontFamily, 12);
+                // New text uses the face the person last chose, which is what makes
+                // picking a font with nothing selected mean something.
+                TextItem created = _vm!.CreateTextAt(
+                    model, _vm.DefaultFontFamily ?? TextItem.DefaultFontFamily, 12);
                 created.Color = _vm.CurrentFill.IsVisible ? _vm.CurrentFill.Color : ColorRgb.Black;
                 // Drag out a box to give it a frame width; a plain click leaves the block
                 // auto-width, so both "type a line" and "draw a text box" are available.

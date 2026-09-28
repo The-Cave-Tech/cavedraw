@@ -71,6 +71,12 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// selection cleared by selecting a document. Operations that style text need to reach
     /// it regardless.
     /// </summary>
+    /// <summary>
+    /// The face new text is created with, set by the font picker when nothing is
+    /// selected. Kept per session so switching documents does not carry a choice across.
+    /// </summary>
+    public string DefaultFontFamily { get; set; } = TextItem.DefaultFontFamily;
+
     public TextItem? EditingText { get; set; }
 
     public bool IsEditingText { get; set; }

@@ -34,6 +34,9 @@ public sealed class TextToolbar
 
     private bool _suppress;
 
+    /// <summary>The face in force before a hover preview, so it can be put back.</summary>
+    private string? _previewed;
+
     public TextToolbar(EditorView view)
     {
         _view = view;
@@ -113,9 +116,18 @@ public sealed class TextToolbar
             return;
         }
 
-        List<TextItem> items = _view.ViewModel.SelectedTextItems().ToList();
-        if (items.Count == 0)
+        string family = _font.SelectedItem as string ?? string.Empty;
+
+        // Nothing selected means there is no block to restyle, so the choice becomes the
+        // face new text is created with. Silently doing nothing would be the worst of the
+        // three options: the person picked a font and expects to see it used.
+        if (_view.ViewModel.SelectedTextItems().ToList() is not { Count: > 0 } items)
         {
+            if (!string.IsNullOrEmpty(family))
+            {
+                _view.ViewModel.DefaultFontFamily = family;
+            }
+
             return;
         }
 
@@ -129,11 +141,68 @@ public sealed class TextToolbar
         double size = double.TryParse(_size.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double s)
             ? s
             : run.FontSize;
-        string family = _font.SelectedItem as string ?? run.FontFamily;
 
         // Styling is the same path a driver takes: it reuses the object's own content.
         _view.ViewModel.UpdateSelectedText(
             item.PlainText, family, size, _bold.IsChecked == true, _italic.IsChecked == true, item.Color);
+    }
+
+    /// <summary>
+    /// Applies a face to the selection while the pointer is merely over it in the list.
+    ///
+    /// Choosing a font by trying it is how anyone actually picks one, and a dropdown that
+    /// only shows the name in its own face still leaves you guessing how it will look on
+    /// the words you have. This previews, and <see cref="_previewed"/> lets the list put
+    /// the original face back if the pointer leaves without a choice being made.
+    /// </summary>
+    private void PreviewFace(string? family)
+    {
+        if (_suppress || string.IsNullOrEmpty(family) ||
+            _view.ViewModel.SelectedTextItems().ToList() is not { Count: > 0 } items)
+        {
+            return;
+        }
+
+        TextItem item = items[0];
+        if (item.Runs.Count == 0)
+        {
+            return;
+        }
+
+        _previewed ??= item.Runs[0].FontFamily;
+
+        _suppress = true;
+        _view.ViewModel.UpdateSelectedText(
+            item.PlainText,
+            family,
+            item.Runs[0].FontSize,
+            item.Runs[0].Bold,
+            item.Runs[0].Italic,
+            item.Color);
+        _suppress = false;
+    }
+
+    /// <summary>Puts back the face that was in force before an abandoned preview.</summary>
+    private void EndPreview()
+    {
+        if (_previewed is not { } original)
+        {
+            return;
+        }
+
+        _previewed = null;
+        if (_view.ViewModel.SelectedTextItems().ToList() is not { Count: > 0 } items ||
+            items[0].Runs.Count == 0)
+        {
+            return;
+        }
+
+        TextItem item = items[0];
+        _suppress = true;
+        _view.ViewModel.UpdateSelectedText(
+            item.PlainText, original, item.Runs[0].FontSize, item.Runs[0].Bold,
+            item.Runs[0].Italic, item.Color);
+        _suppress = false;
     }
 
     private void ApplyParagraph()
