@@ -57,7 +57,7 @@ public sealed class AvaloniaTextMetrics : ITextMetrics
             // out of a paint or a bounds call.
             for (int i = 0; i < n; i++)
             {
-                widths[i] = run.FontSize * 0.6;
+                widths[i] = VCCad.Core.Text.TextMeasurement.Estimate(run);
             }
         }
 

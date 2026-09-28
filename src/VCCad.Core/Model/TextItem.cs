@@ -183,7 +183,7 @@ public sealed class TextItem : LayerItem
                 remaining -= run.Text.Length;
             }
 
-            return MaxFontSize * 0.6;
+            return TextMeasurement.Estimate(Runs.Count > 0 ? Runs[^1] : new TextRun());
         }
 
         var local = new Rect2D(Origin.X, Origin.Y, width, height);

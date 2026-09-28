@@ -55,6 +55,16 @@ public static class TextMeasurement
         set => _current = value;
     }
 
+    /// <summary>
+    /// The last-resort advance for one character, used only when no measurer is
+    /// installed (a headless deserialise or a unit test with no renderer).
+    ///
+    /// This is the **only** estimate left in the codebase. Everything else asks a real
+    /// shaper, and naming it in one place means a search for "0.6" finds the whole of
+    /// the guessing rather than six copies of it.
+    /// </summary>
+    public static double Estimate(TextRun run) => run.FontSize * 0.6;
+
     /// <summary>Per-character advances, real when available and estimated otherwise.</summary>
     public static IReadOnlyList<double> Advances(TextRun run)
     {
@@ -67,7 +77,7 @@ public static class TextMeasurement
         var estimate = new double[n];
         for (int i = 0; i < n; i++)
         {
-            estimate[i] = run.FontSize * 0.6;
+            estimate[i] = TextMeasurement.Estimate(run);
         }
 
         return estimate;
@@ -79,7 +89,7 @@ public static class TextMeasurement
     public static double AdvanceOf(TextRun run, int index)
     {
         IReadOnlyList<double> advances = Advances(run);
-        return index >= 0 && index < advances.Count ? advances[index] : run.FontSize * 0.6;
+        return index >= 0 && index < advances.Count ? advances[index] : TextMeasurement.Estimate(run);
     }
 
     /// <summary>Ascent in document units, real when available.</summary>

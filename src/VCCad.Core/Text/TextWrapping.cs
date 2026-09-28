@@ -99,7 +99,7 @@ public static class TextWrapping
 
             for (int i = 0; i < run.Text.Length; i++)
             {
-                widths.Add(i < advances.Count ? advances[i] : run.FontSize * 0.6);
+                widths.Add(i < advances.Count ? advances[i] : TextMeasurement.Estimate(run));
             }
         }
 
