@@ -29,7 +29,7 @@ internal sealed record NodeDto(Point2D Anchor, Point2D InHandle, Point2D OutHand
 
 internal sealed record SubPathDto(bool Closed, NodeDto[] Nodes);
 
-internal sealed record TextRunDto(string Text, string FontFamily, double FontSize, bool Bold, bool Italic, double? AdvanceWidth = null);
+internal sealed record TextRunDto(string Text, string FontFamily, double FontSize, bool Bold, bool Italic, double? AdvanceWidth = null, string? SourceFont = null);
 
 internal sealed record PathDto(
     Guid Id,
@@ -88,7 +88,7 @@ internal abstract record ItemDto
         new ColorDto(t.Color.R, t.Color.G, t.Color.B, t.Color.A),
         t.RotationRadians,
         t.Alignment,
-        t.Runs.Select(r => new TextRunDto(r.Text, r.FontFamily, r.FontSize, r.Bold, r.Italic, r.AdvanceWidth)).ToArray());
+        t.Runs.Select(r => new TextRunDto(r.Text, r.FontFamily, r.FontSize, r.Bold, r.Italic, r.AdvanceWidth, r.SourceFont)).ToArray());
 
     private static PathDto ToPath(PathItem p) => new(
         p.Id,
@@ -154,6 +154,7 @@ internal static class ItemDtoExtensions
                 Bold = run.Bold,
                 Italic = run.Italic,
                 AdvanceWidth = run.AdvanceWidth,
+                SourceFont = run.SourceFont,
             });
         }
 
@@ -233,12 +234,22 @@ internal sealed record LayerDto(
     double Opacity,
     ItemDto[] Items);
 
+/// <summary>
+/// The Illustrator private-data payload as it travels in the sidecar: decoded
+/// text plus the container format it came from. Kept null (and therefore absent
+/// from the JSON, see <see cref="DocumentDto.AiPrivateData"/>) whenever the
+/// document carries no Illustrator data, so sidecars and PDF bytes of ordinary
+/// documents are unchanged.
+/// </summary>
+internal sealed record AiPrivateDataDto(string Text, AiPrivateDataFormat Format);
+
 internal sealed record DocumentDto(
     int Version,
     Guid Id,
     string Name,
     ArtboardDto[] Artboards,
-    ItemDto[] Orphans);
+    ItemDto[] Orphans,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AiPrivateDataDto? AiPrivateData = null);
 
 /// <summary>
 /// Lossless, deterministic serializer for <see cref="CadDocument"/>.
@@ -322,7 +333,10 @@ public static class VccadDocumentSerializer
                     l.IsLocked,
                     l.Opacity,
                     l.Children.Select(ItemDto.From).ToArray())).ToArray())).ToArray(),
-            d.Orphans.Children.Select(ItemDto.From).ToArray());
+            d.Orphans.Children.Select(ItemDto.From).ToArray(),
+            d.AiPrivateData is null
+                ? null
+                : new AiPrivateDataDto(d.AiPrivateData.Text, d.AiPrivateData.Format));
 
     private static CadDocument ToModel(DocumentDto dto)
     {
@@ -362,6 +376,13 @@ public static class VccadDocumentSerializer
         foreach (ItemDto orphan in dto.Orphans ?? Array.Empty<ItemDto>())
         {
             document.Orphans.AddItem(orphan.ToModel());
+        }
+
+        // A sidecar written before the payload existed has no member here; a
+        // payload property that is present but null means "no Illustrator data".
+        if (dto.AiPrivateData is { } ai)
+        {
+            document.AiPrivateData = new AiPrivateData(ai.Text ?? string.Empty, ai.Format);
         }
 
         return document;

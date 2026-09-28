@@ -509,6 +509,80 @@ public sealed class ReplaceTextCommand : IUndoableCommand
     public void Undo() => _item.CopyFrom(_before);
 }
 
+/// <summary>
+/// Applies paragraph style and orientation to text objects as one undo step. These
+/// change how a block is set — leading, space between paragraphs, the angle it sits at,
+/// the width it wraps in — and never what it says.
+/// </summary>
+public sealed class TextStyleCommand : IUndoableCommand
+{
+    private readonly List<(TextItem Item, TextItem Before, TextItem After)> _changes = new();
+
+    public string Description { get; }
+
+    public TextStyleCommand(IEnumerable<TextItem> items, double? lineSpacing = null,
+        double? paragraphSpacing = null, double? rotationDegrees = null,
+        double? frameWidth = null, TextAlignment? alignment = null)
+    {
+        Description = "Text style";
+        foreach (TextItem item in items)
+        {
+            var before = (TextItem)item.Clone();
+            var after = (TextItem)item.Clone();
+
+            if (lineSpacing is { } ls)
+            {
+                after.LineSpacing = Math.Clamp(ls, 0.5, 4.0);
+            }
+
+            if (paragraphSpacing is { } ps)
+            {
+                after.ParagraphSpacing = Math.Clamp(ps, 0, 400);
+            }
+
+            if (rotationDegrees is { } rd)
+            {
+                after.RotationRadians = rd * Math.PI / 180.0;
+            }
+
+            if (frameWidth is { } fw)
+            {
+                after.FrameWidth = Math.Max(0, fw);
+            }
+
+            if (alignment is { } al)
+            {
+                after.Alignment = al;
+            }
+
+            _changes.Add((item, before, after));
+        }
+    }
+
+    public TextStyleCommand(TextItem item, double? lineSpacing = null,
+        double? paragraphSpacing = null, double? rotationDegrees = null,
+        double? frameWidth = null, TextAlignment? alignment = null)
+        : this(new[] { item }, lineSpacing, paragraphSpacing, rotationDegrees, frameWidth, alignment)
+    {
+    }
+
+    public void Do()
+    {
+        foreach ((TextItem item, _, TextItem after) in _changes)
+        {
+            item.CopyFrom(after);
+        }
+    }
+
+    public void Undo()
+    {
+        foreach ((TextItem item, TextItem before, _) in _changes)
+        {
+            item.CopyFrom(before);
+        }
+    }
+}
+
 /// <summary>Moves a text item's origin as one undo step.</summary>
 public sealed class SetTextOriginCommand : IUndoableCommand
 {

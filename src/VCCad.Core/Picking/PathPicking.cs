@@ -229,9 +229,147 @@ public static class PathPicking
         return (parity, winding);
     }
 
+    /// <summary>
+    /// Whether a path's geometry actually meets a rectangle — what a rubber-band
+    /// selection has to ask.
+    ///
+    /// Testing bounding rectangles instead is what makes marquee selection useless on a
+    /// document like a tiled pattern: a path whose geometry is one thin diagonal line has
+    /// a box covering a quarter of the page, so any rectangle overlapping that box
+    /// "selects" it however far away the line actually is. This walks the flattened
+    /// outline instead, so a rectangle selects what it encloses or crosses and nothing
+    /// else.
+    /// </summary>
+    public static bool IntersectsRect(PathItem path, Rect2D rect)
+    {
+        if (rect.IsEmpty)
+        {
+            return false;
+        }
+
+        foreach (SubPath sub in path.SubPaths)
+        {
+            IReadOnlyList<Point2D> polyline = FlattenOpenContour(sub);
+            if (polyline.Count == 0)
+            {
+                continue;
+            }
+
+            for (int i = 0; i < polyline.Count; i++)
+            {
+                if (rect.Contains(polyline[i]))
+                {
+                    return true;
+                }
+            }
+
+            // The samples can straddle the rectangle without any one landing inside it,
+            // so the edges have to be tested too.
+            int last = sub.IsClosed ? polyline.Count : polyline.Count - 1;
+            for (int i = 0; i < last; i++)
+            {
+                Point2D a = polyline[i];
+                Point2D b = polyline[(i + 1) % polyline.Count];
+                if (SegmentMeetsRect(a, b, rect))
+                {
+                    return true;
+                }
+            }
+        }
+
+        // A rectangle wholly inside a filled shape selects it, even though no outline
+        // sample lands inside the rectangle.
+        if (path.Fill.IsVisible && path.SubPaths.Any(sp => sp.IsClosed))
+        {
+            if (FillContains(path, new Point2D(
+                    (rect.Left + rect.Right) / 2, (rect.Top + rect.Bottom) / 2)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool SegmentMeetsRect(Point2D a, Point2D b, Rect2D r)
+    {
+        // Reject on the axis-aligned box first; most segments fail this.
+        if (Math.Max(a.X, b.X) < r.Left || Math.Min(a.X, b.X) > r.Right ||
+            Math.Max(a.Y, b.Y) < r.Top || Math.Min(a.Y, b.Y) > r.Bottom)
+        {
+            return false;
+        }
+
+        var topLeft = new Point2D(r.Left, r.Top);
+        var topRight = new Point2D(r.Right, r.Top);
+        var bottomRight = new Point2D(r.Right, r.Bottom);
+        var bottomLeft = new Point2D(r.Left, r.Bottom);
+
+        if (SegmentsCross(a, b, topLeft, topRight)
+            || SegmentsCross(a, b, topRight, bottomRight)
+            || SegmentsCross(a, b, bottomRight, bottomLeft)
+            || SegmentsCross(a, b, bottomLeft, topLeft))
+        {
+            return true;
+        }
+
+        // A straight run is flattened to just its endpoints, so a segment that passes
+        // through the rectangle without either end inside it — or that only touches a
+        // corner — has to be sampled. Step finer than the rectangle so the samples
+        // cannot straddle it.
+        double span = Math.Max(0.5, Math.Min(r.Width, r.Height) / 2);
+        double length = Math.Sqrt(((b.X - a.X) * (b.X - a.X)) + ((b.Y - a.Y) * (b.Y - a.Y)));
+        int steps = (int)Math.Min(4096, Math.Ceiling(length / span));
+        for (int i = 1; i < steps; i++)
+        {
+            double t = (double)i / steps;
+            if (r.Contains(new Point2D(a.X + ((b.X - a.X) * t), a.Y + ((b.Y - a.Y) * t))))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Two line segments crossing, touching, or overlapping collinearly.</summary>
+    private static bool SegmentsCross(Point2D a, Point2D b, Point2D c, Point2D d)
+    {
+        double D(Point2D p, Point2D q, Point2D r) =>
+            (q.X - p.X) * (r.Y - p.Y) - (q.Y - p.Y) * (r.X - p.X);
+
+        double d1 = D(c, d, a);
+        double d2 = D(c, d, b);
+        double d3 = D(a, b, c);
+        double d4 = D(a, b, d);
+
+        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+            ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)))
+        {
+            return true;
+        }
+
+        // Touching and collinear cases: a line entering exactly through a rectangle
+        // corner is common in technical artwork, and the strict test above misses it.
+        const double Epsilon = 1e-9;
+        return (Math.Abs(d1) < Epsilon && OnSegment(c, d, a))
+            || (Math.Abs(d2) < Epsilon && OnSegment(c, d, b))
+            || (Math.Abs(d3) < Epsilon && OnSegment(a, b, c))
+            || (Math.Abs(d4) < Epsilon && OnSegment(a, b, d));
+    }
+
+    /// <summary>Whether <paramref name="p"/> lies on the segment <paramref name="a"/>-<paramref name="b"/>.</summary>
+    private static bool OnSegment(Point2D a, Point2D b, Point2D p)
+        => p.X >= Math.Min(a.X, b.X) - 1e-9 && p.X <= Math.Max(a.X, b.X) + 1e-9
+        && p.Y >= Math.Min(a.Y, b.Y) - 1e-9 && p.Y <= Math.Max(a.Y, b.Y) + 1e-9;
+
     /// <summary>Flattens a closed subpath into its boundary polygon (used by the
     /// winding test). A small tolerance keeps the fill test fast and accurate.</summary>
     private static IReadOnlyList<Point2D> FlattenClosedContour(SubPath sub)
+        => FlattenOpenContour(sub);
+
+    /// <summary>Flattens a subpath's segments into a polyline, closed or not.</summary>
+    private static IReadOnlyList<Point2D> FlattenOpenContour(SubPath sub)
     {
         var points = new List<Point2D>();
         foreach (CubicBezier segment in sub.Segments())

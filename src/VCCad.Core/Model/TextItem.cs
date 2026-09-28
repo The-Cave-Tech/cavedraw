@@ -1,5 +1,7 @@
 using VCCad.Geometry;
 
+using VCCad.Core.Text;
+
 namespace VCCad.Core.Model;
 
 /// <summary>A styled span of text. Rich text is a list of runs so different
@@ -25,6 +27,13 @@ public sealed class TextRun
     /// </summary>
     public double? AdvanceWidth { get; set; }
 
+    /// <summary>
+    /// The font the document asked for (for example <c>Helvetica-Bold</c>), kept even
+    /// when the file does not embed it and the run is drawn with a substitute. Without
+    /// it a substitution cannot be reported in terms the person recognises.
+    /// </summary>
+    public string? SourceFont { get; set; }
+
     /// <summary>The embedded font programme this run was drawn with, when the
     /// source PDF embedded one. Null means the renderer should substitute.</summary>
     public EmbeddedFont? EmbeddedFont { get; set; }
@@ -45,6 +54,7 @@ public sealed class TextRun
         Bold = Bold,
         Italic = Italic,
         AdvanceWidth = AdvanceWidth,
+        SourceFont = SourceFont,
         EmbeddedFont = EmbeddedFont,
         RawCodes = RawCodes,
         GlyphIds = GlyphIds,
@@ -70,7 +80,7 @@ public enum TextAlignment
 public sealed class TextItem : LayerItem
 {
     /// <summary>Font bundled with VCCad and embedded in exported PDFs.</summary>
-    public const string DefaultFontFamily = "DejaVu Sans";
+    public const string DefaultFontFamily = "Nimbus Sans";
 
     /// <summary>Top-left of the text block, artboard-local.</summary>
     public Point2D Origin { get; set; }
@@ -83,6 +93,22 @@ public sealed class TextItem : LayerItem
 
     /// <summary>Rotation of the text block about its origin, in radians.</summary>
     public double RotationRadians { get; set; }
+
+    /// <summary>
+    /// Width of the text frame, in model units. Zero means the block grows to fit its
+    /// content; a positive value wraps the text inside it, which is what makes a drawn
+    /// text box behave like a text box rather than a single endless line.
+    /// </summary>
+    public double FrameWidth { get; set; }
+
+    /// <summary>
+    /// Line height as a multiple of the font size. Paragraph style, not content: it
+    /// changes how the block is set, never what it says.
+    /// </summary>
+    public double LineSpacing { get; set; } = 1.2;
+
+    /// <summary>Extra leading inserted before each paragraph except the first.</summary>
+    public double ParagraphSpacing { get; set; }
 
     /// <summary>Horizontal alignment of lines within the block.</summary>
     public TextAlignment Alignment { get; set; } = TextAlignment.Left;
@@ -109,34 +135,56 @@ public sealed class TextItem : LayerItem
     /// <summary>The largest font size among the runs (line height driver).</summary>
     public double MaxFontSize => Runs.Count == 0 ? 12.0 : Runs.Max(r => r.FontSize);
 
-    /// <summary>Approximate tight bounds (see class remarks).</summary>
+    /// <summary>
+    /// Tight bounds of the block: its wrap width and the height its lines need.
+    ///
+    /// Widths come from the installed <see cref="ITextMetrics"/> — the shaper's own
+    /// advances, kerning included — so the box reported here is the box drawn round the
+    /// text. Falling back to a per-character estimate is only correct when no host has
+    /// installed a measurer, which is the headless case; see
+    /// <see cref="TextMeasurement.IsReal"/>.
+    /// </summary>
     public Rect2D BoundingBox()
     {
-        double width = 0;
-        double lineWidth = 0;
-        double height = 0;
-        double lineHeight = MaxFontSize * 1.2;
-        bool anyLine = false;
+        var lines = TextWrapping.Lines(this);
 
-        foreach (TextRun run in Runs)
+        // The block is as wide as its widest line, unless a frame fixes the width — a
+        // drawn box keeps its shape while it fills.
+        double maxLine = 0;
+        foreach (TextWrapping.LineRange line in lines)
         {
-            foreach (char ch in run.Text)
+            double lineWidth = 0;
+            for (int i = line.Start; i < line.Start + line.Length; i++)
             {
-                if (ch == '\n')
-                {
-                    width = Math.Max(width, lineWidth);
-                    lineWidth = 0;
-                    height += lineHeight;
-                    anyLine = true;
-                    continue;
-                }
-
-                lineWidth += run.FontSize * 0.6;
+                lineWidth += WidthAt(i);
             }
+
+            maxLine = Math.Max(maxLine, lineWidth);
         }
 
-        width = Math.Max(width, lineWidth);
-        height += anyLine || Runs.Count > 0 ? lineHeight : 0;
+        // Every explicit break carries the extra paragraph leading — including a trailing
+        // one, which leaves an empty final line with the space above it.
+        int paragraphs = CountNewlines();
+
+        double lineHeight = MaxFontSize * LineSpacing;
+        double height = (lines.Count * lineHeight) + (paragraphs * ParagraphSpacing);
+        double width = FrameWidth > 0 ? FrameWidth : maxLine;
+
+        double WidthAt(int index)
+        {
+            int remaining = index;
+            foreach (TextRun run in Runs)
+            {
+                if (remaining < run.Text.Length)
+                {
+                    return TextMeasurement.AdvanceOf(run, remaining);
+                }
+
+                remaining -= run.Text.Length;
+            }
+
+            return MaxFontSize * 0.6;
+        }
 
         var local = new Rect2D(Origin.X, Origin.Y, width, height);
         if (Math.Abs(RotationRadians) < 1e-9)
@@ -172,12 +220,33 @@ public sealed class TextItem : LayerItem
         return new Rect2D(box.X + offset.X, box.Y + offset.Y, box.Width, box.Height);
     }
 
+    /// <summary>How many explicit line breaks the block's runs contain.</summary>
+    private int CountNewlines()
+    {
+        int count = 0;
+        foreach (TextRun run in Runs)
+        {
+            foreach (char ch in run.Text)
+            {
+                if (ch == '\n')
+                {
+                    count++;
+                }
+            }
+        }
+
+        return count;
+    }
+
     /// <summary>Copies runs/origin/colour from another text item (undo support).</summary>
     public void CopyFrom(TextItem other)
     {
         Origin = other.Origin;
         Color = other.Color;
         RotationRadians = other.RotationRadians;
+        FrameWidth = other.FrameWidth;
+        LineSpacing = other.LineSpacing;
+        ParagraphSpacing = other.ParagraphSpacing;
         Alignment = other.Alignment;
         Runs.Clear();
         Runs.AddRange(other.Runs.Select(r => r.Clone()));
@@ -194,6 +263,9 @@ public sealed class TextItem : LayerItem
             Origin = Origin,
             Color = Color,
             RotationRadians = RotationRadians,
+            FrameWidth = FrameWidth,
+            LineSpacing = LineSpacing,
+            ParagraphSpacing = ParagraphSpacing,
             Alignment = Alignment,
         };
         copy.Runs.AddRange(Runs.Select(r => r.Clone()));

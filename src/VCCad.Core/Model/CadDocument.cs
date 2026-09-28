@@ -45,6 +45,18 @@ public sealed class CadDocument
     /// <summary>Artboards in document order; index 0 is the primary/first artboard.</summary>
     public IReadOnlyList<Artboard> Artboards => _artboards;
 
+    /// <summary>
+    /// The decoded Adobe Illustrator private-data payload this document carries,
+    /// or <c>null</c> when the document has none.
+    ///
+    /// This is the "stay in sync" channel for foreign <c>.ai</c>/PDF files: the
+    /// importer captures the payload, the lossless serializer persists it (as
+    /// decoded text plus its source format — never the compressed bytes), and the
+    /// exporter re-emits it into every page's <c>/PieceInfo</c>. A document with a
+    /// null (or empty) payload exports exactly as before.
+    /// </summary>
+    public AiPrivateData? AiPrivateData { get; set; }
+
     /// <summary>Raised whenever the artboard list changes.</summary>
     public event EventHandler? StructureChanged;
 
