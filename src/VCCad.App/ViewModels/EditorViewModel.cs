@@ -103,6 +103,12 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     private void RaiseDocumentChanged() => DocumentChanged?.Invoke(this, EventArgs.Empty);
 
+    /// <summary>
+    /// Announces a document mutation made outside the command bus (by the
+    /// automation/chatbot layer) so the canvas, panes and diagnostics refresh.
+    /// </summary>
+    public void NotifyDocumentChanged() => RaiseDocumentChanged();
+
     // ------------------------------------------------------------------
     // Session management
     // ------------------------------------------------------------------
@@ -243,10 +249,27 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public bool HasSegmentSelection => _active.HasSegmentSelection;
     public bool HasTransformableSelection => _active.HasTransformableSelection;
     public Point2D? PointPosition => _active.PointPosition;
+    /// <summary>The text block being edited, if any; the target of styling operations.</summary>
+    public TextItem? EditingText
+    {
+        get => _active.EditingText;
+        set => _active.EditingText = value;
+    }
+
     public bool IsEditingText
     {
         get => _active.IsEditingText;
-        set => _active.IsEditingText = value;
+        set
+        {
+            if (_active.IsEditingText == value)
+            {
+                return;
+            }
+
+            _active.IsEditingText = value;
+            // The text toolbar shows and hides on this, so it has to announce itself.
+            OnPropertyChanged();
+        }
     }
 
     public int TextCaretRunIndex
@@ -337,6 +360,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public void UpdateSelectedText(string content, string family, double size, bool bold, bool italic,
         ColorRgb color, int? runIndex = null)
         => _active.UpdateSelectedText(content, family, size, bold, italic, color, runIndex);
+
+
+    /// <summary>Paragraph style and orientation on the selected text, one undo step.</summary>
+    public void ApplyTextStyle(double? lineSpacing = null, double? paragraphSpacing = null,
+        double? rotationDegrees = null, double? frameWidth = null, TextAlignment? alignment = null)
+        => _active.ApplyTextStyle(lineSpacing, paragraphSpacing, rotationDegrees, frameWidth, alignment);
+
 
     private void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

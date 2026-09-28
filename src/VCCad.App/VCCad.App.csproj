@@ -19,13 +19,6 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets/**" />
-    <!-- Bundle the same DejaVu faces the PDF exporter embeds, so on-canvas text
-         metrics match the rendered/exported document. -->
-    <AvaloniaResource Include="../VCCad.Pdf/Fonts/DejaVuSans.ttf" Link="Assets/Fonts/DejaVuSans.ttf" />
-    <AvaloniaResource Include="../VCCad.Pdf/Fonts/DejaVuSans-Bold.ttf" Link="Assets/Fonts/DejaVuSans-Bold.ttf" />
-    <AvaloniaResource Include="../VCCad.Pdf/Fonts/DejaVuSans-Oblique.ttf" Link="Assets/Fonts/DejaVuSans-Oblique.ttf" />
-    <AvaloniaResource Include="../VCCad.Pdf/Fonts/DejaVuSerif.ttf" Link="Assets/Fonts/DejaVuSerif.ttf" />
-    <AvaloniaResource Include="../VCCad.Pdf/Fonts/DejaVuSansMono.ttf" Link="Assets/Fonts/DejaVuSansMono.ttf" />
   </ItemGroup>
 
   <ItemGroup>

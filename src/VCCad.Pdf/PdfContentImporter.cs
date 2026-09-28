@@ -28,6 +28,7 @@ internal sealed class PdfContentImporter
 
     // Font resource object → extracted embedded programme (pass-through).
     private readonly Dictionary<object, EmbeddedFont?> _embeddedFontCache = new();
+    private readonly Dictionary<Dictionary<string, object?>, Dictionary<int, string>?> _encodingCache = new();
 
     public PdfContentImporter(PdfFile file, double pageHeight)
     {
@@ -196,10 +197,29 @@ internal sealed class PdfContentImporter
             return new Point2D(p.X, _pageHeight - p.Y);
         }
 
-        void FlushPath(bool stroke, bool fill)
+        /// <summary>
+        /// Paints the path built so far. Geometry is stored exactly as the file draws
+        /// it: a tiled PDF's overflow past the page edge is a rendering concern (the
+        /// page box clips it), not something to bake into the document.
+        /// </summary>
+        void FlushPath(bool stroke, bool fill, FillRule rule = FillRule.NonZero)
         {
             if (subPaths.Count > 0 && (stroke || fill))
             {
+                // A fill implicitly closes every open subpath (ISO 32000-1 §8.5.3.3);
+                // a stroke leaves them open. This is not a detail: outline exporters
+                // routinely write a glyph contour as "m ... c c c f" with no "h", and an
+                // open figure does not fill, so the letter disappears entirely. That is
+                // why the round glyphs - O, S, C, 0, c - were missing while glyphs whose
+                // contours happened to carry an "h" survived.
+                if (fill)
+                {
+                    foreach (SubPath sub in subPaths)
+                    {
+                        sub.IsClosed = true;
+                    }
+                }
+
                 var item = new PathItem { Name = "Path" };
                 foreach (SubPath sp in subPaths)
                 {
@@ -209,7 +229,7 @@ internal sealed class PdfContentImporter
                 ColorRgb fillRgb = fillColor;
                 ColorRgb penRgb = strokeColor;
                 item.Fill = fill
-                    ? FillSpec.Solid(new ColorRgb(fillRgb.R, fillRgb.G, fillRgb.B, fillAlpha))
+                    ? FillSpec.Solid(new ColorRgb(fillRgb.R, fillRgb.G, fillRgb.B, fillAlpha)) with { Rule = rule }
                     : FillSpec.None;
                 item.Stroke = stroke
                     ? new StrokeSpec(true, new ColorRgb(penRgb.R, penRgb.G, penRgb.B, strokeAlpha),
@@ -405,19 +425,33 @@ internal sealed class PdfContentImporter
                     currentPath.IsClosed = true;
                     break;
                 case "S":
+                    FlushPath(stroke: true, fill: false);
+                    break;
                 case "s":
+                    // "close and stroke": the close applies to this stroke, unlike S.
+                    foreach (SubPath open in subPaths)
+                    {
+                        open.IsClosed = true;
+                    }
+
                     FlushPath(stroke: true, fill: false);
                     break;
                 case "f":
                 case "F":
+                    FlushPath(stroke: false, fill: true, FillRule.NonZero);
+                    break;
                 case "f*":
-                    FlushPath(stroke: false, fill: true);
+                    // The star is the fill rule: even-odd, not non-zero. Treating the two
+                    // alike fills in the counter of every glyph — the "6 with no hole".
+                    FlushPath(stroke: false, fill: true, FillRule.EvenOdd);
                     break;
                 case "B":
-                case "B*":
                 case "b":
+                    FlushPath(stroke: true, fill: true, FillRule.NonZero);
+                    break;
+                case "B*":
                 case "b*":
-                    FlushPath(stroke: true, fill: true);
+                    FlushPath(stroke: true, fill: true, FillRule.EvenOdd);
                     break;
                 case "n":
                     subPaths.Clear();
@@ -484,16 +518,72 @@ internal sealed class PdfContentImporter
                     ShowText(text, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer);
                     break;
                 case "TJ" when operands.Count >= 1 && operands[0] is List<object?> array:
-                    var sb = new StringBuilder();
-                    foreach (object? element in array)
+                    // A TJ array interleaves strings with positioning adjustments, in
+                    // thousandths of the text-space em. They carry real position: the
+                    // page-number table on a pattern is drawn as [(1)-1130(2)-1118(3)],
+                    // where -1130 means "move 1.13 em before the next digit". Concatenating
+                    // the strings and ignoring the numbers collapses that to "123" bunched
+                    // at the origin — the digits land in the wrong cell, and an extractor
+                    // reads one word where the file has three.
+                    //
+                    // Small adjustments are *kerning* and are best left alone: splitting on
+                    // them would turn every letter-spaced line into one object per glyph.
+                    // A quarter of an em is far above any kerning pair and far below any
+                    // deliberate positioning, so that is the line.
                     {
-                        if (element is string s)
+                        var segments = new List<(string Text, double Offset)>();
+                        var buffer = new StringBuilder();
+                        double pen = 0;
+                        double segmentStart = 0;
+                        double pendingShift = 0;
+                        double threshold = fontSize * 0.25;
+
+                        foreach (object? element in array)
                         {
-                            sb.Append(s);
+                            if (element is string part)
+                            {
+                                if (buffer.Length == 0)
+                                {
+                                    segmentStart = pen;
+                                }
+
+                                buffer.Append(part);
+                            }
+                            else if (TryNumber(element, out double adjustment))
+                            {
+                                // Negative advances the pen (PDF moves forward on the page).
+                                // Offsets are in text space, so they are measured with the
+                                // declared Tf size, before the matrix scale.
+                                pendingShift += -adjustment / 1000.0 * fontSize;
+
+                                if (Math.Abs(pendingShift) > threshold && buffer.Length > 0)
+                                {
+                                    // The pen also advances by the glyphs just shown; without
+                                    // that the next piece lands one advance too far left.
+                                    pen += MeasureAdvance(buffer.ToString(), fontName, resources, fontSize) ?? 0;
+                                    pen += pendingShift;
+                                    segments.Add((buffer.ToString(), segmentStart));
+                                    buffer.Clear();
+                                    pendingShift = 0;
+                                }
+                            }
+                        }
+
+                        if (buffer.Length > 0)
+                        {
+                            segments.Add((buffer.ToString(), segmentStart));
+                        }
+
+                        foreach ((string part, double offset) in segments)
+                        {
+                            AffineTransform segmentMatrix = offset == 0
+                                ? textMatrix
+                                : textMatrix.Compose(AffineTransform.CreateTranslation(offset, 0));
+                            ShowText(part, resources, fontName, fontSize, current, segmentMatrix,
+                                fillColor, items, currentLayer);
                         }
                     }
 
-                    ShowText(sb.ToString(), resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer);
                     break;
                 case "Do" when operands.Count >= 1 && operands[0] is PdfName xname:
                     DrawXObject(resources, xname.Value, current, items, depth, currentLayer);
@@ -545,10 +635,14 @@ internal sealed class PdfContentImporter
         double ascent = embedded is not null && embedded.Ascent > 0 ? embedded.Ascent / 1000.0 : mapAscent;
 
         // Text operands carry glyph codes, not characters. Decode via the font's
-        // /ToUnicode CMap (or fall back to Latin-1 for unencoded simple fonts).
+        // /ToUnicode CMap when it has one, otherwise through the font's /Encoding:
+        // WinAnsi code 0x94 is a right double quote (the inches mark on a pattern),
+        // and reading it as Latin-1 turns it into a control character with no glyph.
         bool composite = IsCompositeFont(fontName, resources);
         string rawText = text;
-        string decoded = DecodeText(rawText, ToUnicodeMap(fontName, resources), composite);
+        Dictionary<int, string>? decodeMap = ToUnicodeMap(fontName, resources)
+            ?? EncodingMap(fontName, resources);
+        string decoded = DecodeText(rawText, decodeMap, composite);
         if (decoded.Length == 0)
         {
             decoded = rawText;
@@ -591,11 +685,16 @@ internal sealed class PdfContentImporter
             Bold = bold,
             Italic = italic,
             AdvanceWidth = MeasureAdvance(rawText, fontName, resources, effectiveSize),
+            SourceFont = SourceFontName(fontName, resources),
             EmbeddedFont = embedded,
             RawCodes = embedded is not null ? rawText : null,
             GlyphIds = embedded is not null ? ComputeGlyphIds(embedded, decoded, rawText) : null,
         };
         item.Runs.Add(run);
+
+        // The run is stored exactly as authored. A tiled PDF draws each label once per
+        // sheet it touches and lets the page box clip it; rewriting the characters to
+        // fit was tried and it butchered the labels. Clipping belongs at render time.
         items.Add(new PdfImportedItem(layer, item));
     }
 
@@ -882,6 +981,9 @@ internal sealed class PdfContentImporter
         return null;
     }
 
+    /// <summary>The font name the document asks for, for reporting substitutions.</summary>
+    private string? SourceFontName(string fontName, Dictionary<string, object?> resources)
+        => (FontDict(fontName, resources)?.GetValueOrDefault("BaseFont") as PdfName)?.Value ?? fontName;
     private Dictionary<string, object?>? FontDict(string fontName, Dictionary<string, object?> resources)
         => _file.ResolveDict(resources.GetValueOrDefault("Font")) is { } fonts
             ? _file.ResolveDict(fonts.GetValueOrDefault(fontName))
@@ -889,6 +991,28 @@ internal sealed class PdfContentImporter
 
     private bool IsCompositeFont(string fontName, Dictionary<string, object?> resources)
         => FontDict(fontName, resources)?.GetValueOrDefault("Subtype") is PdfName { Value: "Type0" };
+
+    /// <summary>
+    /// The font's /Encoding as a code → text map, used when the font carries no
+    /// /ToUnicode CMap (which is the usual case for Helvetica and friends).
+    /// </summary>
+    private Dictionary<int, string>? EncodingMap(string fontName, Dictionary<string, object?> resources)
+    {
+        Dictionary<string, object?>? font = FontDict(fontName, resources);
+        if (font is null)
+        {
+            return null;
+        }
+
+        if (_encodingCache.TryGetValue(font, out Dictionary<int, string>? cached))
+        {
+            return cached;
+        }
+
+        Dictionary<int, string>? map = PdfTextEncoding.ForFont(_file, font);
+        _encodingCache[font] = map;
+        return map;
+    }
 
     private Dictionary<int, string>? ToUnicodeMap(string fontName, Dictionary<string, object?> resources)
     {
@@ -1022,37 +1146,30 @@ internal sealed class PdfContentImporter
     private (string Family, bool Bold, bool Italic, double Ascent) MapFont(
         string fontName, Dictionary<string, object?> resources)
     {
-        string baseFont = fontName;
-        if (_file.ResolveDict(resources.GetValueOrDefault("Font")) is { } fonts &&
-            _file.ResolveDict(fonts.GetValueOrDefault(fontName)) is { } fontDict &&
-            fontDict.GetValueOrDefault("BaseFont") is PdfName bf)
-        {
-            baseFont = bf.Value;
-        }
+        Dictionary<string, object?>? fontDict =
+            _file.ResolveDict(resources.GetValueOrDefault("Font")) is { } fonts
+                ? _file.ResolveDict(fonts.GetValueOrDefault(fontName))
+                : null;
 
-        bool bold = baseFont.Contains("Bold", StringComparison.OrdinalIgnoreCase) ||
-                    baseFont.Contains("Demi", StringComparison.OrdinalIgnoreCase) ||
-                    baseFont.Contains("Black", StringComparison.OrdinalIgnoreCase);
-        bool italic = baseFont.Contains("Italic", StringComparison.OrdinalIgnoreCase) ||
-                      baseFont.Contains("Oblique", StringComparison.OrdinalIgnoreCase);
+        string baseFont = (fontDict?.GetValueOrDefault("BaseFont") as PdfName)?.Value ?? fontName;
 
-        string family = baseFont.Contains("Mono", StringComparison.OrdinalIgnoreCase)
-            ? "DejaVu Sans Mono"
-            : baseFont.Contains("Serif", StringComparison.OrdinalIgnoreCase) ||
-              baseFont.Contains("Times", StringComparison.OrdinalIgnoreCase) ||
-              baseFont.Contains("Garamond", StringComparison.OrdinalIgnoreCase) ||
-              baseFont.Contains("Annai", StringComparison.OrdinalIgnoreCase)
-                ? "DejaVu Serif"
-                : "DejaVu Sans";
+        // Classify through the standard-font table rather than a handful of substring
+        // tests: a PDF may name any of the fourteen standard faces, or any of their
+        // many aliases, and each one identifies its family by a family word.
+        StandardFonts.TryResolve(baseFont, bold: false, italic: false, out StandardFace face);
+        bool bold = face.Bold;
+        bool italic = face.Italic;
+        string family = StandardFonts.UrwFamily(face);
 
-        // The origin lift must use the ascent of the font we will actually
-        // render with (the substituted bundled font), not the source font's
-        // descriptor — otherwise the baseline is misplaced.
+        // The origin lift needs the ascent of the face we will actually render with.
+        // The font's own descriptor is the best source; when it is missing, fall back to
+        // the usual Latin ascent rather than borrowing a metric from a bundled font.
         double ascent = 0.8;
-        TrueTypeFont bundled = BundledFonts.Resolve(family, bold: false, italic: false);
-        if (bundled.UnitsPerEm > 0)
+        if (fontDict?.GetValueOrDefault("FontDescriptor") is { } descriptorRef &&
+            _file.ResolveDict(descriptorRef) is { } descriptor &&
+            _file.ResolveNumber(descriptor.GetValueOrDefault("Ascent")) is { } ascentValue && ascentValue > 0)
         {
-            ascent = (double)bundled.Ascender / bundled.UnitsPerEm;
+            ascent = Math.Clamp(ascentValue / 1000.0, 0.5, 1.4);
         }
 
         return (family, bold, italic, ascent);
@@ -1398,6 +1515,26 @@ internal sealed class PdfContentImporter
         int i => i,
         _ => 0.0,
     };
+
+    /// <summary>Reads a numeric operand, reporting whether it was one at all.</summary>
+    private static bool TryNumber(object? value, out double number)
+    {
+        switch (value)
+        {
+            case double d:
+                number = d;
+                return true;
+            case long l:
+                number = l;
+                return true;
+            case int i:
+                number = i;
+                return true;
+            default:
+                number = 0;
+                return false;
+        }
+    }
 
     private static double ScaleOf(AffineTransform transform)
         => Math.Sqrt(Math.Abs(transform.A * transform.D - transform.C * transform.B));

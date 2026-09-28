@@ -46,7 +46,19 @@ internal sealed class PdfFontEmbedder
         foreach ((FontKey key, HashSet<int> codePoints) in usage.OrderBy(k => k.Key.Family)
                      .ThenBy(k => k.Key.Bold).ThenBy(k => k.Key.Italic))
         {
-            TrueTypeFont font = BundledFonts.Resolve(key.Family, key.Bold, key.Italic);
+            // A font the document did not embed is supplied by the standard-font chain:
+            // the URW Core 35 faces carry the Helvetica/Times/Courier metrics, and their
+            // licence explicitly permits embedding them in a PDF. When this machine has
+            // none, the run stays a plain standard-font reference — exactly what the
+            // source document did — rather than inventing a substitute face.
+            StandardFonts.TryResolve(key.Family, key.Bold, key.Italic, out StandardFace face);
+            byte[]? program = StandardFontFiles.TryReadProgram(face);
+            if (program is null)
+            {
+                continue;
+            }
+
+            TrueTypeFont font = new(program);
             string name = $"/F{index++}";
 
             int type0 = assembler.Allocate();

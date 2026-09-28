@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Media;
 using VCCad.App.Fonts;
 using VCCad.App.ViewModels;
+using VCCad.Core.Text;
 using VCCad.Core.Commands;
 using VCCad.Core.Model;
 using ModelFillRule = VCCad.Core.Model.FillRule;
@@ -87,6 +88,47 @@ public sealed class CanvasWorkspace : Control
     private readonly List<TextItem> _dragTexts = new();
     private readonly Dictionary<TextItem, Point2D> _dragTextOrigins = new();
     private Point2D _dragStartModel;
+
+    /// <summary>Caret blink state; the caret is drawn only when this is true.</summary>
+    private bool _caretOn = true;
+
+    private Avalonia.Threading.DispatcherTimer? _caretTimer;
+
+    /// <summary>Starts the caret blinking while a block is edited, and stops it after.</summary>
+    private void UpdateCaretBlink()
+    {
+        if (_editingText is null)
+        {
+            _caretTimer?.Stop();
+            _caretTimer = null;
+            _caretOn = true;
+            return;
+        }
+
+        if (_caretTimer is not null)
+        {
+            return;
+        }
+
+        _caretTimer = new Avalonia.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(530),
+        };
+        _caretTimer.Tick += (_, _) =>
+        {
+            _caretOn = !_caretOn;
+            InvalidateVisual();
+        };
+        _caretTimer.Start();
+    }
+
+    /// <summary>Where a text frame drag began, while the text tool is drawing a box.</summary>
+    private Point2D? _textFrameStart;
+
+    // Edit-box handle drag: which handle, and where the drag began.
+    private int _frameResizeHandle = -1;
+    private double _frameResizeStartWidth;
+    private double _frameResizeStartLocalX;
 
     // Node / handle drag (Node tool).
     private PathItem? _nodePath;
@@ -231,29 +273,164 @@ public sealed class CanvasWorkspace : Control
     public double Zoom
     {
         get => _layout.Zoom;
-        private set
+        private set => SetZoom(value);
+    }
+
+    /// <summary>
+    /// Raised when the view changes (zoom, fit, clipping) — including changes made
+    /// through the automation API, so the status bar never shows a stale figure.
+    /// </summary>
+    public event EventHandler? ViewChanged;
+
+    /// <summary>
+    /// Whether each artboard clips its own content to the page box, as a PDF viewer
+    /// does. On by default: an imported tiled document draws full-size artwork on
+    /// every sheet and relies on the page edge to cut it, so without this the pieces
+    /// and labels sprawl across the pasteboard. Turn it off to inspect that overflow.
+    /// </summary>
+    public bool ClipToArtboard
+    {
+        get => _clipToArtboard;
+        set
         {
-            _layout.Zoom = value;
+            if (_clipToArtboard == value)
+            {
+                return;
+            }
+
+            _clipToArtboard = value;
+            _layout = new PasteboardLayout(ComputeExtent()) { Zoom = _layout.Zoom };
+            ZoomToFit();
             InvalidateVisual();
+            ViewChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
+    private bool _clipToArtboard = true;
+
     private Size2D ViewportPixels => new(Math.Max(Bounds.Width, 1), Math.Max(Bounds.Height, 1));
 
-    public void ZoomIn() => ZoomAtCenter(Zoom * 1.25);
-    public void ZoomOut() => ZoomAtCenter(Zoom / 1.25);
-    public void ZoomToActualSize() => ZoomAtCenter(1.0);
+    /// <summary>
+    /// Space at the bottom of the viewport that must stay clear when fitting — the
+    /// diagnostics overlay. Without it a fitted artboard would slide underneath the
+    /// panel and the person could not see the artwork they are working on.
+    /// </summary>
+    public double ViewportInsetBottom { get; set; }
 
+    /// <summary>True until the person changes the zoom themselves.</summary>
+    private bool _userAdjustedZoom;
+
+    public void ZoomIn()
+    {
+        _userAdjustedZoom = true;
+        ZoomAtCenter(Zoom * 1.25);
+    }
+
+    public void ZoomOut()
+    {
+        _userAdjustedZoom = true;
+        ZoomAtCenter(Zoom / 1.25);
+    }
+
+    public void ZoomToActualSize()
+    {
+        _userAdjustedZoom = true;
+        ZoomAtCenter(1.0);
+    }
+
+    /// <summary>True while the view is still auto-fitting (the person has not zoomed).</summary>
+    public bool IsAutoFit => !_userAdjustedZoom;
+
+    /// <summary>Sets an absolute zoom factor, centred on the current view.</summary>
+    public void ZoomTo(double factor)
+    {
+        _userAdjustedZoom = true;
+        ZoomAtCenter(factor);
+    }
+
+    /// <summary>
+    /// Scrolls the view so <paramref name="model"/> sits in the middle of the visible
+    /// area. A person pans with the scrollbars; this is the same thing as an operation.
+    /// </summary>
+    public void CenterOn(Point2D model)
+    {
+        Size2D vp = UsableViewport;
+        _offset = new Vector2D(vp.Width / 2 - (model.X - _layout.Extent.Left) * _layout.Zoom,
+                               vp.Height / 2 - (model.Y - _layout.Extent.Top) * _layout.Zoom);
+        InvalidateVisual();
+        ViewChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>The model point at the middle of the visible area.</summary>
+    public Point2D ViewCenter
+    {
+        get
+        {
+            Size2D vp = UsableViewport;
+            return ModelPointAtScreen(new Point(vp.Width / 2, vp.Height / 2));
+        }
+    }
+
+    /// <summary>Fits the document into the visible viewport (above the diagnostics overlay)
+    /// and hands control of the zoom back to the automatic behaviour.
+    /// </summary>
     public void ZoomToFit()
     {
-        _layout.Zoom = _layout.ZoomToFit(ViewportPixels);
-        _offset = _layout.CenterInViewport(ViewportPixels);
+        _userAdjustedZoom = false;
+        Size2D vp = UsableViewport;
+        SetZoom(_layout.ZoomToFit(vp));
+        _offset = _layout.CenterInViewport(vp);
         InvalidateVisual();
+        ViewChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Applies a zoom level and notifies observers. Every zoom change must go through
+    /// here: writing <c>_layout.Zoom</c> directly used to leave the status bar showing
+    /// the previous figure.
+    /// </summary>
+    /// <summary>Zoom for an off-screen page render (see <see cref="Views.PageRenderer"/>).</summary>
+    public void SetZoomForExport(double factor) => SetZoom(factor);
+
+    /// <summary>
+    /// A model point in *window* coordinates, which is what a pointer event and
+    /// <c>input.pointer</c> use. <see cref="ModelToScreen"/> is relative to this control,
+    /// so the control's own offset in the window has to be added or every aim lands a
+    /// toolbar's height out.
+    /// </summary>
+    public Point ModelToWindow(Point2D model)
+    {
+        Point local = ModelToScreen(model);
+        return this.TranslatePoint(local, TopLevel.GetTopLevel(this) ?? (Visual)this) ?? local;
+    }
+
+    /// <summary>A window point in model coordinates.</summary>
+    public Point2D WindowToModel(Point window)
+    {
+        Point local = TopLevel.GetTopLevel(this)?.TranslatePoint(window, this) ?? window;
+        return ModelPointAtScreen(local);
+    }
+
+    private void SetZoom(double value)
+    {
+        _layout.Zoom = value;
+        InvalidateVisual();
+        ViewChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>The viewport minus the reserved bottom inset.</summary>
+    private Size2D UsableViewport
+    {
+        get
+        {
+            Size2D vp = ViewportPixels;
+            return new Size2D(vp.Width, Math.Max(1, vp.Height - Math.Max(0, ViewportInsetBottom)));
+        }
     }
 
     private void ZoomAtCenter(double factor)
     {
-        _layout.Zoom = factor;
+        SetZoom(factor);
         Size2D vp = ViewportPixels;
         Point2D centre = ModelPointAtScreen(new Point(vp.Width / 2, vp.Height / 2));
         _offset = new Vector2D(vp.Width / 2 - (centre.X - _layout.Extent.Left) * _layout.Zoom,
@@ -264,7 +441,12 @@ public sealed class CanvasWorkspace : Control
     protected override void OnSizeChanged(SizeChangedEventArgs e)
     {
         base.OnSizeChanged(e);
-        if (!_hasLaidOutOnce && e.NewSize.Width > 10 && e.NewSize.Height > 10 && _document is not null)
+
+        // Refit on every size change until the person takes control of the zoom.
+        // Fitting only once is not enough: the window is resized after it opens (it
+        // is docked to a screen half), and the one-shot fit would leave the artboard
+        // small in the larger viewport.
+        if (e.NewSize.Width > 10 && e.NewSize.Height > 10 && _document is not null && !_userAdjustedZoom)
         {
             _hasLaidOutOnce = true;
             ZoomToFit();
@@ -382,7 +564,14 @@ public sealed class CanvasWorkspace : Control
         foreach (Artboard artboard in _document.Artboards)
         {
             extent = extent.Union(artboard.Bounds);
-            extent = extent.Union(artboard.ArtworkBounds());
+
+            // Only count artwork that is actually visible. When pages clip their own
+            // content, a tiled document's overflow must not stretch the extent — it
+            // would push "fit" out to a zoom where the pages are unreadable.
+            if (!ClipToArtboard)
+            {
+                extent = extent.Union(artboard.ArtworkBounds());
+            }
         }
 
         return extent;
@@ -541,8 +730,25 @@ public sealed class CanvasWorkspace : Control
         // Text editing: clicks inside position the caret / select; outside exits.
         if (_editingText is { } editing)
         {
-            Point2D localPoint = model - editing.ArtboardOffset();
-            if (editing.BoundingBox().Contains(localPoint))
+            // A handle takes priority over placing the caret.
+            int handle = HandleAt(editing, model);
+            if (handle >= 0)
+            {
+                _frameResizeHandle = handle;
+                _frameResizeStartWidth = editing.FrameWidth > 0
+                    ? editing.FrameWidth
+                    : Math.Max(MeasureText(editing).MaxWidth, 24);
+                _frameResizeStartLocalX = ToTextLocal(editing, model).X;
+                _gestureMoved = false;
+
+                // Capture, or the moves that carry the resize may never come back here.
+                e.Pointer.Capture(this);
+                e.Handled = true;
+                return;
+            }
+
+            Point2D localPoint = ToTextLocal(editing, model);
+            if (TextContains(editing, model))
             {
                 int index = IndexAtLocal(editing, localPoint);
                 if (e.ClickCount >= 2)
@@ -610,8 +816,25 @@ public sealed class CanvasWorkspace : Control
                 break;
 
             case EditorTool.Text:
-                TextItem created = _vm!.CreateTextAt(model, "DejaVu Sans", 12);
+                // A handle on the block already being edited takes the press; without this
+                // the text tool starts a brand-new frame instead and the handles drawn on
+                // the box can never be grabbed.
+                if (_editingText is { } current && HandleAt(current, model) is int grabbed && grabbed >= 0)
+                {
+                    _frameResizeHandle = grabbed;
+                    _frameResizeStartWidth = current.FrameWidth > 0
+                        ? current.FrameWidth
+                        : Math.Max(MeasureText(current).MaxWidth, 24);
+                    _frameResizeStartLocalX = ToTextLocal(current, model).X;
+                    _gestureMoved = false;
+                    break;
+                }
+
+                TextItem created = _vm!.CreateTextAt(model, TextItem.DefaultFontFamily, 12);
                 created.Color = _vm.CurrentFill.IsVisible ? _vm.CurrentFill.Color : ColorRgb.Black;
+                // Drag out a box to give it a frame width; a plain click leaves the block
+                // auto-width, so both "type a line" and "draw a text box" are available.
+                _textFrameStart = model;
                 EnterTextEdit(created);
                 break;
         }
@@ -625,9 +848,22 @@ public sealed class CanvasWorkspace : Control
         _hoverModel = model;
         _shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
 
+        // An I-beam over text is the only thing that tells a person the text can be
+        // typed into; without it a text block looks like any other object.
+        Cursor = _editingText is not null || HitTestTopItem(model) is TextItem
+            ? new Cursor(StandardCursorType.Ibeam)
+            : Cursor.Default;
+
+        if (_frameResizeHandle >= 0 && _editingText is not null)
+        {
+            _gestureMoved = true;
+            DragEditBoxHandle(model);
+            return;
+        }
+
         if (_textSelecting && _editingText is { } selText)
         {
-            _caret = IndexAtLocal(selText, model - selText.ArtboardOffset());
+            _caret = IndexAtLocal(selText, ToTextLocal(selText, model));
             AfterTextEdit();
             return;
         }
@@ -684,11 +920,44 @@ public sealed class CanvasWorkspace : Control
         base.OnPointerReleased(e);
         Point2D model = ModelPointAtScreen(e.GetPosition(this));
 
+        // Releasing an edit-box handle ends the resize; the width has already been applied.
+        if (_frameResizeHandle >= 0)
+        {
+            _frameResizeHandle = -1;
+            e.Pointer.Capture(null);
+            InvalidateVisual();
+            return;
+        }
+
         if (_textSelecting)
         {
             _textSelecting = false;
             e.Pointer.Capture(null);
             return;
+        }
+
+        // Finishing a text-frame drag: the box the person drew becomes the wrap width.
+        if (_textFrameStart is { } frameStart)
+        {
+            _textFrameStart = null;
+            if (_editingText is { } framed)
+            {
+                double width = Math.Abs(model.X - frameStart.X);
+                if (width >= 24)
+                {
+                    framed.FrameWidth = width;
+                    AfterTextEdit();
+                    InvalidateVisual();
+
+                    if (_leftDown)
+                    {
+                        _leftDown = false;
+                        e.Pointer.Capture(null);
+                    }
+
+                    return;
+                }
+            }
         }
 
         if (_isPanning)
@@ -735,6 +1004,7 @@ public sealed class CanvasWorkspace : Control
             Point cursor = e.GetPosition(this);
             Point2D before = ModelPointAtScreen(cursor);
             double factor = e.Delta.Y > 0 ? 1.1 : 1 / 1.1;
+            _userAdjustedZoom = true;
             _layout.Zoom *= factor;
             _offset = new Vector2D(
                 cursor.X - (before.X - _layout.Extent.Left) * _layout.Zoom,
@@ -880,7 +1150,7 @@ public sealed class CanvasWorkspace : Control
 
     private bool HitRotationHandle(Point2D model)
     {
-        if (_vm is null || !_vm.SelectedPaths().Any() || _shiftHeld)
+        if (_vm is null || !_vm.HasTransformableSelection || _shiftHeld)
         {
             return false;
         }
@@ -1129,6 +1399,34 @@ public sealed class CanvasWorkspace : Control
         InvalidateVisual();
     }
 
+    /// <summary>
+    /// Whether an object meets a rubber-band rectangle.
+    ///
+    /// A path is asked about its geometry, not its box: on a tiled pattern a diagonal
+    /// line has a page-sized box, so a box test selects it for any rectangle that
+    /// overlaps the box at all, however far away the line actually is. Every other kind
+    /// of object keeps the rectangle test, which is honest for it — a text block's box
+    /// *is* its geometry.
+    /// </summary>
+    private bool ItemMeetsRect(LayerItem item, Rect2D rect)
+    {
+        if (item is PathItem path)
+        {
+            // The rectangle is in document space; a path's geometry is artboard-local.
+            Rect2D local = rect;
+            Vector2D offset = item.ArtboardOffset();
+            if (offset.X != 0 || offset.Y != 0)
+            {
+                local = new Rect2D(rect.X - offset.X, rect.Y - offset.Y, rect.Width, rect.Height);
+            }
+
+            return PathPicking.IntersectsRect(path, local);
+        }
+
+        Rect2D bounds = ItemBounds(item);
+        return !bounds.IsEmpty && bounds.Intersects(rect);
+    }
+
     private List<LayerItem> ItemsIntersectingRect(Rect2D rect)
     {
         var result = new List<LayerItem>();
@@ -1153,8 +1451,7 @@ public sealed class CanvasWorkspace : Control
 
                 foreach (LayerItem item in layer.Children)
                 {
-                    Rect2D bounds = ItemBounds(item);
-                    if (!bounds.IsEmpty && bounds.Intersects(rect))
+                    if (ItemMeetsRect(item, rect))
                     {
                         result.Add(item);
                     }
@@ -1185,6 +1482,11 @@ public sealed class CanvasWorkspace : Control
             case PathItem path:
                 Rect2D b = path.BoundingBox();
                 return b.IsEmpty ? b : new Rect2D(b.X + offset.X, b.Y + offset.Y, b.Width, b.Height);
+            case TextItem text:
+                // Marquee selection must see text too, otherwise a drag never
+                // catches a text block even though clicking one selects it.
+                Rect2D t = text.BoundingBox();
+                return t.IsEmpty ? t : new Rect2D(t.X + offset.X, t.Y + offset.Y, t.Width, t.Height);
             case ArtGroup group:
                 Rect2D g = group.Transform.Transform(group.BoundingBox());
                 return g.IsEmpty ? g : new Rect2D(g.X + offset.X, g.Y + offset.Y, g.Width, g.Height);
@@ -2574,6 +2876,26 @@ public sealed class CanvasWorkspace : Control
         context.FillRectangle(PageBrush, rect);
         context.DrawRectangle(null, new Pen(PageBorderBrush, 1 / z), rect);
 
+        // A page clips its own content, exactly as a PDF viewer does: anything
+        // outside the MediaBox is never visible. An imported tiled document depends
+        // on this — it draws each piece at full size on every sheet it touches and
+        // lets the page edge do the cutting — so without it the artwork spills across
+        // the pasteboard. The document keeps the overflow; only the view clips it.
+        if (ClipToArtboard)
+        {
+            using (context.PushClip(rect))
+            {
+                PaintLayers(context, artboard);
+            }
+        }
+        else
+        {
+            PaintLayers(context, artboard);
+        }
+    }
+
+    private void PaintLayers(DrawingContext context, Artboard artboard)
+    {
         foreach (Layer layer in artboard.Layers)
         {
             if (!layer.IsEffectivelyVisible)
@@ -2636,6 +2958,12 @@ public sealed class CanvasWorkspace : Control
 
         StreamGeometry geometry = GetGeometry(path);
         double width = Math.Max(0.01, path.Stroke.Width);
+
+        // Keep hairlines visible. A 0.3pt stroke is 0.08 device pixels at 27% zoom, so
+        // it faded to nothing and an imported pattern looked washed out next to a
+        // reference render. Viewers hold thin strokes at roughly a pixel.
+        const double MinDevicePixels = 0.75;
+        width = Math.Max(width, MinDevicePixels / Math.Max(_layout.Zoom, 1e-6));
 
         Pen StrokePen(double thickness)
         {
@@ -2721,14 +3049,41 @@ public sealed class CanvasWorkspace : Control
         {
             int a = Math.Min(_caret, _editAnchor);
             int b = Math.Max(_caret, _editAnchor);
-            var selBrush = new SolidColorBrush(Color.FromArgb(90, 0x4C, 0x9A, 0xFF));
+            var selBrush = new SolidColorBrush(Color.FromArgb(110, 0x4C, 0x9A, 0xFF));
             for (int i = a; i < b && i + 1 < metrics.X.Length; i++)
             {
-                Point2D p0 = text.Origin + offset + new Vector2D(metrics.X[i], metrics.Y[i]);
+                // The highlight covers the glyphs: it starts at the caret's x and spans
+                // the line's full height, so it sits behind the characters rather than
+                // floating above or below them.
+                Point2D p0 = text.Origin + offset + new Vector2D(
+                    metrics.X[i], metrics.Y[i] - metrics.Size[i] * 0.8);
                 double w = metrics.Y[i + 1] == metrics.Y[i]
                     ? metrics.X[i + 1] - metrics.X[i]
                     : metrics.Size[i] * 0.3;
-                context.FillRectangle(selBrush, new Rect(p0.X, p0.Y, Math.Max(0.5, w), metrics.Size[i] * 1.2));
+                double h = metrics.Size[i] * 1.05;
+
+                if (Math.Abs(text.RotationRadians) > 1e-9)
+                {
+                    Point2D a0 = RotateAbout(text, p0);
+                    Point2D a1 = RotateAbout(text, p0 + new Vector2D(Math.Max(0.5, w), 0));
+                    Point2D a2 = RotateAbout(text, p0 + new Vector2D(Math.Max(0.5, w), h));
+                    Point2D a3 = RotateAbout(text, p0 + new Vector2D(0, h));
+                    var quad = new Avalonia.Media.StreamGeometry();
+                    using (var g = quad.Open())
+                    {
+                        g.BeginFigure(ModelToScreen(a0), true);
+                        g.LineTo(ModelToScreen(a1));
+                        g.LineTo(ModelToScreen(a2));
+                        g.LineTo(ModelToScreen(a3));
+                        g.EndFigure(true);
+                    }
+
+                    context.DrawGeometry(selBrush, null, quad);
+                }
+                else
+                {
+                    context.FillRectangle(selBrush, new Rect(p0.X, p0.Y, Math.Max(0.5, w), h));
+                }
             }
         }
 
@@ -2739,10 +3094,17 @@ public sealed class CanvasWorkspace : Control
         foreach (TextRun run in text.Runs)
         {
             FormattedText formatted = CreateFormattedText(run, brush);
+            if (text.FrameWidth > 0)
+            {
+                // A drawn frame wraps: the text flows to the box width instead of running
+                // off the page in one endless line.
+                formatted.MaxTextWidth = text.FrameWidth;
+            }
+
             double natural = formatted.Width;
             double target = run.AdvanceWidth is > 0 ? run.AdvanceWidth.Value : natural;
             blockWidth = Math.Max(blockWidth, target);
-            laidOut.Add((run, formatted, natural, run.FontSize * 1.2, run.Text.Count(ch => ch == '\n') + 1));
+            laidOut.Add((run, formatted, natural, run.FontSize * text.LineSpacing, run.Text.Count(ch => ch == '\n') + 1));
         }
 
         double yOffset = 0;
@@ -2792,14 +3154,24 @@ public sealed class CanvasWorkspace : Control
     private static bool TryDrawEmbeddedGlyphs(DrawingContext context, IBrush brush, TextItem text,
         TextRun run, EmbeddedFont embedded, ushort[] glyphIds, Vector2D offset)
     {
-        var typeface = new Typeface(
-            new FontFamily(embedded.FamilyName),
-            run.Italic ? FontStyle.Italic : FontStyle.Normal,
-            run.Bold ? FontWeight.Bold : FontWeight.Normal);
-
-        if (!FontManager.Current.TryGetGlyphTypeface(typeface, out IGlyphTypeface glyphTypeface))
+        // Resolve through the embedded collection itself, never the global font
+        // manager: the latter answers with a fallback face (and reports success)
+        // when the family is unknown, which would index these glyph ids into an
+        // unrelated font and paint garbage. See EmbeddedFontManager.
+        if (!EmbeddedFontManager.TryGetEmbeddedGlyphTypeface(embedded.FamilyName, out IGlyphTypeface glyphTypeface))
         {
             return false;
+        }
+
+
+        // A glyph id outside the programme cannot belong to it, so draw the decoded
+        // text instead of trusting a mismatched typeface.
+        foreach (ushort glyphId in glyphIds)
+        {
+            if (glyphId >= glyphTypeface.GlyphCount)
+            {
+                return false;
+            }
         }
 
         double ascent = embedded.Ascent > 0 ? embedded.Ascent / 1000.0 : 0.928;
@@ -2863,23 +3235,17 @@ public sealed class CanvasWorkspace : Control
             FlowDirection.LeftToRight, typeface, run.FontSize, brush);
     }
 
-    /// <summary>Maps a model font family to the bundled DejaVu face so the canvas
-    /// uses the same metrics as the PDF exporter (Avalonia would otherwise fall
-    /// back to its default font and misalign text).</summary>
-    private static FontFamily ResolveFontFamily(TextRun run) => run.FontFamily switch
-    {
-        "DejaVu Sans" => BundledFace("DejaVu Sans", run,
-            "DejaVuSans.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans-Oblique.ttf"),
-        "DejaVu Serif" => BundledFace("DejaVu Serif", run, "DejaVuSerif.ttf", "DejaVuSerif.ttf", "DejaVuSerif.ttf"),
-        "DejaVu Sans Mono" => BundledFace("DejaVu Sans Mono", run, "DejaVuSansMono.ttf", "DejaVuSansMono.ttf", "DejaVuSansMono.ttf"),
-        _ => new FontFamily(run.FontFamily),
-    };
-
-    private static FontFamily BundledFace(string family, TextRun run, string regular, string bold, string italic)
-    {
-        string file = run.Bold ? bold : run.Italic ? italic : regular;
-        return new FontFamily($"avares://VCCad.App/Assets/Fonts/{file}#{family}");
-    }
+    /// <summary>
+    /// The family to draw a run with.
+    ///
+    /// A run drawn from an imported programme uses that programme. Everything else is
+    /// supplied by the standard-font chain: the URW Core 35 faces from this machine,
+    /// else a metric-compatible platform clone (Arial / Times New Roman / Courier New).
+    /// A PDF is entitled to name Helvetica and embed nothing at all, and those are the
+    /// faces every viewer supplies for it — never an arbitrary bundled font, whose
+    /// letterforms and widths would not match the document.</summary>
+    private static FontFamily ResolveFontFamily(TextRun run)
+        => new(StandardFontResolver.FamilyFor(run));
 
     /// <summary>Measured layout of a text block: per-character boundary positions
     /// (global indices) with alignment applied, plus the block size.</summary>
@@ -2894,35 +3260,95 @@ public sealed class CanvasWorkspace : Control
 
     private static TextMetrics MeasureText(TextItem text)
     {
-        var lines = new List<(int Start, int Count, double Width, double Height)>();
+        // Flatten to characters first: wrapping has to look ahead to the previous break,
+        // which a straight run-by-run walk cannot do.
+        var chars = new List<(int Index, char Ch, double Size)>();
         int total = 0;
-        int lineStart = 0;
-        double lineWidth = 0;
-        double lineHeight = text.MaxFontSize * 1.2;
-
         foreach (TextRun run in text.Runs)
         {
             foreach (char ch in run.Text)
             {
-                if (ch == '\n')
-                {
-                    lines.Add((lineStart, total - lineStart, lineWidth, lineHeight));
-                    lineStart = total + 1;
-                    lineWidth = 0;
-                    lineHeight = text.MaxFontSize * 1.2;
-                }
-                else
-                {
-                    lineWidth += run.FontSize * 0.6;
-                    lineHeight = Math.Max(lineHeight, run.FontSize * 1.2);
-                }
-
+                chars.Add((total, ch, run.FontSize));
                 total++;
             }
         }
 
-        lines.Add((lineStart, total - lineStart, lineWidth, lineHeight));
-        double blockWidth = lines.Count == 0 ? 0 : lines.Max(l => l.Width);
+        double frame = text.FrameWidth;
+        var lines = new List<(int Start, int Count, double Width, double Height)>();
+
+        double WidthOf(int from, int count)
+        {
+            double sum = 0;
+            for (int i = from; i < from + count && i < chars.Count; i++)
+            {
+                sum += CharWidth(text, chars[i].Index);
+            }
+
+            return sum;
+        }
+
+        void AddLine(int from, int count)
+        {
+            double maxSize = 0;
+            for (int i = from; i < from + count && i < chars.Count; i++)
+            {
+                maxSize = Math.Max(maxSize, chars[i].Size);
+            }
+
+            lines.Add((chars.Count == 0 ? 0 : chars[Math.Min(from, chars.Count - 1)].Index,
+                count, WidthOf(from, count), Math.Max(maxSize, text.MaxFontSize) * text.LineSpacing));
+        }
+
+        int lineStartChar = 0;
+        int lastBreak = -1;
+        for (int i = 0; i < chars.Count; i++)
+        {
+            char ch = chars[i].Ch;
+
+            if (ch == '\n')
+            {
+                AddLine(lineStartChar, i - lineStartChar);
+                lines.Add((-1, -1, 0, text.ParagraphSpacing));
+                lineStartChar = i + 1;
+                lastBreak = -1;
+                continue;
+            }
+
+            if (ch == ' ')
+            {
+                lastBreak = i;
+            }
+
+            if (frame <= 0 || i <= lineStartChar)
+            {
+                continue;
+            }
+
+            // Break at the last space; if a single word is wider than the frame, break it
+            // rather than let it run out of the box. A space at the end of a line is
+            // collapsed when the line is drawn, so it must not count towards the wrap
+            // width — counting it wraps a line early and the box ends up a line too tall.
+            int measured = i;
+            while (measured > lineStartChar && chars[measured].Ch == ' ')
+            {
+                measured--;
+            }
+
+            if (WidthOf(lineStartChar, measured - lineStartChar + 1) > frame)
+            {
+                int breakAt = lastBreak > lineStartChar ? lastBreak : i;
+                AddLine(lineStartChar, breakAt - lineStartChar);
+                lineStartChar = breakAt == lastBreak ? breakAt + 1 : breakAt;
+                lastBreak = -1;
+            }
+        }
+
+        if (lineStartChar <= chars.Count)
+        {
+            AddLine(lineStartChar, chars.Count - lineStartChar);
+        }
+
+        double blockWidth = frame > 0 ? frame : lines.Count == 0 ? 0 : lines.Max(l => l.Width);
 
         var m = new TextMetrics
         {
@@ -2966,6 +3392,16 @@ public sealed class CanvasWorkspace : Control
         return m;
     }
 
+    /// <summary>
+    /// Per-character advance widths for a run, from the one measurement source the whole
+    /// program shares (<see cref="TextMeasurement.Current"/>).
+    ///
+    /// The canvas used to measure here itself, which meant the caret and the edit box were
+    /// laid out by a different code path than the model's <c>BoundingBox</c> — and the two
+    /// could disagree about where anything was. They now cannot: both ask the shaper.
+    /// </summary>
+    private static IReadOnlyList<double> Advances(TextRun run) => TextMeasurement.Advances(run);
+
     private static double CharWidth(TextItem text, int globalIndex)
     {
         int remaining = globalIndex;
@@ -2973,7 +3409,7 @@ public sealed class CanvasWorkspace : Control
         {
             if (remaining < run.Text.Length)
             {
-                return run.FontSize * 0.6;
+                return TextMeasurement.AdvanceOf(run, remaining);
             }
 
             remaining -= run.Text.Length;
@@ -3053,7 +3489,12 @@ public sealed class CanvasWorkspace : Control
 
         EditorTool tool = _vm.Tool;
 
-        if (tool == EditorTool.Select && _vm.SelectedPaths().Any())
+        // Text blocks are selectable objects, so the dashed box and its handles
+        // must appear for a text-only selection too — without this, clicking text
+        // selected it in the model but drew no feedback at all.
+        bool hasObjectSelection = _vm.SelectedPaths().Any() || _vm.SelectedTextItems().Any();
+
+        if (tool == EditorTool.Select && hasObjectSelection)
         {
             Rect2D selection = ChromeRect();
             if (!selection.IsEmpty)
@@ -3086,7 +3527,11 @@ public sealed class CanvasWorkspace : Control
 
         if (_editingText is not null)
         {
-            PaintTextCaret(context);
+            PaintTextEditBox(context, _editingText);
+            if (_caretOn)
+            {
+                PaintTextCaret(context);
+            }
         }
 
         if (tool == EditorTool.Artboard)
@@ -3326,6 +3771,12 @@ public sealed class CanvasWorkspace : Control
         _editAnchor = _caret;
         _vm!.SelectObject(text);
         _vm.IsEditingText = true;
+
+        // Publish the target so operations that style text can reach the block even after
+        // the selection moves on (picking a font, clicking away, switching document).
+        _vm.EditingText = text;
+        _caretOn = true;
+        UpdateCaretBlink();
         UpdateCaretInfo();
         Focus();
         InvalidateVisual();
@@ -3349,6 +3800,8 @@ public sealed class CanvasWorkspace : Control
         if (_vm is not null)
         {
             _vm.IsEditingText = false;
+            _vm.EditingText = null;
+            UpdateCaretBlink();
         }
 
         InvalidateVisual();
@@ -3708,6 +4161,103 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
+    /// <summary>
+    /// The box around the block being edited: its frame width — the width the text wraps
+    /// in, which does not follow the text — and the height its lines actually need, so it
+    /// grows downwards as lines are added and never widens with the text.
+    /// </summary>
+    private void PaintTextEditBox(DrawingContext context, TextItem text)
+    {
+        TextMetrics metrics = MeasureText(text);
+
+        double width = text.FrameWidth > 0 ? text.FrameWidth : Math.Max(metrics.MaxWidth, 4);
+        double height = Math.Max(metrics.TotalHeight, text.MaxFontSize * text.LineSpacing);
+
+        Point2D topLeft = TextLocalToWorld(text, new Point2D(0, 0));
+        Point2D topRight = TextLocalToWorld(text, new Point2D(width, 0));
+        Point2D bottomRight = TextLocalToWorld(text, new Point2D(width, height));
+        Point2D bottomLeft = TextLocalToWorld(text, new Point2D(0, height));
+
+        Point a = ModelToScreen(topLeft);
+        Point b = ModelToScreen(topRight);
+        Point c = ModelToScreen(bottomRight);
+        Point d = ModelToScreen(bottomLeft);
+
+        var pen = new Pen(new SolidColorBrush(Color.FromArgb(190, 0x4C, 0x9A, 0xFF)), 1);
+        context.DrawLine(pen, a, b);
+        context.DrawLine(pen, b, c);
+        context.DrawLine(pen, c, d);
+        context.DrawLine(pen, d, a);
+
+        // Grab handles, so the box can be resized while the text is being set.
+        var handleFill = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
+        foreach (Point2D handle in EditBoxHandles(text, metrics))
+        {
+            Point screen = ModelToScreen(TextLocalToWorld(text, handle));
+            context.FillRectangle(handleFill, new Rect(screen.X - 3, screen.Y - 3, 6, 6));
+        }
+    }
+
+    /// <summary>
+    /// The grab handles on the edit box, in the block's own coordinates.
+    ///
+    /// Only the width is settable: the height is whatever the lines need, so a vertical
+    /// handle would be a lie. The handles resize the frame the text wraps in — the box
+    /// grows downwards on its own as lines are added and never widens with the text.
+    /// </summary>
+    private static Point2D[] EditBoxHandles(TextItem text, TextMetrics metrics)
+    {
+        double w = text.FrameWidth > 0 ? text.FrameWidth : Math.Max(metrics.MaxWidth, 4);
+        double h = Math.Max(metrics.TotalHeight, text.MaxFontSize * text.LineSpacing);
+        double mid = h / 2;
+
+        // Right edge (three), then the left edge's middle.
+        return new[]
+        {
+            new Point2D(w, 0), new Point2D(w, mid), new Point2D(w, h), new Point2D(0, mid),
+        };
+    }
+
+    /// <summary>Which edit-box handle, if any, is under a point; -1 when none is.</summary>
+    private int HandleAt(TextItem text, Point2D world)
+    {
+        TextMetrics metrics = MeasureText(text);
+        Point2D local = ToTextLocal(text, world);
+        Point2D[] handles = EditBoxHandles(text, metrics);
+        double tolerance = Math.Max(PickTolerance, 4);
+
+        for (int i = 0; i < handles.Length; i++)
+        {
+            if (local.DistanceTo(handles[i]) <= tolerance)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>Applies a handle drag: only the frame width changes.</summary>
+    private void DragEditBoxHandle(Point2D world)
+    {
+        if (_editingText is not { } text)
+        {
+            return;
+        }
+
+        Point2D local = ToTextLocal(text, world);
+        double start = _frameResizeStartWidth;
+
+        // Handle 3 is the left edge, so dragging it left widens the block.
+        double delta = _frameResizeHandle == 3
+            ? _frameResizeStartLocalX - local.X
+            : local.X - _frameResizeStartLocalX;
+
+        text.FrameWidth = Math.Max(24, start + delta);
+        AfterTextEdit();
+        InvalidateVisual();
+    }
+
     private void PaintTextCaret(DrawingContext context)
     {
         if (_editingText is null)
@@ -3732,11 +4282,86 @@ public sealed class CanvasWorkspace : Control
         }
 
         Point screen = ModelToScreen(world + offset);
-        double h = metrics.Size[index] * 1.2 * _layout.Zoom;
-        context.DrawLine(new Pen(Brushes.White, 1.4), screen, new Point(screen.X, screen.Y + h));
+
+        // The caret spans the line's full height (ymax to ymin), not a fixed multiple of
+        // the font size, so it brackets the glyphs rather than floating inside them.
+        double size = metrics.Size[index];
+        double ascent = size * 0.8;
+        double descent = size * 0.2;
+        double h = Math.Max((ascent + descent) * _layout.Zoom, 4);
+
+        // Dark, because the page is white: a white caret on white paper is no caret.
+        var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x10, 0x10, 0x10)), 1.5);
+        Point top = new(screen.X, screen.Y - ascent * _layout.Zoom);
+        context.DrawLine(pen, top, new Point(top.X, top.Y + h));
     }
 
     /// <summary>Nearest character index for a local text point (click/drag).</summary>
+    /// <summary>
+    /// A world point in a text block's own coordinates — the space its metrics are laid
+    /// out in. A rotated block has to be turned back before it can be hit-tested, or a
+    /// click lands somewhere else entirely and the caret jumps.
+    /// </summary>
+    /// <summary>A world point turned about a text block's origin by its rotation.</summary>
+    private static Point2D RotateAbout(TextItem text, Point2D point)
+    {
+        if (Math.Abs(text.RotationRadians) < 1e-9)
+        {
+            return point;
+        }
+
+        double cos = Math.Cos(text.RotationRadians);
+        double sin = Math.Sin(text.RotationRadians);
+        double dx = point.X - text.Origin.X;
+        double dy = point.Y - text.Origin.Y;
+        return new Point2D(text.Origin.X + dx * cos - dy * sin,
+            text.Origin.Y + dx * sin + dy * cos);
+    }
+
+    private static Point2D ToTextLocal(TextItem text, Point2D world)
+    {
+        Point2D point = world - text.ArtboardOffset();
+        double dx = point.X - text.Origin.X;
+        double dy = point.Y - text.Origin.Y;
+
+        if (Math.Abs(text.RotationRadians) > 1e-9)
+        {
+            double cos = Math.Cos(-text.RotationRadians);
+            double sin = Math.Sin(-text.RotationRadians);
+            return new Point2D(dx * cos - dy * sin, dx * sin + dy * cos);
+        }
+
+        return new Point2D(dx, dy);
+    }
+
+    /// <summary>Whether a world point falls inside a text block, rotation included.</summary>
+    private static bool TextContains(TextItem text, Point2D world)
+    {
+        Point2D local = ToTextLocal(text, world);
+        Rect2D box = text.BoundingBox();
+        return local.X >= -1 && local.X <= box.Width + 1 &&
+               local.Y >= -1 && local.Y <= box.Height + 1;
+    }
+
+    /// <summary>A world point to a screen point, through a text block's own space.</summary>
+    private Point2D TextLocalToWorld(TextItem text, Point2D local)
+    {
+        double x = text.Origin.X + local.X;
+        double y = text.Origin.Y + local.Y;
+
+        if (Math.Abs(text.RotationRadians) > 1e-9)
+        {
+            double cos = Math.Cos(text.RotationRadians);
+            double sin = Math.Sin(text.RotationRadians);
+            double dx = x - text.Origin.X;
+            double dy = y - text.Origin.Y;
+            x = text.Origin.X + dx * cos - dy * sin;
+            y = text.Origin.Y + dx * sin + dy * cos;
+        }
+
+        return new Point2D(x, y) + text.ArtboardOffset();
+    }
+
     private int IndexAtLocal(TextItem text, Point2D local)
     {
         TextMetrics metrics = MeasureText(text);

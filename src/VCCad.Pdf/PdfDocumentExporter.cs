@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using VCCad.Core.Model;
+using VCCad.Core.Text;
 using VCCad.Core.Serialization;
 using VCCad.Pdf.Fonts;
 using VCCad.Geometry;
@@ -73,6 +74,23 @@ public static class PdfDocumentExporter
         }
 
         // ------------------------------------------------------------------
+        // Illustrator private data. A document that carries a decoded .ai payload
+        // re-emits it so the export is again a valid Illustrator document, and so
+        // VCCad can import it back. Strictly conditional: a document without a
+        // payload allocates nothing and its PDF bytes are unchanged.
+        // ------------------------------------------------------------------
+        Ai.AiPrivateDataDocument? aiDocument = document.AiPrivateData is { IsEmpty: false } aiPayload
+            ? Ai.AiPrivateDataDocument.FromPrivateData(aiPayload)
+            : null;
+        int aiStreamNumber = aiDocument is null ? 0 : assembler.Allocate();
+        string pagePieceInfo = aiStreamNumber == 0
+            ? string.Empty
+            : " " + Ai.AiPrivateDataEmbedder.PieceInfo(aiStreamNumber);
+        string catalogCreatorInfo = aiStreamNumber == 0
+            ? string.Empty
+            : Ai.AiPrivateDataEmbedder.CatalogCreatorInfo() + " ";
+
+        // ------------------------------------------------------------------
         // Fonts: collect text usage and embed the bundled fonts (FontFile2).
         // ------------------------------------------------------------------
         var usage = new Dictionary<FontKey, HashSet<int>>();
@@ -132,7 +150,7 @@ public static class PdfDocumentExporter
                 $"<< /Type /Page /Parent {pagesNumber} 0 R " +
                 $"/MediaBox [0 0 {Num(artboard.Width)} {Num(artboard.Height)}] " +
                 $"/Contents {contentNumbers[i]} 0 R " +
-                resources + " >>");
+                resources + pagePieceInfo + " >>");
 
             kidList.Append(pageNumbers[i]).Append(" 0 R ");
         }
@@ -143,10 +161,21 @@ public static class PdfDocumentExporter
         assembler.SetBody(
             pagesNumber,
             $"<< /Type /Pages /Kids [{kidList}] /Count {document.Artboards.Count} >>");
+        if (aiDocument is not null)
+        {
+            // The payload is stored as its own FlateDecode stream, exactly like
+            // Illustrator stores /AIPrivateData: the filter is the block-level zlib
+            // compression our extractor expects to find in the raw stream bytes.
+            assembler.SetBody(
+                aiStreamNumber,
+                MakeStreamObject(Compress(Ai.AiPrivateDataEmbedder.EncodePayload(aiDocument.Text))));
+        }
+
         assembler.SetBody(
             catalogNumber,
             $"<< /Type /Catalog /Pages {pagesNumber} 0 R " +
             $"/VCCadDocument {sidecarStreamNumber} 0 R " +
+            catalogCreatorInfo +
             $"/Metadata {metadataNumber} 0 R /OutputIntents [{outputIntentNumber} 0 R] >>");
 
         string now = DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
@@ -588,30 +617,91 @@ public static class PdfDocumentExporter
             }
             else
             {
-                foreach (char ch in run.Text)
+                // Break the emitted lines where the editor breaks them.
+                //
+                // Previously export only honoured explicit newlines, so a block wrapped
+                // into a frame came out on the page as one long line — the exported
+                // document was not the document that was on screen. The wrap rule now
+                // lives in TextWrapping and is shared with the model and the canvas.
+                List<TextWrapping.LineRange> displayLines = TextWrapping.Lines(text);
+                int charBase = FlattenedOffsetOf(text, run);
+                double lineHeight = run.FontSize * text.LineSpacing;
+
+                for (int li = 0; li < displayLines.Count; li++)
                 {
-                    if (ch == '\n')
-                    {
-                        Flush();
-                        y += run.FontSize * 1.2;
-                        yOffset = y - text.Origin.Y;
-                        lineAdvance = 0;
-                        continue;
-                    }
-
-                    int gid = font!.GlyphFor(ch);
-                    if (gid == 0)
+                    TextWrapping.LineRange line = displayLines[li];
+                    int from = Math.Max(line.Start, charBase);
+                    int to = Math.Min(line.Start + line.Length, charBase + run.Text.Length);
+                    if (to <= from)
                     {
                         continue;
                     }
 
-                    hex.Append(gid.ToString("X4", CultureInfo.InvariantCulture));
-                    lineAdvance += font.Advance1000(gid) * run.FontSize / 1000.0;
+                    hex.Clear();
+                    lineAdvance = 0;
+
+                    for (int i = from; i < to; i++)
+                    {
+                        char ch = run.Text[i - charBase];
+                        if (ch == '\n')
+                        {
+                            continue;
+                        }
+
+                        int gid = font!.GlyphFor(ch);
+                        if (gid == 0)
+                        {
+                            continue;
+                        }
+
+                        hex.Append(gid.ToString("X4", CultureInfo.InvariantCulture));
+                        lineAdvance += font.Advance1000(gid) * run.FontSize / 1000.0;
+                    }
+
+                    // The display line's own top, including the paragraph leading that
+                    // each explicit break contributes.
+                    yOffset = (li * lineHeight) + (NewlinesBefore(text, displayLines, li) * text.ParagraphSpacing);
+                    Flush();
                 }
             }
 
             Flush();
         }
+    }
+
+    /// <summary>Where a run begins in the block's flattened text.</summary>
+    private static int FlattenedOffsetOf(TextItem text, TextRun run)
+    {
+        int offset = 0;
+        foreach (TextRun candidate in text.Runs)
+        {
+            if (ReferenceEquals(candidate, run))
+            {
+                return offset;
+            }
+
+            offset += candidate.Text.Length;
+        }
+
+        return offset;
+    }
+
+    /// <summary>How many explicit line breaks fall before a display line.</summary>
+    private static int NewlinesBefore(TextItem text, List<TextWrapping.LineRange> lines, int index)
+    {
+        (string flat, _) = TextWrapping.Flatten(text);
+        int start = lines[index].Start;
+        int count = 0;
+
+        for (int i = 0; i < start && i < flat.Length; i++)
+        {
+            if (flat[i] == '\n')
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     /// <summary>Writes the raw geometry of several contours into the current path.</summary>

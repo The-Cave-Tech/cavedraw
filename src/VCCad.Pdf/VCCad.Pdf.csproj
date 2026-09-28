@@ -7,6 +7,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      zstd decompression for Illustrator 2020+ private data (%AI24_ZStandard_Data).
+      .NET 8 has no built-in zstd; ZstdSharp.Port is a pure managed port (no
+      native dependency), which is required because VCCad.Pdf is also loaded by
+      the browser/WASM host.
+    -->
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="Fonts\*.ttf" />
     <EmbeddedResource Include="Resources\*.icc" />
   </ItemGroup>

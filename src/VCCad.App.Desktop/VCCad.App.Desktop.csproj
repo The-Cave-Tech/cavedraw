@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- WinExe: on Windows this suppresses the console window (the app is a GUI);
+         on Linux the same OutputType is ignored and the apphost still runs. -->
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>VCCad.App.Desktop</AssemblyName>
+    <RootNamespace>VCCad.App.Desktop</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Description>Desktop host for the VCCad editor shell (Windows and Linux) — Win32/X11 windowing around VCCad.App.</Description>
+    <!-- The RIDs we ship and verify. Declaring them keeps restore/build
+         RID-agnostic (no SelfContained here); the concrete self-contained /
+         single-file choice is made at publish time by
+         scripts/publish-desktop.sh, so plain `dotnet build VCCad.sln` is
+         unaffected. win-arm64/linux-arm64 are deliberately NOT declared:
+         declaring a RID pulls its ~35 MB runtime pack into every cold restore
+         (CI, Docker, fresh clone) although nothing publishes it. Any RID still
+         publishes with an explicit -r, e.g.
+         VCCAD_DESKTOP_RIDS=linux-arm64 scripts/publish-desktop.sh. -->
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
+    <!-- The lossless serializer uses reflection-based System.Text.Json today.
+         Trimming would break deserialization at runtime; disable trimming until
+         the serializer moves to a JsonSerializerContext (project plan M9).
+         Same constraint the WebAssembly host documents. -->
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.11" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VCCad.App\VCCad.App.csproj" />
+  </ItemGroup>
+
+</Project>

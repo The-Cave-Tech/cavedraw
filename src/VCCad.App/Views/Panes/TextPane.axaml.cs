@@ -1,6 +1,7 @@
 using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using VCCad.App.Fonts;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
 using VCCad.Pdf.Fonts;
@@ -17,7 +18,7 @@ public partial class TextPane : UserControl
     public TextPane()
     {
         InitializeComponent();
-        FamilyBox.ItemsSource = BundledFonts.Families;
+        FamilyBox.ItemsSource = StandardFontResolver.OfferedFamilies();
         AlignBox.SelectionChanged += (_, _) =>
         {
             if (_syncingAlign || _vm is null)

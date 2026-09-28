@@ -9,9 +9,11 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using VCCad.App.Docking;
+using VCCad.App.Fonts;
 using VCCad.App.ViewModels;
 using VCCad.App.Views.Panes;
 using VCCad.Core.Model;
+using VCCad.Pdf;
 using Avalonia.Platform.Storage;
 
 namespace VCCad.App.Views;
@@ -27,6 +29,69 @@ public partial class EditorView : UserControl
     private DockManager _manager = null!;
     private readonly Dictionary<string, (string Title, string PanelId)> _tabDefs = new();
     private readonly Dictionary<EditorTool, Button> _toolButtons = new();
+
+    /// <summary>
+    /// The editor's view-model. Exposed so the desktop host can attach the
+    /// automation/assistant services to the same live document the person sees.
+    /// </summary>
+    public EditorViewModel ViewModel => _viewModel;
+
+    /// <summary>
+    /// The workspace canvas. Exposed so the host can fit the artboard to the
+    /// window and reserve space for the diagnostics overlay, and so the viewport
+    /// operations (<c>view.fit</c>, <c>view.zoom</c>) can drive the same control
+    /// the toolbar buttons do.
+    /// </summary>
+    public Controls.CanvasWorkspace WorkspaceControl => Workspace;
+
+    /// <summary>
+    /// The dockable panes and whether each is open — the Windows menu's content.
+    /// Exposed so pane visibility is an operation rather than a menu-only action.
+    /// </summary>
+    public IReadOnlyList<(string Id, string Title, bool IsOpen)> Panes
+        => _tabDefs.Select(kv => (kv.Key, kv.Value.Title, _manager.IsTabOpen(kv.Key))).ToArray();
+
+    /// <summary>
+    /// Shows or hides a pane by id or title. Passing <c>null</c> toggles it.
+    /// Returns the pane's new visibility.
+    /// </summary>
+    public bool SetPaneOpen(string pane, bool? visible)
+    {
+        string? id = _tabDefs.Keys.FirstOrDefault(k => string.Equals(k, pane, StringComparison.OrdinalIgnoreCase));
+        if (id is null)
+        {
+            id = _tabDefs.FirstOrDefault(kv =>
+                string.Equals(kv.Value.Title, pane, StringComparison.OrdinalIgnoreCase)).Key;
+        }
+
+        if (id is null)
+        {
+            throw new ArgumentException(
+                $"Unknown pane '{pane}'. Known panes: {string.Join(", ", _tabDefs.Select(kv => kv.Value.Title))}.");
+        }
+
+        bool open = visible ?? !_manager.IsTabOpen(id);
+        _manager.SetTabOpen(id, open);
+        RefreshWindowMenu();
+        return open;
+    }
+
+    private Func<bool>? _diagnosticsVisible;
+    private Action? _toggleDiagnostics;
+
+    /// <summary>
+    /// Adds the diagnostics overlay to the Windows menu, so it is toggled the same
+    /// way the panes are rather than only by keyboard shortcut.
+    /// </summary>
+    public void AttachDiagnosticsToggle(Func<bool> isVisible, Action toggle)
+    {
+        _diagnosticsVisible = isVisible;
+        _toggleDiagnostics = toggle;
+        RefreshWindowMenu();
+    }
+
+    /// <summary>Re-reads the diagnostics state into the Windows menu.</summary>
+    public void RefreshDiagnosticsMenu() => RefreshWindowMenu();
 
     // Drag/drop state.
     private bool _dragging;
@@ -95,6 +160,10 @@ public partial class EditorView : UserControl
         DataContext = _viewModel;
         Workspace.AttachEditor(_viewModel);
 
+        // Keep the status bar honest when the view changes from anywhere — the
+        // toolbar, a keyboard shortcut, or the automation API.
+        Workspace.ViewChanged += (_, _) => UpdateStatus();
+
         _manager = new DockManager(LeftPanelHost, RightPanelHost, LeftToolbarHost, RightToolbarHost, TopHost, BottomHost);
         _manager.LayoutChanged += (_, _) =>
         {
@@ -113,8 +182,95 @@ public partial class EditorView : UserControl
 
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         _viewModel.Sessions.CollectionChanged += (_, _) => RebuildDocumentTabs();
-        _viewModel.DocumentChanged += (_, _) => UpdateStatus();
+        _viewModel.DocumentChanged += (_, _) =>
+        {
+            UpdateStatus();
+            PromptForMissingFonts(force: true);
+        };
         _viewModel.ArtboardDeletionRequested += OnArtboardDeletionRequested;
+        UpdateStatus();
+        PromptForMissingFonts(force: true);
+        _textToolbar = new TextToolbar(this);
+        _textToolbar.Sync();
+    }
+
+    /// <summary>The contextual type controls, shown while a text block is edited.</summary>
+    private TextToolbar? _textToolbar;
+
+    /// <summary>Re-reads the text toolbar from the edit state. Called after any edit.</summary>
+    private void SyncTextToolbar() => _textToolbar?.Sync();
+
+    // ------------------------------------------------------------------
+    // Missing standard fonts
+    // ------------------------------------------------------------------
+
+    /// <summary>Faces the person has already declined for the current document.</summary>
+    private string? _fontsDeclined;
+
+    private object? _fontsCheckedFor;
+
+    /// <summary>
+    /// Offers to install any standard font this document needs that the computer cannot
+    /// supply. A PDF may name Helvetica and embed nothing at all, so the face has to
+    /// come from somewhere: we ask first, rather than silently substituting a different
+    /// design or shipping fonts we may not redistribute.
+    /// </summary>
+    private void PromptForMissingFonts(bool force = false)
+    {
+        CadDocument document = _viewModel.Document;
+        if (!force && ReferenceEquals(document, _fontsCheckedFor))
+        {
+            return;
+        }
+
+        _fontsCheckedFor = document;
+        IReadOnlyList<string> missing = StandardFontResolver.Installable(document);
+        string key = string.Join("|", missing);
+
+        if (missing.Count == 0 || key == _fontsDeclined)
+        {
+            FontOverlay.IsVisible = false;
+            return;
+        }
+
+        FontOverlayMessage.Text = missing.Count == 1
+            ? "This document uses a font that is not installed on this computer:"
+            : $"This document uses {missing.Count} fonts that are not installed on this computer:";
+        FontOverlayDetail.Text = string.Join("\n", missing) +
+            "\n\nThe URW base-35 fonts supply these faces with the original metrics — the same " +
+            "fonts Ghostscript and Inkscape use. They are downloaded into your own font folder " +
+            "and are not part of the application.";
+        FontOverlay.IsVisible = true;
+    }
+
+    private void OnFontInstallLater(object? sender, RoutedEventArgs e)
+    {
+        _fontsDeclined = string.Join("|", StandardFontResolver.Installable(_viewModel.Document));
+        FontOverlay.IsVisible = false;
+        UpdateStatus();
+    }
+
+    private async void OnFontInstallAgree(object? sender, RoutedEventArgs e)
+    {
+        FontOverlay.IsVisible = false;
+        StatusText.Text = "Installing fonts…";
+
+        try
+        {
+            IReadOnlyList<string> installed = await StandardFontResolver.InstallAsync();
+            _fontsDeclined = null;
+            _fontsCheckedFor = null;
+            StatusText.Text = installed.Count == 0
+                ? "Fonts already installed"
+                : $"Installed {installed.Count} font file(s) into {StandardFontFiles.UserFontDirectory}";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Font install failed: {ex.Message}";
+        }
+
+        Workspace.InvalidateVisual();
+        PromptForMissingFonts(force: true);
         UpdateStatus();
     }
 
@@ -285,6 +441,23 @@ public partial class EditorView : UserControl
             item.Click += (_, _) => _manager.ToggleTab(tabId);
             WindowsMenu.Items.Add(item);
         }
+
+        // The diagnostics overlay is a window-level panel too, so it belongs here.
+        if (_toggleDiagnostics is not null)
+        {
+            WindowsMenu.Items.Add(new Separator());
+            var diagnostics = new MenuItem
+            {
+                Header = "Diagnostics overlay",
+                IsChecked = _diagnosticsVisible?.Invoke() ?? false,
+            };
+            diagnostics.Click += (_, _) =>
+            {
+                _toggleDiagnostics();
+                RefreshWindowMenu();
+            };
+            WindowsMenu.Items.Add(diagnostics);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -434,11 +607,29 @@ public partial class EditorView : UserControl
         {
             UpdateStatus();
         }
+        else if (e.PropertyName == nameof(EditorViewModel.IsEditingText))
+        {
+            // Entering or leaving text edit is what shows and hides the type controls.
+            SyncTextToolbar();
+        }
     }
 
     private void UpdateStatus()
     {
-        StatusText.Text = _viewModel.Status;
+        // Entering or leaving text edit changes which controls apply.
+        SyncTextToolbar();
+
+        // Tell the person when a font had to be substituted. The document not embedding
+        // a font is a fidelity limit, not something they should have to spot from the
+        // rendering — and an embedded font that failed to load is a defect.
+        string? fontWarning = Fonts.FontUsage.Warning(_viewModel.Document);
+        string status = _viewModel.Status;
+        if (fontWarning is not null)
+        {
+            status = status.Length == 0 ? fontWarning : $"{status}   {fontWarning}";
+        }
+
+        StatusText.Text = status;
         var origin = _viewModel.Document.ContentOrigin();
         ZoomLabel.Text = $"origin {origin.X:0.#}, {origin.Y:0.#}   ·   {Workspace.Zoom * 100:0.##}%";
     }

@@ -1,19 +1,30 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Input;
 using Avalonia.Markup.Xaml;
+using Avalonia.Platform;
+using VCCad.App.Automation;
+using VCCad.App.Fonts;
 using VCCad.App.Views;
 
 namespace VCCad.App;
 
 /// <summary>
 /// Avalonia application entry point. The browser host starts this through
-/// <c>StartBrowserAppAsync</c>; the same app can later run as a desktop window
-/// (the <see cref="IClassicDesktopStyleApplicationLifetime"/> branch) with no
-/// changes to the editor view.
+/// <c>StartBrowserAppAsync</c>; the desktop host runs the same shell in a classic
+/// desktop window (the <see cref="IClassicDesktopStyleApplicationLifetime"/>
+/// branch).
+///
+/// On the desktop the application also brings up the automation services: a
+/// loopback HTTP endpoint that exposes every editor operation, and the in-app
+/// assistant that drives those same operations for the model. The diagnostics
+/// overlay shows both, semi-transparently, on top of the document.
 /// </summary>
 public partial class App : Application
 {
+    private DiagnosticsOverlay? _diagnostics;
+
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
@@ -24,14 +35,26 @@ public partial class App : Application
         switch (ApplicationLifetime)
         {
             case IClassicDesktopStyleApplicationLifetime desktop:
-                desktop.MainWindow = new Window
+            {
+                var view = new EditorView();
+
+                // The editor fills the window; the diagnostics overlay is stacked on
+                // top of it so the document stays visible through the panel.
+                var root = new Panel();
+                root.Children.Add(view);
+
+                var window = new Window
                 {
                     Title = "VCCad",
-                    Width = 1280,
-                    Height = 820,
-                    Content = new EditorView(),
+                    Width = 960,
+                    Height = 900,
+                    Content = root,
                 };
+
+                desktop.MainWindow = window;
+                window.Opened += (_, _) => AttachAutomation(view, root, window, desktop);
                 break;
+            }
 
             case ISingleViewApplicationLifetime singleView:
                 singleView.MainView = new EditorView();
@@ -39,5 +62,187 @@ public partial class App : Application
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    /// <summary>
+    /// Brings up the automation endpoint and assistant against the window's live
+    /// document, adds the diagnostics overlay and its shortcut, and honours
+    /// startup options.
+    /// </summary>
+    private void AttachAutomation(
+        EditorView view, Panel root, Window window, IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        DesktopStartupOptions options = DesktopStartup.Options;
+
+        if (!options.NoDock)
+        {
+            DockRightHalf(window);
+        }
+
+        // Supply the standard PDF fonts (Helvetica, Times, Courier, Symbol, Dingbats) from
+        // this machine: the URW Core 35 faces if present, else a metric-compatible clone.
+        StandardFontResolver.RegisterAvailable();
+
+            // One measurement source for the whole program: the model's bounds and the
+            // canvas's caret and edit box both ask the text shaper through this.
+            VCCad.Core.Text.TextMeasurement.Current = new AvaloniaTextMetrics();
+
+        Controls.CanvasWorkspace workspace = view.WorkspaceControl;
+        Views.PageRenderer.Workspace = workspace;
+
+        // The diary: everything that happens in the application, on disk, searchable.
+        var diary = new InteractionLog(options.HistoryDirectory ?? InteractionLog.DefaultDirectory());
+        diary.StartSession(string.Join(' ', options.OriginalArguments ?? Array.Empty<string>()));
+        UiEventRecorder? recorder = null;
+
+        AutomationHost host = AutomationHost.Create(
+            view.ViewModel,
+            () => ScreenCapture.CaptureWindow(window),
+            () => window,
+            options.Llm,
+            options.Port,
+            startServer: !options.NoServer,
+            uiTreeDump: maxNodes => VisualTreeDump.Ui(window, maxNodes),
+            uiRoot: () => window,
+            viewport: new ViewportActions(
+                Fit: workspace.ZoomToFit,
+                ActualSize: workspace.ZoomToActualSize,
+                Zoom: workspace.ZoomTo,
+                GetZoom: () => workspace.Zoom,
+                IsAutoFit: () => workspace.IsAutoFit,
+                ZoomIn: workspace.ZoomIn,
+                ZoomOut: workspace.ZoomOut,
+                GetClipToArtboard: () => workspace.ClipToArtboard,
+                SetClipToArtboard: enabled => workspace.ClipToArtboard = enabled,
+                CenterOn: (x, y) => workspace.CenterOn(new VCCad.Geometry.Point2D(x, y)),
+                GetViewCenter: () => (workspace.ViewCenter.X, workspace.ViewCenter.Y)),
+            host: new HostActions(
+                Panes: () => view.Panes.Select(p => new PaneInfo(p.Id, p.Title, p.IsOpen)).ToArray(),
+                SetPaneOpen: view.SetPaneOpen,
+                Exit: () => desktop.Shutdown()),
+            history: diary);
+
+        // Record what the person does, including hover, drag and drop and keystrokes.
+        if (!options.NoRecording)
+        {
+            recorder = UiEventRecorder.Attach(window, diary);
+        }
+
+        _diagnostics = new DiagnosticsOverlay(host) { IsVisible = false };
+        root.Children.Add(_diagnostics);
+
+        // Reserve the overlay's height when fitting, so a fitted artboard is never
+        // hidden behind the panel; `--diagnostics` therefore opens already fitted.
+        void SyncOverlayInset()
+        {
+            workspace.ViewportInsetBottom = _diagnostics.IsVisible ? _diagnostics.Bounds.Height + 44 : 0;
+            if (workspace.IsAutoFit)
+            {
+                workspace.ZoomToFit();
+            }
+        }
+
+        _diagnostics.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == Visual.IsVisibleProperty)
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    SyncOverlayInset();
+                    view.RefreshDiagnosticsMenu();
+                });
+            }
+        };
+
+        // Windows → Diagnostics overlay toggles the panel like any other pane.
+        view.AttachDiagnosticsToggle(() => _diagnostics.IsVisible, () =>
+        {
+            _diagnostics.IsVisible = !_diagnostics.IsVisible;
+        });
+
+        // Opening or importing a document must fit it: a newly imported page can be
+        // any size, and keeping the previous zoom showed it at the wrong scale.
+        void FitForNewDocument()
+        {
+            if (workspace.IsAutoFit)
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => workspace.ZoomToFit(),
+                    Avalonia.Threading.DispatcherPriority.Background);
+            }
+        }
+
+        view.ViewModel.Sessions.CollectionChanged += (_, _) => FitForNewDocument();
+        view.ViewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ViewModels.EditorViewModel.ActiveSession))
+            {
+                FitForNewDocument();
+            }
+        };
+
+        // While the assistant is working the editor is locked: the person must not
+        // be able to fight the model for the document. The diagnostics overlay stays
+        // enabled, so the transcript keeps updating and Cancel is always reachable.
+        host.BusyChanged += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(
+            () => view.IsEnabled = !host.IsBusy);
+
+        // F12 toggles the overlay (and F9, which some keyboards send for this key).
+        window.KeyDown += (_, e) =>
+        {
+            if (e.Key is Key.F12 or Key.F9)
+            {
+                e.Handled = true;
+                ToggleDiagnostics();
+            }
+        };
+
+        desktop.ShutdownRequested += (_, _) => host.Server?.Dispose();
+
+        if (options.ShowDiagnostics)
+        {
+            _diagnostics.IsVisible = true;
+            // The inset depends on the panel's measured height, which is only known
+            // after it is laid out; refit once that has happened.
+            Avalonia.Threading.Dispatcher.UIThread.Post(SyncOverlayInset,
+                Avalonia.Threading.DispatcherPriority.Background);
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.ChatPrompt))
+        {
+            _diagnostics.IsVisible = true;
+            _diagnostics.SubmitPrompt(options.ChatPrompt!, options.ChatWithScreenshot);
+        }
+    }
+
+    private void ToggleDiagnostics()
+    {
+        if (_diagnostics is not null)
+        {
+            _diagnostics.IsVisible = !_diagnostics.IsVisible;
+        }
+    }
+
+    /// <summary>
+    /// Docks the window to the right half of the primary screen's working area.
+    ///
+    /// Development happens with the agent harness occupying the left half, so the
+    /// editor opens beside it rather than on top of it. Sizes are device-independent
+    /// pixels, hence the scaling division; the position is in screen pixels.
+    /// </summary>
+    private static void DockRightHalf(Window window)
+    {
+        Screen? screen = window.Screens.Primary ?? window.Screens.All.FirstOrDefault();
+        if (screen is null)
+        {
+            return;
+        }
+
+        PixelRect area = screen.WorkingArea;
+        double scaling = screen.Scaling <= 0 ? 1.0 : screen.Scaling;
+
+        window.WindowStartupLocation = WindowStartupLocation.Manual;
+        window.Width = Math.Max(480, area.Width / scaling / 2.0);
+        window.Height = Math.Max(400, area.Height / scaling);
+        window.Position = new PixelPoint(area.X + (int)(area.Width / 2.0), area.Y);
     }
 }

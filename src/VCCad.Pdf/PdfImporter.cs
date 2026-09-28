@@ -23,6 +23,27 @@ public static class PdfImporter
     /// <summary>Imports <paramref name="pdfBytes"/> into a document.</summary>
     public static CadDocument Import(byte[] pdfBytes)
     {
+        CadDocument document = ImportCore(pdfBytes);
+
+        // Illustrator private data lives outside the PDF content model, so it is
+        // captured separately and attached here, once, on every import path. A
+        // document restored from our own sidecar already carries the payload and is
+        // therefore left untouched.
+        if (document.AiPrivateData is null)
+        {
+            document.AiPrivateData = Ai.AiPrivateDataExtractor.ExtractPrivateData(pdfBytes);
+        }
+
+        return document;
+    }
+
+    /// <summary>
+    /// The import itself: sidecar, then vector, then structural fallback. Split out
+    /// of <see cref="Import"/> so the private-data capture happens exactly once
+    /// without being repeated at each of the early returns below.
+    /// </summary>
+    private static CadDocument ImportCore(byte[] pdfBytes)
+    {
         // 1) Our own lossless sidecar wins.
         try
         {
@@ -51,15 +72,12 @@ public static class PdfImporter
         // 3) Structural fallback: one artboard per page, non-uniform sizes allowed.
         var document = new CadDocument { Name = "Imported" };
         IReadOnlyList<Size2D> pages = ReadPageSizes(pdfBytes);
+        IReadOnlyList<Point2D> origins = GridOrigins(pages);
 
-        double x = 0;
-        const double gap = 40;
         for (int i = 0; i < pages.Count; i++)
         {
-            Size2D size = pages[i];
-            Artboard artboard = document.AddArtboard(size, $"Page {i + 1}", new Point2D(x, 0));
+            Artboard artboard = document.AddArtboard(pages[i], $"Page {i + 1}", origins[i]);
             artboard.AddLayer("Layer 1");
-            x += size.Width + gap;
         }
 
         if (pages.Count == 0)
@@ -101,14 +119,23 @@ public static class PdfImporter
         IReadOnlyList<Dictionary<string, object?>> pageDicts)
     {
         var document = new CadDocument { Name = "Imported" };
-        double x = 0;
-        const double gap = 40;
+
+        // Page sizes are resolved first so the whole sheet can be laid out as a
+        // grid: a single row of pages is unusable once fitted (see GridOrigins).
+        var sizes = new List<Size2D>(pageDicts.Count);
+        foreach (Dictionary<string, object?> page in pageDicts)
+        {
+            (double w, double h) = MediaBox(file, page);
+            sizes.Add(new Size2D(w, h));
+        }
+
+        IReadOnlyList<Point2D> origins = GridOrigins(sizes);
 
         for (int i = 0; i < pageDicts.Count; i++)
         {
             Dictionary<string, object?> page = pageDicts[i];
-            (double w, double h) = MediaBox(file, page);
-            Artboard artboard = document.AddArtboard(new Size2D(w, h), $"Page {i + 1}", new Point2D(x, 0));
+            double h = sizes[i].Height;
+            Artboard artboard = document.AddArtboard(sizes[i], $"Page {i + 1}", origins[i]);
 
             // Preserve the PDF's optional-content layers (Illustrator layers). Items
             // drawn outside any marked-content block land in a default layer.
@@ -125,7 +152,8 @@ public static class PdfImporter
                 return layer;
             }
 
-            foreach (PdfImportedItem imported in new PdfContentImporter(file, h).ParsePage(page))
+            foreach (PdfImportedItem imported in
+                     new PdfContentImporter(file, h).ParsePage(page))
             {
                 LayerFor(imported.Layer).AddItem(imported.Item);
             }
@@ -134,11 +162,96 @@ public static class PdfImporter
             {
                 artboard.AddLayer("Imported");
             }
-
-            x += w + gap;
         }
 
         return document;
+    }
+
+    /// <summary>Gap left between pages when laying out an imported document.</summary>
+    internal const double PageGap = 40;
+
+    /// <summary>
+    /// Aspect ratio the page grid aims for: close to a landscape working area.
+    /// </summary>
+    private const double TargetSheetAspect = 1.4;
+
+    /// <summary>
+    /// Positions for a document's pages, arranged as a grid rather than one long row.
+    ///
+    /// Laying pages out left to right is the obvious thing and the wrong one: an
+    /// eight-page A4 pattern becomes a 4837 x 814 pt strip (5.9:1), so fitting it to
+    /// the window lands at ~13% zoom and every page is an unreadable sliver. Choosing
+    /// the column count whose overall shape is closest to <see cref="TargetSheetAspect"/>
+    /// gives the same eight pages as a 4x2 block at ~39% zoom.
+    ///
+    /// Sizes may differ between pages (and within a row), so column widths and row
+    /// heights are the maxima of what they contain.
+    /// </summary>
+    internal static IReadOnlyList<Point2D> GridOrigins(IReadOnlyList<Size2D> sizes)
+    {
+        var origins = new Point2D[sizes.Count];
+        if (sizes.Count == 0)
+        {
+            return origins;
+        }
+
+        if (sizes.Count == 1)
+        {
+            origins[0] = new Point2D(0, 0);
+            return origins;
+        }
+
+        double averageWidth = sizes.Average(s => Math.Max(1, s.Width));
+        double averageHeight = sizes.Average(s => Math.Max(1, s.Height));
+
+        int columns = 1;
+        double bestScore = double.MaxValue;
+        for (int candidate = 1; candidate <= sizes.Count; candidate++)
+        {
+            int candidateRows = (int)Math.Ceiling(sizes.Count / (double)candidate);
+            double width = (candidate * averageWidth) + ((candidate - 1) * PageGap);
+            double height = (candidateRows * averageHeight) + ((candidateRows - 1) * PageGap);
+            double score = Math.Abs(Math.Log(width / height / TargetSheetAspect));
+            if (score < bestScore - 1e-9)
+            {
+                bestScore = score;
+                columns = candidate;
+            }
+        }
+
+        int rows = (int)Math.Ceiling(sizes.Count / (double)columns);
+        var columnWidths = new double[columns];
+        var rowHeights = new double[rows];
+        for (int i = 0; i < sizes.Count; i++)
+        {
+            int column = i % columns;
+            int row = i / columns;
+            columnWidths[column] = Math.Max(columnWidths[column], sizes[i].Width);
+            rowHeights[row] = Math.Max(rowHeights[row], sizes[i].Height);
+        }
+
+        var columnX = new double[columns];
+        double x = 0;
+        for (int c = 0; c < columns; c++)
+        {
+            columnX[c] = x;
+            x += columnWidths[c] + PageGap;
+        }
+
+        var rowY = new double[rows];
+        double y = 0;
+        for (int r = 0; r < rows; r++)
+        {
+            rowY[r] = y;
+            y += rowHeights[r] + PageGap;
+        }
+
+        for (int i = 0; i < sizes.Count; i++)
+        {
+            origins[i] = new Point2D(columnX[i % columns], rowY[i / columns]);
+        }
+
+        return origins;
     }
 
     private static IEnumerable<Dictionary<string, object?>> EnumeratePages(Parsing.PdfFile file)

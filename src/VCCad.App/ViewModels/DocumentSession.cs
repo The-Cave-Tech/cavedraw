@@ -63,6 +63,16 @@ public sealed class DocumentSession : INotifyPropertyChanged
     public Action<string>? StatusSink;
 
     /// <summary>True while a text object is being edited on the canvas.</summary>
+    /// <summary>
+    /// The text block currently being edited, if any.
+    ///
+    /// While a block is being typed into it is the editing target whether or not it is in
+    /// the selection — the person may have clicked the canvas, chosen a font, or had the
+    /// selection cleared by selecting a document. Operations that style text need to reach
+    /// it regardless.
+    /// </summary>
+    public TextItem? EditingText { get; set; }
+
     public bool IsEditingText { get; set; }
 
     /// <summary>Run index under the text caret (for run-aware styling).</summary>
@@ -334,24 +344,40 @@ public sealed class DocumentSession : INotifyPropertyChanged
         SetStatus("Select two open paths with a shared endpoint");
     }
 
-    /// <summary>Text items in the selection (including inside selected groups).</summary>
+    /// <summary>
+    /// Text items in the selection (including inside selected groups).
+    ///
+    /// While a block is being edited it is yielded even when the selection no longer holds
+    /// it — the person may have clicked away, picked a font, or switched document, and the
+    /// text they are typing into is still the text they mean. Without this, styling the
+    /// block being edited silently did nothing.
+    /// </summary>
     public IEnumerable<TextItem> SelectedTextItems()
     {
+        bool any = false;
+
         foreach (LayerItem item in _selectedObjects)
         {
             switch (item)
             {
                 case TextItem text:
+                    any = true;
                     yield return text;
                     break;
                 case ArtGroup group:
                     foreach (TextItem nested in DescendantTexts(group))
                     {
+                        any = true;
                         yield return nested;
                     }
 
                     break;
             }
+        }
+
+        if (!any && EditingText is { } editing)
+        {
+            yield return editing;
         }
     }
 
@@ -386,11 +412,33 @@ public sealed class DocumentSession : INotifyPropertyChanged
             Origin = world - offset,
             Color = ColorRgb.Black,
         };
-        item.Runs.Add(new TextRun { Text = "Text", FontFamily = family, FontSize = fontSize });
+        // Start empty. Placing the word "Text" in a new object means the text tool litters
+        // the page with placeholder words instead of asking for typing, and every one has
+        // to be cleared by hand before it says anything.
+        item.Runs.Add(new TextRun { Text = string.Empty, FontFamily = family, FontSize = fontSize });
         Execute(new AddItemCommand(layer, item));
         SelectObject(item);
-        SetStatus("Text created — edit it in the Text pane");
+        SetStatus("Type to enter text");
         return item;
+    }
+
+    /// <summary>
+    /// Applies paragraph style and orientation to the selected text objects in one undo
+    /// step. These are how the block is set — leading, space between paragraphs, and the
+    /// angle it sits at — and they never change what the text says.
+    /// </summary>
+    public void ApplyTextStyle(double? lineSpacing, double? paragraphSpacing,
+        double? rotationDegrees, double? frameWidth, TextAlignment? alignment)
+    {
+        List<TextItem> targets = SelectedTextItems().ToList();
+        if (targets.Count == 0)
+        {
+            SetStatus("Select a text object first");
+            return;
+        }
+
+        Execute(new TextStyleCommand(targets, lineSpacing, paragraphSpacing,
+            rotationDegrees, frameWidth, alignment));
     }
 
     /// <summary>Updates the content and uniform style of the selected text
@@ -814,7 +862,11 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// selection (Shift-marquee).</summary>
     public void SelectRange(IEnumerable<LayerItem> items, bool additive)
     {
-        var materialised = items.Where(i => i is PathItem or ArtGroup).ToArray();
+        // Every kind of layer item is selectable. This used to accept only paths and
+        // groups, which silently dropped text from marquee selections — and from the
+        // automation API, where "select this text and edit it" then failed with
+        // "no text is selected".
+        LayerItem[] materialised = items.ToArray();
         if (!additive)
         {
             _selectedArtboard = null;
@@ -1071,8 +1123,10 @@ public sealed class DocumentSession : INotifyPropertyChanged
     // ------------------------------------------------------------------
 
     /// <summary>True when whole-object transform fields are meaningful (objects
-    /// selected, no point mode).</summary>
-    public bool HasTransformableSelection => !HasPointSelection && SelectedPaths().Any();
+    /// selected, no point mode). Text blocks count: they have bounds, move, and
+    /// scale with the same handles as paths.</summary>
+    public bool HasTransformableSelection
+        => !HasPointSelection && (SelectedPaths().Any() || SelectedTextItems().Any());
 
     /// <summary>Current bounds + principal-axis angle (degrees, 0..180) of the
     /// selected objects — the basis the numeric fields display.</summary>

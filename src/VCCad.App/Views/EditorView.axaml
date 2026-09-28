@@ -74,6 +74,44 @@
               <Button Name="NewTabButton" Content="+" Click="OnNewTab" ToolTip.Tip="New document"/>
             </StackPanel>
           </Border>
+
+          <!-- Text toolbar: only while a text block is being edited, so the controls a
+               person needs to set type are in front of them at the moment they need
+               them. Every control here is reachable through ui.find/ui.setValue, so a
+               driver can click the same buttons a person does. -->
+          <Border Name="TextToolbar" DockPanel.Dock="Top" IsVisible="False"
+                  Background="{DynamicResource VcPanel}" BorderBrush="{DynamicResource VcBorder}"
+                  BorderThickness="0,0,0,1" Padding="6,4">
+            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+              <TextBlock Text="Text" FontWeight="SemiBold" VerticalAlignment="Center"
+                         Foreground="{DynamicResource VcTextDim}"/>
+              <ComboBox Name="TtFont" Width="150" ToolTip.Tip="Font"/>
+              <TextBox Name="TtSize" Width="52" ToolTip.Tip="Size"/>
+              <ToggleButton Name="TtBold" Content="B" FontWeight="Bold" Width="32"
+                            ToolTip.Tip="Bold"/>
+              <ToggleButton Name="TtItalic" Content="I" FontStyle="Italic" Width="32"
+                            ToolTip.Tip="Italic"/>
+              <ComboBox Name="TtAlign" Width="96" ToolTip.Tip="Alignment">
+                <ComboBoxItem Content="Left"/>
+                <ComboBoxItem Content="Center"/>
+                <ComboBoxItem Content="Right"/>
+              </ComboBox>
+              <TextBlock Text="Leading" VerticalAlignment="Center"
+                         Foreground="{DynamicResource VcTextDim}"/>
+              <TextBox Name="TtLineSpacing" Width="44" ToolTip.Tip="Line spacing (multiple of font size)"/>
+              <TextBlock Text="Space" VerticalAlignment="Center"
+                         Foreground="{DynamicResource VcTextDim}"/>
+              <TextBox Name="TtParagraphSpacing" Width="44" ToolTip.Tip="Space between paragraphs"/>
+              <TextBlock Text="Rot" VerticalAlignment="Center"
+                         Foreground="{DynamicResource VcTextDim}"/>
+              <TextBox Name="TtRotation" Width="46" ToolTip.Tip="Rotation in degrees"/>
+              <TextBlock Text="Colour" VerticalAlignment="Center"
+                         Foreground="{DynamicResource VcTextDim}"/>
+              <TextBox Name="TtColor" Width="80" ToolTip.Tip="Colour as R,G,B"/>
+              <Button Name="TtWidth" Content="Box…" ToolTip.Tip="Set the frame width the text wraps in"/>
+            </StackPanel>
+          </Border>
+
           <controls:CanvasWorkspace x:Name="Workspace" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
         </DockPanel>
       </Border>
@@ -108,6 +146,35 @@
             <Button Content="Keep objects" Click="OnDeleteKeepObjects"/>
             <Button Content="Delete objects" Click="OnDeleteAllObjects"/>
             <Button Content="Cancel" Click="OnDeleteCancel"/>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+    </Grid>
+
+    <!-- Shown when the document names standard fonts this computer cannot supply.
+         A PDF is entitled to name Helvetica and embed nothing, so the face has to come
+         from somewhere; we ask before fetching it rather than shipping fonts we may not
+         redistribute or silently substituting a different design. -->
+    <Grid Name="FontOverlay" Grid.Row="0" Grid.RowSpan="3" IsVisible="False"
+          Background="#99000000">
+      <Border Background="{DynamicResource VcPanel}" BorderBrush="{DynamicResource VcBorder}"
+              BorderThickness="1" CornerRadius="8" Padding="20" MaxWidth="500"
+              HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel Spacing="12">
+          <TextBlock Text="This document needs fonts that are not installed"
+                     FontWeight="SemiBold" FontSize="15" TextWrapping="Wrap"
+                     Foreground="{DynamicResource VcText}"/>
+          <TextBlock Name="FontOverlayMessage" TextWrapping="Wrap"
+                     Foreground="{DynamicResource VcText}"/>
+          <Border Background="{DynamicResource VcPanelAlt}" CornerRadius="4" Padding="10">
+            <TextBlock Name="FontOverlayDetail" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource VcTextDim}"/>
+          </Border>
+          <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+            <Button Name="FontInstallAgree" Content="I agree — install now"
+                    Click="OnFontInstallAgree"/>
+            <Button Name="FontInstallLater" Content="Not now"
+                    Click="OnFontInstallLater"/>
           </StackPanel>
         </StackPanel>
       </Border>
