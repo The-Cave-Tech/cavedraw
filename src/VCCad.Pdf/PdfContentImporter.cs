@@ -334,7 +334,12 @@ internal sealed class PdfContentImporter
                 case "Q":
                     if (stack.Count > 0)
                     {
-                        EndTextLine();
+                        // Q restores the graphics state but does not end a line. A file
+                        // that wraps each show operation in its own q/Q — the Transparency
+                        // Guide wraps every glyph — would otherwise never merge anything,
+                        // which is exactly what happened while this call was here. The
+                        // baseline test is what decides whether text continues; the state
+                        // stack has nothing to say about it.
                         _clips.Clear();
                         _clips.AddRange(_clipStack.Pop());
                         (current, lineWidth, lineCap, lineJoin, miterLimit, dash,
@@ -676,14 +681,30 @@ internal sealed class PdfContentImporter
                             segments.Add((buffer.ToString(), segmentStart));
                         }
 
-                        foreach ((string part, double offset) in segments)
+                        for (int s = 0; s < segments.Count; s++)
                         {
+                            (string part, double offset) = segments[s];
                             AffineTransform segmentMatrix = offset == 0
                                 ? textMatrix
                                 : textMatrix.Compose(AffineTransform.CreateTranslation(offset, 0));
+
+                            // How much room the file left between this piece and the next,
+                            // over and above the glyphs themselves. Measured from the
+                            // offsets the split already worked out, in text space, and
+                            // passed as a fraction of the em because that is the unit
+                            // ShowText scales by.
+                            double gap = 0;
+                            if (s + 1 < segments.Count)
+                            {
+                                double own = MeasureAdvance(part, fontName, resources, fontSize,
+                                    new TextState(charSpacing, wordSpacing, horizontalScale, rise)) ?? 0;
+                                gap = (segments[s + 1].Offset - offset - own) / fontSize;
+                            }
+
                             ShowText(part, resources, fontName, fontSize, current, segmentMatrix,
                                 fillColor, items, currentLayer, fillCmyk,
-                                new TextState(charSpacing, wordSpacing, horizontalScale, rise));
+                                new TextState(charSpacing, wordSpacing, horizontalScale, rise),
+                                gap);
                         }
                     }
 
@@ -992,7 +1013,7 @@ internal sealed class PdfContentImporter
     private void ShowText(string text, Dictionary<string, object?> resources, string fontName,
         double fontSize, AffineTransform ctm, AffineTransform textMatrix, ColorRgb color,
         List<PdfImportedItem> items, string? layer, double[]? cmyk = null,
-        TextState? state = null)
+        TextState? state = null, double gapAfter = 0.0)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -1055,7 +1076,14 @@ internal sealed class PdfContentImporter
             FontSize = effectiveSize,
             Bold = bold,
             Italic = italic,
-            AdvanceWidth = MeasureAdvance(rawText, fontName, resources, effectiveSize, state, composite),
+            // The gap the file left before the next piece of the same line is part of how
+            // wide this one is. Folding it in is what lets a letter-spaced line arrive as
+            // one block: the piece starts where the file put it, ends where the next piece
+            // begins, and the importer sees a line that continues rather than two fragments
+            // with a hole between them. Without it a heading set at 0.2 em spacing came in
+            // two glyphs at a time, and an extractor read "IN TR OD UC TI ON".
+            AdvanceWidth = MeasureAdvance(rawText, fontName, resources, effectiveSize, state, composite)
+                + (gapAfter * effectiveSize),
             SourceFont = SourceFontName(fontName, resources),
             EmbeddedFont = embedded,
             RawCodes = embedded is not null ? rawText : null,

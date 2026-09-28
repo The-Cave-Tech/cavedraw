@@ -70,25 +70,30 @@ public class TjPositioningTests
     }
 
     [Fact]
-    public void AwidelySpacedTjArrayBecomesSeparatelyPositionedText()
+    public void AwidelySpacedTjArrayKeepsItsCellsApart()
     {
         CadDocument document = PdfImporter.Import(Pdf("[(1)-1130(2)-1118(3)]TJ"));
         List<TextItem> items = TextItems(document);
 
-        Assert.Equal(3, items.Count);
-        Assert.Equal(new[] { "1", "2", "3" }, items.Select(i => i.PlainText).ToArray());
-
-        items.Sort((a, b) => a.Origin.X.CompareTo(b.Origin.X));
+        // One block of three pieces rather than three blocks. The pieces sit a whole cell
+        // apart, and that distance is carried on each piece's advance — so the block lays
+        // out where the file put it, and an editor still sees one row of a table. Standing
+        // them up as three separate objects said the same thing in a shape that made the
+        // row impossible to select, move or restyle as a unit.
+        TextItem item = Assert.Single(items);
+        Assert.Equal(new[] { "1", "2", "3" }, item.Runs.Select(r => r.Text).ToArray());
 
         // The digits must be a whole cell apart, not bunched: the file advances ~1.13 em
-        // plus the glyph's own width between them.
-        double first = items[0].Origin.X;
-        double second = items[1].Origin.X;
-        double third = items[2].Origin.X;
+        // plus the glyph's own width between them, so each piece is over 30pt wide.
+        Assert.Equal(3, item.Runs.Count);
+        Assert.True(item.Runs[0].AdvanceWidth > 30,
+            $"expected a wide advance, got {item.Runs[0].AdvanceWidth:F1}pt");
+        Assert.True(item.Runs[1].AdvanceWidth > 30,
+            $"expected a wide advance, got {item.Runs[1].AdvanceWidth:F1}pt");
 
-        Assert.True(second - first > 30, $"expected a wide gap, got {second - first:F1}pt");
-        Assert.True(third - second > 30, $"expected a wide gap, got {third - second:F1}pt");
-        Assert.Equal(second - first, third - second, 0.5);
+        double first = item.Runs[0].AdvanceWidth!.Value;
+        double second = item.Runs[1].AdvanceWidth!.Value;
+        Assert.Equal(first, second, 0.5);
     }
 
     [Fact]
