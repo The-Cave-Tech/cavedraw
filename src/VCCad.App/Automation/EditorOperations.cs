@@ -2307,6 +2307,44 @@ public static class EditorOperations
         => ctx.InputRoot?.Invoke() ?? throw new EditorOperationException("No window is available.");
 
     /// <summary>
+    /// Every control in the application, the main window first and then any other window.
+    ///
+    /// A dialog is a window of its own, so ui.find - which walked only the main one - could not
+    /// see the rename prompt's text box or its button, and a driver could open the prompt and
+    /// not fill it in. Handles index into this list, and ui.click and ui.setValue resolve
+    /// against the same one, so a handle taken from a dialog means the same thing everywhere.
+    /// </summary>
+    private static IReadOnlyList<Avalonia.Visual> AllVisuals(AutomationContext ctx)
+    {
+        var all = new List<Avalonia.Visual>();
+        var seen = new HashSet<Avalonia.Visual>(ReferenceEqualityComparer.Instance);
+
+        void Take(Avalonia.Visual root)
+        {
+            foreach (Avalonia.Visual visual in UiAutomation.Flatten(root))
+            {
+                if (seen.Add(visual))
+                {
+                    all.Add(visual);
+                }
+            }
+        }
+
+        Take(Root(ctx));
+
+        if (Avalonia.Application.Current?.ApplicationLifetime
+            is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            foreach (Avalonia.Controls.Window window in desktop.Windows)
+            {
+                Take(window);
+            }
+        }
+
+        return all;
+    }
+
+    /// <summary>
     /// A named page or layer and everything beneath it, or null when nothing has that name.
     ///
     /// Taken by depth rather than by tracking parents: a row is inside the named one exactly
@@ -2459,16 +2497,65 @@ public static class EditorOperations
     private static Avalonia.Controls.Control RequireUiRoot(AutomationContext ctx)
         => ctx.UiRoot?.Invoke() ?? throw new EditorOperationException("No window is available in this host.");
 
+    /// <summary>Where a visual sits in a flattened list, or -1.</summary>
+    private static int IndexOf(IReadOnlyList<Visual> all, Visual visual)
+    {
+        for (int i = 0; i < all.Count; i++)
+        {
+            if (ReferenceEquals(all[i], visual))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
     private static object FindControls(AutomationContext ctx, JsonElement p)
     {
-        Avalonia.Controls.Control root = RequireUiRoot(ctx);
-        IReadOnlyList<(Visual Visual, UiControlRef Ref)> matches = UiAutomation.Find(
-            root,
-            p.GetString("type"),
-            p.GetString("name"),
-            p.GetString("text"),
-            p.GetBool("includeHidden", false),
-            (int)Math.Clamp(p.GetLong("max", 50), 1, 500));
+        string? type = p.GetString("type");
+        string? name = p.GetString("name");
+        string? text = p.GetString("text");
+        bool includeHidden = p.GetBool("includeHidden", false);
+        int max = (int)Math.Clamp(p.GetLong("max", 50), 1, 20000);
+
+        // Search every window, not just the main one, and give handles that are indices into
+        // the same list ui.click resolves against - otherwise a handle found in a dialog would
+        // mean a different control when it was used.
+        IReadOnlyList<Visual> all = AllVisuals(ctx);
+        var roots = new List<Visual> { Root(ctx) };
+
+        if (Avalonia.Application.Current?.ApplicationLifetime
+            is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            roots.AddRange(desktop.Windows);
+        }
+
+        var seen = new HashSet<Visual>(ReferenceEqualityComparer.Instance);
+        var matches = new List<(Visual Visual, UiControlRef Ref)>();
+
+        foreach (Visual root in roots)
+        {
+            if (root is not Avalonia.Controls.Control control)
+            {
+                continue;
+            }
+
+            foreach ((Visual visual, UiControlRef reference) in UiAutomation.Find(
+                         control, type, name, text, includeHidden, max))
+            {
+                if (!seen.Add(visual))
+                {
+                    continue;
+                }
+
+                int index = IndexOf(all, visual);
+                if (index >= 0)
+                {
+                    matches.Add((visual, reference with { Index = index }));
+                }
+            }
+        }
 
         return new
         {
@@ -2516,7 +2603,7 @@ public static class EditorOperations
             handleElement.ValueKind == JsonValueKind.Number)
         {
             int handle = handleElement.GetInt32();
-            IReadOnlyList<Visual> all = UiAutomation.Flatten(root);
+            IReadOnlyList<Visual> all = AllVisuals(ctx);
             if (handle < 0 || handle >= all.Count)
             {
                 throw new EditorOperationException(
