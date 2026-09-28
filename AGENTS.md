@@ -145,7 +145,6 @@ describe when a visual judgement is needed.
    `chore:`). Commit *before* starting the next item, not at the end of a session: an
    uncommitted tree is invisible history, and a change that is not in `git log` cannot
    be reviewed, bisected or reverted. Keep the tree clean when handing off.
-   commit messages (`feat:`, `fix:`, `test:`, `docs:`, `build:`, `chore:`).
 2. **Never add comments to code unless asked** — but this repo *does* want
    explanatory comments on math/formulas and public APIs; match surrounding style.
 3. **Deployment archives `HEAD`** (`git archive HEAD`). Uncommitted work is *not*
