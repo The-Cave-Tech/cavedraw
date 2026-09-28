@@ -22,7 +22,8 @@ public class FormGroupingTests
     /// A page drawing one form. The form's content and its optional-content layer are passed
     /// in, because both decide whether the group is made.
     /// </summary>
-    private static byte[] PageWithForm(string formContent, string? markedLayer = null)
+    private static byte[] PageWithForm(string formContent, string? markedLayer = null,
+        string bbox = "[0 0 612 792]")
     {
         string pageContent = markedLayer is null
             ? "q /Fm0 Do Q"
@@ -45,7 +46,7 @@ public class FormGroupingTests
                 + (markedLayer is null ? string.Empty : "/Properties << /MC0 6 0 R >> ")
                 + ">> /Contents 4 0 R >>", null),
             (null, pageContent),
-            ("<< /Type /XObject /Subtype /Form /BBox [0 0 612 792] "
+            ($"<< /Type /XObject /Subtype /Form /BBox {bbox} "
                 + "/Resources << >> >>", formContent),
             (markedLayer is null ? "<< >>" : $"<< /Type /OCG /Name ({markedLayer}) >>", null),
         };
@@ -150,5 +151,48 @@ public class FormGroupingTests
 
         // Unlike a clip, a group adds a level: the count of drawn objects is what it was.
         Assert.Equal(3, group.Children.Count);
+    }
+
+    /// <summary>A page whose form draws three bars inside a box narrower than they are.</summary>
+    private static byte[] PageWithTightBox()
+    {
+        // The bars run from x=0 to x=300; the box stops at 100, so it removes two thirds.
+        const string content = "0 0 0 rg 0 0 300 20 re f 0 0 0 rg 0 40 300 20 re f";
+        return PageWithForm(content, bbox: "[0 0 100 200]");
+    }
+
+    [Fact]
+    public void ABoxThatCutsWhatTheFormDrawsBecomesAClippingMask()
+    {
+        CadDocument document = PdfImporter.Import(PageWithTightBox());
+        ArtGroup group = Assert.IsType<ArtGroup>(Assert.Single(Top(document)));
+
+        Assert.True(group.IsClipped, "a box that removes part of the artwork is a clip");
+        Assert.Equal("Clipping Mask", ObjectNaming.LabelFor(group));
+    }
+
+    [Fact]
+    public void ABoxThatCutsNothingIsNotCalledAMask()
+    {
+        // The page-sized case, which is most of the corpus. Calling this a Clipping Mask would
+        // put a mask row on every page of every document that has one - which is what the
+        // first attempt did: twelve masks for twelve pages that clip nothing.
+        CadDocument document = PdfImporter.Import(PageWithForm(ThreeBars));
+        ArtGroup group = Assert.IsType<ArtGroup>(Assert.Single(Top(document)));
+
+        Assert.False(group.IsClipped);
+        Assert.Equal("Group", ObjectNaming.LabelFor(group));
+    }
+
+    [Fact]
+    public void AMaskStillClipsWhatIsUnderIt()
+    {
+        // The mask is not decoration: the artwork is still bounded by the box.
+        CadDocument document = PdfImporter.Import(PageWithTightBox());
+        ArtGroup group = Assert.IsType<ArtGroup>(Assert.Single(Top(document)));
+
+        Assert.Single(group.Clips);
+        double right = group.Clips[0].SubPaths[0].Nodes.Max(n => n.Anchor.X);
+        Assert.Equal(100.0, right, 2);
     }
 }

@@ -830,13 +830,17 @@ internal sealed class PdfContentImporter
             }
 
             bounds.SubPaths.Add(rect);
-            _clips.Add(bounds);
         }
 
         var drawn = new List<PdfImportedItem>();
 
         try
         {
+            if (bounds is not null)
+            {
+                _clips.Add(bounds);
+            }
+
             Interpret(_file.GetStreamData(stream), childResources, toPage, drawn, depth + 1, layer);
         }
         finally
@@ -876,8 +880,55 @@ internal sealed class PdfContentImporter
             group.AddItem(item.Item);
         }
 
+        // The box goes on the group when there is a group, because that is what it is: the
+        // parent object's rectangle bounding everything the form drew. Left on each item it
+        // still clips correctly, but nothing in the tree says a clipping happened - Affinity
+        // shows one row for the mask, and this is that row.
+        //
+        // Only when it actually cuts something. A form whose box is the whole page bounds its
+        // content without removing any of it, and calling that a Clipping Mask would put a
+        // mask row on every page of every document that has one - which is what happened on
+        // the first attempt, twelve masks for twelve pages that clip nothing.
+        if (bounds is not null && Cuts(bounds, group))
+        {
+            group.Clips.Add(bounds);
+        }
+
         items.Add(new PdfImportedItem(only, group));
     }
+
+    /// <summary>Whether a clip removes any of what the group draws.</summary>
+    private static bool Cuts(ClipSpec clip, ArtGroup group)
+    {
+        Rect2D content = group.Transform.Transform(group.BoundingBox());
+        if (content.IsEmpty)
+        {
+            return false;
+        }
+
+        foreach (SubPath sub in clip.SubPaths)
+        {
+            Rect2D box = sub.BoundingBox();
+            if (box.IsEmpty)
+            {
+                continue;
+            }
+
+            // Any part of the content outside the box is a part the box removes.
+            if (content.Left < box.Left - Tolerance ||
+                content.Top < box.Top - Tolerance ||
+                content.Right > box.Right + Tolerance ||
+                content.Bottom > box.Bottom + Tolerance)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>How far outside a box still counts as inside it.</summary>
+    private const double Tolerance = 0.01;
 
     /// <summary>
     /// The compressor an image stream is still in, when this reader has no way to decode it.
