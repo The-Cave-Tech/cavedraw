@@ -9,6 +9,11 @@
 
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.11" />
+    <!-- The font chooser reads each family's real faces from the font index. Asking the
+         renderer for a style a family does not have makes it build a synthetic one, and for
+         at least one installed font that crashes the process natively. The index knows the
+         faces, so the question never has to be asked. Same version Avalonia itself uses. -->
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.11" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.11" />
     <PackageReference Include="Avalonia.Diagnostics" Version="11.3.11">
