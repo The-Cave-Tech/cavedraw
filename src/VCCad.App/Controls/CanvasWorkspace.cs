@@ -3924,6 +3924,49 @@ public sealed class CanvasWorkspace : Control
         _vm.TextSelectionEnd = Math.Max(_caret, _editAnchor);
     }
 
+    /// <summary>
+    /// Opens a text block for editing, as double-clicking into it does.
+    ///
+    /// Public because a person can do it and the assistant must be able to as well: without
+    /// it a driver cannot reach rich-text styling at all, since styling part of a selection
+    /// needs there to be a selection, and a selection needs the block open.
+    /// </summary>
+    public bool BeginTextEdit(TextItem text)
+    {
+        if (_vm is null)
+        {
+            return false;
+        }
+
+        EnterTextEdit(text);
+        return true;
+    }
+
+    /// <summary>
+    /// Places the caret and selection, as dragging across the text does.
+    ///
+    /// The range is in flattened characters, the same coordinates
+    /// <see cref="EditorViewModel.TextSelectionStart"/> reports, so a caller can select
+    /// exactly what it measured.
+    /// </summary>
+    public bool SetTextSelection(int start, int end)
+    {
+        if (_editingText is null)
+        {
+            return false;
+        }
+
+        int length = TextEditing.Length(_editingText);
+        _editAnchor = Math.Clamp(start, 0, length);
+        _caret = Math.Clamp(end, 0, length);
+        _caretOn = true;
+
+        UpdateCaretInfo();
+        UpdateCaretBlink();
+        InvalidateVisual();
+        return true;
+    }
+
     private static bool TextEquals(TextItem a, TextItem b)
     {
         if (a.Runs.Count != b.Runs.Count || a.Origin != b.Origin || a.Color != b.Color ||

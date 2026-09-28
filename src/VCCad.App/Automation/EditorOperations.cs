@@ -930,6 +930,73 @@ public static class EditorOperations
                 return Summary(ctx);
             });
 
+        Add("text.edit",
+            "Open a text block for editing, as double-clicking into it does. Needed before " +
+            "text.select, and therefore before styling part of a selection: the range is " +
+            "only meaningful while the block is open.",
+            "itemId?:guid (default: selected text)",
+            (ctx, p) =>
+            {
+                LayerItem? found = p.TryGetProperty("itemId", out JsonElement iv) &&
+                                   Guid.TryParse(iv.GetString(), out Guid id)
+                    ? FindItem(ctx.Document, id)
+                    : ctx.ViewModel.SelectedTextItems().FirstOrDefault();
+
+                if (found is not TextItem target)
+                {
+                    throw new EditorOperationException("No text object is selected.");
+                }
+
+                VCCad.App.Controls.CanvasWorkspace? canvas = Workspace(ctx);
+                if (canvas is null)
+                {
+                    throw new EditorOperationException("No canvas is attached.");
+                }
+
+                if (!canvas.BeginTextEdit(target))
+                {
+                    throw new EditorOperationException("The canvas could not open the text block.");
+                }
+
+                ctx.ViewModel.NotifyDocumentChanged();
+                return new
+                {
+                    editing = ctx.ViewModel.IsEditingText,
+                    length = VCCad.Core.Model.TextEditing.Length(target),
+                    runs = target.Runs.Count,
+                };
+            });
+
+        Add("text.select",
+            "Place the caret and selection inside the open text block, as dragging across " +
+            "the text does. The range is in flattened characters, so a caller can select " +
+            "exactly what it measured and then style that part alone.",
+            "start:number, end:number",
+            (ctx, p) =>
+            {
+                VCCad.App.Controls.CanvasWorkspace? canvas = Workspace(ctx);
+                if (canvas is null)
+                {
+                    throw new EditorOperationException("No canvas is attached.");
+                }
+
+                int start = (int)p.GetDouble("start", 0);
+                int end = (int)p.GetDouble("end", start);
+                if (!canvas.SetTextSelection(start, end))
+                {
+                    throw new EditorOperationException(
+                        "No text block is open; call text.edit first.");
+                }
+
+                return new
+                {
+                    editing = ctx.ViewModel.IsEditingText,
+                    selectionStart = ctx.ViewModel.TextSelectionStart,
+                    selectionEnd = ctx.ViewModel.TextSelectionEnd,
+                    selected = ctx.ViewModel.TextSelectionEnd - ctx.ViewModel.TextSelectionStart,
+                };
+            });
+
         Add("text.centerIn",
             "Centre a text block inside a rectangle. With no target it finds the enclosing artwork " +
             "automatically (the pattern piece a label belongs to), falling back to the artboard — so " +
