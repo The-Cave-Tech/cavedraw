@@ -65,6 +65,8 @@ public partial class ObjectsPane : UserControl
 
         _roots.Clear();
         _map.Clear();
+
+        (Dictionary<Layer, List<LayerItem>> byLayer, List<LayerItem> loose) = Classify(_vm.Document);
         var pasteboard = new List<LayerItem>();
 
         foreach (Artboard artboard in _vm.Document.Artboards)
@@ -79,9 +81,13 @@ public partial class ObjectsPane : UserControl
                     v => SetVisible(layer, v));
                 _map[layer] = layerNode;
 
+                HashSet<LayerItem> mine = byLayer.TryGetValue(layer, out List<LayerItem>? items)
+                    ? new HashSet<LayerItem>(items, ReferenceEqualityComparer.Instance)
+                    : new HashSet<LayerItem>(ReferenceEqualityComparer.Instance);
+
                 foreach (LayerItem child in layer.Children)
                 {
-                    if (IntersectsArtboard(child, artboard))
+                    if (mine.Contains(child))
                     {
                         AddItemNode(layerNode, child, expanded);
                     }
@@ -97,7 +103,7 @@ public partial class ObjectsPane : UserControl
             _roots.Add(board);
         }
 
-        pasteboard.AddRange(_vm.Document.Orphans.Children);
+        pasteboard.AddRange(loose);
 
         if (pasteboard.Count > 0)
         {
@@ -129,6 +135,44 @@ public partial class ObjectsPane : UserControl
     {
         layer.IsVisible = visible;
         _vm?.RaiseTransformChanged();
+    }
+
+    /// <summary>
+    /// Which items belong to which layer, and which belong to no artboard at all.
+    ///
+    /// Split out from <see cref="Rebuild"/> so the placement rule can be exercised without
+    /// an Avalonia visual tree — a tiled pattern laid out as a grid is the case that broke,
+    /// and it needs twelve artboards and a few hundred items to show up.
+    /// </summary>
+    internal static (Dictionary<Layer, List<LayerItem>> ByLayer, List<LayerItem> Pasteboard)
+        Classify(CadDocument document)
+    {
+        var byLayer = new Dictionary<Layer, List<LayerItem>>();
+        var pasteboard = new List<LayerItem>();
+
+        foreach (Artboard artboard in document.Artboards)
+        {
+            foreach (Layer layer in artboard.Layers)
+            {
+                var mine = new List<LayerItem>();
+                byLayer[layer] = mine;
+
+                foreach (LayerItem child in layer.Children)
+                {
+                    if (IntersectsArtboard(BoundsOf(child), child.ArtboardOffset(), artboard))
+                    {
+                        mine.Add(child);
+                    }
+                    else
+                    {
+                        pasteboard.Add(child);
+                    }
+                }
+            }
+        }
+
+        pasteboard.AddRange(document.Orphans.Children);
+        return (byLayer, pasteboard);
     }
 
     private static string FormatLayer(Layer layer)
@@ -302,10 +346,32 @@ public partial class ObjectsPane : UserControl
         _ => Rect2D.Empty,
     };
 
-    private static bool IntersectsArtboard(LayerItem item, Artboard artboard)
+    /// <summary>
+    /// Whether an item belongs to an artboard, in document space.
+    ///
+    /// Item coordinates are stored relative to their artboard, so an item's own bounds are
+    /// near the origin while an artboard's are its place in the sheet's grid. Comparing the
+    /// two directly asked "is this item near the top-left of the whole document", which is
+    /// only ever true of the first page: every item on every other page failed the test and
+    /// was filed under the Pasteboard. A tiled pattern - twelve sheets laid out in a grid -
+    /// showed one page's contents and a collapsed Pasteboard holding the rest.
+    ///
+    /// Takes the bounds rather than the item so the placement rule can be exercised without
+    /// an Avalonia visual tree.
+    /// </summary>
+    internal static bool IntersectsArtboard(Rect2D bounds, Vector2D offset, Artboard artboard)
     {
-        Rect2D bounds = BoundsOf(item);
-        return bounds.IsEmpty || bounds.Intersects(artboard.Bounds.Inflated(0.25));
+        // Nothing to place: a group with no geometry, or bounds not yet computed. Showing it
+        // under its artboard is better than hiding it on the pasteboard.
+        if (bounds.IsEmpty)
+        {
+            return true;
+        }
+
+        var page = new Rect2D(
+            bounds.Left + offset.X, bounds.Top + offset.Y, bounds.Width, bounds.Height);
+
+        return page.Intersects(artboard.Bounds.Inflated(0.25));
     }
 
     private void SyncToSelection()
