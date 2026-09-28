@@ -401,7 +401,7 @@ public static class EditorOperations
         Add("object.find",
             "Find objects by name, text content, type and/or layer — the way to turn a description " +
             "like 'the text UPPER CUP' into an id.",
-            "name?:string, text?:string, type?:path|text|group, layerName?:string, max?:number",
+            "name?:string, text?:string, type?:path|text|group|image, layerName?:string, max?:number",
             (ctx, p) =>
             {
                 string? name = p.GetString("name");
@@ -1678,6 +1678,7 @@ public static class EditorOperations
         PathItem => "path",
         TextItem => "text",
         ArtGroup => "group",
+        ImageItem => "image",
         _ => item.GetType().Name,
     };
 
@@ -2237,6 +2238,7 @@ public static class EditorOperations
             PathItem path => path.BoundingBox(),
             TextItem text => text.BoundingBox(),
             ArtGroup group => group.BoundingBox(),
+            ImageItem image => image.WorldBounds(),
             _ => Rect2D.Empty,
         };
 

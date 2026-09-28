@@ -126,7 +126,7 @@ public class PdfFeatureTargetedTests
 
     [Fact]
     [Trait("Category", "Corpus")]
-    public void ImageOnlyPage_ImportsAsAnEmptyArtboard()
+    public void ImageOnlyPage_ImportsItsImage()
     {
         string? path = Fixture("pdf/Jbig2_042_01.pdf")
                        ?? PdfCorpus.FirstFileWhere(report =>
@@ -151,11 +151,18 @@ public class PdfFeatureTargetedTests
         DocumentSanity.AssertSane(document, name);
         Assert.NotEmpty(document.Artboards);
 
-        // GAP (AGENTS.md §9, "images"): PdfContentImporter.DrawXObject handles
-        // only /Subtype /Form, so a page whose entire content is "<name> Do" for
-        // an image XObject imports as an empty artboard.
-        Assert.Empty(DocumentSanity.Items(document));
-        AssertNoModelConcept("image", "Image");
+        // Was a gap: PdfContentImporter.DrawXObject handled only /Subtype /Form, so a
+        // page whose entire content is "<name> Do" for an image XObject imported as an
+        // empty artboard. Image XObjects are now imported, so the assertion is the
+        // positive one — the page carries its image.
+        List<ImageItem> images = DocumentSanity.Items(document).OfType<ImageItem>().ToList();
+        Assert.NotEmpty(images);
+
+        ImageItem image = images[0];
+        Assert.True(image.PixelWidth > 0 && image.PixelHeight > 0,
+            $"{name}: image has no pixels");
+        Assert.False(image.Placement.IsEmpty, $"{name}: image has no placement");
+        Assert.NotEmpty(image.Samples);
     }
 
     // ------------------------------------------------------------------

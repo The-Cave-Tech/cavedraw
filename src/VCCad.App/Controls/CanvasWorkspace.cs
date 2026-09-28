@@ -2934,6 +2934,10 @@ public sealed class CanvasWorkspace : Control
                 PaintText(context, text, opacity);
                 break;
 
+            case ImageItem image when image.IsVisible:
+                PaintImage(context, image, opacity);
+                break;
+
             case ArtGroup group when group.IsVisible:
                 foreach (LayerItem child in group.Children)
                 {
@@ -3026,6 +3030,33 @@ public sealed class CanvasWorkspace : Control
         StreamGeometry geometry = BuildGeometry(path, outsideClip: false);
         _geometryCache[path] = (path.GeometryRevision, geometry);
         return geometry;
+    }
+
+    /// <summary>
+    /// Draws an embedded raster image. The samples live in the model in the colour space
+    /// the file used, so the conversion to pixels happens here rather than on import.
+    /// </summary>
+    private void PaintImage(DrawingContext context, ImageItem image, double opacity)
+    {
+        Rect2D bounds = image.WorldBounds();
+        if (bounds.IsEmpty || !bounds.Intersects(_worldViewport))
+        {
+            return;
+        }
+
+        double scale = _layout.Zoom;
+        Point origin = ModelToScreen(new Point2D(bounds.X, bounds.Y));
+
+        var destination = new Rect(
+            origin.X,
+            origin.Y,
+            Math.Max(0.5, bounds.Width * scale),
+            Math.Max(0.5, bounds.Height * scale));
+
+        using (context.PushOpacity(Math.Clamp(opacity, 0, 1)))
+        {
+            context.DrawImage(ImageRenderer.BitmapFor(image), destination);
+        }
     }
 
     private void PaintText(DrawingContext context, TextItem text, double opacity)

@@ -599,8 +599,19 @@ internal sealed class PdfContentImporter
     {
         if (_file.ResolveDict(resources.GetValueOrDefault("XObject")) is not { } xobjects ||
             _file.Resolve(xobjects.GetValueOrDefault(name)) is not PdfStream stream ||
-            _file.ResolveDict(stream.Dict) is not { } dict ||
-            dict.GetValueOrDefault("Subtype") is not PdfName { Value: "Form" })
+            _file.ResolveDict(stream.Dict) is not { } dict)
+        {
+            return;
+        }
+
+        // Images are painted, not interpreted: the CTM maps the unit square onto the page.
+        if (dict.GetValueOrDefault("Subtype") is PdfName { Value: "Image" })
+        {
+            AddImage(dict, stream, ctm, items, layer);
+            return;
+        }
+
+        if (dict.GetValueOrDefault("Subtype") is not PdfName { Value: "Form" })
         {
             return;
         }
@@ -617,6 +628,162 @@ internal sealed class PdfContentImporter
             _file.ResolveDict(dict.GetValueOrDefault("Resources")) ?? resources;
 
         Interpret(_file.GetStreamData(stream), childResources, ctm.Compose(matrix), items, depth + 1, layer);
+    }
+
+    /// <summary>
+    /// Records an embedded raster image.
+    ///
+    /// Samples are kept decoded but otherwise untouched, in the colour space the file
+    /// used, so a CMYK scan is still a CMYK scan when it is written back out. The
+    /// placement comes from the CTM, which maps the image's unit square onto the page.
+    /// </summary>
+    private void AddImage(Dictionary<string, object?> dict, PdfStream stream,
+        AffineTransform ctm, List<PdfImportedItem> items, string? layer)
+    {
+        int width = (int)Math.Round(ToDouble(_file.Resolve(dict.GetValueOrDefault("Width"))));
+        int height = (int)Math.Round(ToDouble(_file.Resolve(dict.GetValueOrDefault("Height"))));
+        if (width <= 0 || height <= 0)
+        {
+            return;
+        }
+
+        int bits = dict.TryGetValue("BitsPerComponent", out object? bpc)
+            ? (int)Math.Round(ToDouble(_file.Resolve(bpc)))
+            : 8;
+
+        (ImageColorSpace space, byte[] palette) = ResolveImageColorSpace(dict);
+        byte[] samples = _file.GetStreamData(stream);
+
+        // The declared colour space can be indirect, inherited or simply absent, and
+        // getting it wrong is not subtle: CMYK samples read as RGB turn a pale magenta
+        // tint into black. The byte count per pixel is unambiguous for 8-bit images, so
+        // it settles the question when the declaration does not.
+        if (bits == 8 && width > 0 && height > 0 && samples.Length >= width * height)
+        {
+            int perPixel = samples.Length / (width * height);
+            space = space switch
+            {
+                ImageColorSpace.Rgb when perPixel == 4 => ImageColorSpace.Cmyk,
+                ImageColorSpace.Rgb when perPixel == 1 => ImageColorSpace.Gray,
+                ImageColorSpace.Gray when perPixel == 3 => ImageColorSpace.Rgb,
+                ImageColorSpace.Gray when perPixel == 4 => ImageColorSpace.Cmyk,
+                _ => space,
+            };
+        }
+
+        var image = new ImageItem
+        {
+            Name = dict.GetValueOrDefault("Name") is PdfName { Value: var n } ? n : "Image",
+            PixelWidth = width,
+            PixelHeight = height,
+            BitsPerComponent = bits is 1 or 2 or 4 or 8 or 16 ? bits : 8,
+            ColorSpace = space,
+            Palette = palette,
+            Samples = samples,
+        };
+
+        // A soft mask is a second image; only its coverage is needed.
+        if (_file.Resolve(dict.GetValueOrDefault("SMask")) is PdfStream maskStream)
+        {
+            byte[] mask = _file.GetStreamData(maskStream);
+            image.Mask = mask;
+
+            // A 1-bit or sub-byte mask has to be widened before it can be used as alpha.
+            if (_file.ResolveDict(maskStream.Dict) is { } maskDict &&
+                maskDict.TryGetValue("BitsPerComponent", out object? mbpc) &&
+                (int)Math.Round(ToDouble(_file.Resolve(mbpc))) is > 0 and < 8 and var maskBits)
+            {
+                image.Mask = ExpandMask(mask, width, height, maskBits);
+            }
+        }
+
+        // The two diagonal corners of the unit square, mapped through the CTM into the
+        // same top-left model frame the paths use.
+        Point2D corner0 = ctm.Transform(new Point2D(0, 0));
+        Point2D corner1 = ctm.Transform(new Point2D(1, 1));
+        image.Placement = Rect2D.FromPoints(
+            new Point2D(corner0.X, _pageHeight - corner0.Y),
+            new Point2D(corner1.X, _pageHeight - corner1.Y));
+
+        items.Add(new PdfImportedItem(layer, image));
+    }
+
+    /// <summary>Widens a sub-byte soft mask to one byte per pixel.</summary>
+    private static byte[] ExpandMask(byte[] packed, int width, int height, int bits)
+    {
+        var expanded = new byte[width * height];
+        int perByte = 8 / bits;
+        int rowBytes = (width + perByte - 1) / perByte;
+        int max = (1 << bits) - 1;
+
+        for (int y = 0; y < height; y++)
+        {
+            int rowStart = y * rowBytes;
+            for (int x = 0; x < width; x++)
+            {
+                int index = rowStart + (x / perByte);
+                if (index >= packed.Length)
+                {
+                    return expanded;
+                }
+
+                int shift = 8 - bits * ((x % perByte) + 1);
+                int value = (packed[index] >> shift) & max;
+                expanded[(y * width) + x] = (byte)(value * 255 / max);
+            }
+        }
+
+        return expanded;
+    }
+
+    /// <summary>The image's colour space and palette, normalised to what the model stores.</summary>
+    private (ImageColorSpace Space, byte[] Palette) ResolveImageColorSpace(Dictionary<string, object?> dict)
+    {
+        object? raw = _file.Resolve(dict.GetValueOrDefault("ColorSpace"));
+
+        if (raw is PdfName { Value: var name })
+        {
+            return name switch
+            {
+                "DeviceGray" or "G" => (ImageColorSpace.Gray, Array.Empty<byte>()),
+                "DeviceCMYK" or "CMYK" => (ImageColorSpace.Cmyk, Array.Empty<byte>()),
+                _ => (ImageColorSpace.Rgb, Array.Empty<byte>()),
+            };
+        }
+
+        if (raw is List<object?> parts && parts.Count > 0 &&
+            _file.Resolve(parts[0]) is PdfName { Value: "Indexed" } && parts.Count >= 4)
+        {
+            // [/Indexed base hival lookup] — the lookup is a string or a stream.
+            object? lookup = _file.Resolve(parts[3]);
+            byte[] palette = lookup switch
+            {
+                string literal => System.Text.Encoding.Latin1.GetBytes(literal),
+                PdfStream paletteStream => _file.GetStreamData(paletteStream),
+                _ => Array.Empty<byte>(),
+            };
+
+            return (ImageColorSpace.Indexed, palette);
+        }
+
+        if (raw is List<object?> array && array.Count > 0 &&
+            _file.Resolve(array[0]) is PdfName { Value: "ICCBased" } && array.Count >= 2 &&
+            _file.Resolve(array[1]) is PdfStream icc &&
+            _file.ResolveDict(icc.Dict) is { } iccDict)
+        {
+            int components = iccDict.TryGetValue("N", out object? n)
+                ? (int)Math.Round(ToDouble(_file.Resolve(n)))
+                : 3;
+
+            return components switch
+            {
+                1 => (ImageColorSpace.Gray, Array.Empty<byte>()),
+                4 => (ImageColorSpace.Cmyk, Array.Empty<byte>()),
+                _ => (ImageColorSpace.Rgb, Array.Empty<byte>()),
+            };
+        }
+
+        return (ImageColorSpace.Rgb, Array.Empty<byte>());
     }
 
     private void ShowText(string text, Dictionary<string, object?> resources, string fontName,

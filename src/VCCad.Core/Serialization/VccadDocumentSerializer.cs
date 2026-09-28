@@ -62,6 +62,25 @@ internal sealed record TextDto(
     TextRunDto[] Runs) : ItemDto;
 
 /// <summary>
+/// An embedded raster image. Samples travel as base64 because they are bytes, not text;
+/// they are stored decoded, so a reload reproduces the image bit for bit without having
+/// to know how it was compressed.
+/// </summary>
+internal sealed record ImageDto(
+    Guid Id,
+    string Name,
+    bool IsVisible,
+    bool IsLocked,
+    int PixelWidth,
+    int PixelHeight,
+    int BitsPerComponent,
+    ImageColorSpace ColorSpace,
+    string Samples,
+    string Palette,
+    string Mask,
+    Rect2D Placement) : ItemDto;
+
+/// <summary>
 /// Discriminated union over the possible layer items. System.Text.Json picks the
 /// concrete type from the <c>$kind</c> property written by the converter below.
 /// </summary>
@@ -69,6 +88,7 @@ internal sealed record TextDto(
 [JsonDerivedType(typeof(PathDto), "path")]
 [JsonDerivedType(typeof(GroupDto), "group")]
 [JsonDerivedType(typeof(TextDto), "text")]
+[JsonDerivedType(typeof(ImageDto), "image")]
 internal abstract record ItemDto
 {
     public static ItemDto From(LayerItem item) => item switch
@@ -76,6 +96,7 @@ internal abstract record ItemDto
         PathItem path => ToPath(path),
         ArtGroup group => ToGroup(group),
         TextItem text => ToText(text),
+        ImageItem image => ToImage(image),
         _ => throw new NotSupportedException($"Unsupported layer item type {item.GetType().Name}."),
     };
 
@@ -89,6 +110,20 @@ internal abstract record ItemDto
         t.RotationRadians,
         t.Alignment,
         t.Runs.Select(r => new TextRunDto(r.Text, r.FontFamily, r.FontSize, r.Bold, r.Italic, r.AdvanceWidth, r.SourceFont)).ToArray());
+
+    private static ImageDto ToImage(ImageItem i) => new(
+        i.Id,
+        i.Name,
+        i.IsVisible,
+        i.IsLocked,
+        i.PixelWidth,
+        i.PixelHeight,
+        i.BitsPerComponent,
+        i.ColorSpace,
+        Convert.ToBase64String(i.Samples),
+        Convert.ToBase64String(i.Palette),
+        Convert.ToBase64String(i.Mask),
+        i.Placement);
 
     private static PathDto ToPath(PathItem p) => new(
         p.Id,
@@ -128,8 +163,29 @@ internal static class ItemDtoExtensions
         PathDto p => p.ToModel(),
         GroupDto g => g.ToModel(),
         TextDto t => t.ToModel(),
+        ImageDto i => i.ToModel(),
         _ => throw new NotSupportedException($"Unknown DTO kind {dto.GetType().Name}."),
     };
+
+    private static ImageItem ToModel(this ImageDto i)
+    {
+        var item = new ImageItem
+        {
+            Name = i.Name,
+            IsVisible = i.IsVisible,
+            IsLocked = i.IsLocked,
+            PixelWidth = i.PixelWidth,
+            PixelHeight = i.PixelHeight,
+            BitsPerComponent = i.BitsPerComponent,
+            ColorSpace = i.ColorSpace,
+            Samples = Convert.FromBase64String(i.Samples),
+            Palette = Convert.FromBase64String(i.Palette),
+            Mask = Convert.FromBase64String(i.Mask),
+            Placement = i.Placement,
+        };
+        item.RestoreIdentity(i.Id);
+        return item;
+    }
 
     private static TextItem ToModel(this TextDto t)
     {
