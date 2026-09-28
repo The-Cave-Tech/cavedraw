@@ -538,7 +538,11 @@ internal sealed class PdfContentImporter
             return;
         }
 
-            (string family, bool bold, bool italic, double ascent) = MapFont(fontName, resources);
+            (string family, bool bold, bool italic, double mapAscent) = MapFont(fontName, resources);
+        EmbeddedFont? embedded = BuildEmbeddedFont(fontName, resources);
+        // Baseline placement uses the embedded font's own ascent when available
+        // (the canvas and exporter both render with that programme).
+        double ascent = embedded is not null && embedded.Ascent > 0 ? embedded.Ascent / 1000.0 : mapAscent;
 
         // Text operands carry glyph codes, not characters. Decode via the font's
         // /ToUnicode CMap (or fall back to Latin-1 for unencoded simple fonts).
@@ -579,7 +583,6 @@ internal sealed class PdfContentImporter
             Color = color,
             RotationRadians = rotation,
         };
-        EmbeddedFont? embedded = BuildEmbeddedFont(fontName, resources);
         var run = new TextRun
         {
             Text = decoded,
@@ -590,6 +593,7 @@ internal sealed class PdfContentImporter
             AdvanceWidth = MeasureAdvance(rawText, fontName, resources, effectiveSize),
             EmbeddedFont = embedded,
             RawCodes = embedded is not null ? rawText : null,
+            GlyphIds = embedded is not null ? ComputeGlyphIds(embedded, decoded, rawText) : null,
         };
         item.Runs.Add(run);
         items.Add(new PdfImportedItem(layer, item));
@@ -692,6 +696,7 @@ internal sealed class PdfContentImporter
                 Program = program,
                 Composite = composite,
                 BaseFont = (font.GetValueOrDefault("BaseFont") as PdfName)?.Value ?? "Embedded",
+                FamilyName = "VCCadEmb" + StableHash(program).ToString("X8"),
                 FirstChar = (int)(_file.ResolveNumber(font.GetValueOrDefault("FirstChar")) ?? 0),
                 Widths = ReadNumbers(font.GetValueOrDefault("Widths")) ?? Array.Empty<double>(),
                 MissingWidth = _file.ResolveNumber(descriptor.GetValueOrDefault("MissingWidth")) ?? 0,
@@ -802,6 +807,79 @@ internal sealed class PdfContentImporter
             long l => l.ToString(System.Globalization.CultureInfo.InvariantCulture),
             _ => "0",
         };
+    }
+
+    private static uint StableHash(byte[] data)
+    {
+        uint hash = 2166136261;
+        foreach (byte b in data)
+        {
+            hash = (hash ^ b) * 16777619;
+        }
+
+        return hash;
+    }
+
+    /// <summary>Maps a run's text to glyph indices for the embedded programme.</summary>
+    private static ushort[]? ComputeGlyphIds(EmbeddedFont font, string decoded, string rawCodes)
+    {
+        try
+        {
+            if (font.Composite)
+            {
+                // Identity-H: 2-byte codes are the glyph indices.
+                var ids = new List<ushort>(rawCodes.Length / 2);
+                for (int i = 0; i + 1 < rawCodes.Length; i += 2)
+                {
+                    ids.Add((ushort)((rawCodes[i] << 8) | rawCodes[i + 1]));
+                }
+
+                return ids.Count > 0 ? ids.ToArray() : null;
+            }
+
+            if (font.Format == EmbeddedFontFormat.TrueType)
+            {
+                var ttf = new Fonts.TrueTypeFont(font.Program);
+                var ids = new ushort[decoded.Length];
+                bool any = false;
+                for (int i = 0; i < decoded.Length; i++)
+                {
+                    ids[i] = (ushort)ttf.GlyphFor(decoded[i]);
+                    any |= ids[i] != 0;
+                }
+
+                return any ? ids : null;
+            }
+
+            if (font.Format is EmbeddedFontFormat.Type1C or EmbeddedFontFormat.OpenType)
+            {
+                Dictionary<int, ushort>? sidToGid = CffGlyphMap.SidToGid(font.Program);
+                if (sidToGid is null)
+                {
+                    return null;
+                }
+
+                var ids = new ushort[decoded.Length];
+                bool any = false;
+                for (int i = 0; i < decoded.Length; i++)
+                {
+                    int sid = CffGlyphMap.AsciiSid(decoded[i]);
+                    if (sid >= 0 && sidToGid.TryGetValue(sid, out ushort gid))
+                    {
+                        ids[i] = gid;
+                        any = true;
+                    }
+                }
+
+                return any ? ids : null;
+            }
+        }
+        catch
+        {
+            // fall through to substitution
+        }
+
+        return null;
     }
 
     private Dictionary<string, object?>? FontDict(string fontName, Dictionary<string, object?> resources)

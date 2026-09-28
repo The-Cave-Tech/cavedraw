@@ -538,7 +538,9 @@ public static class PdfDocumentExporter
             // The model stores the block's top-left; PDF places text on the
             // baseline, so the baseline sits one ascent down the (rotated) text
             // axis. Ascent is per run.
-            double ascent = font is null || font.UnitsPerEm == 0 ? 0.928 : (double)font.Ascender / font.UnitsPerEm;
+            double ascent = embeddedRun
+                ? embeddedFont!.Ascent / 1000.0
+                : font is null || font.UnitsPerEm == 0 ? 0.928 : (double)font.Ascender / font.UnitsPerEm;
             double targetAdvance = embeddedRun ? 0.0 : run.AdvanceWidth ?? 0.0;
             bool multiLine = !embeddedRun && run.Text.Contains('\n');
             double lineAdvance = 0;

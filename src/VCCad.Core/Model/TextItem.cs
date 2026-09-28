@@ -33,6 +33,10 @@ public sealed class TextRun
     /// when <see cref="EmbeddedFont"/> is set.</summary>
     public string? RawCodes { get; set; }
 
+    /// <summary>Glyph indices for rendering with <see cref="EmbeddedFont"/>
+    /// (bare CFF has no Unicode cmap, so the canvas draws by glyph id).</summary>
+    public ushort[]? GlyphIds { get; set; }
+
     public TextRun Clone() => new()
     {
         Text = Text,
@@ -43,6 +47,7 @@ public sealed class TextRun
         AdvanceWidth = AdvanceWidth,
         EmbeddedFont = EmbeddedFont,
         RawCodes = RawCodes,
+        GlyphIds = GlyphIds,
     };
 }
 

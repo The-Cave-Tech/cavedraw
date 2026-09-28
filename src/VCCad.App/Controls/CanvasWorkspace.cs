@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using VCCad.App.Fonts;
 using VCCad.App.ViewModels;
 using VCCad.Core.Commands;
 using VCCad.Core.Model;
@@ -180,12 +181,14 @@ public sealed class CanvasWorkspace : Control
     {
         _vm = viewModel;
         _document = viewModel.Document;
+        RegisterEmbeddedFonts(_document);
         _layout = new PasteboardLayout(ComputeExtent());
         viewModel.DocumentChanged += (_, _) =>
         {
             double zoom = _layout.Zoom;
             Vector2D offset = _offset;
             _document = viewModel.Document;
+            RegisterEmbeddedFonts(_document);
             _layout = new PasteboardLayout(ComputeExtent()) { Zoom = zoom };
             _offset = _layout.ClampTopLeft(offset, ViewportPixels);
 
@@ -2745,6 +2748,13 @@ public sealed class CanvasWorkspace : Control
         double yOffset = 0;
         foreach ((TextRun run, FormattedText formatted, double natural, double lineHeight, int lines) in laidOut)
         {
+            if (run.EmbeddedFont is { } embedded && run.GlyphIds is { Length: > 0 } glyphIds &&
+                TryDrawEmbeddedGlyphs(context, brush, text, run, embedded, glyphIds, offset))
+            {
+                yOffset += lines * lineHeight;
+                continue;
+            }
+
             double target = run.AdvanceWidth is > 0 ? run.AdvanceWidth.Value : natural;
             double scaleX = run.AdvanceWidth is > 0 && natural > 0 ? target / natural : 1.0;
             double alignX = text.Alignment switch
@@ -2774,6 +2784,71 @@ public sealed class CanvasWorkspace : Control
             }
 
             yOffset += lines * lineHeight;
+        }
+    }
+
+    /// <summary>Draws a run with its imported embedded programme by glyph id.
+    /// Returns false when the font is not registered, so the caller substitutes.</summary>
+    private static bool TryDrawEmbeddedGlyphs(DrawingContext context, IBrush brush, TextItem text,
+        TextRun run, EmbeddedFont embedded, ushort[] glyphIds, Vector2D offset)
+    {
+        var typeface = new Typeface(
+            new FontFamily(embedded.FamilyName),
+            run.Italic ? FontStyle.Italic : FontStyle.Normal,
+            run.Bold ? FontWeight.Bold : FontWeight.Normal);
+
+        if (!FontManager.Current.TryGetGlyphTypeface(typeface, out IGlyphTypeface glyphTypeface))
+        {
+            return false;
+        }
+
+        double ascent = embedded.Ascent > 0 ? embedded.Ascent / 1000.0 : 0.928;
+        Point2D o = text.Origin + offset;
+        var baseline = new Point(o.X, o.Y + (ascent * run.FontSize));
+        var glyphRun = new GlyphRun(glyphTypeface, run.FontSize, run.Text.AsMemory(), glyphIds, baseline, 0);
+
+        context.DrawGlyphRun(brush, glyphRun);
+        return true;
+    }
+
+    private static void RegisterEmbeddedFonts(CadDocument document)
+    {
+        var fonts = new List<EmbeddedFont>();
+        foreach (Artboard artboard in document.Artboards)
+        {
+            foreach (Layer layer in artboard.Layers)
+            {
+                CollectEmbeddedFonts(layer.Children, fonts);
+            }
+        }
+
+        CollectEmbeddedFonts(document.Orphans.Children, fonts);
+        if (fonts.Count > 0)
+        {
+            EmbeddedFontManager.Register(fonts.Distinct());
+        }
+    }
+
+    private static void CollectEmbeddedFonts(IReadOnlyList<LayerItem> items, List<EmbeddedFont> fonts)
+    {
+        foreach (LayerItem item in items)
+        {
+            switch (item)
+            {
+                case TextItem text:
+                    foreach (TextRun run in text.Runs)
+                    {
+                        if (run.EmbeddedFont is { } font)
+                        {
+                            fonts.Add(font);
+                        }
+                    }
+
+                    break;
+                case ArtGroup group:
+                    CollectEmbeddedFonts(group.Children, fonts);
+                    break;
+            }
         }
     }
 

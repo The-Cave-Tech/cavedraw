@@ -34,6 +34,9 @@ public sealed class EmbeddedFont
 
     public string BaseFont { get; init; } = "Embedded";
 
+    /// <summary>Unique family name under which the app registers this programme.</summary>
+    public string FamilyName { get; init; } = "VCCadEmbedded";
+
     /// <summary>Simple-font /FirstChar (codes below are relative to it).</summary>
     public int FirstChar { get; init; }
 
