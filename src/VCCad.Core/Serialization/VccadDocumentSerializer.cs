@@ -29,7 +29,55 @@ internal sealed record NodeDto(Point2D Anchor, Point2D InHandle, Point2D OutHand
 
 internal sealed record SubPathDto(bool Closed, NodeDto[] Nodes);
 
-internal sealed record TextRunDto(string Text, string FontFamily, double FontSize, bool Bold, bool Italic, double? AdvanceWidth = null, string? SourceFont = null);
+/// <summary>
+/// An embedded font programme and the metrics needed to re-emit it.
+///
+/// All of it travels: this is the file's own font, and the fidelity rule is that what we
+/// did not have to change, we do not change. Dropping it here meant a save-and-reload
+/// silently lost the embedded programme and the original glyph codes, and the document
+/// could then only be re-exported by substituting a different face.
+/// </summary>
+internal sealed record EmbeddedFontDto(
+    EmbeddedFontFormat Format,
+    string Program,
+    bool Composite,
+    string BaseFont,
+    string FamilyName,
+    int FirstChar,
+    double[] Widths,
+    double MissingWidth,
+    string? ToUnicode,
+    string? EncodingName,
+    string? BaseEncoding,
+    (int Code, string Name)[] Differences,
+    string DescendantSubtype,
+    string DescendantBaseFont,
+    string? Type0Encoding,
+    string? Type0EncodingStream,
+    string CidSystemInfo,
+    double DefaultWidth,
+    string WidthsSpec,
+    string? CidToGidMapName,
+    string? CidToGidMapStream,
+    int Flags,
+    double[] FontBBox,
+    double ItalicAngle,
+    double Ascent,
+    double Descent,
+    double CapHeight,
+    double StemV);
+
+internal sealed record TextRunDto(
+    string Text,
+    string FontFamily,
+    double FontSize,
+    bool Bold,
+    bool Italic,
+    double? AdvanceWidth = null,
+    string? SourceFont = null,
+    string? RawCodes = null,
+    ushort[]? GlyphIds = null,
+    EmbeddedFontDto? Embedded = null);
 
 internal sealed record PathDto(
     Guid Id,
@@ -59,6 +107,9 @@ internal sealed record TextDto(
     ColorDto Color,
     double RotationRadians,
     TextAlignment Alignment,
+    double FrameWidth,
+    double LineSpacing,
+    double ParagraphSpacing,
     TextRunDto[] Runs) : ItemDto;
 
 /// <summary>
@@ -109,7 +160,52 @@ internal abstract record ItemDto
         new ColorDto(t.Color.R, t.Color.G, t.Color.B, t.Color.A),
         t.RotationRadians,
         t.Alignment,
-        t.Runs.Select(r => new TextRunDto(r.Text, r.FontFamily, r.FontSize, r.Bold, r.Italic, r.AdvanceWidth, r.SourceFont)).ToArray());
+        t.FrameWidth,
+        t.LineSpacing,
+        t.ParagraphSpacing,
+        t.Runs.Select(ToRun).ToArray());
+
+    private static TextRunDto ToRun(TextRun r) => new(
+        r.Text,
+        r.FontFamily,
+        r.FontSize,
+        r.Bold,
+        r.Italic,
+        r.AdvanceWidth,
+        r.SourceFont,
+        r.RawCodes,
+        r.GlyphIds,
+        r.EmbeddedFont is { } font ? ToEmbedded(font) : null);
+
+    private static EmbeddedFontDto ToEmbedded(EmbeddedFont f) => new(
+        f.Format,
+        Convert.ToBase64String(f.Program),
+        f.Composite,
+        f.BaseFont,
+        f.FamilyName,
+        f.FirstChar,
+        f.Widths,
+        f.MissingWidth,
+        f.ToUnicode is null ? null : Convert.ToBase64String(f.ToUnicode),
+        f.EncodingName,
+        f.BaseEncoding,
+        f.Differences.ToArray(),
+        f.DescendantSubtype,
+        f.DescendantBaseFont,
+        f.Type0Encoding,
+        f.Type0EncodingStream is null ? null : Convert.ToBase64String(f.Type0EncodingStream),
+        f.CidSystemInfo,
+        f.DefaultWidth,
+        f.WidthsSpec,
+        f.CidToGidMapName,
+        f.CidToGidMapStream is null ? null : Convert.ToBase64String(f.CidToGidMapStream),
+        f.Flags,
+        f.FontBBox,
+        f.ItalicAngle,
+        f.Ascent,
+        f.Descent,
+        f.CapHeight,
+        f.StemV);
 
     private static ImageDto ToImage(ImageItem i) => new(
         i.Id,
@@ -167,6 +263,61 @@ internal static class ItemDtoExtensions
         _ => throw new NotSupportedException($"Unknown DTO kind {dto.GetType().Name}."),
     };
 
+    private static TextRun ToModel(this TextRunDto dto)
+    {
+        var run = new TextRun
+        {
+            Text = dto.Text,
+            FontFamily = dto.FontFamily,
+            FontSize = dto.FontSize,
+            Bold = dto.Bold,
+            Italic = dto.Italic,
+            AdvanceWidth = dto.AdvanceWidth,
+            SourceFont = dto.SourceFont,
+            RawCodes = dto.RawCodes,
+            GlyphIds = dto.GlyphIds,
+            EmbeddedFont = dto.Embedded is { } e ? ToModel(e) : null,
+        };
+
+        return run;
+    }
+
+    private static EmbeddedFont ToModel(this EmbeddedFontDto dto) => new()
+    {
+        Format = dto.Format,
+        Program = Convert.FromBase64String(dto.Program),
+        Composite = dto.Composite,
+        BaseFont = dto.BaseFont,
+        FamilyName = dto.FamilyName,
+        FirstChar = dto.FirstChar,
+        Widths = dto.Widths,
+        MissingWidth = dto.MissingWidth,
+        ToUnicode = dto.ToUnicode is null ? null : Convert.FromBase64String(dto.ToUnicode),
+        EncodingName = dto.EncodingName,
+        BaseEncoding = dto.BaseEncoding,
+        Differences = dto.Differences,
+        DescendantSubtype = dto.DescendantSubtype,
+        DescendantBaseFont = dto.DescendantBaseFont,
+        Type0Encoding = dto.Type0Encoding,
+        Type0EncodingStream = dto.Type0EncodingStream is null
+            ? null
+            : Convert.FromBase64String(dto.Type0EncodingStream),
+        CidSystemInfo = dto.CidSystemInfo,
+        DefaultWidth = dto.DefaultWidth,
+        WidthsSpec = dto.WidthsSpec,
+        CidToGidMapName = dto.CidToGidMapName,
+        CidToGidMapStream = dto.CidToGidMapStream is null
+            ? null
+            : Convert.FromBase64String(dto.CidToGidMapStream),
+        Flags = dto.Flags,
+        FontBBox = dto.FontBBox,
+        ItalicAngle = dto.ItalicAngle,
+        Ascent = dto.Ascent,
+        Descent = dto.Descent,
+        CapHeight = dto.CapHeight,
+        StemV = dto.StemV,
+    };
+
     private static ImageItem ToModel(this ImageDto i)
     {
         var item = new ImageItem
@@ -199,19 +350,13 @@ internal static class ItemDtoExtensions
             RotationRadians = t.RotationRadians,
             Alignment = t.Alignment,
         };
+        item.FrameWidth = t.FrameWidth;
+        item.LineSpacing = t.LineSpacing;
+        item.ParagraphSpacing = t.ParagraphSpacing;
         item.RestoreIdentity(t.Id);
         foreach (TextRunDto run in t.Runs)
         {
-            item.Runs.Add(new TextRun
-            {
-                Text = run.Text,
-                FontFamily = run.FontFamily,
-                FontSize = run.FontSize,
-                Bold = run.Bold,
-                Italic = run.Italic,
-                AdvanceWidth = run.AdvanceWidth,
-                SourceFont = run.SourceFont,
-            });
+            item.Runs.Add(run.ToModel());
         }
 
         return item;

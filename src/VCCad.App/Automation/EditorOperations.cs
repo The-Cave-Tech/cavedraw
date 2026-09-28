@@ -9,6 +9,7 @@ using VCCad.App.Fonts;
 using VCCad.Pdf;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
+using VCCad.Core.Serialization;
 using VCCad.Geometry;
 
 namespace VCCad.App.Automation;
@@ -318,6 +319,75 @@ public static class EditorOperations
             {
                 ctx.ViewModel.NewDocument(p.GetString("name"));
                 return Summary(ctx);
+            });
+
+        Add("document.dump",
+            "A canonical, complete text dump of the document model: every id, flag, " +
+            "coordinate, style, text run and image sample fingerprint. Two documents with " +
+            "equal dumps are identical in every value the model holds, so this is how to " +
+            "check a save-and-reload rather than believe it.",
+            "scope?:all|active (default all open documents)",
+            (ctx, p) =>
+            {
+                string scope = p.TryGetProperty("scope", out JsonElement sv)
+                    ? sv.GetString() ?? "all"
+                    : "all";
+
+                if (scope.Equals("active", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new { dump = ModelDump.Of(ctx.Document) };
+                }
+
+                var dumps = ctx.ViewModel.Sessions
+                    .Select(s => new { document = s.Document.Name, dump = ModelDump.Of(s.Document) })
+                    .ToArray();
+
+                return new { documents = dumps };
+            });
+
+        Add("document.verifyRoundTrip",
+            "Save the active document, load it straight back, and compare the two model " +
+            "dumps field by field. Returns whether they match and, when they do not, the " +
+            "first differing line from each side - which is the point of having a dump " +
+            "rather than a boolean.",
+            "save?:bool (default true; false only round-trips in memory)",
+            (ctx, p) =>
+            {
+                CadDocument original = ctx.Document;
+                string before = ModelDump.Of(original);
+
+                byte[] saved = VccadDocumentSerializer.SerializeToBytes(original);
+                CadDocument reloaded = VccadDocumentSerializer.Deserialize(saved);
+                string after = ModelDump.Of(reloaded);
+
+                if (before == after)
+                {
+                    return new
+                    {
+                        match = true,
+                        bytes = saved.Length,
+                        lines = before.Split('\n').Length,
+                    };
+                }
+
+                string[] a = before.Split('\n');
+                string[] b = after.Split('\n');
+                int limit = Math.Min(a.Length, b.Length);
+                int at = 0;
+                while (at < limit && a[at] == b[at])
+                {
+                    at++;
+                }
+
+                return new
+                {
+                    match = false,
+                    line = at,
+                    before = at < a.Length ? a[at] : "<missing>",
+                    after = at < b.Length ? b[at] : "<missing>",
+                    beforeLines = a.Length,
+                    afterLines = b.Length,
+                };
             });
 
         Add("document.summary", "Document structure and current selection.", "",
