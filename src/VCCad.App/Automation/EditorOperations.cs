@@ -892,13 +892,19 @@ public static class EditorOperations
                 }
 
                 TextRun run = first.Runs.FirstOrDefault() ?? new TextRun();
+                string family = p.GetString("family") ?? run.FontFamily;
+
                 ctx.Session.UpdateSelectedText(
                     p.GetString("text") ?? first.PlainText,
-                    p.GetString("family") ?? run.FontFamily,
+                    family,
                     p.GetDouble("fontSize", run.FontSize),
                     p.GetBool("bold", run.Bold),
                     p.GetBool("italic", run.Italic),
                     p.TryGetColorArray("color", out ColorRgb color) ? color : first.Color);
+
+                // Choosing a font is what makes it recent, so the picker's "recent" list is a
+                // record of what was actually used rather than of what was scrolled past.
+                FontFavourites.Shared.Used(family);
                 return Summary(ctx);
             });
 
@@ -1625,7 +1631,7 @@ public static class EditorOperations
             "chooser shows without seeing it - every row is drawn in its own face, and a face " +
             "is listed only when the font itself provides it rather than one the renderer " +
             "would fake.",
-            "category?:all|favourites (default all), max?:number (default 500), search?:string",
+            "category?:all|recent|used|favourites (default all), max?:number (default 500), search?:string",
             (ctx, p) =>
             {
                 int max = p.TryGetProperty("max", out JsonElement mv) && mv.TryGetInt32(out int m)
@@ -1633,30 +1639,60 @@ public static class EditorOperations
                     : 500;
 
                 string? search = p.GetString("search");
-                bool favouritesOnly = string.Equals(p.GetString("category"), "favourites",
-                    StringComparison.OrdinalIgnoreCase);
+                string category = (p.GetString("category") ?? "all").ToLowerInvariant();
+                IReadOnlyList<FontFamilyEntry> every = FontCatalog.Families();
+                List<FontFamilyEntry> list;
 
-                IEnumerable<FontFamilyEntry> families = FontCatalog.Families();
-
-                if (favouritesOnly)
+                switch (category)
                 {
-                    families = families.Where(f => FontFavourites.Shared.IsFavourite(f.Name));
+                    case "favourites":
+                        list = every
+                            .Where(f => FontFavourites.Shared.IsFavourite(f.Name))
+                            .ToList();
+                        break;
+
+                    case "recent":
+                        // Ordered by use, not by name: that is what "recent" means.
+                        list = FontFavourites.Shared.Recents.All
+                            .Select(name => every.FirstOrDefault(f =>
+                                string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)))
+                            .Where(f => f is not null)
+                            .Select(f => f!)
+                            .ToList();
+                        break;
+
+                    case "used":
+                        // The families the open document actually names, in the order they
+                        // appear in it, so the list answers "what is this document set in".
+                        list = FontUsage.Detail(ctx.Document)
+                            .Select(d => d.Font.BaseFont)
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .Select(name => every.FirstOrDefault(f =>
+                                string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)))
+                            .Where(f => f is not null)
+                            .Select(f => f!)
+                            .ToList();
+                        break;
+
+                    default:
+                        category = "all";
+                        list = every.ToList();
+                        break;
                 }
 
                 if (!string.IsNullOrWhiteSpace(search))
                 {
-                    families = families.Where(f => f.Name.Contains(
-                        search, StringComparison.OrdinalIgnoreCase));
+                    list = list.Where(f => f.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
                 }
-
-                List<FontFamilyEntry> list = families.ToList();
 
                 return new
                 {
                     count = list.Count,
                     shown = Math.Min(list.Count, max),
-                    category = favouritesOnly ? "favourites" : "all",
+                    category,
                     favouriteCount = FontFavourites.Shared.Count,
+                    recentCount = FontFavourites.Shared.Recents.Count,
                     families = list.Take(max).Select(f => new
                     {
                         name = f.Name,
