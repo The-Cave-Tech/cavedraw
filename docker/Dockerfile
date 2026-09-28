@@ -33,6 +33,7 @@ COPY tests/VCCad.Geometry.Tests/VCCad.Geometry.Tests.csproj tests/VCCad.Geometry
 COPY tests/VCCad.Core.Tests/VCCad.Core.Tests.csproj tests/VCCad.Core.Tests/
 COPY tests/VCCad.Pdf.Tests/VCCad.Pdf.Tests.csproj tests/VCCad.Pdf.Tests/
 COPY tests/VCCad.Api.Integration.Tests/VCCad.Api.Integration.Tests.csproj tests/VCCad.Api.Integration.Tests/
+COPY tests/VCCad.App.Tests/VCCad.App.Tests.csproj tests/VCCad.App.Tests/
 RUN dotnet workload install wasm-tools \
  && dotnet restore VCCad.sln
 
