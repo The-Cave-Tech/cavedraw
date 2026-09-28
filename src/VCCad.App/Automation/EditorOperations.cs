@@ -712,6 +712,47 @@ public static class EditorOperations
                 return DescribeOne(item);
             });
 
+        Add("ui.list",
+            "The entries a list-backed control is showing: a combo box, a list box, a tree. A " +
+            "dropdown's rows live in a Popup, which is outside the window's visual tree, so " +
+            "ui.find and a screenshot both miss them - and a list nobody can read is a list " +
+            "nobody can check.",
+            "name?:string, type?:string, handle?:number, max?:number (default 200)",
+            (ctx, p) =>
+            {
+                Avalonia.Visual root = Root(ctx);
+                var target = ResolveControl(ctx, (Avalonia.Controls.Control)root, p) as Avalonia.Controls.Control
+                    ?? throw new EditorOperationException("No list control matched.");
+
+                int max = p.TryGetProperty("max", out JsonElement mv) && mv.TryGetInt32(out int m)
+                    ? Math.Clamp(m, 1, 5000)
+                    : 200;
+
+                object[] items = target switch
+                {
+                    Avalonia.Controls.ComboBox combo => combo.ItemsSource?.Cast<object>()
+                        .Select(DescribeChoice)
+                        .ToArray() ?? Array.Empty<object>(),
+
+                    Avalonia.Controls.ListBox list => list.ItemsSource?.Cast<object>()
+                        .Select(DescribeChoice)
+                        .ToArray() ?? Array.Empty<object>(),
+
+                    _ => throw new EditorOperationException(
+                        $"{target.GetType().Name} is not a list control."),
+                };
+
+                return new
+                {
+                    type = target.GetType().Name,
+                    name = target.Name,
+                    count = items.Length,
+                    shown = Math.Min(items.Length, max),
+                    open = (target as Avalonia.Controls.ComboBox)?.IsDropDownOpen ?? false,
+                    items = items.Take(max).ToArray(),
+                };
+            });
+
         Add("ui.windows",
             "Every top-level window the application has open, with its title and kind. Menus, " +
             "tooltips and combo-box dropdowns are separate top-level windows in Avalonia, so " +
@@ -1638,61 +1679,21 @@ public static class EditorOperations
                     ? Math.Clamp(m, 1, 5000)
                     : 500;
 
+                // Through FontChooser, which the popup also uses: what a driver reads here and
+                // what a person sees in the dropdown are the same answer.
+                FontCategory category = FontChooser.Parse(p.GetString("category"));
                 string? search = p.GetString("search");
-                string category = (p.GetString("category") ?? "all").ToLowerInvariant();
-                IReadOnlyList<FontFamilyEntry> every = FontCatalog.Families();
-                List<FontFamilyEntry> list;
-
-                switch (category)
-                {
-                    case "favourites":
-                        list = every
-                            .Where(f => FontFavourites.Shared.IsFavourite(f.Name))
-                            .ToList();
-                        break;
-
-                    case "recent":
-                        // Ordered by use, not by name: that is what "recent" means.
-                        list = FontFavourites.Shared.Recents.All
-                            .Select(name => every.FirstOrDefault(f =>
-                                string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)))
-                            .Where(f => f is not null)
-                            .Select(f => f!)
-                            .ToList();
-                        break;
-
-                    case "used":
-                        // The families the open document actually names, in the order they
-                        // appear in it, so the list answers "what is this document set in".
-                        list = FontUsage.Detail(ctx.Document)
-                            .Select(d => d.Font.BaseFont)
-                            .Distinct(StringComparer.OrdinalIgnoreCase)
-                            .Select(name => every.FirstOrDefault(f =>
-                                string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)))
-                            .Where(f => f is not null)
-                            .Select(f => f!)
-                            .ToList();
-                        break;
-
-                    default:
-                        category = "all";
-                        list = every.ToList();
-                        break;
-                }
-
-                if (!string.IsNullOrWhiteSpace(search))
-                {
-                    list = list.Where(f => f.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-                }
+                IReadOnlyList<FontFamilyEntry> list =
+                    FontChooser.Select(ctx.Document, category, search);
 
                 return new
                 {
                     count = list.Count,
                     shown = Math.Min(list.Count, max),
-                    category,
+                    category = FontChooser.NameOf(category),
                     favouriteCount = FontFavourites.Shared.Count,
                     recentCount = FontFavourites.Shared.Recents.Count,
+                    preview = FontChooser.PreviewText,
                     families = list.Take(max).Select(f => new
                     {
                         name = f.Name,
@@ -1700,6 +1701,7 @@ public static class EditorOperations
                         faceCount = f.FaceCount,
                         standard = f.IsStandard,
                         favourite = FontFavourites.Shared.IsFavourite(f.Name),
+                        drawable = FontChooser.RowFace(f) is not null,
                         faces = f.Faces.Select(face => new
                         {
                             style = face.Style,
@@ -2273,6 +2275,26 @@ public static class EditorOperations
                     : null,
         };
     }
+
+    /// <summary>
+    /// One entry of a list-backed control, as text plus what it says about itself.
+    ///
+    /// A font entry is described by the family it applies and the face it is drawn in, which
+    /// is what tells a reader that the row really is a specimen and not just a name.
+    /// </summary>
+    private static object DescribeChoice(object? item) => item switch
+    {
+        FontChoice choice => new
+        {
+            text = choice.Label,
+            family = choice.Name,
+            face = choice.Face?.Name,
+            faces = choice.FaceCount,
+            standard = choice.IsStandard,
+            drawable = choice.Drawable,
+        },
+        _ => (object)new { text = item?.ToString() },
+    };
 
     /// <summary>The model-facing kind of an item (path/text/group).</summary>
     private static string ItemKind(LayerItem item) => item switch

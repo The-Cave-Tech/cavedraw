@@ -119,8 +119,11 @@
                 <ComboBox.ItemTemplate>
                   <DataTemplate>
                     <!-- Each entry is drawn in its own face, so the list shows what it
-                         offers instead of naming it and leaving you to imagine. -->
-                    <TextBlock Text="{Binding}" FontFamily="{Binding}" FontSize="15"
+                         offers instead of naming it and leaving you to imagine. The label
+                         carries the number of faces the family has, and a family nothing can
+                         draw says so rather than quietly rendering in the default - which
+                         would look exactly like a row that worked. -->
+                    <TextBlock Text="{Binding Label}" FontFamily="{Binding Face}" FontSize="15"
                                VerticalAlignment="Center" Padding="0,2"/>
                   </DataTemplate>
                 </ComboBox.ItemTemplate>

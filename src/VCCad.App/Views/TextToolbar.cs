@@ -51,7 +51,10 @@ public sealed class TextToolbar
         _rotation = view.FindControl<TextBox>("TtRotation")!;
         _color = view.FindControl<TextBox>("TtColor")!;
 
-        _font.ItemsSource = StandardFontResolver.OfferedFamilies();
+        // The chooser's own list: labels carry the face count, and each row is drawn in the
+        // face it offers. A family nothing can draw says so instead of quietly rendering in
+        // the default, which would look exactly like a row that worked.
+        _font.ItemsSource = FontChoices.For(FontChooser.Select(null, FontCategory.All));
 
         _font.SelectionChanged += (_, _) => ApplyFace();
         _size.LostFocus += (_, _) => ApplyFace();
@@ -90,7 +93,8 @@ public sealed class TextToolbar
         _suppress = true;
         if (run is not null)
         {
-            _font.SelectedItem = run.FontFamily;
+            _font.SelectedItem = ((IEnumerable<FontChoice>?)_font.ItemsSource ?? Array.Empty<FontChoice>())
+            .FirstOrDefault(c => string.Equals(c.Name, run.FontFamily, StringComparison.OrdinalIgnoreCase));
             _size.Text = run.FontSize.ToString("0.##", CultureInfo.InvariantCulture);
             _bold.IsChecked = run.Bold;
             _italic.IsChecked = run.Italic;
@@ -116,7 +120,11 @@ public sealed class TextToolbar
             return;
         }
 
-        string family = _font.SelectedItem as string ?? string.Empty;
+        // The family's real name, not the row's label: the label carries the face count, and
+        // applying "Adobe Arabic (4)" would put a count in the document.
+        string family = (_font.SelectedItem as FontChoice)?.Name
+            ?? _font.SelectedItem as string
+            ?? string.Empty;
 
         // Nothing selected means there is no block to restyle, so the choice becomes the
         // face new text is created with. Silently doing nothing would be the worst of the
