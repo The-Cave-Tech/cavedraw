@@ -788,13 +788,53 @@ internal sealed class PdfContentImporter
         Dictionary<string, object?> childResources =
             _file.ResolveDict(dict.GetValueOrDefault("Resources")) ?? resources;
 
-        // A form's /BBox clips everything it draws, and that is not applied yet. It was
-        // implemented and reverted: attaching the box took the LILLIE pages from showing
-        // their artwork to showing almost nothing, and the cause is not yet understood. The
-        // boxes themselves are real and small — /BBox [0 -9 124.084 0.900055] belongs to a
-        // form holding one line of header text — so the mistake is in how the box was taken
-        // into page space, not in whether it should be used.
-        Interpret(_file.GetStreamData(stream), childResources, ctm.Compose(matrix), items, depth + 1, layer);
+        // A form's /BBox clips everything it draws. It is the parent object's rectangle: the
+        // file says "this artwork belongs inside this box", and a viewer that ignores it lets
+        // the artwork spill. The LILLIE sample has a form whose box is one line of header
+        // text, so its content is meant to be bounded by a sliver nine units tall.
+        //
+        // The box is given in form space, so it goes through the same matrix the content
+        // does. Its corners are taken rather than a width and a height, because a rotation
+        // makes it a parallelogram.
+        AffineTransform toPage = ctm.Compose(matrix);
+        var box = _file.Resolve(dict.GetValueOrDefault("BBox")) as List<object?>;
+        ClipSpec? bounds = null;
+
+        if (box is { Count: >= 4 })
+        {
+            double bx0 = ToDouble(_file.Resolve(box[0]));
+            double by0 = ToDouble(_file.Resolve(box[1]));
+            double bx1 = ToDouble(_file.Resolve(box[2]));
+            double by1 = ToDouble(_file.Resolve(box[3]));
+
+            bounds = new ClipSpec { Rule = FillRule.NonZero };
+            var rect = new SubPath { IsClosed = true };
+
+            foreach ((double cx, double cy) in new[]
+                     {
+                         (bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1),
+                     })
+            {
+                Point2D page = toPage.Transform(new Point2D(cx, cy));
+                rect.Nodes.Add(new PathNode(new Point2D(page.X, _pageHeight - page.Y)));
+            }
+
+            bounds.SubPaths.Add(rect);
+            _clips.Add(bounds);
+        }
+
+        try
+        {
+            Interpret(_file.GetStreamData(stream), childResources, toPage, items, depth + 1, layer);
+        }
+        finally
+        {
+            // The box bounds this form and nothing else.
+            if (bounds is not null)
+            {
+                _clips.Remove(bounds);
+            }
+        }
     }
 
     /// <summary>
