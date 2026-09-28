@@ -20,15 +20,29 @@ namespace VCCad.App.Automation;
 /// A clean exit removes the journal. Its presence at startup therefore means the last run
 /// ended badly, and that is exactly when recovery should be offered.
 /// </summary>
-internal static class SessionJournal
+public static class SessionJournal
 {
-    /// <summary>Operations that read rather than change, and so are not worth journaling.</summary>
-    private static readonly string[] ReadOnlyPrefixes =
+    /// <summary>
+    /// The operation families that change the document, and so belong in the journal.
+    ///
+    /// This is an allow-list on purpose. The first version was a deny-list of reads, which
+    /// meant every operation nobody had thought about — <c>view.fit</c> among them — was
+    /// treated as an edit. The application fits the view on every launch, so it wrote a
+    /// journal every time, and the recovery prompt therefore reappeared every time: the
+    /// person dismissed it, used the app, and found it waiting again next morning. Naming
+    /// what counts is the only way that cannot happen.
+    /// </summary>
+    private static readonly string[] MutatingPrefixes =
     {
-        "app.", "ui.find", "ui.dump", "ui.describe", "document.list", "document.summary",
-        "document.model", "document.dump", "document.verify", "object.list", "object.find",
-        "selection.get", "pane.list", "tool.get", "view.status", "fonts.list", "artboard.list",
-        "layer.list", "history.", "diagnostics.",
+        "object.", "artboard.", "layer.", "image.insert", "text.update", "text.style",
+        "document.new", "document.importPdf", "document.openFromServer",
+    };
+
+    /// <summary>Members of those families that only read.</summary>
+    private static readonly string[] ReadOnlyMembers =
+    {
+        "object.list", "object.find", "object.get", "artboard.list", "layer.list",
+        "image.exportPng",
     };
 
     private static readonly string Directory = Path.Combine(
@@ -48,15 +62,23 @@ internal static class SessionJournal
     /// <summary>Whether an operation changes the document and so belongs in the journal.</summary>
     public static bool IsMutation(string name)
     {
-        foreach (string prefix in ReadOnlyPrefixes)
+        foreach (string read in ReadOnlyMembers)
         {
-            if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            if (name.Equals(read, StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }
         }
 
-        return true;
+        foreach (string prefix in MutatingPrefixes)
+        {
+            if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

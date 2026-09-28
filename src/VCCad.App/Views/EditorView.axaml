@@ -222,8 +222,9 @@
 
     <!-- Asking before throwing work away. Closing a document or quitting with unsaved
          changes is the one place an editor must stop and ask. -->
-    <Grid Name="ConfirmOverlay" Grid.Row="0" Grid.RowSpan="3" IsVisible="False"
-          Background="#99000000">
+    <!-- Covers the editing area rather than the whole window: a prompt the person is not
+         ready to answer must not take the File menu with it. -->
+    <Grid Name="ConfirmOverlay" Grid.Row="1" IsVisible="False" Background="#99000000">
       <Border Background="{DynamicResource VcPanel}" BorderBrush="{DynamicResource VcBorder}"
               BorderThickness="1" CornerRadius="8" Padding="20" MaxWidth="460"
               HorizontalAlignment="Center" VerticalAlignment="Center">

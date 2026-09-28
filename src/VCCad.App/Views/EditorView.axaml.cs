@@ -207,6 +207,7 @@ public partial class EditorView : UserControl
         _viewModel.ArtboardDeletionRequested += OnArtboardDeletionRequested;
         UpdateStatus();
         PromptForMissingFonts(force: true);
+        KeyDown += OnOverlayKey;
         _textToolbar = new TextToolbar(this);
         _textToolbar.Sync();
         RebuildRecentMenu();
@@ -754,6 +755,8 @@ public partial class EditorView : UserControl
 
     /// <summary>Where the pending confirmation should go once the person answers.</summary>
     private Action? _pendingConfirm;
+    private Action? _pendingDecline;
+    private bool _confirmIsRecovery;
 
     /// <summary>Rebuilds File → Open Recent from the remembered paths.</summary>
     private void RebuildRecentMenu()
@@ -820,7 +823,8 @@ public partial class EditorView : UserControl
     /// Asks before doing something that would lose unsaved changes. The action runs only
     /// if the person chooses to save it first, or to discard it deliberately.
     /// </summary>
-    private void AskBeforeDiscarding(string title, string message, Action proceed)
+    private void AskBeforeDiscarding(string title, string message, Action proceed,
+        Action? decline = null)
     {
         if (!_viewModel.ActiveSession.IsModified)
         {
@@ -828,16 +832,37 @@ public partial class EditorView : UserControl
             return;
         }
 
-        _pendingConfirm = proceed;
+        ShowConfirm(title, message, proceed, decline ?? proceed, isRecovery: false);
+    }
+
+    /// <summary>Shows the shared prompt. Confirm and Discard do different things.</summary>
+    private void ShowConfirm(string title, string message, Action confirm, Action decline,
+        bool isRecovery)
+    {
+        _pendingConfirm = confirm;
+        _pendingDecline = decline;
+        _confirmIsRecovery = isRecovery;
+
         this.FindControl<TextBlock>("ConfirmTitle")!.Text = title;
         this.FindControl<TextBlock>("ConfirmMessage")!.Text = message;
         this.FindControl<Grid>("ConfirmOverlay")!.IsVisible = true;
+    }
+
+    /// <summary>Escape dismisses whatever prompt is showing, so the window is never trapped.</summary>
+    private void OnOverlayKey(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape && DismissOverlay())
+        {
+            e.Handled = true;
+        }
     }
 
     private void CloseConfirmOverlay()
     {
         this.FindControl<Grid>("ConfirmOverlay")!.IsVisible = false;
         _pendingConfirm = null;
+        _pendingDecline = null;
+        _confirmIsRecovery = false;
 
         // The overlay is shared, so its buttons go back to their usual labels.
         this.FindControl<Button>("ConfirmSave")!.Content = "Save";
@@ -847,16 +872,24 @@ public partial class EditorView : UserControl
     private void OnConfirmSave(object? sender, RoutedEventArgs e)
     {
         Action? proceed = _pendingConfirm;
+        bool recovery = _confirmIsRecovery;
         CloseConfirmOverlay();
-        _viewModel.SaveActiveToServer();
+
+        // Saving something is not what a recovery prompt is asking about; writing the
+        // current document to the server there would be an unrelated side effect.
+        if (!recovery)
+        {
+            _viewModel.SaveActiveToServer();
+        }
+
         proceed?.Invoke();
     }
 
     private void OnConfirmDiscard(object? sender, RoutedEventArgs e)
     {
-        Action? proceed = _pendingConfirm;
+        Action? decline = _pendingDecline;
         CloseConfirmOverlay();
-        proceed?.Invoke();
+        decline?.Invoke();
     }
 
     private void OnConfirmCancel(object? sender, RoutedEventArgs e) => CloseConfirmOverlay();
@@ -869,20 +902,41 @@ public partial class EditorView : UserControl
     public void OfferRecovery(VCCad.Core.Model.CadDocument recovered, int commands)
     {
         _recovered = recovered;
-        _pendingConfirm = () =>
-        {
-            _viewModel.AddDocument(recovered);
-            SessionJournal.Clear();
-            UpdateStatus();
-        };
 
-        this.FindControl<TextBlock>("ConfirmTitle")!.Text = "Recover unsaved work?";
-        this.FindControl<TextBlock>("ConfirmMessage")!.Text =
-            $"A previous session ended unexpectedly. {commands} command(s) were recorded " +
-            $"since the last save of \u0022{recovered.Name}\u0022.";
+        ShowConfirm(
+            "Recover unsaved work?",
+            $"\u0022{recovered.Name}\u0022 was left behind when the last session ended " +
+            $"unexpectedly, with {commands} command(s) since its last save.",
+            confirm: () =>
+            {
+                _viewModel.AddDocument(recovered);
+                SessionJournal.Clear();
+                UpdateStatus();
+            },
+            // Discarding has to actually discard, or the prompt simply returns on the
+            // next launch and the person is never rid of it.
+            decline: () => SessionJournal.Clear(),
+            isRecovery: true);
+
         this.FindControl<Button>("ConfirmSave")!.Content = "Recover";
         this.FindControl<Button>("ConfirmDiscard")!.Content = "Discard";
-        this.FindControl<Grid>("ConfirmOverlay")!.IsVisible = true;
+    }
+
+    /// <summary>
+    /// Dismisses the prompt if one is showing. Escape closes it, because a modal with no
+    /// keyboard way out traps anyone who does not want to answer yet.
+    /// </summary>
+    public bool DismissOverlay()
+    {
+        if (!this.FindControl<Grid>("ConfirmOverlay")!.IsVisible &&
+            !this.FindControl<Grid>("FontOverlay")!.IsVisible)
+        {
+            return false;
+        }
+
+        CloseConfirmOverlay();
+        this.FindControl<Grid>("FontOverlay")!.IsVisible = false;
+        return true;
     }
 
     /// <summary>The document offered for recovery, so a discard can drop it.</summary>
