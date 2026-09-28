@@ -14,6 +14,17 @@
     <TreeView.ItemTemplate>
       <TreeDataTemplate DataType="panes:ObjectNode" ItemsSource="{Binding Children}">
         <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+          <!-- Every row can be renamed, as other editors allow, and the name is the person's
+               from then on. The eye already toggles visibility; these are the same two
+               actions reachable without aiming at a 14-pixel icon. -->
+          <Grid.ContextMenu>
+            <ContextMenu>
+              <MenuItem Header="Rename…" Click="OnRenameClicked"/>
+              <Separator/>
+              <MenuItem Header="Show" Click="OnShowClicked"/>
+              <MenuItem Header="Hide" Click="OnHideClicked"/>
+            </ContextMenu>
+          </Grid.ContextMenu>
           <!-- Vertical rules, one per level, so how deep a row sits can be read at a glance
                rather than counted from the indent. -->
           <ItemsControl Grid.Column="0" ItemsSource="{Binding DepthGuides}"

@@ -776,10 +776,10 @@ public static class EditorOperations
                 LayerItem item = RequireItem(ctx.Document, p.RequireGuid("itemId"));
                 string? name = p.GetString("name");
 
-                if (name is not null)
+                if (name is not null && !string.Equals(name, item.Name, StringComparison.Ordinal))
                 {
-                    item.Name = name;
-                    item.NameIsUserSet = true;
+                    // Through the command stack, so a rename can be undone like any other edit.
+                    ctx.ViewModel.Execute(new RenameItemCommand(item, name));
                 }
 
                 ctx.ViewModel.NotifyDocumentChanged();
@@ -1339,7 +1339,8 @@ public static class EditorOperations
         Add("input.pointer",
             "Click at a window coordinate with a real pointer event (x, y in window pixels). " +
             "Use clickCount 2 to double-click, which is how a word is selected for editing.",
-            "x:number, y:number, clickCount?:number (default 1), shift?:bool",
+            "x:number, y:number, clickCount?:number (default 1), shift?:bool, " +
+            "button?:left|right (default left)",
             (ctx, p) =>
             {
                 Avalonia.Visual root = Root(ctx);
@@ -1350,15 +1351,21 @@ public static class EditorOperations
                 double py = p.TryGetProperty("y", out JsonElement yv) && yv.TryGetDouble(out double y) ? y : 0;
                 bool shift = p.TryGetProperty("shift", out JsonElement sv) && sv.ValueKind == JsonValueKind.True;
 
+                // A right click is how a person opens a context menu, so the automation
+                // surface has to be able to send one. A left-only injector made the whole
+                // class of right-click actions person-only, which is a parity defect.
+                bool right = string.Equals(p.GetString("button"), "right",
+                    StringComparison.OrdinalIgnoreCase);
+
                 string outcome = mode.ToLowerInvariant() switch
                 {
-                    "press" => InputInjection.Press(root, px, py, shift),
+                    "press" => InputInjection.Press(root, px, py, shift, right),
                     "move" => InputInjection.Move(root, px, py,
                         p.TryGetProperty("leftDown", out JsonElement ld) && ld.ValueKind == JsonValueKind.True),
-                    "release" => InputInjection.Release(root, px, py),
+                    "release" => InputInjection.Release(root, px, py, right),
                     _ => InputInjection.Click(root, px, py,
                         p.TryGetProperty("clickCount", out JsonElement cv) && cv.TryGetInt32(out int c) ? c : 1,
-                        shift),
+                        shift, right),
                 };
 
                 return new { action = outcome, mode };

@@ -2,6 +2,9 @@ using System.Collections.ObjectModel;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Layout;
+using VCCad.Core.Commands;
 using Avalonia.VisualTree;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
@@ -347,6 +350,99 @@ public partial class ObjectsPane : UserControl
         {
             _syncing = false;
         }
+    }
+
+    /// <summary>
+    /// Renames the row the menu was opened on, through the command stack so it undoes.
+    ///
+    /// The prompt is a small inline window rather than an edit box in the row: the tree is
+    /// virtualised, so a row can be recycled the moment it scrolls out, and an editor living
+    /// inside one would lose what had been typed into it.
+    /// </summary>
+    private async void OnRenameClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_vm is null || RowOf(sender) is not { } node)
+        {
+            return;
+        }
+
+        string? name = await PromptForName(node.Name);
+        if (name is null || string.Equals(name, node.Name, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (node.Tag is LayerItem item)
+        {
+            _vm.Execute(new RenameItemCommand(item, name));
+            _vm.NotifyDocumentChanged();
+        }
+    }
+
+    private void OnShowClicked(object? sender, RoutedEventArgs e) => SetRowVisible(sender, true);
+
+    private void OnHideClicked(object? sender, RoutedEventArgs e) => SetRowVisible(sender, false);
+
+    private void SetRowVisible(object? sender, bool visible)
+    {
+        if (RowOf(sender) is { } node)
+        {
+            node.IsVisible = visible;
+        }
+    }
+
+    /// <summary>The node a context-menu item was opened over.</summary>
+    private static ObjectNode? RowOf(object? sender)
+        => (sender as MenuItem)?.DataContext as ObjectNode;
+
+    /// <summary>Asks for a name. Returns null when the person cancelled.</summary>
+    private async Task<string?> PromptForName(string current)
+    {
+        if (TopLevel.GetTopLevel(this) is not Window owner)
+        {
+            return null;
+        }
+
+        var box = new TextBox { Text = current, Width = 280, Margin = new Thickness(0, 0, 0, 12) };
+        var ok = new Button { Content = "Rename", IsDefault = true };
+        var cancel = new Button { Content = "Cancel", IsCancel = true };
+        string? result = null;
+
+        var dialog = new Window
+        {
+            Title = "Rename",
+            Width = 340,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(16),
+                Children =
+                {
+                    new TextBlock { Text = "Name", Margin = new Thickness(0, 0, 0, 6) },
+                    box,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                        Spacing = 8,
+                        Children = { cancel, ok },
+                    },
+                },
+            },
+        };
+
+        ok.Click += (_, _) =>
+        {
+            result = box.Text ?? string.Empty;
+            dialog.Close();
+        };
+
+        cancel.Click += (_, _) => dialog.Close();
+        box.AttachedToVisualTree += (_, _) => box.SelectAll();
+
+        await dialog.ShowDialog(owner);
+        return result;
     }
 
     private void OnTreeSelectionChanged(object? sender, SelectionChangedEventArgs e)

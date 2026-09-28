@@ -32,7 +32,8 @@ public static class InputInjection
     private static Pointer? _activePointer;
 
     /// <summary>Press, optionally twice, and release at a window point.</summary>
-    public static string Click(Visual root, double x, double y, int clickCount, bool shift)
+    public static string Click(Visual root, double x, double y, int clickCount, bool shift,
+        bool right = false)
     {
         Visual? target = HitTest(root, x, y);
         if (target is not Control control)
@@ -43,14 +44,15 @@ public static class InputInjection
         var pointer = new Pointer(++_pointerId, PointerType.Mouse, true);
         _activePointer = pointer;
         Point position = root.TranslatePoint(new Point(x, y), control) ?? new Point(x, y);
-        var properties = new PointerPointProperties(RawInputModifiers.LeftMouseButton,
-            PointerUpdateKind.LeftButtonPressed);
+        var properties = new PointerPointProperties(
+            right ? RawInputModifiers.RightMouseButton : RawInputModifiers.LeftMouseButton,
+            right ? PointerUpdateKind.RightButtonPressed : PointerUpdateKind.LeftButtonPressed);
         KeyModifiers modifiers = shift ? KeyModifiers.Shift : KeyModifiers.None;
 
         for (int i = 0; i < Math.Max(1, clickCount); i++)
         {
             Press(control, pointer, position, properties, modifiers, i + 1);
-            Release(control, pointer, position, modifiers);
+            Release(control, pointer, position, modifiers, right);
         }
 
         return $"{(clickCount >= 2 ? "double-" : string.Empty)}clicked {control.GetType().Name} " +
@@ -65,7 +67,7 @@ public static class InputInjection
     /// is waiting for it, so typing would silently do nothing.
     /// </summary>
     /// <summary>Presses the left button at a window point without releasing.</summary>
-    public static string Press(Visual root, double x, double y, bool shift)
+    public static string Press(Visual root, double x, double y, bool shift, bool right = false)
     {
         Visual target = HitTest(root, x, y)
             ?? throw new EditorOperationException($"Nothing is at ({x},{y}).");
@@ -75,8 +77,9 @@ public static class InputInjection
 
         (target as InputElement)?.RaiseEvent(new PointerPressedEventArgs(
             target, pointer, target, position, 0,
-            new PointerPointProperties(RawInputModifiers.LeftMouseButton,
-                PointerUpdateKind.LeftButtonPressed),
+            new PointerPointProperties(
+                right ? RawInputModifiers.RightMouseButton : RawInputModifiers.LeftMouseButton,
+                right ? PointerUpdateKind.RightButtonPressed : PointerUpdateKind.LeftButtonPressed),
             shift ? KeyModifiers.Shift : KeyModifiers.None, 1));
 
         return $"pressed at ({x:F0},{y:F0})";
@@ -110,7 +113,7 @@ public static class InputInjection
     }
 
     /// <summary>Releases the left button at a window point - the end of a drag.</summary>
-    public static string Release(Visual root, double x, double y)
+    public static string Release(Visual root, double x, double y, bool right = false)
     {
         // While a button is down the captured element gets the moves, exactly as a real
         // pointer behaves - otherwise the capture made on press is meaningless.
@@ -122,8 +125,9 @@ public static class InputInjection
 
         (target as InputElement)?.RaiseEvent(new PointerReleasedEventArgs(
             target, pointer, target, position, 0,
-            new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.LeftButtonReleased),
-            KeyModifiers.None, MouseButton.Left));
+            new PointerPointProperties(RawInputModifiers.None,
+                right ? PointerUpdateKind.RightButtonReleased : PointerUpdateKind.LeftButtonReleased),
+            KeyModifiers.None, right ? MouseButton.Right : MouseButton.Left));
 
         // The drag is over, so the next press starts a fresh pointer.
         _activePointer = null;
@@ -226,11 +230,12 @@ public static class InputInjection
             control, pointer, control, position, 0, properties, modifiers, clickCount));
 
     private static void Release(Control control, Pointer pointer, Point position,
-        KeyModifiers modifiers)
+        KeyModifiers modifiers, bool right = false)
         => control.RaiseEvent(new PointerReleasedEventArgs(
             control, pointer, control, position, 0,
-            new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.LeftButtonReleased),
-            modifiers, MouseButton.Left));
+            new PointerPointProperties(RawInputModifiers.None,
+                right ? PointerUpdateKind.RightButtonReleased : PointerUpdateKind.LeftButtonReleased),
+            modifiers, right ? MouseButton.Right : MouseButton.Left));
 
     /// <summary>The deepest visible control under a window point.</summary>
     private static Visual? HitTest(Visual root, double x, double y)
