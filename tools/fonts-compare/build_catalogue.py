@@ -181,8 +181,26 @@ def main():
         "recovered. The original ink values are now kept on the model and written back "
         "out, which improved every page.",
         "",
-        "The same cause explains the grey page corners, which now match exactly, and most "
-        "of what is left on the embedded raster - the largest differing region remaining.",
+        "The same cause explains the grey page corners, which now match exactly.",
+        "",
+        "## The embedded raster",
+        "",
+        "The raster is still the largest differing region, and it is not an import, placement",
+        "or orientation problem. Its samples are byte-identical to the original's (CMYK",
+        "sha 3817e492, mask ac527633); the placement resolves to the same rectangle in PDF",
+        "space as the original's composed matrix, at the same scale; the cell dividers",
+        "inside it fall on identical pixels; and every flip or rotation measures worse. The",
+        "soft mask is correctly attached.",
+        "",
+        "What is measurable is that drawing our image makes the page slightly worse - mean",
+        "absolute difference 2.41 without it against 2.91 with it - even though the",
+        "reference demonstrably has image content in that same box, because every one of the",
+        "hottest cells where it differs from a vector-only render of our page falls inside",
+        "it. So the image is in the right place and is painted differently.",
+        "",
+        "Two explanations were rejected by measurement rather than argument: the reference's",
+        "page transparency group, and the /Intent /RelativeColorimetric its image carries.",
+        "Neither changed any page, and both were reverted rather than kept.",
         "",
     ]
     lines += stamp
