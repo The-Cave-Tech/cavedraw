@@ -2,7 +2,9 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:panes="clr-namespace:VCCad.App.Views.Panes"
              x:Class="VCCad.App.Views.Panes.ObjectsPane">
-  <TreeView x:Name="ObjectTree" Margin="6" Height="240" SelectionMode="Multiple"
+  <!-- No height of its own: the panel's row is the height, and a fixed one here left the
+       list stranded in the middle of a resized panel instead of filling it. -->
+  <TreeView x:Name="ObjectTree" Margin="6" SelectionMode="Multiple"
             SelectionChanged="OnTreeSelectionChanged">
     <TreeView.Styles>
       <Style Selector="TreeViewItem">
