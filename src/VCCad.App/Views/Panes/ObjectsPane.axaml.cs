@@ -73,12 +73,14 @@ public partial class ObjectsPane : UserControl
         {
             var board = new ObjectNode(artboard.Name, artboard, artboard.IsVisible, expanded.Contains(artboard),
                 v => SetVisible(artboard, v));
+            board.SetDepth(0);
             _map[artboard] = board;
 
             foreach (Layer layer in artboard.Layers)
             {
                 var layerNode = new ObjectNode(FormatLayer(layer), layer, layer.IsVisible, expanded.Contains(layer),
                     v => SetVisible(layer, v));
+                layerNode.SetDepth(1);
                 _map[layer] = layerNode;
 
                 HashSet<LayerItem> mine = byLayer.TryGetValue(layer, out List<LayerItem>? items)
@@ -108,6 +110,7 @@ public partial class ObjectsPane : UserControl
         if (pasteboard.Count > 0)
         {
             var paste = new ObjectNode("Pasteboard", PasteboardTag, true, expanded.Contains(PasteboardTag), _ => { });
+            paste.SetDepth(0);
             foreach (LayerItem item in pasteboard)
             {
                 AddItemNode(paste, item, expanded);
@@ -159,21 +162,29 @@ public partial class ObjectsPane : UserControl
     }
 
     private void AddItemNode(ObjectNode parent, LayerItem item, HashSet<object> expanded)
+        => AddItemNode(parent, item, expanded, parent.Depth + 1);
+
+    private void AddItemNode(ObjectNode parent, LayerItem item, HashSet<object> expanded, int depth)
     {
         var node = new ObjectNode(DescribeItem(item), item, item.IsVisible, expanded.Contains(item),
             v => SetVisible(item, v));
+        node.SetDepth(depth);
+        node.Thumbnail = ObjectThumbnail.For(item, ThumbnailSize);
         _map[item] = node;
 
         if (item is ArtGroup group)
         {
             foreach (LayerItem child in group.Children)
             {
-                AddItemNode(node, child, expanded);
+                AddItemNode(node, child, expanded, depth + 1);
             }
         }
 
         parent.Children.Add(node);
     }
+
+    /// <summary>The box the row's sample is fitted to. Matches the template.</summary>
+    private const double ThumbnailSize = 20;
 
     /// <summary>
     /// What the row reads. A name somebody typed, or what the object is: a panel of "Path",

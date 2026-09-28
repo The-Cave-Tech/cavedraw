@@ -33,6 +33,44 @@ public sealed class ObjectNode : INotifyPropertyChanged
 
     public object? Tag { get; }
 
+    /// <summary>
+    /// How deep the row sits, which is what the vertical rules at its left are drawn from.
+    /// The other rows are fixed at startup so the guides are a plain list to bind.
+    /// </summary>
+    public int Depth { get; private set; }
+
+    /// <summary>One entry per level, so the template draws that many vertical rules.</summary>
+    public IReadOnlyList<int> DepthGuides { get; private set; } = Array.Empty<int>();
+
+    /// <summary>
+    /// The object's own shape, scaled to its box, or null when there is nothing to draw.
+    /// Set by the panel, which knows the size; a geometry rather than a picture so a tree of
+    /// thousands of rows does not allocate thousands of bitmaps.
+    /// </summary>
+    public Avalonia.Media.Geometry? Thumbnail
+    {
+        get => _thumbnail;
+        set
+        {
+            _thumbnail = value;
+            Raise(nameof(Thumbnail));
+            Raise(nameof(HasThumbnail));
+        }
+    }
+
+    public bool HasThumbnail => _thumbnail is not null;
+
+    private Avalonia.Media.Geometry? _thumbnail;
+
+    /// <summary>Sets the row's depth and the rules that show it.</summary>
+    public void SetDepth(int depth)
+    {
+        Depth = depth;
+        DepthGuides = Enumerable.Range(0, depth).ToArray();
+        Raise(nameof(Depth));
+        Raise(nameof(DepthGuides));
+    }
+
     public ObservableCollection<ObjectNode> Children { get; } = new();
 
     public bool IsExpanded

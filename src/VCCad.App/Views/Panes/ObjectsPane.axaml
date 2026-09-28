@@ -13,10 +13,40 @@
     </TreeView.Styles>
     <TreeView.ItemTemplate>
       <TreeDataTemplate DataType="panes:ObjectNode" ItemsSource="{Binding Children}">
-        <Grid ColumnDefinitions="*,Auto">
-          <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center"
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+          <!-- Vertical rules, one per level, so how deep a row sits can be read at a glance
+               rather than counted from the indent. -->
+          <ItemsControl Grid.Column="0" ItemsSource="{Binding DepthGuides}"
+                        VerticalAlignment="Stretch" Margin="0,0,3,0">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <StackPanel Orientation="Horizontal"/>
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Border Width="9" BorderThickness="1,0,0,0"
+                        BorderBrush="{DynamicResource VcBorder}" Opacity="0.5"/>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+
+          <!-- A sample of the object: its own shape, fitted to the box. Filled rather than
+               stroked - these are closed outlines and glyph shapes, and a one-pixel stroke
+               on a twenty-pixel box is barely visible. -->
+          <Border Grid.Column="1" Width="22" Height="22" Margin="0,1,6,1"
+                  CornerRadius="2" BorderThickness="1"
+                  BorderBrush="{DynamicResource VcBorder}">
+            <Path Data="{Binding Thumbnail}" Stretch="None"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  Fill="{DynamicResource VcForeground}" Opacity="0.85"
+                  IsVisible="{Binding HasThumbnail}"/>
+          </Border>
+
+          <TextBlock Grid.Column="2" Text="{Binding Name}" VerticalAlignment="Center"
                      Opacity="{Binding LabelOpacity}" TextTrimming="CharacterEllipsis"/>
-          <ToggleButton Grid.Column="1" IsChecked="{Binding IsVisible, Mode=TwoWay}"
+
+          <ToggleButton Grid.Column="3" IsChecked="{Binding IsVisible, Mode=TwoWay}"
                         Padding="4,0" Background="Transparent" BorderThickness="0"
                         VerticalAlignment="Center">
             <Image Source="{Binding EyeSource}" Width="14" Height="14" Stretch="Uniform"/>
