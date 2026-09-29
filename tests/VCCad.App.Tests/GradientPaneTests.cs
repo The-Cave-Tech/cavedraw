@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using VCCad.App.Views.Panes;
 using VCCad.App.ViewModels;
@@ -212,6 +213,85 @@ public class GradientPaneTests
 
             Assert.True(item.Fill.IsVisible);
             Assert.True(item.Fill.HasGradient);
+        }
+        finally
+        {
+            pane.Detach();
+        }
+    }
+
+    /// <summary>The blend midpoint is a per-stop field, and editing it is one undo step.</summary>
+    [AvaloniaFact]
+    public void TheMidpointFieldEditsTheSelectedStopsBlend()
+    {
+        PathItem path = Box();
+        path.Fill = FillSpec.WithGradient(new GradientSpec
+        {
+            Stops = new[]
+            {
+                new GradientStop(0.0, ColorRgb.Red),
+                new GradientStop(1.0, ColorRgb.Blue),
+            },
+        });
+
+        (EditorViewModel vm, PathItem item) = Selected(path);
+        var pane = new GradientPane();
+        pane.Attach(vm);
+        try
+        {
+            Assert.Equal("0.5", pane.MidBox.Text);
+
+            pane.MidBox.Text = "0.25";
+            pane.MidBox.RaiseEvent(new KeyEventArgs
+            {
+                RoutedEvent = InputElement.KeyDownEvent,
+                Key = Key.Enter,
+            });
+
+            Assert.Equal(0.25, item.Fill.Gradient!.Normalised()[0].Midpoint, 6);
+
+            vm.Undo();
+            Assert.Equal(0.5, item.Fill.Gradient!.Normalised()[0].Midpoint, 6);
+        }
+        finally
+        {
+            pane.Detach();
+        }
+    }
+
+    /// <summary>
+    /// The freeform blend mode is a field on the gradient, offered only while the gradient is
+    /// freeform - the selector #17 asks for.
+    /// </summary>
+    [AvaloniaFact]
+    public void TheFreeformModeSelectorSwitchesTheBlend()
+    {
+        PathItem path = Box();
+        path.Fill = FillSpec.WithGradient(new GradientSpec
+        {
+            Stops = new[]
+            {
+                new GradientStop(0.0, ColorRgb.Red),
+                new GradientStop(1.0, ColorRgb.Blue),
+            },
+        });
+
+        (EditorViewModel vm, PathItem item) = Selected(path);
+        var pane = new GradientPane();
+        pane.Attach(vm);
+        try
+        {
+            Assert.False(pane.FreeformRow.IsVisible, "the freeform row belongs to a freeform gradient");
+
+            pane.KindBox.SelectedIndex = 2; // Freeform
+            Assert.Equal(GradientKind.Freeform, item.Fill.Gradient!.Kind);
+            Assert.True(pane.FreeformRow.IsVisible);
+
+            pane.FreeformModeBox.SelectedIndex = 1; // Lines
+            Assert.Equal(FreeformMode.Lines, item.Fill.Gradient!.FreeformMode);
+
+            vm.Undo();
+            Assert.Equal(FreeformMode.Points, item.Fill.Gradient!.FreeformMode);
         }
         finally
         {

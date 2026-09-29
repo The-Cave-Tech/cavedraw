@@ -67,11 +67,18 @@ public partial class GradientPane : UserControl
 
         Hook(PositionBox, () => EditStop(stop => stop with { Position = Number(PositionBox, stop.Position, 0, 1) }));
         Hook(StopOpacityBox, () => EditStop(stop => stop with { Opacity = Number(StopOpacityBox, stop.Opacity, 0, 1) }));
+        Hook(MidBox, () => EditStop(stop => stop with { Midpoint = Number(MidBox, stop.Midpoint, 0, 1) }));
         Hook(AngleBox, () => EditLinear());
         Hook(ScaleBox, () => EditLinear());
         Hook(CentreXBox, () => EditRadial());
         Hook(CentreYBox, () => EditRadial());
         Hook(AspectBox, () => EditRadial());
+
+        // The freeform blend mode is a field on the gradient, like the kind and the spread.
+        FreeformModeBox.SelectionChanged += (_, _) => Edit(spec => spec with
+        {
+            FreeformMode = FreeformModeBox.SelectedIndex == 1 ? FreeformMode.Lines : FreeformMode.Points,
+        });
     }
 
     /// <summary>Wires a numeric field to commit on Enter and on losing focus, like the Color pane.</summary>
@@ -137,6 +144,10 @@ public partial class GradientPane : UserControl
 
             LinearRow.IsVisible = spec.Kind == GradientKind.Linear;
             RadialRow.IsVisible = spec.Kind == GradientKind.Radial;
+            FreeformRow.IsVisible = spec.Kind == GradientKind.Freeform;
+
+            FreeformModeBox.ItemsSource = new[] { "Points", "Lines" };
+            FreeformModeBox.SelectedIndex = (int)spec.FreeformMode;
 
             UpdateStopFields(spec);
             UpdateGeometryFields(spec);
@@ -158,6 +169,7 @@ public partial class GradientPane : UserControl
         ModelStop stop = spec.Stops[_stopIndex];
         PositionBox.Text = Number(stop.Position);
         StopOpacityBox.Text = Number(stop.Opacity);
+        MidBox.Text = Number(stop.Midpoint);
         _stopModel.SetColor(stop.Color);
         StopWheel.Refresh();
         StopOpacityBar.Color = stop.Color;
