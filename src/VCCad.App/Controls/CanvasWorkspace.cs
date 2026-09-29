@@ -3954,11 +3954,16 @@ public sealed class CanvasWorkspace : Control
 
         if (tool == EditorTool.Select && hasObjectSelection)
         {
+            // The trace comes first so the box and its handles sit on top of it. It does NOT
+            // depend on the box having extent: a horizontal or vertical line has a zero-height
+            // or zero-width box and is still selected, and gating the trace on that box left
+            // such a line with no feedback at all. Only the box and its handles need a
+            // rectangle to sit on.
+            PaintSelectionOutlines(context);
+
             Rect2D selection = ChromeRect();
             if (!selection.IsEmpty)
             {
-                // The outlines first, so the box and its handles sit on top of them.
-                PaintSelectionOutlines(context);
                 PaintSelectChrome(context);
             }
         }

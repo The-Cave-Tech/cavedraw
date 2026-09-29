@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using VCCad.App.Automation;
 using VCCad.App.Controls;
@@ -140,5 +141,70 @@ public class SelectionGestureTests
         {
             window.Close();
         }
+    }
+
+    /// <summary>
+    /// A selected line is traced in the selection colour. A horizontal line's selection box
+    /// has zero height, and the trace used to be skipped along with the box whenever that
+    /// box read as empty - so the model said "selected" and the canvas showed nothing.
+    /// </summary>
+    [AvaloniaFact]
+    public void ASelectedHorizontalLineIsTraced()
+    {
+        (Window window, CanvasWorkspace workspace, EditorViewModel viewModel) = Host();
+        try
+        {
+            CadDocument document = viewModel.ActiveSession.Document;
+            Artboard board = document.Artboards[0];
+            PathItem line = PathFactory.CreateLine("line", new Point2D(100, 100), new Point2D(400, 100));
+            board.Layers[0].AddItem(line);
+
+            Click(window, workspace, new Point2D(250, 100));
+            Assert.Contains(line, viewModel.SelectedObjects);
+
+            int traced = CountSelectionColourPixels(workspace, 900, 700);
+            Assert.True(traced > 100, $"a selected line must be traced (found {traced} selection-colour pixels)");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// Counts pixels painted in the selection colour (#4C9AFF) in a render of the control.
+    /// </summary>
+    private static int CountSelectionColourPixels(Visual visual, int width, int height)
+    {
+        var target = new RenderTargetBitmap(new PixelSize(width, height), new Vector(96, 96));
+        target.Render(visual);
+
+        int stride = width * 4;
+        var pixels = new byte[stride * height];
+        System.Runtime.InteropServices.GCHandle handle = System.Runtime.InteropServices.GCHandle.Alloc(
+            pixels, System.Runtime.InteropServices.GCHandleType.Pinned);
+        try
+        {
+            target.CopyPixels(new PixelRect(0, 0, width, height), handle.AddrOfPinnedObject(), pixels.Length, stride);
+        }
+        finally
+        {
+            handle.Free();
+        }
+
+        int count = 0;
+        for (int i = 0; i + 3 < pixels.Length; i += 4)
+        {
+            // BGRA, premultiplied; the trace is opaque, so the channels are the colour.
+            byte b = pixels[i];
+            byte g = pixels[i + 1];
+            byte r = pixels[i + 2];
+            if (r is > 50 and < 110 && g is > 120 and < 190 && b > 210)
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 }
