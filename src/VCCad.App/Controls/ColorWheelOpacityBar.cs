@@ -68,8 +68,10 @@ public sealed class ColorWheelOpacityBar : Control
             EndPoint = new RelativePoint(1.0, 0.0, RelativeUnit.Relative),
             GradientStops =
             {
-                new GradientStop(ToColor(_color.WithAlpha(0.0)), 0.0),
-                new GradientStop(ToColor(_color.WithAlpha(1.0)), 1.0),
+                // Fully qualified: Avalonia has its own GradientStop, and this project now has one
+                // too. Avalonia's is the one this brush wants.
+                new Avalonia.Media.GradientStop(ToColor(_color.WithAlpha(0.0)), 0.0),
+                new Avalonia.Media.GradientStop(ToColor(_color.WithAlpha(1.0)), 1.0),
             },
         };
         context.DrawRectangle(ramp, null, track, 3.0, 3.0);

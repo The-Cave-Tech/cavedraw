@@ -95,8 +95,25 @@ public enum StrokeJoin
 /// closed (per the brief: "Closed paths should be filled"), but the model keeps
 /// the fill spec available regardless so an open path can be filled after it is
 /// closed without losing the user's chosen colour.
+///
+/// <para>
+/// <see cref="Color"/> is always meaningful, even for a gradient: it is the colour to paint with
+/// when the gradient cannot be, which is how a renderer without shading support, a flattened
+/// export, or a swatch preview shows the fill. A gradient therefore never leaves a fill with no
+/// colour at all.
+/// </para>
+///
+/// <para>
+/// <see cref="Gradient"/> is null for a solid fill. It is the last parameter and optional so that
+/// every existing construction - and every deserialized document that predates gradients - keeps
+/// its meaning without change.
+/// </para>
 /// </summary>
-public sealed record FillSpec(bool IsVisible, ColorRgb Color, FillRule Rule)
+public sealed record FillSpec(
+    bool IsVisible,
+    ColorRgb Color,
+    FillRule Rule,
+    GradientSpec? Gradient = null)
 {
     /// <summary>Convenience: an invisible fill ("none").</summary>
     public static FillSpec None { get; } = new(false, ColorRgb.White, FillRule.NonZero);
@@ -104,6 +121,21 @@ public sealed record FillSpec(bool IsVisible, ColorRgb Color, FillRule Rule)
     /// <summary>Convenience: a solid visible fill.</summary>
     public static FillSpec Solid(ColorRgb color, FillRule rule = FillRule.NonZero)
         => new(true, color, rule);
+
+    /// <summary>
+    /// A gradient fill. <paramref name="flattened"/> is the colour used wherever the gradient
+    /// cannot be painted - a thumbnail, a flattened export, a viewer with no shading support -
+    /// and defaults to the gradient's own midpoint so that a gradient with no explicit fallback
+    /// still previews as something recognisable rather than white.
+    /// </summary>
+    public static FillSpec WithGradient(
+        GradientSpec gradient,
+        FillRule rule = FillRule.NonZero,
+        ColorRgb? flattened = null)
+        => new(true, flattened ?? gradient.Sample(0.5).Color, rule, gradient);
+
+    /// <summary>True when this fill carries a gradient.</summary>
+    public bool HasGradient => Gradient is not null;
 }
 
 /// <summary>Which side of the path outline the stroke is drawn on (Illustrator's
