@@ -35,14 +35,14 @@ public static class SessionJournal
     private static readonly string[] MutatingPrefixes =
     {
         "object.", "artboard.", "layer.", "image.insert", "text.update", "text.style",
-        "document.new", "document.importPdf", "document.openFromServer",
+        "document.new", "document.importPdf", "document.openFromServer", "gradient.",
     };
 
     /// <summary>Members of those families that only read.</summary>
     private static readonly string[] ReadOnlyMembers =
     {
         "object.list", "object.find", "object.get", "artboard.list", "layer.list",
-        "image.exportPng",
+        "image.exportPng", "gradient.get", "gradient.sample",
     };
 
     private static readonly string Directory = Path.Combine(

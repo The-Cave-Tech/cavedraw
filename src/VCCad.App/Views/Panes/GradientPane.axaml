@@ -3,11 +3,16 @@
              xmlns:controls="using:VCCad.App.Controls"
              x:Class="VCCad.App.Views.Panes.GradientPane">
   <StackPanel Margin="8,4" Spacing="3">
-    <!-- Kind, spread and the two whole-gradient actions. -->
-    <Grid ColumnDefinitions="Auto,6,*,6,Auto">
+    <!-- Kind, spread and the whole-gradient actions. A gradient is not a one-way door: a
+         person can go back to a solid, or take the fill away entirely, here. -->
+    <Grid ColumnDefinitions="Auto,6,*,6,Auto,6,Auto,6,Auto">
       <Button x:Name="ApplyButton" Grid.Column="0" Content="Make gradient" Padding="6,2"/>
       <ComboBox x:Name="KindBox" Grid.Column="2" HorizontalAlignment="Stretch"/>
       <Button x:Name="ReverseButton" Grid.Column="4" Content="Reverse" Padding="6,2"/>
+      <Button x:Name="SolidButton" Grid.Column="6" Content="Solid" Padding="6,2"
+              ToolTip.Tip="Replace the gradient with the fill's own colour"/>
+      <Button x:Name="RemoveButton" Grid.Column="8" Content="None" Padding="6,2"
+              ToolTip.Tip="Remove the fill entirely"/>
     </Grid>
 
     <Grid ColumnDefinitions="Auto,6,*">

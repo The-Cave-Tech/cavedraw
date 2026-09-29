@@ -51,6 +51,8 @@ public partial class GradientPane : UserControl
         Ramp.StopActivated += (_, index) => SelectStop(index);
 
         ApplyButton.Click += (_, _) => MakeGradient();
+        SolidButton.Click += (_, _) => MakeSolid();
+        RemoveButton.Click += (_, _) => RemoveFill();
         ReverseButton.Click += (_, _) => Edit(spec => spec with
         {
             Stops = spec.Stops
@@ -211,6 +213,64 @@ public partial class GradientPane : UserControl
         _stopIndex = 0;
         ApplyLive(spec);
         Commit();
+        Refresh();
+    }
+
+    /// <summary>
+    /// Replaces every selected path's gradient with a solid fill, using the colour the fill
+    /// already falls back to when a gradient cannot be painted - so the object keeps the colour
+    /// the person was looking at instead of turning white. The mirror of Make gradient, and what
+    /// makes the switch a two-way door.
+    /// </summary>
+    private void MakeSolid()
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        var edits = new List<IUndoableCommand>();
+        foreach (PathItem path in _vm.SelectedPaths())
+        {
+            if (path.Fill.HasGradient)
+            {
+                edits.Add(new SetFillCommand(
+                    path, FillSpec.Solid(path.Fill.Color, path.Fill.Rule), path.Fill));
+            }
+        }
+
+        if (edits.Count > 0)
+        {
+            _vm.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Gradient to solid", edits));
+        }
+
+        _fillBefore = null;
+        Refresh();
+    }
+
+    /// <summary>Removes the fill from every selected path, gradient and colour alike.</summary>
+    private void RemoveFill()
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        var edits = new List<IUndoableCommand>();
+        foreach (PathItem path in _vm.SelectedPaths())
+        {
+            if (path.Fill.IsVisible)
+            {
+                edits.Add(new SetFillCommand(path, FillSpec.None, path.Fill));
+            }
+        }
+
+        if (edits.Count > 0)
+        {
+            _vm.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Remove fill", edits));
+        }
+
+        _fillBefore = null;
         Refresh();
     }
 

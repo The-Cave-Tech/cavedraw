@@ -1,4 +1,6 @@
+using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.Interactivity;
 using VCCad.App.Views.Panes;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
@@ -135,6 +137,81 @@ public class GradientPaneTests
             // The second object has no gradient, so the panel offers to make one from its colour
             // rather than showing the previous object's stops.
             Assert.True(pane.ApplyButton.IsEnabled);
+        }
+        finally
+        {
+            pane.Detach();
+        }
+    }
+
+    /// <summary>
+    /// A gradient is not a one-way door: the Solid button puts the object back to the colour the
+    /// fill falls back to, which is what the registry's <c>gradient.solid</c> does, and one undo
+    /// brings the gradient back.
+    /// </summary>
+    [AvaloniaFact]
+    public void SolidGoesBackToTheFlattenedColourAndUndoBringsTheGradientBack()
+    {
+        PathItem path = Box();
+        path.Fill = FillSpec.WithGradient(
+            new GradientSpec
+            {
+                Stops = new[]
+                {
+                    new GradientStop(0.0, ColorRgb.Red),
+                    new GradientStop(1.0, ColorRgb.Blue),
+                },
+            },
+            flattened: ColorRgb.Green);
+
+        (EditorViewModel vm, PathItem item) = Selected(path);
+        var pane = new GradientPane();
+        pane.Attach(vm);
+        try
+        {
+            pane.SolidButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+            Assert.False(item.Fill.HasGradient);
+            Assert.True(item.Fill.IsVisible);
+            Assert.Equal(ColorRgb.Green, item.Fill.Color);
+
+            vm.Undo();
+
+            Assert.True(item.Fill.HasGradient, "one undo must restore the gradient");
+        }
+        finally
+        {
+            pane.Detach();
+        }
+    }
+
+    /// <summary>The None button removes the fill entirely, and undo restores it gradient and all.</summary>
+    [AvaloniaFact]
+    public void NoneRemovesTheFillAndUndoRestoresIt()
+    {
+        PathItem path = Box();
+        path.Fill = FillSpec.WithGradient(new GradientSpec
+        {
+            Stops = new[]
+            {
+                new GradientStop(0.0, ColorRgb.Red),
+                new GradientStop(1.0, ColorRgb.Blue),
+            },
+        });
+
+        (EditorViewModel vm, PathItem item) = Selected(path);
+        var pane = new GradientPane();
+        pane.Attach(vm);
+        try
+        {
+            pane.RemoveButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+            Assert.False(item.Fill.IsVisible);
+
+            vm.Undo();
+
+            Assert.True(item.Fill.IsVisible);
+            Assert.True(item.Fill.HasGradient);
         }
         finally
         {

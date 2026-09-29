@@ -307,6 +307,259 @@ public static class EditorOperations
     }
 
     // ------------------------------------------------------------------
+    // Gradient helpers
+    // ------------------------------------------------------------------
+
+    /// <summary>The path a gradient operation acts on: an explicit itemId, else the selection.</summary>
+    private static PathItem GradientTarget(AutomationContext ctx, JsonElement p)
+    {
+        if (p.TryGetGuid("itemId", out Guid id))
+        {
+            return RequirePath(ctx.Document, id);
+        }
+
+        return ctx.Session.SelectedPaths().FirstOrDefault()
+            ?? throw new EditorOperationException(
+                "No path is selected. Select one first, or pass itemId.");
+    }
+
+    /// <summary>
+    /// The path's gradient, or the one its solid fill would become. A solid visibly becomes a
+    /// ramp from its own colour rather than an unrelated default picture, and an invisible fill
+    /// (no colour at all) becomes the default ramp.
+    /// </summary>
+    private static GradientSpec GradientOf(PathItem path)
+    {
+        if (path.Fill.Gradient is { } gradient)
+        {
+            return gradient;
+        }
+
+        return path.Fill.IsVisible
+            ? GradientSpec.Default with
+            {
+                Stops = new[]
+                {
+                    new GradientStop(0.0, path.Fill.Color),
+                    new GradientStop(1.0, ColorRgb.Black),
+                },
+            }
+            : GradientSpec.Default;
+    }
+
+    /// <summary>Writes a gradient onto a path as one undo step, keeping the fill's rule.</summary>
+    private static void SetGradient(AutomationContext ctx, PathItem path, GradientSpec gradient)
+    {
+        FillSpec next = FillSpec.WithGradient(gradient, path.Fill.Rule, path.Fill.Color);
+        ctx.Session.Execute(new SetFillCommand(path, next, path.Fill));
+    }
+
+    private static object ColourJson(ColorRgb colour) => new
+    {
+        r = Math.Round(colour.R, 6),
+        g = Math.Round(colour.G, 6),
+        b = Math.Round(colour.B, 6),
+        a = Math.Round(colour.A, 6),
+    };
+
+    private static object PointJson(Point2D point) => new
+    {
+        x = Math.Round(point.X, 6),
+        y = Math.Round(point.Y, 6),
+    };
+
+    private static object StopJson(GradientStop stop) => new
+    {
+        position = Math.Round(stop.Position, 6),
+        color = ColourJson(stop.Color),
+        opacity = Math.Round(stop.Opacity, 6),
+        midpoint = Math.Round(stop.Midpoint, 6),
+        name = stop.Name,
+    };
+
+    /// <summary>The whole gradient, in the shape a driver can send straight back.</summary>
+    private static object GradientJson(GradientSpec g) => new
+    {
+        kind = g.Kind.ToString().ToLowerInvariant(),
+        spread = g.Spread.ToString().ToLowerInvariant(),
+        stops = g.Normalised().Select(StopJson).ToArray(),
+        linear = new { start = PointJson(g.Start), end = PointJson(g.End) },
+        radial = new
+        {
+            centre = PointJson(g.Center),
+            radiusX = Math.Round(g.RadiusX, 6),
+            radiusY = Math.Round(g.RadiusY, 6),
+            rotation = Math.Round(g.Rotation, 6),
+        },
+        angle = Math.Round(g.Angle, 6),
+        freeform = new
+        {
+            mode = g.FreeformMode.ToString().ToLowerInvariant(),
+            points = g.Points.Select(fp => new
+            {
+                position = PointJson(fp.Position),
+                color = ColourJson(fp.Color),
+                opacity = Math.Round(fp.Opacity, 6),
+            }).ToArray(),
+            lines = g.Lines.Select(l => new { from = l.From, to = l.To }).ToArray(),
+        },
+    };
+
+    private static GradientKind ParseKind(JsonElement p)
+    {
+        string text = (p.GetString("kind") ?? string.Empty).Trim().ToLowerInvariant();
+        return text switch
+        {
+            "linear" => GradientKind.Linear,
+            "radial" => GradientKind.Radial,
+            "freeform" => GradientKind.Freeform,
+            "conical" => GradientKind.Conical,
+            _ => throw new EditorOperationException(
+                $"Unknown gradient kind '{text}'. Use linear, radial, freeform or conical."),
+        };
+    }
+
+    private static GradientSpread ParseSpread(JsonElement p)
+    {
+        string text = (p.GetString("spread") ?? string.Empty).Trim().ToLowerInvariant();
+        return text switch
+        {
+            "pad" => GradientSpread.Pad,
+            "reflect" => GradientSpread.Reflect,
+            "repeat" => GradientSpread.Repeat,
+            _ => throw new EditorOperationException(
+                $"Unknown gradient spread '{text}'. Use pad, reflect or repeat."),
+        };
+    }
+
+    /// <summary>One stop from JSON: position and colour are required, opacity and midpoint optional.</summary>
+    private static GradientStop ParseStop(JsonElement stop)
+    {
+        ColorRgb colour = ParseColorElement(stop, "color");
+
+        return new GradientStop(
+            stop.GetDouble("position", 0),
+            colour,
+            stop.GetDouble("opacity", 1),
+            stop.GetDouble("midpoint", 0.5),
+            stop.GetString("name")).Clamped();
+    }
+
+    /// <summary>The colour at a named member, which may be [r,g,b] or {r,g,b}.</summary>
+    private static ColorRgb ParseColorElement(JsonElement owner, string name)
+    {
+        if (!owner.TryGetProperty(name, out JsonElement value))
+        {
+            throw new EditorOperationException($"'{name}' is required.");
+        }
+
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            double[] parts = value.EnumerateArray().Select(e => e.GetDouble()).ToArray();
+            if (parts.Length < 3)
+            {
+                throw new EditorOperationException($"'{name}' needs at least [r,g,b].");
+            }
+
+            return new ColorRgb(parts[0], parts[1], parts[2], parts.Length > 3 ? parts[3] : 1.0);
+        }
+
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            return new ColorRgb(
+                value.GetDouble("r", 0), value.GetDouble("g", 0), value.GetDouble("b", 0),
+                value.GetDouble("a", 1));
+        }
+
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            return HexColor.Parse(value.GetString()!);
+        }
+
+        throw new EditorOperationException($"'{name}' must be [r,g,b], {{r,g,b}} or a hex string.");
+    }
+
+    private static IReadOnlyList<GradientStop> ParseStops(JsonElement p)
+    {
+        if (!p.TryGetProperty("stops", out JsonElement stops) || stops.ValueKind != JsonValueKind.Array)
+        {
+            throw new EditorOperationException("'stops' must be an array of {position, color, ...}.");
+        }
+
+        return stops.EnumerateArray().Select(ParseStop).ToList();
+    }
+
+    /// <summary>Replaces one stop in a gradient, leaving the rest alone.</summary>
+    private static GradientSpec WithStop(GradientSpec gradient, int index, Func<GradientStop, GradientStop> edit)
+    {
+        List<GradientStop> stops = gradient.Normalised().ToList();
+        if (index < 0 || index >= stops.Count)
+        {
+            throw new EditorOperationException(
+                $"No stop at index {index}; the ramp has {stops.Count}.");
+        }
+
+        stops[index] = edit(stops[index]).Clamped();
+        return gradient with { Stops = stops.OrderBy(s => s.Position).ToList() };
+    }
+
+    /// <summary>Reads an optional <c>{x,y}</c> member into a point.</summary>
+    private static bool TryPoint(JsonElement owner, string name, out Point2D point)
+    {
+        point = default;
+        if (!owner.TryGetProperty(name, out JsonElement value) || value.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        point = new Point2D(value.GetDouble("x", 0), value.GetDouble("y", 0));
+        return true;
+    }
+
+    private static FreeformMode ParseFreeformMode(JsonElement p)
+    {
+        string text = (p.GetString("freeformMode") ?? string.Empty).Trim().ToLowerInvariant();
+        return text switch
+        {
+            "points" => FreeformMode.Points,
+            "lines" => FreeformMode.Lines,
+            _ => throw new EditorOperationException(
+                $"Unknown freeform mode '{text}'. Use points or lines."),
+        };
+    }
+
+    private static IReadOnlyList<FreeformPoint> ParseFreeformPoints(JsonElement p)
+    {
+        if (!p.TryGetProperty("points", out JsonElement points) || points.ValueKind != JsonValueKind.Array)
+        {
+            throw new EditorOperationException("'points' must be an array of {x,y,color}.");
+        }
+
+        var parsed = new List<FreeformPoint>();
+        foreach (JsonElement point in points.EnumerateArray())
+        {
+            parsed.Add(new FreeformPoint(
+                new Point2D(point.GetDouble("x", 0), point.GetDouble("y", 0)),
+                ParseColorElement(point, "color"),
+                Math.Clamp(point.GetDouble("opacity", 1), 0.0, 1.0)));
+        }
+
+        return parsed;
+    }
+
+    private static IReadOnlyList<(int From, int To)> ParseLines(JsonElement p)
+    {
+        if (!p.TryGetProperty("lines", out JsonElement lines) || lines.ValueKind != JsonValueKind.Array)
+        {
+            throw new EditorOperationException("'lines' must be an array of {from,to} point indices.");
+        }
+
+        return lines.EnumerateArray()
+            .Select(line => ((int)line.GetLong("from", 0), (int)line.GetLong("to", 0)))
+            .ToList();
+    }
+
+    // ------------------------------------------------------------------
     // Registry
     // ------------------------------------------------------------------
 
@@ -1698,6 +1951,286 @@ public static class EditorOperations
                 }
 
                 return DescribeColor();
+            });
+
+        // ---- gradients ---------------------------------------------------
+        // Everything a person can do to a gradient in the Gradient panel, so the panel and a
+        // driver reach the same model through the same registry (AGENTS.md §1.1).
+
+        Add("gradient.get",
+            "Read the gradient on a path: kind, spread, every stop (position, colour, opacity, " +
+            "midpoint), the linear and radial geometry and the freeform points. The shape is the " +
+            "one gradient.setStops and gradient.setGeometry accept, so a driver can read, change " +
+            "and write it back.",
+            "itemId?:guid (default: the selected path)",
+            (ctx, p) =>
+            {
+                PathItem path = GradientTarget(ctx, p);
+                return new
+                {
+                    itemId = path.Id,
+                    hasGradient = path.Fill.HasGradient,
+                    fill = new { visible = path.Fill.IsVisible, color = ColourJson(path.Fill.Color) },
+                    gradient = GradientJson(GradientOf(path)),
+                };
+            });
+
+        Add("gradient.setKind",
+            "Switch a gradient's type while keeping its stops and geometry - what Illustrator does " +
+            "when a person clicks Radial on a gradient they already have.",
+            "kind:linear|radial|freeform|conical, itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem path = GradientTarget(ctx, p);
+                GradientSpec gradient = GradientOf(path) with { Kind = ParseKind(p) };
+                SetGradient(ctx, path, gradient);
+                return GradientJson(gradient);
+            });
+
+        Add("gradient.setSpread",
+            "Set what happens outside the 0..1 ramp: pad, reflect or repeat.",
+            "spread:pad|reflect|repeat, itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem path = GradientTarget(ctx, p);
+                GradientSpec gradient = GradientOf(path) with { Spread = ParseSpread(p) };
+                SetGradient(ctx, path, gradient);
+                return GradientJson(gradient);
+            });
+
+        Add("gradient.setStops",
+            "Replace every stop on a gradient in one undo step. Positions are 0..1; stops are " +
+            "clamped and ordered, and two stops sharing a position are kept, which is what makes " +
+            "a hard edge hard.",
+            "stops:[{position:number, color:[r,g,b]|hex, opacity?:number, midpoint?:number}], itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem path = GradientTarget(ctx, p);
+                GradientSpec gradient = GradientOf(path) with { Stops = ParseStops(p) };
+                SetGradient(ctx, path, gradient);
+                return GradientJson(gradient);
+            });
+
+        Add("gradient.addStop",
+            "Add a stop to a gradient and return its index in the ordered ramp, which is what the " +
+            "other stop operations address.",
+            "position:number (0..1), color:[r,g,b]|hex, opacity?:number, midpoint?:number, itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem path = GradientTarget(ctx, p);
+                GradientSpec gradient = GradientOf(path);
+                GradientStop added = ParseStop(p);
+
+                List<GradientStop> stops = gradient.Normalised().ToList();
+                stops.Add(added);
+                stops = stops.OrderBy(s => s.Position).ToList();
+
+                gradient = gradient with { Stops = stops };
+                SetGradient(ctx, path, gradient);
+
+                return new
+                {
+                    index = stops.FindIndex(s => ReferenceEquals(s, added)),
+                    gradient = GradientJson(gradient),
+                };
+            });
+
+        Add("gradient.removeStop",
+            "Remove a stop by its index in the ordered ramp. The last stop cannot go: a gradient " +
+            "with no stops has nothing to paint.",
+            "index:number, itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem path = GradientTarget(ctx, p);
+                GradientSpec gradient = GradientOf(path);
+
+                List<GradientStop> stops = gradient.Normalised().ToList();
+                int index = (int)p.GetLong("index", -1);
+                if (index < 0 || index >= stops.Count)
+                {
+                    throw new EditorOperationException(
+                        $"No stop at index {index}; the ramp has {stops.Count}.");
+                }
+
+                if (stops.Count <= 1)
+                {
+                    throw new EditorOperationException("A gradient must keep at least one stop.");
+                }
+
+                stops.RemoveAt(index);
+                gradient = gradient with { Stops = stops };
+                SetGradient(ctx, path, gradient);
+                return GradientJson(gradient);
+            });
+
+        Add("gradient.moveStop",
+            "Move a stop along the ramp. The stops are re-ordered, so indices are the ordered ones.",
+            "index:number, position:number (0..1), itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem path = GradientTarget(ctx, p);
+                GradientSpec gradient = WithStop(
+                    GradientOf(path), (int)p.GetLong("index", -1),
+                    stop => stop with { Position = p.GetDouble("position", stop.Position) });
+                SetGradient(ctx, path, gradient);
+                return GradientJson(gradient);
+            });
+
+        Add("gradient.setStop",
+            "Change one stop: its position, colour, opacity or blend midpoint. Only the members " +
+            "that are sent change.",
+            "index:number, position?, color?, opacity?, midpoint?, itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem path = GradientTarget(ctx, p);
+                GradientSpec gradient = WithStop(
+                    GradientOf(path), (int)p.GetLong("index", -1),
+                    stop => stop with
+                    {
+                        Position = p.TryGetProperty("position", out _)
+                            ? p.GetDouble("position", stop.Position)
+                            : stop.Position,
+                        Color = p.TryGetProperty("color", out _)
+                            ? ParseColorElement(p, "color")
+                            : stop.Color,
+                        Opacity = p.TryGetProperty("opacity", out _)
+                            ? p.GetDouble("opacity", stop.Opacity)
+                            : stop.Opacity,
+                        Midpoint = p.TryGetProperty("midpoint", out _)
+                            ? p.GetDouble("midpoint", stop.Midpoint)
+                            : stop.Midpoint,
+                    });
+                SetGradient(ctx, path, gradient);
+                return GradientJson(gradient);
+            });
+
+        Add("gradient.reverse",
+            "Reverse a gradient: every stop mirrors across the middle of the ramp, so the picture " +
+            "flips without the colours changing.",
+            "itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem path = GradientTarget(ctx, p);
+                GradientSpec gradient = GradientOf(path) with
+                {
+                    Stops = GradientOf(path).Normalised()
+                        .Select(s => s with { Position = 1.0 - s.Position })
+                        .OrderBy(s => s.Position)
+                        .ToList(),
+                };
+                SetGradient(ctx, path, gradient);
+                return GradientJson(gradient);
+            });
+
+        Add("gradient.setGeometry",
+            "Place the ramp on the object: the linear start and end, the radial centre, radii and " +
+            "rotation, the conical angle, or the freeform points and mode. Linear and radial " +
+            "geometry is normalised to the object's bounds, which is how it survives a resize.",
+            "start?:{x,y}, end?:{x,y}, centre?:{x,y}, radiusX?:number, radiusY?:number, " +
+            "rotation?:number (degrees), angle?:number (degrees), " +
+            "freeformMode?:points|lines, points?:[{x,y,color,opacity?}], lines?:[{from,to}], itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem path = GradientTarget(ctx, p);
+                GradientSpec gradient = GradientOf(path);
+
+                if (TryPoint(p, "start", out Point2D start))
+                {
+                    gradient = gradient with { Start = start };
+                }
+
+                if (TryPoint(p, "end", out Point2D end))
+                {
+                    gradient = gradient with { End = end };
+                }
+
+                if (TryPoint(p, "centre", out Point2D centre))
+                {
+                    gradient = gradient with { Center = centre };
+                }
+
+                if (p.TryGetProperty("radiusX", out _))
+                {
+                    gradient = gradient with { RadiusX = p.GetDouble("radiusX", gradient.RadiusX) };
+                }
+
+                if (p.TryGetProperty("radiusY", out _))
+                {
+                    gradient = gradient with { RadiusY = p.GetDouble("radiusY", gradient.RadiusY) };
+                }
+
+                if (p.TryGetProperty("rotation", out _))
+                {
+                    gradient = gradient with { Rotation = p.GetDouble("rotation", gradient.Rotation) };
+                }
+
+                if (p.TryGetProperty("angle", out _))
+                {
+                    gradient = gradient with { Angle = p.GetDouble("angle", gradient.Angle) };
+                }
+
+                if (p.TryGetProperty("freeformMode", out _))
+                {
+                    gradient = gradient with { FreeformMode = ParseFreeformMode(p) };
+                }
+
+                if (p.TryGetProperty("points", out _))
+                {
+                    gradient = gradient with { Points = ParseFreeformPoints(p) };
+                }
+
+                if (p.TryGetProperty("lines", out _))
+                {
+                    gradient = gradient with { Lines = ParseLines(p) };
+                }
+
+                SetGradient(ctx, path, gradient);
+                return GradientJson(gradient);
+            });
+
+        Add("gradient.solid",
+            "Replace a gradient with a solid fill. The colour defaults to the object's flattened " +
+            "fill colour, so removing a gradient never leaves it colourless.",
+            "color?:[r,g,b]|hex, itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem path = GradientTarget(ctx, p);
+                ColorRgb colour = p.TryGetProperty("color", out _)
+                    ? ParseColorElement(p, "color")
+                    : path.Fill.Color;
+                ctx.Session.Execute(new SetFillCommand(
+                    path, FillSpec.Solid(colour, path.Fill.Rule), path.Fill));
+                return new { itemId = path.Id, hasGradient = false, color = ColourJson(colour) };
+            });
+
+        Add("gradient.remove",
+            "Remove the fill entirely, gradient and all. Use gradient.solid to go back to a solid " +
+            "colour instead.",
+            "itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem path = GradientTarget(ctx, p);
+                ctx.Session.Execute(new SetFillCommand(path, FillSpec.None, path.Fill));
+                return new { itemId = path.Id, hasGradient = false, visible = false };
+            });
+
+        Add("gradient.sample",
+            "Sample the ramp at a position, with the spread applied, so a driver can check what is " +
+            "actually painted instead of trusting the stop list.",
+            "position:number (0..1; outside it the spread applies), itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem path = GradientTarget(ctx, p);
+                GradientSpec gradient = GradientOf(path);
+                double position = p.GetDouble("position", 0.5);
+                (ColorRgb colour, double opacity) = gradient.SampleWithSpread(position);
+
+                return new
+                {
+                    position,
+                    color = ColourJson(colour),
+                    opacity = Math.Round(opacity, 6),
+                };
             });
 
         Add("color.pickInTriangle",
