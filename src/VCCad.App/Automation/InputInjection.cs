@@ -263,25 +263,33 @@ public static class InputInjection
                 right ? PointerUpdateKind.RightButtonReleased : PointerUpdateKind.LeftButtonReleased),
             modifiers, right ? MouseButton.Right : MouseButton.Left));
 
-    /// <summary>The deepest visible control under a window point.</summary>
+    /// <summary>
+    /// The control a real click at a window point would reach.
+    ///
+    /// This asks Avalonia rather than scanning bounds by hand. The scan took the LAST control
+    /// in visual-descendant order whose rectangle contained the point, which is list order and
+    /// not z-order - so an internal overlay that covers the window and appears late in the list
+    /// always won. That is exactly what happened: with a text field focused, a click aimed at
+    /// the colour wheel was delivered to Avalonia's own TextSelectorLayer instead, and the
+    /// operation reported success while nothing the person could see was touched.
+    ///
+    /// A hand-rolled scan cannot know about adorner layers, overlays, or anything else that
+    /// sits above the content, and every future one would be another chance to get it wrong.
+    /// </summary>
     private static Visual? HitTest(Visual root, double x, double y)
     {
-        Visual? best = null;
-        foreach (Visual visual in root.GetVisualDescendants().OfType<Visual>())
-        {
-            if (visual is not Control { IsVisible: true, IsHitTestVisible: true } control ||
-                control.Bounds.Width <= 0 || control.Bounds.Height <= 0)
-            {
-                continue;
-            }
+        Point point = new(x, y);
 
-            Point? origin = root.TranslatePoint(new Point(x, y), control);
-            if (origin is { } local && new Rect(control.Bounds.Size).Contains(local))
+        // Topmost first, so the first hit-testable control is the one on top.
+        foreach (Visual visual in root.GetVisualsAt(point))
+        {
+            if (visual is Control { IsVisible: true, IsHitTestVisible: true } control &&
+                control.Bounds.Width > 0 && control.Bounds.Height > 0)
             {
-                best = control;
+                return control;
             }
         }
 
-        return best;
+        return null;
     }
 }

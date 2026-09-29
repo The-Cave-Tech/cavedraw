@@ -53,18 +53,6 @@ public partial class ColorsPane : UserControl
             }
         };
         HexBox.LostFocus += (_, _) => ApplyHex();
-        foreach (TextBox box in new[] { HueBox, SatBox, LightBox })
-        {
-            box.KeyDown += (_, e) =>
-            {
-                if (e.Key == Key.Enter)
-                {
-                    ApplyHsl();
-                    e.Handled = true;
-                }
-            };
-            box.LostFocus += (_, _) => ApplyHsl();
-        }
 
         TargetSelector.TargetChanged += (_, stroke) =>
         {
@@ -347,12 +335,18 @@ public partial class ColorsPane : UserControl
         HslColor hsl = HslColor.FromRgb(color);
 
         _syncing = true;
-        SetBox(HueBox, Math.Round(hsl.H));
-        SetBox(SatBox, Math.Round(hsl.S * 100.0));
-        SetBox(LightBox, Math.Round(hsl.L * 100.0));
+
+        // HSL is a readout, not an editor: the reference panel shows the three
+        // values stacked beside the ring, so they are captions here.
+        HueText.Text = Math.Round(hsl.H).ToString("0", CultureInfo.InvariantCulture);
+        SatText.Text = Math.Round(hsl.S * 100.0).ToString("0", CultureInfo.InvariantCulture);
+        LightText.Text = Math.Round(hsl.L * 100.0).ToString("0", CultureInfo.InvariantCulture);
+
+        // The hex entry is RGB with the opacity byte: eight characters, no '#' in
+        // the box (the caption supplies it).
         if (!HexBox.IsFocused)
         {
-            HexBox.Text = HexColor.Format(color);
+            HexBox.Text = HexColor.Format(color, includeAlpha: true).TrimStart('#');
         }
 
         OpacityBar.Color = Wheel.Color;
@@ -375,52 +369,38 @@ public partial class ColorsPane : UserControl
             path.Stroke.Color, path.Stroke.IsVisible, _strokeTarget);
     }
 
-    private static void SetBox(TextBox box, double value)
-    {
-        if (!box.IsFocused)
-        {
-            box.Text = value.ToString("0", CultureInfo.InvariantCulture);
-        }
-    }
-
     private void ApplyHex()
     {
-        if (_syncing || !HexColor.TryParse(HexBox.Text, out ColorRgb parsed))
+        if (_syncing)
         {
             return;
         }
+
+        string text = (HexBox.Text ?? string.Empty).Trim();
+        if (!HexColor.TryParse(text, out ColorRgb parsed))
+        {
+            return;
+        }
+
+        // A four- or eight-digit entry carries opacity; a six-digit one leaves the
+        // bar where the person put it.
+        int digits = text.TrimStart('#').Length;
 
         _syncing = true;
         Colors.Model.SetColor(parsed);
-        Wheel.Refresh();
-        _syncing = false;
-        UpdateReadouts();
-        ApplyLive();
-        CommitLive();
-    }
-
-    private void ApplyHsl()
-    {
-        if (_syncing
-            || !TryParse(HueBox, out double h)
-            || !TryParse(SatBox, out double s)
-            || !TryParse(LightBox, out double l))
+        if (digits is 4 or 8)
         {
-            return;
+            Colors.SetAlpha(parsed.A);
         }
 
-        var hsl = new HslColor(h, s / 100.0, l / 100.0).Normalized();
-        _syncing = true;
-        Colors.Model.SetColor(hsl.ToRgb(Colors.Alpha));
         Wheel.Refresh();
+        OpacityBar.Color = Wheel.Color;
+        OpacityBar.SetValue(Colors.Alpha);
         _syncing = false;
         UpdateReadouts();
         ApplyLive();
         CommitLive();
     }
-
-    private static bool TryParse(TextBox box, out double value)
-        => double.TryParse(box.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value);
 
     private static Color ToColor(ColorRgb c) => Color.FromArgb(
         (byte)Math.Round(Math.Clamp(c.A, 0.0, 1.0) * 255.0),

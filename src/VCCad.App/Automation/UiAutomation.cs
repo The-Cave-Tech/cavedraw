@@ -258,13 +258,58 @@ public static class UiAutomation
                 return "list is empty";
 
             case Control control:
-                throw new EditorOperationException(
-                    $"{control.GetType().Name} is not directly clickable. Use ui.setValue for inputs, " +
-                    "or ui.keys for keyboard shortcuts.");
+                return ClickControl(control);
 
             default:
                 throw new EditorOperationException("That visual is not a control.");
         }
+    }
+
+    /// <summary>
+    /// Clicks a control that has no Click/invoke path of its own.
+    ///
+    /// A person can click a text field to put the caret in it, and can click a
+    /// custom control (the colour picker, the canvas) to act on the point under the
+    /// pointer. Refusing these made whole classes of control unreachable by
+    /// <c>ui.click</c>, so a text field takes focus and anything else receives a real
+    /// pointer press at its centre — the same event a person's click delivers.
+    /// </summary>
+    private static string ClickControl(Control control)
+    {
+        if (!control.IsEffectivelyVisible || control.Bounds.Width <= 0 || control.Bounds.Height <= 0)
+        {
+            throw new EditorOperationException(
+                $"{control.GetType().Name} is not laid out on screen, so it cannot be clicked.");
+        }
+
+        if (control is TextBox text)
+        {
+            // A single click puts the caret in the field; leave it at the end so a
+            // following input.type appends where a person's typing would.
+            text.Focus();
+            text.CaretIndex = text.Text?.Length ?? 0;
+            return $"focused {text.Name ?? "TextBox"}";
+        }
+
+        TopLevel? top = TopLevel.GetTopLevel(control);
+        Point? centre = top is null
+            ? null
+            : control.TranslatePoint(
+                new Point(control.Bounds.Width / 2.0, control.Bounds.Height / 2.0), top);
+
+        if (top is not null && centre is { } position)
+        {
+            return InputInjection.Click(top, position.X, position.Y, clickCount: 1, shift: false);
+        }
+
+        if (control.Focusable)
+        {
+            control.Focus();
+            return $"focused {control.Name ?? control.GetType().Name}";
+        }
+
+        throw new EditorOperationException(
+            $"{control.GetType().Name} has no position in the window, so it cannot be clicked.");
     }
 
     /// <summary>Sets a value on an input control, as typing/choosing would.</summary>
@@ -273,8 +318,15 @@ public static class UiAutomation
         switch (visual)
         {
             case TextBox box:
+                box.Focus();
                 box.Text = value;
                 box.CaretIndex = box.Text?.Length ?? 0;
+
+                // Setting Text is not the same as a person entering the value: a panel
+                // that commits on Enter or on leaving the field never sees the change,
+                // and its next refresh overwrites the box. Raising the commit boundary
+                // is what makes the value take effect.
+                box.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(InputElement.LostFocusEvent));
                 return $"set text of {(box.Name ?? "TextBox")} to \"{value}\"";
 
             case ToggleButton toggle:
