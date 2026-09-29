@@ -102,7 +102,21 @@ api.MapPost("/documents/import", async (HttpRequest request, IDocumentStore stor
             return Results.BadRequest(new { error = "Empty PDF payload." });
         }
 
-        CadDocument imported = PdfImporter.Import(bytes);
+        // The importer refuses input that is not a PDF, and a refusal is the caller's fault, not
+        // ours: it is a 400 with the reason, not a 500. This call used to sit outside the try
+        // above, so once the importer started refusing rather than fabricating a blank page, a
+        // non-PDF became a server error - which tells the caller the same nothing it was told
+        // before.
+        CadDocument imported;
+        try
+        {
+            imported = PdfImporter.Import(bytes);
+        }
+        catch (InvalidDataException ex)
+        {
+            return Results.BadRequest(new { error = $"Not a usable PDF: {ex.Message}" });
+        }
+
         store.Add(new DocumentSession { Document = imported, Stack = new VCCad.Core.Commands.CommandStack() });
         return Results.Created($"/api/v1/documents/{imported.Id}",
             new { id = imported.Id, name = imported.Name, artboards = imported.Artboards.Count });
