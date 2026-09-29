@@ -211,7 +211,6 @@ public sealed class CanvasWorkspace : Control
     private int _artboardHandle;
     private Point2D _artboardCreateStart;
     private Point2D _artboardCreateCurrent;
-    private readonly List<(PathItem Path, PathItem Before)> _artboardChildren = new();
 
     // Pen tool.
     private PathItem? _penPath;
@@ -2799,7 +2798,6 @@ public sealed class CanvasWorkspace : Control
 
     private void ArtboardPress(Point2D model)
     {
-        _artboardChildren.Clear();
         _dragStartModel = model;
 
         // 1) A handle of the selected artboard takes priority — the handle sits on
@@ -2828,14 +2826,9 @@ public sealed class CanvasWorkspace : Control
             }
             else
             {
+                // Moving the page carries its contents, because their geometry is stored
+                // relative to the artboard origin. Nothing to collect and translate.
                 _artboardGesture = ArtboardGesture.Move;
-                foreach (Layer layer in artboard.Layers)
-                {
-                    foreach (LayerItem item in layer.Children)
-                    {
-                        CollectPaths(item, _artboardChildren);
-                    }
-                }
             }
         }
         else
@@ -2847,23 +2840,6 @@ public sealed class CanvasWorkspace : Control
         }
 
         InvalidateVisual();
-    }
-
-    private void CollectPaths(LayerItem item, List<(PathItem Path, PathItem Before)> sink)
-    {
-        switch (item)
-        {
-            case PathItem path:
-                sink.Add((path, path.GeometrySnapshot()));
-                break;
-            case ArtGroup group:
-                foreach (LayerItem child in group.Children)
-                {
-                    CollectPaths(child, sink);
-                }
-
-                break;
-        }
     }
 
     private void ArtboardDrag(Point2D model)
@@ -2878,12 +2854,10 @@ public sealed class CanvasWorkspace : Control
                 Vector2D delta = model - _dragStartModel;
                 _artboard.X = _artboardBefore.X + delta.X;
                 _artboard.Y = _artboardBefore.Y + delta.Y;
-                foreach ((PathItem path, PathItem before) in _artboardChildren)
-                {
-                    path.RestoreGeometryFrom(before);
-                    path.TranslateGeometryBy(delta);
-                }
 
+                // The artwork is stored relative to the artboard origin, so moving the page
+                // carries it: translating the children's own geometry here as well moved
+                // them twice as far as the page and walked them off the sheet.
                 _vm!.RaiseTransformChanged();
                 break;
 
@@ -2918,16 +2892,10 @@ public sealed class CanvasWorkspace : Control
         switch (_artboardGesture)
         {
             case ArtboardGesture.Move when _artboard is not null:
-                var edits = new List<IUndoableCommand>
-                {
-                    new SetArtboardBoundsCommand(_artboard, _artboardBefore, _artboard.Bounds, "Move artboard"),
-                };
-                foreach ((PathItem path, PathItem before) in _artboardChildren)
-                {
-                    edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot()));
-                }
-
-                _vm.Execute(new CompositeCommand("Move artboard", edits));
+                // One command: moving the bounds is the whole edit, because the children
+                // travel with the origin.
+                _vm.Execute(new SetArtboardBoundsCommand(
+                    _artboard, _artboardBefore, _artboard.Bounds, "Move artboard"));
                 break;
 
             case ArtboardGesture.Resize when _artboard is not null:
@@ -2948,7 +2916,6 @@ public sealed class CanvasWorkspace : Control
 
         _artboardGesture = ArtboardGesture.None;
         _artboard = null;
-        _artboardChildren.Clear();
         InvalidateVisual();
     }
 
