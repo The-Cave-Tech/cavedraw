@@ -140,7 +140,18 @@ try {
         $args = @('test', $project, '-c', $Configuration)
         if ($Filter) { $args += @('--filter', $Filter) }
 
-        $output = & dotnet @args 2>&1
+        # A failing test writes to stderr, and with $ErrorActionPreference = 'Stop' that
+        # becomes a TERMINATING error - so the first project with a failure ended the run and
+        # the four after it never executed. A test summary that hides four projects is worse
+        # than no summary: it reads as though everything else passed. stderr is data here.
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $output = & dotnet @args 2>&1
+        }
+        finally {
+            $ErrorActionPreference = $previous
+        }
         $output | Where-Object { $_ -match 'error (CS|MSB)\d' } | ForEach-Object { Write-Host "    $_" }
         $summary = $output | Select-String -Pattern 'Passed!|Failed!' | Select-Object -Last 1
         if ($summary) {
