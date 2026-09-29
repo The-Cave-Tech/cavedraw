@@ -298,13 +298,17 @@ public sealed record GradientSpec
     /// component-wise in the document's RGB space, and blending in linear light produces visibly
     /// different midpoints - a black-to-white ramp would come out lighter in the middle - so
     /// matching the reference means matching this, however imperfect the colour science.
+    ///
+    /// Channels are 0..1 in this model (see ColorRgb.FromBytes). An earlier version of this
+    /// method rounded to a byte 0..255 and handed that to the constructor, which silently
+    /// collapsed every blend to 0 or 1 - a ramp came out almost black. The renderer noticed
+    /// because it reads the stops directly rather than trusting Sample.
     /// </summary>
     public static ColorRgb Blend(ColorRgb a, ColorRgb b, double t)
     {
         t = Math.Clamp(t, 0.0, 1.0);
-        static byte Mix(double x, double y, double u) => (byte)Math.Clamp(
-            Math.Round(x + ((y - x) * u)), 0, 255);
+        static double Mix(double x, double y, double u) => Math.Clamp(x + ((y - x) * u), 0.0, 1.0);
 
-        return new ColorRgb(Mix(a.R, b.R, t), Mix(a.G, b.G, t), Mix(a.B, b.B, t));
+        return new ColorRgb(Mix(a.R, b.R, t), Mix(a.G, b.G, t), Mix(a.B, b.B, t), Mix(a.A, b.A, t));
     }
 }
