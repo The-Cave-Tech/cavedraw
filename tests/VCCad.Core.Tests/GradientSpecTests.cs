@@ -114,14 +114,54 @@ public class GradientSpecTests
         };
 
         IReadOnlyList<GradientStop> n = g.Normalised();
-        Assert.Equal(3, n.Count);
+
+        // Sorted, and BOTH stops at 0.5 kept. Collapsing the pair to its later stop turned the
+        // hard edge into a fast ramp, which is the bug this now pins.
+        Assert.Equal(4, n.Count);
         Assert.Equal(0.0, n[0].Position, 6);
         Assert.Equal(0.5, n[1].Position, 6);
+        Assert.Equal(0.5, n[2].Position, 6);
+        Assert.Equal(1.0, n[3].Position, 6);
+        Assert.Equal(1.0, n[1].Color.R, 6);
+        Assert.Equal(1.0, n[2].Color.G, 6);
+    }
 
-        // Two stops at the same position collapse to the later one, which is what makes a hard
-        // edge hard rather than a very fast ramp.
-        Assert.Equal(0.0, n[1].Color.R, 6);
-        Assert.Equal(1.0, n[1].Color.G, 6);
+    [Fact]
+    public void TwoStopsAtTheSamePositionMakeAHardEdgeNotAFastRamp()
+    {
+        // The distinction a person can see: approaching the edge the colour is one thing, leaving
+        // it the colour is the other, with nothing that reads as a blend across it.
+        var g = new GradientSpec
+        {
+            Stops = new[]
+            {
+                new GradientStop(0.0, Rgb(0, 0, 0)),
+                new GradientStop(0.5, Rgb(0, 0, 1)),
+                new GradientStop(0.5, Rgb(1, 1, 1)),
+                new GradientStop(1.0, Rgb(1, 1, 1)),
+            },
+        };
+
+        Assert.Equal(0.0, g.Sample(0.499).Color.R, 6);
+        Assert.Equal(1.0, g.Sample(0.501).Color.R, 6);
+        Assert.Equal(1.0, g.Sample(0.5).Color.R, 6);
+    }
+
+    [Fact]
+    public void NonFiniteValuesAreReplacedRatherThanSurvivingAsNaN()
+    {
+        // Math.Clamp cannot repair NaN - Math.Clamp(double.NaN, 0, 1) is NaN - so a NaN position
+        // and a NaN channel used to survive Clamped() and paint as NaN: a silent wrong colour
+        // instead of a refusal.
+        var stop = new GradientStop(double.NaN, new ColorRgb(double.NaN, 0.5, 0.5), Opacity: double.NaN);
+
+        (ColorRgb c, double opacity) = new GradientSpec { Stops = new[] { stop } }.Sample(0.5);
+
+        Assert.True(double.IsFinite(c.R));
+        Assert.True(double.IsFinite(c.G));
+        Assert.True(double.IsFinite(opacity));
+        Assert.InRange(c.R, 0.0, 1.0);
+        Assert.InRange(opacity, 0.0, 1.0);
     }
 
     [Fact]

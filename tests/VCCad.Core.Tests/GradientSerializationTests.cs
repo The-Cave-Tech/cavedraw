@@ -263,9 +263,15 @@ public class GradientSerializationTests
         AssertStopsEqual(gradient.Stops, got!.Stops);
 
         IReadOnlyList<GradientStop> normalised = got.Normalised();
-        Assert.Equal(3, normalised.Count);
-        GradientStop atHalf = Assert.Single(normalised, s => Math.Abs(s.Position - 0.5) < 1e-9);
-        Assert.Equal(ColorRgb.Blue, atHalf.Color);
+
+        // Both stops at 0.5 survive, deliberately - that pair IS the hard edge. Collapsing them
+        // to the later one, which this test previously asserted, turned the edge into a fast ramp
+        // and made the colour approaching the edge wrong.
+        Assert.Equal(4, normalised.Count);
+        List<GradientStop> atHalf = normalised.Where(s => Math.Abs(s.Position - 0.5) < 1e-9).ToList();
+        Assert.Equal(2, atHalf.Count);
+        Assert.Equal(ColorRgb.Red, atHalf[0].Color);
+        Assert.Equal(ColorRgb.Blue, atHalf[1].Color);
     }
 
     /// <summary>

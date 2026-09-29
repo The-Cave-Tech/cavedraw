@@ -61,12 +61,30 @@ public sealed record GradientStop(
     double Midpoint = 0.5,
     string? Name = null)
 {
-    /// <summary>Clamps into the ramp, so a caller cannot build a stop that cannot be evaluated.</summary>
+    /// <summary>
+    /// Clamps into the ramp, so a caller cannot build a stop that cannot be evaluated.
+    ///
+    /// Non-finite values are REPLACED rather than clamped, because Math.Clamp cannot repair NaN:
+    /// Math.Clamp(double.NaN, 0, 1) returns NaN, so a NaN position survived this method and
+    /// produced a NaN paint from Sample - a silent wrong colour rather than a refusal. A NaN
+    /// position has no sensible place on a ramp, so it becomes the start; a NaN opacity becomes
+    /// opaque, which is the value that changes the picture least; a NaN midpoint becomes even.
+    /// </summary>
     public GradientStop Clamped() => this with
     {
-        Position = Math.Clamp(Position, 0.0, 1.0),
-        Opacity = Math.Clamp(Opacity, 0.0, 1.0),
-        Midpoint = Math.Clamp(Midpoint, 0.0, 1.0),
+        Position = double.IsFinite(Position) ? Math.Clamp(Position, 0.0, 1.0) : 0.0,
+        Opacity = double.IsFinite(Opacity) ? Math.Clamp(Opacity, 0.0, 1.0) : 1.0,
+        Midpoint = double.IsFinite(Midpoint) ? Math.Clamp(Midpoint, 0.0, 1.0) : 0.5,
+
+        // Not Color.Clamped(): that uses Math.Clamp too, so it cannot repair a NaN channel any
+        // more than this method could repair a NaN position. A NaN channel has no meaning; black
+        // is the value that makes the wrongness visible rather than hiding it in a valid-looking
+        // colour.
+        Color = new ColorRgb(
+            double.IsFinite(Color.R) ? Math.Clamp(Color.R, 0.0, 1.0) : 0.0,
+            double.IsFinite(Color.G) ? Math.Clamp(Color.G, 0.0, 1.0) : 0.0,
+            double.IsFinite(Color.B) ? Math.Clamp(Color.B, 0.0, 1.0) : 0.0,
+            double.IsFinite(Color.A) ? Math.Clamp(Color.A, 0.0, 1.0) : 1.0),
     };
 }
 
@@ -164,11 +182,15 @@ public sealed record GradientSpec
     };
 
     /// <summary>
-    /// Stops sorted by position with duplicates and out-of-range values removed, so evaluation
-    /// has a well-ordered ramp to work with whatever a caller or an imported file supplied.
+    /// Stops sorted by position and clamped into the ramp, so evaluation has a well-ordered ramp
+    /// to work with whatever a caller or an imported file supplied.
     ///
-    /// Equal positions are a real case - Illustrator lets two stops share a position to make a
-    /// hard edge - and the later one wins, which is what makes a hard edge hard.
+    /// Stops at the SAME position are KEPT, both of them, and that is what makes a hard edge hard.
+    /// An earlier version collapsed each duplicate run to its last stop, which quietly turned a
+    /// hard edge into a fast ramp - a two-stop pair [0.5 black, 0.5 white] became just [0.5 white]
+    /// and the colour approaching it ramped in from the previous stop, so "sample(0.499) is black,
+    /// sample(0.501) is white" was not true. Evaluation handles a zero-width span by returning the
+    /// later stop, so keeping both stops is all a hard edge needs.
     /// </summary>
     public IReadOnlyList<GradientStop> Normalised()
     {
@@ -177,25 +199,9 @@ public sealed record GradientSpec
             return DefaultStops();
         }
 
-        var ordered = Stops.Select(s => s.Clamped())
+        return Stops.Select(s => s.Clamped())
             .OrderBy(s => s.Position)
             .ToList();
-
-        // Collapse runs at the same position to the last, preserving a hard edge.
-        var result = new List<GradientStop>(ordered.Count);
-        foreach (GradientStop stop in ordered)
-        {
-            if (result.Count > 0 && Math.Abs(result[^1].Position - stop.Position) < 1e-9)
-            {
-                result[^1] = stop;
-            }
-            else
-            {
-                result.Add(stop);
-            }
-        }
-
-        return result;
     }
 
     /// <summary>
@@ -223,36 +229,45 @@ public sealed record GradientSpec
             return (stops[^1].Color, stops[^1].Opacity);
         }
 
+        // Walk the pairs and keep the LAST one that contains t. That matters at a hard edge, where
+        // two stops share a position: the pair ending at the edge and the zero-width pair starting
+        // at it both "contain" t, and the later stop is the one a person sees on the right-hand
+        // side of the edge. Taking the first match instead would resolve the boundary to the
+        // colour before it.
+        int found = -1;
         for (int i = 0; i < stops.Count - 1; i++)
         {
-            GradientStop a = stops[i];
-            GradientStop b = stops[i + 1];
-            if (t < a.Position || t > b.Position)
+            if (t >= stops[i].Position && t <= stops[i + 1].Position)
             {
-                continue;
+                found = i;
             }
-
-            double span = b.Position - a.Position;
-            if (span <= 0)
-            {
-                return (b.Color, b.Opacity);
-            }
-
-            double u = (t - a.Position) / span;
-
-            // The midpoint control is a power curve: 0.5 linear, below it biases toward the
-            // first stop, above it toward the second.
-            double m = Math.Clamp(a.Midpoint, 1e-6, 1.0 - 1e-6);
-            if (Math.Abs(m - 0.5) > 1e-9)
-            {
-                double exponent = Math.Log(0.5) / Math.Log(m);
-                u = Math.Pow(u, exponent);
-            }
-
-            return (Blend(a.Color, b.Color, u), a.Opacity + ((b.Opacity - a.Opacity) * u));
         }
 
-        return (stops[^1].Color, stops[^1].Opacity);
+        if (found < 0)
+        {
+            return (stops[^1].Color, stops[^1].Opacity);
+        }
+
+        GradientStop a = stops[found];
+        GradientStop b = stops[found + 1];
+        double span = b.Position - a.Position;
+        if (span <= 0)
+        {
+            return (b.Color, b.Opacity);
+        }
+
+        double u = (t - a.Position) / span;
+
+        // The midpoint control is a power curve: 0.5 linear, below it biases toward the first
+        // stop, above it toward the second.
+        double m = Math.Clamp(a.Midpoint, 1e-6, 1.0 - 1e-6);
+        if (Math.Abs(m - 0.5) > 1e-9)
+        {
+            double exponent = Math.Log(0.5) / Math.Log(m);
+            u = Math.Pow(u, exponent);
+        }
+
+        return (Blend(a.Color, b.Color, u), a.Opacity + ((b.Opacity - a.Opacity) * u));
     }
 
     /// <summary>
