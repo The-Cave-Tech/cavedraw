@@ -3824,6 +3824,68 @@ public sealed class CanvasWorkspace : Control
         return geometry;
     }
 
+    /// <summary>
+    /// A path's outline in SCREEN coordinates, for drawing the selection trace.
+    ///
+    /// BuildGeometry returns world coordinates and is drawn inside the world transform.
+    /// The trace is not: it is painted alongside the chrome, which converts through
+    /// ModelToScreen because it is already outside that transform. Drawing world geometry
+    /// there left the trace offset by exactly the page origin - a selected object was traced
+    /// wherever its page sits from the canvas origin, which is what the person saw and
+    /// reported as "stroked at an offset that does not make sense".
+    /// </summary>
+    private StreamGeometry BuildScreenGeometry(PathItem path)
+    {
+        var geometry = new StreamGeometry();
+        MediaFillRule rule = path.Fill.Rule == ModelFillRule.EvenOdd
+            ? MediaFillRule.EvenOdd
+            : MediaFillRule.NonZero;
+
+        Vector2D offset = path.ArtboardOffset();
+
+        Point Map(Point2D local)
+            => ModelToScreen(new Point2D(local.X + offset.X, local.Y + offset.Y));
+
+        using (StreamGeometryContext g = geometry.Open())
+        {
+            g.SetFillRule(rule);
+
+            foreach (SubPath sub in path.SubPaths)
+            {
+                if (sub.Nodes.Count < 2)
+                {
+                    continue;
+                }
+
+                g.BeginFigure(Map(sub.Nodes[0].Anchor), sub.IsClosed);
+                int segmentCount = sub.SegmentCount;
+
+                for (int i = 0; i < segmentCount; i++)
+                {
+                    PathNode from = sub.Nodes[i];
+                    PathNode to = sub.Nodes[(i + 1) % sub.Nodes.Count];
+                    Point fromAnchor = Map(from.Anchor);
+                    Point p1 = Map(from.OutHandle);
+                    Point p2 = Map(to.InHandle);
+                    Point p3 = Map(to.Anchor);
+
+                    if (Near(p1, fromAnchor) && Near(p2, p3))
+                    {
+                        g.LineTo(p3);
+                    }
+                    else
+                    {
+                        g.CubicBezierTo(p1, p2, p3);
+                    }
+                }
+
+                g.EndFigure(sub.IsClosed);
+            }
+        }
+
+        return geometry;
+    }
+
     private void PaintOverlays(DrawingContext context)
     {
         if (_vm is null)
@@ -3915,17 +3977,16 @@ public sealed class CanvasWorkspace : Control
     {
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
 
-        // Screen-thick, so the trace stays visible when zoomed out and does not become a
-        // slab when zoomed in.
-        double z = _layout.Zoom <= 0 ? 1 : _layout.Zoom;
-        var pen = new Pen(accent, Math.Max(1.0, 1.4 / z));
+        // Screen-thick. The trace is drawn in screen space now, so the width is already in
+        // pixels and must not be divided by the zoom as well.
+        var pen = new Pen(accent, 1.4);
 
         foreach (LayerItem item in _vm!.SelectedObjects)
         {
             switch (item)
             {
                 case PathItem path:
-                    context.DrawGeometry(null, pen, BuildGeometry(path, outsideClip: false));
+                    context.DrawGeometry(null, pen, BuildScreenGeometry(path));
                     break;
 
                 case TextItem text:
