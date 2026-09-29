@@ -8,6 +8,7 @@ using VCCad.App.ViewModels;
 using VCCad.Core.Text;
 using VCCad.Core.Commands;
 using VCCad.Core.Model;
+using VCCad.Core.Selection;
 using ModelFillRule = VCCad.Core.Model.FillRule;
 using ModelTextAlignment = VCCad.Core.Model.TextAlignment;
 using MediaFillRule = Avalonia.Media.FillRule;
@@ -618,15 +619,18 @@ public sealed class CanvasWorkspace : Control
 
         LayerItem? topmost = null;
         double tolerance = PickTolerance;
-        foreach (Artboard artboard in _document.Artboards)
-        {
-            if (!artboard.IsVisible)
-            {
-                continue;
-            }
 
-            Point2D local = model - new Vector2D(artboard.X, artboard.Y);
-            foreach (Layer layer in artboard.Layers)
+        // Only the artboard that CONTAINS the point. Testing every artboard's local
+        // coordinates in turn made a click on page 1 select whatever sat under the same offset
+        // on page 6 - a point inside one page is also a point inside another page shifted by
+        // five of them, and the later one won.
+        Artboard? board = SelectionEngine.ArtboardAt(_document.Artboards, model);
+
+        if (board is not null)
+        {
+            Point2D local = model - new Vector2D(board.X, board.Y);
+
+            foreach (Layer layer in board.Layers)
             {
                 if (!layer.IsEffectivelyVisible)
                 {
