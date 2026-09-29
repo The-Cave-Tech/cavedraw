@@ -54,6 +54,96 @@ public static class SelectionEngine
     public const double PickTolerance = 3.0;
 
     /// <summary>
+    /// How far the pointer may wander and still count as a click rather than a marquee.
+    ///
+    /// A press and release in the same place is a click; anything further is a drag, whether
+    /// or not the person meant one. Without a slop of some kind, every click that shakes by a
+    /// pixel would become a marquee over nothing and select nothing.
+    /// </summary>
+    public const double ClickSlop = 2.0;
+
+    /// <summary>
+    /// Plays a gesture and says what it selected.
+    ///
+    /// This is the whole surface: a document and a list of what the pointer did. A test can
+    /// write the list by hand, or save one an automation run produced and replay it later with
+    /// no window open - which is the point, because a regression suite that needs the
+    /// application running is one that stops being run.
+    ///
+    /// A press and release in the same place is a click. Anything else is a marquee, and the
+    /// marquee is a path, so the rectangle one and the lasso one differ only in the points they
+    /// hand over.
+    /// </summary>
+    /// <param name="focused">The artboard already focused when the gesture began.</param>
+    public static SelectionResult Play(
+        CadDocument document, IEnumerable<SelectEvent> events, Artboard? focused = null)
+    {
+        Point2D? press = null;
+        var path = new List<Point2D>();
+
+        foreach (SelectEvent e in events)
+        {
+            switch (e)
+            {
+                case PointerDown down:
+                    press = down.Point;
+                    path.Clear();
+                    break;
+
+                case PointerMove move when press is not null:
+                    path.Add(move.Point);
+                    break;
+
+                case PointerUp up when press is { } from:
+                    press = null;
+
+                    bool clicked = path.Count == 0 &&
+                                   Math.Abs(up.Point.X - from.X) <= ClickSlop &&
+                                   Math.Abs(up.Point.Y - from.Y) <= ClickSlop;
+
+                    return clicked
+                        ? Click(document, from, focused)
+                        : ByLasso(document, from, path, focused);
+            }
+        }
+
+        // A gesture that never came up changed nothing.
+        return SelectionResult.Empty;
+    }
+
+    /// <summary>
+    /// What a freehand path selects.
+    ///
+    /// The path closes with a straight segment from its last point back to its first - the one
+    /// the pointer went down at - so the region is a closed shape however wildly it was drawn.
+    /// A rectangular marquee is the same call with four corners.
+    /// </summary>
+    public static SelectionResult ByLasso(
+        CadDocument document, Point2D start, IReadOnlyList<Point2D> path, Artboard? focused = null)
+    {
+        // The press point is the first corner and the path is everything after it. Leaving it
+        // out lost the corner the person started at, so a four-corner drag became a triangle
+        // over the wrong three points and a short lasso became nothing at all.
+        //
+        // Fewer than three corners is not a lasso, it is a rectangle: a press and a single move
+        // is what an ordinary marquee drag looks like, and it has to select the same region a
+        // rectangle between those two points would.
+        IReadOnlyList<Point2D> corners = path.Count switch
+        {
+            0 => new[] { start, start },
+            1 => MarqueePath(start, path[0]).Points,
+            _ => new[] { start }.Concat(path).ToList(),
+        };
+
+        var shape = new Polygon(corners);
+        Artboard? startedIn = ArtboardAt(document.Artboards, start) ?? focused;
+
+        return startedIn is not null
+            ? WithinArtboard(startedIn, shape)
+            : AcrossArtboards(document, shape);
+    }
+
+    /// <summary>
     /// The artboard a point is in, or null when it is outside all of them.
     ///
     /// The first that contains it, so overlapping artboards resolve in document order rather
