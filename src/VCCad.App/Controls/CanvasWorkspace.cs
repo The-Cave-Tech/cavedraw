@@ -782,14 +782,17 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        // Clicking an artboard's title enters artboard editing mode.
+        // The name label is the page's handle: holding it moves the artboard, in whatever
+        // tool is active. It used to switch to the Artboard tool instead, which armed a
+        // body drag - so the page moved from any point on it and the label did nothing.
         if (HitTestArtboardLabel(model) is { } labelled)
         {
             _vm!.SelectArtboard(labelled);
-            _vm.Tool = EditorTool.Artboard;
             _leftDown = true;
             e.Pointer.Capture(this);
             e.Handled = true;
+            BeginArtboardMove(labelled, model);
+            InvalidateVisual();
             return;
         }
 
@@ -885,6 +888,14 @@ public sealed class CanvasWorkspace : Control
 
         if (_leftDown)
         {
+            // An artboard gesture outranks the tool: the label is a handle in every tool,
+            // so a page drag must not depend on which tool happens to be active.
+            if (_artboardGesture != ArtboardGesture.None)
+            {
+                ArtboardDrag(model);
+                return;
+            }
+
             switch (_vm?.Tool ?? EditorTool.Select)
             {
                 case EditorTool.Select:
@@ -920,7 +931,9 @@ public sealed class CanvasWorkspace : Control
                     break;
 
                 case EditorTool.Artboard:
-                    ArtboardDrag(model);
+                    // No artboard gesture is active (those returned above), so the press on
+                    // the page body fell through to object selection.
+                    SelectDrag(model);
                     break;
             }
         }
@@ -990,6 +1003,14 @@ public sealed class CanvasWorkspace : Control
         _leftDown = false;
         e.Pointer.Capture(null);
 
+        // An artboard gesture outranks the tool, for the same reason it does on the move:
+        // the label is a handle whatever tool is active.
+        if (_artboardGesture != ArtboardGesture.None)
+        {
+            ArtboardRelease(model);
+            return;
+        }
+
         switch (_vm?.Tool ?? EditorTool.Select)
         {
             case EditorTool.Select:
@@ -1012,7 +1033,7 @@ public sealed class CanvasWorkspace : Control
             case EditorTool.Pen: PenRelease(model); break;
             case EditorTool.Rectangle: CreateShape(rect: true); break;
             case EditorTool.Ellipse: CreateShape(rect: false); break;
-            case EditorTool.Artboard: ArtboardRelease(model); break;
+            case EditorTool.Artboard: SelectRelease(model); break;
         }
     }
 
@@ -2812,23 +2833,24 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        // 2) Otherwise select the artboard under the point (handle or move).
+        // 2) Otherwise the page body is the artwork's, not the page's: an artboard is moved
+        //    by its name label (handled before the tool switch), so a press here behaves
+        //    like the Select tool - picking objects and starting a marquee.
         Artboard? artboard = HitTestArtboard(model);
         if (artboard is not null)
         {
             _vm.SelectArtboard(artboard);
-            _artboard = artboard;
-            _artboardBefore = artboard.Bounds;
+            _artboard = null;
             if (TryHitArtboardHandle(artboard, model, out int handle))
             {
+                _artboard = artboard;
+                _artboardBefore = artboard.Bounds;
                 _artboardGesture = ArtboardGesture.Resize;
                 _artboardHandle = handle;
             }
             else
             {
-                // Moving the page carries its contents, because their geometry is stored
-                // relative to the artboard origin. Nothing to collect and translate.
-                _artboardGesture = ArtboardGesture.Move;
+                SelectPress(model);
             }
         }
         else
@@ -2840,6 +2862,15 @@ public sealed class CanvasWorkspace : Control
         }
 
         InvalidateVisual();
+    }
+
+    /// <summary>Starts moving a page from its name label.</summary>
+    private void BeginArtboardMove(Artboard artboard, Point2D model)
+    {
+        _artboard = artboard;
+        _artboardBefore = artboard.Bounds;
+        _artboardGesture = ArtboardGesture.Move;
+        _dragStartModel = model;
     }
 
     private void ArtboardDrag(Point2D model)
@@ -2893,9 +2924,14 @@ public sealed class CanvasWorkspace : Control
         {
             case ArtboardGesture.Move when _artboard is not null:
                 // One command: moving the bounds is the whole edit, because the children
-                // travel with the origin.
-                _vm.Execute(new SetArtboardBoundsCommand(
-                    _artboard, _artboardBefore, _artboard.Bounds, "Move artboard"));
+                // travel with the origin. A press on the label that never moved is a click,
+                // and a click must not leave a no-op on the undo stack.
+                if (_artboard.Bounds != _artboardBefore)
+                {
+                    _vm.Execute(new SetArtboardBoundsCommand(
+                        _artboard, _artboardBefore, _artboard.Bounds, "Move artboard"));
+                }
+
                 break;
 
             case ArtboardGesture.Resize when _artboard is not null:
