@@ -33,11 +33,6 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
-        // The desktop entry point installs this before Avalonia starts, with the
-        // command line and dev mode; hosts that do not (the browser) get the hooks
-        // here. Calling it twice is harmless and never changes a setting.
-        CrashReporter.EnsureInstalled();
-
         switch (ApplicationLifetime)
         {
             case IClassicDesktopStyleApplicationLifetime desktop:
@@ -122,10 +117,6 @@ public partial class App : Application
         var diary = new InteractionLog(options.HistoryDirectory ?? InteractionLog.DefaultDirectory());
         diary.StartSession(string.Join(' ', options.OriginalArguments ?? Array.Empty<string>()));
         UiEventRecorder? recorder = null;
-
-        // A crash records the diary session and a summary of what was open.
-        CrashReporter.RegisterDiary(diary);
-        CrashReporter.RegisterDocument(() => CrashReporter.SummariseDocument(view.ViewModel.Document));
 
         AutomationHost host = AutomationHost.Create(
             view.ViewModel,
@@ -280,18 +271,6 @@ public partial class App : Application
         {
             _diagnostics.IsVisible = true;
             _diagnostics.SubmitPrompt(options.ChatPrompt!, options.ChatWithScreenshot);
-        }
-
-        if (options.CrashTest)
-        {
-            // Diagnostic only: a real uncaught exception on the UI thread, which is
-            // the channel that used to take the process down without a word. It is
-            // posted rather than thrown here so the shell is fully up first, exactly
-            // as it is when a crash happens in normal use.
-            Avalonia.Threading.Dispatcher.UIThread.Post(
-                () => throw new InvalidOperationException(
-                    "VCCAD_CRASH_TEST: deliberate uncaught exception on the UI thread"),
-                Avalonia.Threading.DispatcherPriority.Background);
         }
     }
 

@@ -785,20 +785,6 @@ public sealed class DesktopStartupOptions
     /// <summary>Do not dock the window to the right half of the screen.</summary>
     public bool NoDock { get; set; }
 
-    /// <summary>
-    /// Development mode: an uncaught crash is filed as a GitHub issue against
-    /// <c>darrenstarr/cavedraw</c>. Off unless the caller asks for it — a crash
-    /// carries the user's paths, and a public issue is forever.
-    /// </summary>
-    public bool DevMode { get; set; }
-
-    /// <summary>
-    /// Deliberately throw an uncaught exception on the UI thread shortly after
-    /// startup, to prove the crash reporter end to end. A diagnostic, never a
-    /// default; nothing else in the program sets it.
-    /// </summary>
-    public bool CrashTest { get; set; }
-
     /// <summary>Print usage and exit.</summary>
     public bool ShowHelp { get; set; }
 
@@ -809,12 +795,6 @@ public sealed class DesktopStartupOptions
     public static DesktopStartupOptions Parse(string[] args)
     {
         var options = new DesktopStartupOptions { OriginalArguments = args };
-
-        // Environment first, command line second: a flag on this run overrides a
-        // setting left in the environment.
-        options.DevMode = IsTruthy(Environment.GetEnvironmentVariable("VCCAD_DEV"));
-        options.CrashTest = IsTruthy(Environment.GetEnvironmentVariable("VCCAD_CRASH_TEST"));
-
         for (int i = 0; i < args.Length; i++)
         {
             string arg = args[i];
@@ -883,15 +863,6 @@ public sealed class DesktopStartupOptions
                 case "--no-dock":
                     options.NoDock = true;
                     break;
-                case "--dev":
-                    options.DevMode = true;
-                    break;
-                case "--no-dev":
-                    options.DevMode = false;
-                    break;
-                case "--crash-test":
-                    options.CrashTest = true;
-                    break;
                 case "--model":
                     options.Llm.Model = Next() ?? options.Llm.Model;
                     break;
@@ -927,14 +898,6 @@ public sealed class DesktopStartupOptions
         return options;
     }
 
-    /// <summary>True for the usual "yes" spellings of an environment switch.</summary>
-    private static bool IsTruthy(string? value)
-        => value is not null &&
-           value.Trim() is { Length: > 0 } trimmed &&
-           !trimmed.Equals("0", StringComparison.Ordinal) &&
-           !trimmed.Equals("false", StringComparison.OrdinalIgnoreCase) &&
-           !trimmed.Equals("no", StringComparison.OrdinalIgnoreCase);
-
     /// <summary>Command-line help text.</summary>
     public static string Usage =>
         """
@@ -950,12 +913,6 @@ public sealed class DesktopStartupOptions
           --history-dir DIR   where the interaction diary is stored
                               (default %APPDATA%\VCCad\history, env VCCAD_HISTORY_DIR)
           --no-dock           do not dock the window to the right half of the screen
-          --dev               development mode: file an uncaught crash as a GitHub
-                              issue against darrenstarr/cavedraw (off by default;
-                              env VCCAD_DEV=1)
-          --crash-test        deliberately throw an uncaught exception on the UI
-                              thread after startup, to prove the crash reporter
-                              (env VCCAD_CRASH_TEST=1)
           --name NAME         name this instance and publish its endpoint to
                               %APPDATA%\VCCad\instances\NAME.json
                               (binds an arbitrary free port unless --port pins one;
@@ -973,8 +930,7 @@ public sealed class DesktopStartupOptions
           --help              show this help
 
         Environment: VCCAD_LLM_MODEL, VCCAD_LLM_BASE, VCCAD_LLM_KEY,
-                     VCCAD_HISTORY_DIR, VCCAD_INSTANCE_DIR,
-                     VCCAD_DEV, VCCAD_CRASH_TEST, VCCAD_CRASH_DIR
+                     VCCAD_HISTORY_DIR, VCCAD_INSTANCE_DIR
         """;
 }
 

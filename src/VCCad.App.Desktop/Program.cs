@@ -38,16 +38,6 @@ internal sealed class Program
 
         DesktopStartupOptions options = DesktopStartupOptions.Parse(args);
 
-        // Installed before anything else can throw. This assembly is a WinExe with
-        // no console, so an uncaught exception used to take the process down in
-        // silence; from here on it leaves a crash file, and files an issue when the
-        // caller asked for development mode.
-        CrashReporter.Install(new CrashReporterOptions
-        {
-            DevMode = options.DevMode,
-            Arguments = args,
-        });
-
         if (options.ArgumentError is not null)
         {
             Fail(options.ArgumentError);
