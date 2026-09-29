@@ -1,36 +1,48 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:media="clr-namespace:Avalonia.Media;assembly=Avalonia.Base"
              x:Class="VCCad.App.Views.Panes.TransformPane">
   <ScrollViewer>
-    <StackPanel Margin="8,6" Spacing="6">
+    <!-- FontSize is set once, here, so the captions and the text in the fields are the same
+         height by construction rather than by two numbers agreeing. The font face follows. -->
+    <StackPanel Margin="8,6" Spacing="6" TextElement.FontSize="13">
       <!-- Reference point: nine circles on a square, left of the fields so the panel stays
            short. Affinity puts it in the same place and for the same reason. -->
-      <Grid ColumnDefinitions="Auto,8,*">
+      <Grid ColumnDefinitions="Auto,6,*">
         <ContentControl x:Name="PivotHost" Grid.Column="0" VerticalAlignment="Center"/>
 
         <!-- Two aligned columns of labelled fields: X/Y, W/H, R/S. Every box shows its unit,
-             so a value reads as a measurement rather than a number. -->
+             so a value reads as a measurement rather than a number.
+
+             A narrow caption column and a small gap, because the caption belongs to its field:
+             at a wide gap the eye pairs "X" with the wrong box. -->
         <Grid Grid.Column="2"
-              ColumnDefinitions="14,*,10,14,*"
+              ColumnDefinitions="11,*,7,11,*"
               RowDefinitions="Auto,Auto,Auto"
-              ColumnSpacing="4" RowSpacing="4">
+              ColumnSpacing="2" RowSpacing="3">
           <TextBlock Text="X" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-          <TextBox x:Name="XBox" Grid.Column="1" Height="24" Padding="4,0" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="0"/>
+          <TextBox x:Name="XBox" Grid.Column="1" Padding="3,1" KeyDown="OnFieldKeyDown"
+                   VerticalContentAlignment="Center" KeyboardNavigation.TabIndex="0"/>
 
           <TextBlock Text="W" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-          <TextBox x:Name="WBox" Grid.Column="4" Height="24" Padding="4,0" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="2"/>
+          <TextBox x:Name="WBox" Grid.Column="4" Padding="3,1" KeyDown="OnFieldKeyDown"
+                   VerticalContentAlignment="Center" KeyboardNavigation.TabIndex="2"/>
 
           <TextBlock Text="Y" Grid.Row="1" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-          <TextBox x:Name="YBox" Grid.Row="1" Grid.Column="1" Height="24" Padding="4,0" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="1"/>
+          <TextBox x:Name="YBox" Grid.Row="1" Grid.Column="1" Padding="3,1" KeyDown="OnFieldKeyDown"
+                   VerticalContentAlignment="Center" KeyboardNavigation.TabIndex="1"/>
 
           <TextBlock Text="H" Grid.Row="1" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-          <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" Height="24" Padding="4,0" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="3"/>
+          <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" Padding="3,1" KeyDown="OnFieldKeyDown"
+                   VerticalContentAlignment="Center" KeyboardNavigation.TabIndex="3"/>
 
           <TextBlock Text="R" Grid.Row="2" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-          <TextBox x:Name="AngleBox" Grid.Row="2" Grid.Column="1" Height="24" Padding="4,0" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="4"/>
+          <TextBox x:Name="AngleBox" Grid.Row="2" Grid.Column="1" Padding="3,1" KeyDown="OnFieldKeyDown"
+                   VerticalContentAlignment="Center" KeyboardNavigation.TabIndex="4"/>
 
           <TextBlock Text="S" Grid.Row="2" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-          <TextBox x:Name="SkewBox" Grid.Row="2" Grid.Column="4" Height="24" Padding="4,0" KeyDown="OnFieldKeyDown" KeyboardNavigation.TabIndex="5"/>
+          <TextBox x:Name="SkewBox" Grid.Row="2" Grid.Column="4" Padding="3,1" KeyDown="OnFieldKeyDown"
+                   VerticalContentAlignment="Center" KeyboardNavigation.TabIndex="5"/>
         </Grid>
       </Grid>
 

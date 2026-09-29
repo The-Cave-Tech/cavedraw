@@ -18,7 +18,10 @@ namespace VCCad.App.Views.Panes;
 public partial class TransformPane : UserControl
 {
     private EditorViewModel? _vm;
-    private int _pivot = 4;
+    // Top-left is where a transform is normally measured from: a position is the corner the
+    // object starts at, not its middle. The panel opens there and the person can pick
+    // another of the nine.
+    private int _pivot = 0;
     private readonly List<Button> _pivotButtons = new();
     private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
     private static readonly IBrush IdleBrush = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x52));
