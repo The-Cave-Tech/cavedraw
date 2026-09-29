@@ -20,10 +20,12 @@ namespace VCCad.Pdf.Tests;
 /// 2. Malformed input must be <b>handled or refused with a clear message</b> —
 ///    never an unhandled exception and never a hang.
 ///
-/// Tests whose names are statements (…IsRefused, …IsNotSilentlyAccepted) fail
-/// against the current build and pin real defects; they are deliberately left
-/// failing. See the class-level report in the hand-off note. Tests that pin
-/// behaviour that is already correct are grouped at the bottom.
+/// Every name that is a statement now holds: a file that is not a PDF is
+/// refused with a catchable exception rather than imported as a blank A4, a
+/// non-finite MediaBox does not become a non-finite artboard, a declared xref
+/// count cannot make a tiny file parse for seconds, and nesting past the
+/// reader's depth limit is refused instead of overflowing the stack. Tests that
+/// pin behaviour that was already correct are grouped at the bottom.
 /// </summary>
 public class HostileImportTests
 {
@@ -176,26 +178,19 @@ public class HostileImportTests
     }
 
     // ------------------------------------------------------------------
-    // Defect 4 — deeply nested arrays recurse without a depth guard. The
-    // failure mode is a StackOverflowException, which is uncatchable and kills
-    // the process, so this cannot be a plain failing test: it would abort the
-    // whole run and hide every other result. It is recorded here as a repro
-    // that a person can run deliberately.
+    // Defect 4 — deeply nested arrays. Fixed: PdfReader refuses nesting past
+    // MaxDepth (256) with a catchable PdfNestingLimitException, which the
+    // importer lets through instead of swallowing. Before the guard this input
+    // was an uncatchable StackOverflowException that killed the test host, so
+    // the test could only be recorded as a skipped repro.
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// REPRO (do not remove the Skip while the defect stands):
-    /// 8,000 nested "[" bytes in a 16 kB file crash the test host with an
-    /// uncatchable StackOverflowException inside <c>PdfReader.ReadArray</c> →
-    /// <c>ReadObject</c>. Depth 6,000 survived on this machine; 8,000 crashed.
-    /// The same recursion is reached from the content-stream operand reader.
-    /// Requirement: refuse nesting beyond a documented limit with a catchable
-    /// exception.
+    /// 8,000 nested "[" bytes in a 16 kB file must be refused with a catchable
+    /// exception — never a <c>StackOverflowException</c>, which cannot be caught
+    /// and aborts the whole process.
     /// </summary>
-    [Fact(Skip =
-        "Process-killing defect, not a test failure: depth 8,000 gives an uncatchable " +
-        "StackOverflowException that aborts the entire test run (verified on the dev box). " +
-        "Remove this Skip once PdfReader enforces a depth limit.")]
+    [Fact]
     public void DeeplyNestedArraysAreRefusedWithACatchableException()
     {
         var bytes = Encoding.ASCII.GetBytes("%PDF-1.4\n1 0 obj\n" + Nesting(8_000) + "\nendobj\n");

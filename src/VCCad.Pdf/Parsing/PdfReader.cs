@@ -1,7 +1,21 @@
 using System.Globalization;
+using System.IO;
 using System.Text;
 
 namespace VCCad.Pdf.Parsing;
+
+/// <summary>
+/// Raised when an object nests past <see cref="PdfReader.MaxDepth"/>. A dedicated
+/// type so the importer can refuse hostile input instead of swallowing it and
+/// fabricating a blank page; the alternative — unbounded recursion — is a
+/// <c>StackOverflowException</c>, which cannot be caught at all.
+/// </summary>
+internal sealed class PdfNestingLimitException : Exception
+{
+    public PdfNestingLimitException(string message) : base(message)
+    {
+    }
+}
 
 /// <summary>
 /// Tokenizer/object reader over a PDF byte buffer. Reads PDF objects (numbers,
@@ -11,8 +25,17 @@ namespace VCCad.Pdf.Parsing;
 /// </summary>
 internal ref struct PdfReader
 {
+    /// <summary>
+    /// Nesting depth refused. Real documents nest a handful of levels (page tree,
+    /// resources, a form's own resources); the operand reader is also reachable
+    /// from content streams. Sixteen kilobytes of <c>'['</c> is not a document, it
+    /// is a denial of service, so the reader stops well before the stack does.
+    /// </summary>
+    public const int MaxDepth = 256;
+
     private readonly byte[] _data;
     private int _pos;
+    private int _depth;
 
     public PdfReader(byte[] data, int position)
     {
@@ -110,8 +133,30 @@ internal ref struct PdfReader
             NumberStyles.Integer, CultureInfo.InvariantCulture, out long value) ? value : null;
     }
 
-    /// <summary>Reads one PDF object.</summary>
+    /// <summary>
+    /// Reads one PDF object. Every nested array/dictionary re-enters here, so the
+    /// depth guard lives at this single choke point.
+    /// </summary>
     public object? ReadObject(PdfFile file, bool parseStream = false)
+    {
+        if (_depth >= MaxDepth)
+        {
+            throw new PdfNestingLimitException(
+                $"PDF object nesting exceeds the supported limit of {MaxDepth} levels.");
+        }
+
+        _depth++;
+        try
+        {
+            return ReadObjectCore(file, parseStream);
+        }
+        finally
+        {
+            _depth--;
+        }
+    }
+
+    private object? ReadObjectCore(PdfFile file, bool parseStream)
     {
         SkipWhitespace();
         if (_pos >= _data.Length)

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Text;
 using VCCad.Core.Model;
 using VCCad.Geometry;
@@ -21,6 +22,12 @@ namespace VCCad.Pdf;
 public static class PdfImporter
 {
     /// <summary>Imports <paramref name="pdfBytes"/> into a document.</summary>
+    /// <exception cref="InvalidDataException">
+    /// The bytes are not a PDF at all: no <c>%PDF-</c> header, or a header with
+    /// neither a readable page nor any PDF completion marker. Refusing is the
+    /// point — a blank A4 would tell the caller an import succeeded when nothing
+    /// was read.
+    /// </exception>
     public static CadDocument Import(byte[] pdfBytes)
     {
         CadDocument document = ImportCore(pdfBytes);
@@ -38,12 +45,21 @@ public static class PdfImporter
     }
 
     /// <summary>
-    /// The import itself: sidecar, then vector, then structural fallback. Split out
-    /// of <see cref="Import"/> so the private-data capture happens exactly once
-    /// without being repeated at each of the early returns below.
+    /// The import itself: refusal, then sidecar, then vector, then structural
+    /// fallback. Split out of <see cref="Import"/> so the private-data capture
+    /// happens exactly once without being repeated at each of the early returns.
     /// </summary>
     private static CadDocument ImportCore(byte[] pdfBytes)
     {
+        // 0) A file that is not a PDF at all is refused here, before any parser
+        //    gets a chance to fall through and hand back a fabricated A4.
+        if (!HasPdfHeader(pdfBytes))
+        {
+            throw new InvalidDataException(
+                $"Not a PDF: the {pdfBytes.Length}-byte input has no %PDF- header in its " +
+                "first 1024 bytes.");
+        }
+
         // 1) Our own lossless sidecar wins.
         try
         {
@@ -64,12 +80,21 @@ public static class PdfImporter
                 return BuildFromPages(file, pageDicts);
             }
         }
+        catch (Parsing.PdfNestingLimitException)
+        {
+            // Hostile nesting: refuse rather than swallow the refusal and
+            // substitute a blank page for a file that was deliberately crafted.
+            throw;
+        }
         catch (Exception)
         {
             // fall through to the structural (page-size only) import
         }
 
         // 3) Structural fallback: one artboard per page, non-uniform sizes allowed.
+        //    This is the path for a real PDF whose object model or xref is damaged
+        //    but whose page objects are still intact — the public API must hand a
+        //    caller a usable document there, not throw (see VeraPdfCorpusTests).
         var document = new CadDocument { Name = "Imported" };
         IReadOnlyList<Size2D> pages = ReadPageSizes(pdfBytes);
         IReadOnlyList<Point2D> origins = GridOrigins(pages);
@@ -80,13 +105,50 @@ public static class PdfImporter
             artboard.AddLayer("Layer 1");
         }
 
+        // 4) Nothing readable at all. A complete-but-empty PDF (a header and an
+        //    end marker, no pages) is a legitimate blank document; anything else
+        //    is not a PDF document and must be refused, not silently accepted.
         if (pages.Count == 0)
         {
+            if (!HasPdfCompletionMarker(pdfBytes))
+            {
+                throw new InvalidDataException(
+                    $"Not a readable PDF: the {pdfBytes.Length}-byte input has a %PDF- header " +
+                    "but no readable page, no page-size MediaBox and no completion marker " +
+                    "(%%EOF / startxref / trailer).");
+            }
+
             Artboard artboard = document.AddArtboard(PageSizes.A4Landscape, "Page 1");
             artboard.AddLayer("Layer 1");
         }
 
         return document;
+    }
+
+    /// <summary>
+    /// True when the bytes carry a PDF header (<c>%PDF-</c>) near the start. ISO
+    /// 32000-1 §7.5.2 puts it on the first line; readers tolerate a little leading
+    /// junk, so the first 1024 bytes are searched.
+    /// </summary>
+    private static bool HasPdfHeader(byte[] bytes)
+    {
+        int limit = Math.Min(bytes.Length, 1024);
+        ReadOnlySpan<byte> header = new[] { (byte)'%', (byte)'P', (byte)'D', (byte)'F', (byte)'-' };
+        return bytes.AsSpan(0, limit).IndexOf(header) >= 0;
+    }
+
+    /// <summary>
+    /// True when the bytes carry a PDF completion marker. Used only to distinguish
+    /// an empty-but-complete PDF (accepted as a blank page) from a fragment that is
+    /// not a PDF document (refused).
+    /// </summary>
+    private static bool HasPdfCompletionMarker(byte[] bytes)
+    {
+        int length = Math.Min(bytes.Length, 1024);
+        string tail = Encoding.Latin1.GetString(bytes, bytes.Length - length, length);
+        return tail.Contains("%%EOF", StringComparison.Ordinal)
+               || tail.Contains("startxref", StringComparison.Ordinal)
+               || tail.Contains("trailer", StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -308,7 +370,16 @@ public static class PdfImporter
                 double lly = ToNum(file.Resolve(box[1]));
                 double urx = ToNum(file.Resolve(box[2]));
                 double ury = ToNum(file.Resolve(box[3]));
-                return (Math.Abs(urx - llx), Math.Abs(ury - lly));
+                double width = Math.Abs(urx - llx);
+                double height = Math.Abs(ury - lly);
+                if (IsUsableSize(width, height))
+                {
+                    return (width, height);
+                }
+
+                // A MediaBox holding NaN, Infinity or an overflowing number is not
+                // a page size; keep walking up the tree rather than minting a
+                // non-finite artboard the serializer cannot represent.
             }
 
             current = dict.GetValueOrDefault("Parent");
@@ -316,6 +387,10 @@ public static class PdfImporter
 
         return (PageSizes.A4Landscape.Width, PageSizes.A4Landscape.Height);
     }
+
+    /// <summary>A page size is usable only when it is finite and has area.</summary>
+    private static bool IsUsableSize(double width, double height)
+        => double.IsFinite(width) && double.IsFinite(height) && width > 0 && height > 0;
 
     private static double ToNum(object? value) => value switch
     {
@@ -376,7 +451,21 @@ public static class PdfImporter
                 double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out double urx) &&
                 double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out double ury))
             {
-                sizes.Add(new Size2D(Math.Abs(urx - llx), Math.Abs(ury - lly)));
+                double width = Math.Abs(urx - llx);
+                double height = Math.Abs(ury - lly);
+                if (IsUsableSize(width, height))
+                {
+                    sizes.Add(new Size2D(width, height));
+                    index = close + 1;
+                    continue;
+                }
+
+                // double.TryParse accepts "NaN" and "Infinity" and overflows
+                // "1e400" to infinity, and the difference of two finite extremes
+                // ("[-1e308 -1e308 1e308 1e308]") overflows too. The page is real
+                // even though its box is not: keep the page and give it the
+                // default size rather than a non-finite artboard.
+                sizes.Add(PageSizes.A4Landscape);
             }
 
             index = close + 1;

@@ -184,10 +184,22 @@ internal sealed class PdfFile
             return null;
         }
 
+        // The declared /Count is a claim, not a promise. Every iteration must
+        // consume bytes, and the moment the bytes run out (no offset, or EOF) the
+        // section is over however large the count says it is. Without this a
+        // 130-byte file declaring 2e9 entries loops 2e9 times, and a 13-digit
+        // count runs for about an hour: work proportional to a number in the
+        // file rather than to the file.
         while (true)
         {
             reader.SkipWhitespace();
-            if (reader.Peek() == 't') // trailer
+            int peeked = reader.Peek();
+            if (peeked < 0) // EOF
+            {
+                break;
+            }
+
+            if (peeked == 't') // trailer
             {
                 break;
             }
@@ -199,14 +211,28 @@ internal sealed class PdfFile
                 break;
             }
 
+            bool exhausted = false;
             for (long i = 0; i < count.Value; i++)
             {
                 long? entryOffset = reader.ReadInteger();
                 long? gen = reader.ReadInteger();
+                if (entryOffset is null || gen is null)
+                {
+                    exhausted = true;
+                    break;
+                }
+
                 reader.SkipWhitespace();
-                char type = (char)reader.Peek();
+                int typePeek = reader.Peek();
+                if (typePeek < 0)
+                {
+                    exhausted = true;
+                    break;
+                }
+
+                char type = (char)typePeek;
                 reader.SkipLine();
-                if (entryOffset is null || gen is null || type != 'n')
+                if (type != 'n')
                 {
                     continue;
                 }
@@ -216,6 +242,11 @@ internal sealed class PdfFile
                 {
                     _offsets[number] = entryOffset.Value;
                 }
+            }
+
+            if (exhausted)
+            {
+                break;
             }
         }
 
