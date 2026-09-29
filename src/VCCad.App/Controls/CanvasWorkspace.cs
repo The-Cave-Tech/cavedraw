@@ -65,6 +65,16 @@ public sealed class CanvasWorkspace : Control
     /// </summary>
     private LayerItem? _plainClickCandidate;
 
+    // Gradient annotator drag (Select tool): the path whose gradient is being placed, the box its
+    // normalised geometry is measured against, the handle grabbed, and the fill as it was before
+    // the drag so the whole gesture is one undo step.
+    private PathItem? _gradientPath;
+    private Rect _gradientBox;
+    private GradientHandle _gradientHandle;
+    private FillSpec _gradientBefore;
+    private GradientSpec _gradientSpec0 = GradientSpec.Default;
+    private bool _gradientMoved;
+
     // Marquee (rubber-band) selection.
     private bool _marqueeActive;
     private Point2D _marqueeStart;
@@ -1222,6 +1232,13 @@ public sealed class CanvasWorkspace : Control
         _selectMoved = false;
         _vm.ClearPointSelection();
 
+        // The gradient annotators are drawn over the object, so they grab first: a press on one
+        // of their handles is about the gradient, not about whatever is underneath it.
+        if (TryBeginGradientDrag(model))
+        {
+            return;
+        }
+
         // Rotation handle sits above the selection box.
         if (HitRotationHandle(model))
         {
@@ -1355,8 +1372,125 @@ public sealed class CanvasWorkspace : Control
         _dragStartModel = model;
     }
 
+    /// <summary>
+    /// The path whose gradient annotators are on screen: the primary selection, when it carries a
+    /// gradient. One object at a time, because the annotators are that object's geometry.
+    /// </summary>
+    private PathItem? GradientTargetPath()
+        => _vm?.PrimarySelection is PathItem { Fill.HasGradient: true } path ? path : null;
+
+    /// <summary>Grabs a gradient handle if the press is on one. False means "not about the gradient".</summary>
+    private bool TryBeginGradientDrag(Point2D model)
+    {
+        if (GradientTargetPath() is not { } path)
+        {
+            return false;
+        }
+
+        Rect box = GetGeometry(path).Bounds;
+        if (box.Width <= 0 || box.Height <= 0)
+        {
+            return false;
+        }
+
+        GradientSpec spec = path.Fill.Gradient!;
+        GradientHandle handle = GradientAnnotators.HitTest(spec, box, model, PickTolerance * 2.5);
+        if (handle == GradientHandle.None)
+        {
+            return false;
+        }
+
+        _gradientPath = path;
+        _gradientBox = box;
+        _gradientHandle = handle;
+        _gradientBefore = path.Fill;
+        _gradientSpec0 = spec;
+        _gradientMoved = false;
+        return true;
+    }
+
+    /// <summary>Places the gradient's annotators while the gesture lasts.</summary>
+    private void GradientDrag(Point2D model)
+    {
+        if (_gradientPath is null || _gradientHandle == GradientHandle.None)
+        {
+            return;
+        }
+
+        // Always from the spec as it was when the press happened, so the drag is absolute and
+        // does not accumulate whatever rounding each move introduces.
+        GradientSpec dragged = GradientAnnotators.Drag(
+            _gradientSpec0, _gradientBox, _gradientHandle, model, _shiftHeld);
+
+        _gradientPath.Fill = _gradientPath.Fill with { Gradient = dragged };
+        _gradientMoved = true;
+        _vm!.RaiseTransformChanged();
+        InvalidateVisual();
+    }
+
+    /// <summary>Commits a gradient drag as one undo step.</summary>
+    private void GradientRelease(Point2D model)
+    {
+        if (_gradientPath is null || _gradientHandle == GradientHandle.None)
+        {
+            return;
+        }
+
+        if (_gradientMoved && _vm is not null)
+        {
+            _vm.Execute(new SetFillCommand(_gradientPath, _gradientPath.Fill, _gradientBefore));
+        }
+
+        _gradientPath = null;
+        _gradientHandle = GradientHandle.None;
+        _gradientMoved = false;
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Draws a gradient's annotators: the linear ramp's line with its two ends, or the radial
+    /// centre with its radius handles. Drawn in the selection colour, because they are that
+    /// selection's chrome.
+    ///
+    /// Freeform and conical gradients have none: neither has a renderer yet, so handles would be
+    /// placed on a picture that is only the fill's flat colour.
+    /// </summary>
+    private void PaintGradientAnnotators(DrawingContext context, PathItem path)
+    {
+        Rect box = GetGeometry(path).Bounds;
+        if (box.Width <= 0 || box.Height <= 0)
+        {
+            return;
+        }
+
+        GradientSpec spec = path.Fill.Gradient!;
+        IReadOnlyList<(GradientHandle Handle, Point2D Point)> handles = GradientAnnotators.Handles(spec, box);
+        if (handles.Count == 0)
+        {
+            return;
+        }
+
+        var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF)), 1.6);
+        if (spec.Kind == GradientKind.Linear)
+        {
+            context.DrawLine(pen, ModelToScreen(handles[0].Point), ModelToScreen(handles[1].Point));
+        }
+
+        foreach ((GradientHandle handle, Point2D point) in handles)
+        {
+            double radius = handle == GradientHandle.RadialCentre ? 5.0 : 4.0;
+            context.DrawEllipse(Brushes.White, pen, ModelToScreen(point), radius, radius);
+        }
+    }
+
     private void SelectDrag(Point2D model)
     {
+        if (_gradientHandle != GradientHandle.None)
+        {
+            GradientDrag(model);
+            return;
+        }
+
         if (_marqueeActive)
         {
             _marqueeCurrent = model;
@@ -1426,6 +1560,12 @@ public sealed class CanvasWorkspace : Control
 
     private void SelectRelease(Point2D model)
     {
+        if (_gradientHandle != GradientHandle.None)
+        {
+            GradientRelease(model);
+            return;
+        }
+
         if (_marqueeActive)
         {
             FinishMarquee();
@@ -3965,6 +4105,13 @@ public sealed class CanvasWorkspace : Control
             if (!selection.IsEmpty)
             {
                 PaintSelectChrome(context);
+            }
+
+            // The gradient annotators sit on top of the chrome: they are what the person drags to
+            // place the ramp, and the box's own handles are underneath them.
+            if (GradientTargetPath() is { } gradientPath)
+            {
+                PaintGradientAnnotators(context, gradientPath);
             }
         }
         else if (tool == EditorTool.Node)
