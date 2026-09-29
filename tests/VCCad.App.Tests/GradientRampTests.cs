@@ -202,4 +202,45 @@ public class GradientRampTests
             window.Close();
         }
     }
+
+    [AvaloniaFact]
+    public void TwoStopsAtTheSamePositionStayTwoMarkersAndCanBeDraggedApart()
+    {
+        // Equal positions are a HARD EDGE, not a duplicate: the model keeps both stops so the
+        // boundary resolves to the later one. A ramp that de-duplicated them for display would
+        // quietly turn the edge into a fast ramp, so both markers must survive and be draggable.
+        var spec = new GradientSpec
+        {
+            Stops = new[]
+            {
+                new GradientStop(0.5, ColorRgb.Red),
+                new GradientStop(0.5, ColorRgb.Blue),
+            },
+        };
+
+        var ramp = new GradientRamp { Spec = spec };
+        Window window = Host(ramp);
+        try
+        {
+            Assert.Equal(2, ramp.Spec.Stops.Count);
+
+            double x = ramp.StripBounds.X + (ramp.StripBounds.Width * 0.5);
+            int under = ramp.MarkerAt(new Point(x, ramp.StripBounds.Y));
+            Assert.InRange(under, 0, 1);
+
+            Point from = InWindow(window, ramp, x, ramp.StripBounds.Y);
+            Point to = InWindow(window, ramp, ramp.StripBounds.X + (ramp.StripBounds.Width * 0.75), ramp.StripBounds.Y);
+            InputInjection.Press(window, from.X, from.Y, shift: false);
+            InputInjection.Move(window, to.X, to.Y, leftDown: true);
+            InputInjection.Release(window, to.X, to.Y);
+
+            Assert.Equal(2, ramp.Spec.Stops.Count);
+            Assert.NotEqual(ramp.Spec.Stops[0].Position, ramp.Spec.Stops[1].Position);
+            Assert.InRange(ramp.Spec.Stops[under].Position, 0.73, 0.77);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
 }

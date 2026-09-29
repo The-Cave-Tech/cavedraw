@@ -207,7 +207,7 @@ public sealed class GradientRamp : Control
     public void AddStop(double position)
     {
         position = Math.Clamp(position, 0.0, 1.0);
-        (ColorRgb colour, double opacity) = GradientPaint.Sample(_spec, position);
+        (ColorRgb colour, double opacity) = _spec.Sample(position);
         var stops = _spec.Stops.ToList();
         stops.Add(new ModelStop(position, colour, opacity));
         stops.Sort((a, b) => a.Position.CompareTo(b.Position));

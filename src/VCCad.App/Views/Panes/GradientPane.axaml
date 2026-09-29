@@ -1,0 +1,69 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:VCCad.App.Controls"
+             x:Class="VCCad.App.Views.Panes.GradientPane">
+  <StackPanel Margin="8,4" Spacing="3">
+    <!-- Kind, spread and the two whole-gradient actions. -->
+    <Grid ColumnDefinitions="Auto,6,*,6,Auto">
+      <Button x:Name="ApplyButton" Grid.Column="0" Content="Make gradient" Padding="6,2"/>
+      <ComboBox x:Name="KindBox" Grid.Column="2" HorizontalAlignment="Stretch"/>
+      <Button x:Name="ReverseButton" Grid.Column="4" Content="Reverse" Padding="6,2"/>
+    </Grid>
+
+    <Grid ColumnDefinitions="Auto,6,*">
+      <TextBlock Grid.Column="0" Text="Spread" VerticalAlignment="Center"
+                 FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+      <ComboBox x:Name="SpreadBox" Grid.Column="2" HorizontalAlignment="Stretch"/>
+    </Grid>
+
+    <!-- The ramp: click to add a stop, drag a marker, double-click to recolour it. -->
+    <controls:GradientRamp x:Name="Ramp" Height="44"/>
+
+    <!-- The selected stop: its own colour through the existing ring-and-triangle picker,
+         plus its position and opacity. -->
+    <Grid ColumnDefinitions="Auto,6,*,6,Auto,6,*">
+      <TextBlock Grid.Column="0" Text="Pos" VerticalAlignment="Center"
+                 FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+      <TextBox x:Name="PositionBox" Grid.Column="2" Height="22" Padding="4,0"
+               VerticalContentAlignment="Center" TextAlignment="Right"/>
+      <TextBlock Grid.Column="4" Text="Opacity" VerticalAlignment="Center"
+                 FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+      <TextBox x:Name="StopOpacityBox" Grid.Column="6" Height="22" Padding="4,0"
+               VerticalContentAlignment="Center" TextAlignment="Right"/>
+    </Grid>
+
+    <Grid ColumnDefinitions="Auto,6,*">
+      <controls:ColorWheel x:Name="StopWheel" Grid.Column="0" Width="92" Height="92"/>
+      <controls:ColorWheelOpacityBar x:Name="StopOpacityBar" Grid.Column="2" Height="14"
+                                     VerticalAlignment="Center"/>
+    </Grid>
+
+    <!-- Linear geometry: angle and the length of the ramp across the object. -->
+    <Grid x:Name="LinearRow" ColumnDefinitions="Auto,6,*,6,Auto,6,*">
+      <TextBlock Grid.Column="0" Text="Angle" VerticalAlignment="Center"
+                 FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+      <TextBox x:Name="AngleBox" Grid.Column="2" Height="22" Padding="4,0"
+               VerticalContentAlignment="Center" TextAlignment="Right"/>
+      <TextBlock Grid.Column="4" Text="Scale" VerticalAlignment="Center"
+                 FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+      <TextBox x:Name="ScaleBox" Grid.Column="6" Height="22" Padding="4,0"
+               VerticalContentAlignment="Center" TextAlignment="Right"/>
+    </Grid>
+
+    <!-- Radial geometry: centre and the aspect that turns the circle into an ellipse. -->
+    <Grid x:Name="RadialRow" ColumnDefinitions="Auto,4,*,4,*,4,Auto,4,*">
+      <TextBlock Grid.Column="0" Text="Cx" VerticalAlignment="Center"
+                 FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+      <TextBox x:Name="CentreXBox" Grid.Column="2" Height="22" Padding="4,0"
+               VerticalContentAlignment="Center" TextAlignment="Right"/>
+      <TextBlock Grid.Column="4" Text="Cy" VerticalAlignment="Center"
+                 FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+      <TextBox x:Name="CentreYBox" Grid.Column="6" Height="22" Padding="4,0"
+               VerticalContentAlignment="Center" TextAlignment="Right"/>
+      <TextBlock Grid.Column="8" Text="Aspect" VerticalAlignment="Center"
+                 FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+      <TextBox x:Name="AspectBox" Grid.Column="10" Height="22" Padding="4,0"
+               VerticalContentAlignment="Center" TextAlignment="Right"/>
+    </Grid>
+  </StackPanel>
+</UserControl>

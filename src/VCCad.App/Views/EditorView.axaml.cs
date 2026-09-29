@@ -307,6 +307,8 @@ public partial class EditorView : UserControl
         transform.Attach(_viewModel);
         var colors = new ColorsPane();
         colors.Attach(_viewModel);
+        var gradient = new GradientPane();
+        gradient.Attach(_viewModel);
         var stroke = new StrokePane();
         stroke.Attach(_viewModel);
         var swatches = new SwatchesPane();
@@ -320,6 +322,7 @@ public partial class EditorView : UserControl
 
         var appearance = new DockPanelModel { Id = "appearance", Title = "Appearance", Side = DockSide.Right };
         appearance.Tabs.Add(new DockTab { Id = "colors", Title = "Color", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => colors, IsOpen = true });
+        appearance.Tabs.Add(new DockTab { Id = "gradient", Title = "Gradient", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => gradient });
         appearance.Tabs.Add(new DockTab { Id = "swatches", Title = "Swatches", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => swatches });
         appearance.Tabs.Add(new DockTab { Id = "stroke", Title = "Stroke", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => stroke, IsOpen = true });
         appearance.Tabs.Add(new DockTab { Id = "text", Title = "Text", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => text });

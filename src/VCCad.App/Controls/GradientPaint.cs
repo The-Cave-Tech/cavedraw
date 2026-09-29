@@ -91,56 +91,13 @@ public static class GradientPaint
     }
 
     /// <summary>
-    /// The colour and opacity at a ramp position, blended the way the shader blends.
-    ///
-    /// The model has an evaluation of its own (<c>GradientSpec.Sample</c>), but its blend feeds
-    /// byte-scaled channels into a 0..1 colour, so anything that samples a ramp for display -
-    /// adding a stop where the person clicked, for instance - has to come through here.
+    /// The colour and opacity at a ramp position, sampled by the model itself so that the
+    /// panel, the exporter and the shader cannot drift apart on what a ramp means.
     /// </summary>
     public static (ColorRgb Colour, double Opacity) Sample(GradientSpec spec, double t)
     {
-        IReadOnlyList<ModelStop> stops = spec.Normalised();
-        if (stops.Count == 0)
-        {
-            return (ColorRgb.White, 1.0);
-        }
-
-        if (stops.Count == 1 || t <= stops[0].Position)
-        {
-            return (stops[0].Color, stops[0].Opacity);
-        }
-
-        if (t >= stops[^1].Position)
-        {
-            return (stops[^1].Color, stops[^1].Opacity);
-        }
-
-        for (int i = 0; i < stops.Count - 1; i++)
-        {
-            ModelStop a = stops[i];
-            ModelStop b = stops[i + 1];
-            if (t < a.Position || t > b.Position)
-            {
-                continue;
-            }
-
-            double span = b.Position - a.Position;
-            if (span <= 1e-9)
-            {
-                return (b.Color, b.Opacity);
-            }
-
-            double u = (t - a.Position) / span;
-            double midpoint = Math.Clamp(a.Midpoint, 1e-6, 1.0 - 1e-6);
-            if (Math.Abs(midpoint - 0.5) > 1e-9)
-            {
-                u = Math.Pow(u, Math.Log(0.5) / Math.Log(midpoint));
-            }
-
-            return (Blend(a.Color, b.Color, u), a.Opacity + ((b.Opacity - a.Opacity) * u));
-        }
-
-        return (stops[^1].Color, stops[^1].Opacity);
+        (ColorRgb Colour, double Opacity) sample = spec.Sample(t);
+        return sample;
     }
 
     /// <summary>
