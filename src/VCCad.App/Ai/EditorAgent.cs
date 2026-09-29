@@ -44,8 +44,14 @@ public sealed class EditorAgent
     /// </summary>
     private const int MaxObservationChars = 3000;
 
-    /// <summary>Character budget for the conversation before old turns are dropped.</summary>
-    private const int MaxHistoryChars = 48000;
+    /// <summary>Diary entry name for a turn the person typed.</summary>
+    public const string UserEntryName = "chat.user";
+
+    /// <summary>Diary entry name for a completed assistant reply.</summary>
+    public const string AssistantEntryName = "chat.assistant";
+
+    /// <summary>Diary entry name for "start a new conversation".</summary>
+    public const string ResetEntryName = "chat.reset";
 
     /// <summary>Sentinel meaning "the turn ended without a closing message".</summary>
     private const string NoAnswer = "\u0000no-answer";
@@ -55,17 +61,29 @@ public sealed class EditorAgent
     private readonly InteractionLog? _diary;
     private readonly List<LlmMessage> _history = new();
     private readonly List<ChatEntry> _transcript = new();
+    private readonly ContextCompressor _compressor;
 
     public EditorAgent(AutomationContext context, VllmClient client, InteractionLog? diary = null)
     {
         _context = context;
         _client = client;
         _diary = diary ?? context.History;
+        _compressor = new ContextCompressor(_client.HistoryChars);
         _history.Add(new LlmMessage("system", BuildSystemPrompt()));
+
+        // The conversation is continuous: what was said in an earlier run of the
+        // editor is in the diary, so it is restored rather than lost with the process.
+        RestoreFromDiary();
     }
 
     /// <summary>The conversation so far, oldest first.</summary>
     public IReadOnlyList<ChatEntry> Transcript => _transcript;
+
+    /// <summary>The accumulated summary of everything compressed out of the context.</summary>
+    public string CompressedSummary => _compressor.Summary;
+
+    /// <summary>How many times the conversation has been compressed.</summary>
+    public int CompressionCount => _compressor.CompressionCount;
 
     /// <summary>Raised whenever the transcript changes (any thread).</summary>
     public event EventHandler? TranscriptChanged;
@@ -80,10 +98,133 @@ public sealed class EditorAgent
     /// <summary>Resets the conversation, keeping the system prompt.</summary>
     public void Reset()
     {
+        // A cleared conversation must stay cleared across a restart, so the reset is
+        // written to the diary: restoration stops at the most recent reset marker.
+        if (_diary is not null && _transcript.Count > 0)
+        {
+            Remember(ResetEntryName, $"cleared {_transcript.Count} transcript entries");
+        }
+
+        _compressor.Reset();
         _history.Clear();
         _history.Add(new LlmMessage("system", BuildSystemPrompt()));
         _transcript.Clear();
         TranscriptChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Restores the conversation recorded in the diary, oldest first, skipping
+    /// anything cleared by a later reset. Only the person's turns and the
+    /// assistant's replies are restored: the intermediate operation chatter stays in
+    /// the History tab, so the Assistant tab reads as a conversation.
+    /// </summary>
+    /// <param name="maxEntries">Most recent entries to restore.</param>
+    /// <param name="maxChars">Ceiling on the restored text, so a long history does not
+    /// blow the context budget before the first turn.</param>
+    public static IReadOnlyList<ChatEntry> RestoreTranscript(
+        InteractionLog diary, int maxEntries = 40, int maxChars = 24000)
+    {
+        IReadOnlyList<InteractionRecord> tail = diary.Tail(2000);
+
+        int start = 0;
+        for (int i = tail.Count - 1; i >= 0; i--)
+        {
+            if (tail[i].Name == ResetEntryName)
+            {
+                start = i + 1;
+                break;
+            }
+        }
+
+        var spoken = new List<ChatEntry>();
+        for (int i = start; i < tail.Count; i++)
+        {
+            InteractionRecord record = tail[i];
+            if (record.Details is not { Length: > 0 })
+            {
+                continue;
+            }
+
+            if (record.Name == UserEntryName)
+            {
+                spoken.Add(new ChatEntry("user", record.Details));
+            }
+            else if (record.Name == AssistantEntryName)
+            {
+                spoken.Add(new ChatEntry("assistant", record.Details));
+            }
+        }
+
+        var kept = new List<ChatEntry>();
+        int chars = 0;
+        for (int i = spoken.Count - 1; i >= 0; i--)
+        {
+            if (kept.Count >= maxEntries || chars + spoken[i].Text.Length > maxChars)
+            {
+                break;
+            }
+
+            chars += spoken[i].Text.Length;
+            kept.Add(spoken[i]);
+        }
+
+        kept.Reverse();
+        return kept;
+    }
+
+    private void RestoreFromDiary()
+    {
+        if (_diary is null)
+        {
+            return;
+        }
+
+        IReadOnlyList<ChatEntry> restored;
+        try
+        {
+            restored = RestoreTranscript(_diary);
+        }
+        catch (Exception)
+        {
+            return; // an unreadable diary must not stop the assistant starting
+        }
+
+        foreach (ChatEntry entry in restored)
+        {
+            _transcript.Add(entry);
+            _history.Add(new LlmMessage(entry.Role, entry.Text));
+        }
+
+        if (restored.Count > 0)
+        {
+            _transcript.Add(new ChatEntry(
+                "action", $"restored {restored.Count} turn(s) from the diary — this conversation continues an earlier session"));
+        }
+    }
+
+    /// <summary>Records one conversation turn in the diary.</summary>
+    private void Remember(string name, string text)
+    {
+        if (_diary is null || string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        try
+        {
+            _diary.Record(
+                InteractionKind.Llm,
+                InteractionCategory.Note,
+                name,
+                details: text,
+                success: true,
+                durationMs: 0,
+                tags: new[] { "chat" });
+        }
+        catch (Exception)
+        {
+            // Persistence is valuable but never worth failing a turn for.
+        }
     }
 
     /// <summary>Runs one user turn to completion.</summary>
@@ -91,6 +232,7 @@ public sealed class EditorAgent
         string prompt, bool withScreenshot = false, CancellationToken cancellationToken = default)
     {
         Append(new ChatEntry("user", prompt));
+        Remember(UserEntryName, prompt);
 
         byte[]? startImage = withScreenshot ? _context.Screenshot?.Invoke() : null;
         string recall = RecallFor(prompt);
@@ -109,7 +251,7 @@ public sealed class EditorAgent
         {
             steps = step;
             cancellationToken.ThrowIfCancellationRequested();
-            TrimHistory();
+            await CompressHistoryAsync(cancellationToken).ConfigureAwait(false);
             Report($"step {step}: asking {_client.Model}…");
 
             LlmReply completion = await _client.CompleteAsync(_history, VccadTools, cancellationToken)
@@ -187,6 +329,7 @@ public sealed class EditorAgent
         }
 
         Append(new ChatEntry("assistant", reply));
+        Remember(AssistantEntryName, reply);
         return new AgentTurnResult(reply, actions, steps);
     }
 
@@ -282,6 +425,7 @@ public sealed class EditorAgent
 
         foreach (InteractionRecord entry in _diary.Search(prompt, limit: 12)
                      .Where(e => e.Kind != InteractionKind.Skill)
+                     .Where(e => !e.Name.StartsWith("chat.", StringComparison.Ordinal))
                      .Take(5))
         {
             string target = string.IsNullOrWhiteSpace(entry.Target) ? string.Empty : $" {Compact(entry.Target, 80)}";
@@ -310,52 +454,93 @@ public sealed class EditorAgent
     }
 
     /// <summary>
-    /// Drops the middle of the conversation once it grows past its budget, always
-    /// keeping the system prompt and the original task, and cutting only at a user
-    /// turn boundary.
+    /// Compresses the middle of the conversation once it outgrows the endpoint's
+    /// budget, instead of deleting it.
     ///
     /// Two things must not happen: the endpoint rejects a conversation with no user
     /// query ("No user query found in messages"), and a <c>tool</c> result must never
-    /// lose the assistant message that requested it — hence the boundary cut rather
-    /// than trimming individual messages.
+    /// lose the assistant message that requested it — hence cutting only at a user
+    /// turn boundary. What is cut is turned into a summary that is carried forward,
+    /// so a long session accumulates what happened rather than forgetting it.
     /// </summary>
-    private void TrimHistory()
+    private async Task CompressHistoryAsync(CancellationToken cancellationToken)
     {
-        static int Cost(LlmMessage m) => (m.Text?.Length ?? 0) + ((m.ImagePng?.Length ?? 0) / 4);
-
-        int total = _history.Sum(Cost);
-        if (total <= MaxHistoryChars || _history.Count <= 4)
+        // The accumulated summary already holds the earlier material, so the
+        // compressor hands back only the messages that are genuinely new;
+        // re-summarising the summary would duplicate it.
+        IReadOnlyList<LlmMessage>? region = _compressor.SelectRegion(_history);
+        if (region is null)
         {
             return;
         }
 
-        // The most recent user turn is a safe place to resume from.
-        int cut = -1;
-        for (int i = _history.Count - 1; i >= 2; i--)
+        string digest = ContextCompressor.Digest(region);
+        string written = await SummariseRegionAsync(region, cancellationToken).ConfigureAwait(false);
+
+        string combined = string.IsNullOrWhiteSpace(written)
+            ? digest
+            : digest.Length == 0 ? written : written + Environment.NewLine + digest;
+
+        if (string.IsNullOrWhiteSpace(combined))
         {
-            if (_history[i].Role == "user")
-            {
-                cut = i;
-                break;
-            }
+            return;
         }
 
-        if (cut <= 2)
-        {
-            return; // nothing droppable without breaking the conversation
-        }
-
-        var trimmed = new List<LlmMessage> { _history[0] };
-        if (_history.Count > 1 && _history[1].Role == "user")
-        {
-            trimmed.Add(_history[1]); // the original task
-        }
-
-        trimmed.Add(new LlmMessage("user", "(earlier steps omitted to stay within the context window)"));
-        trimmed.AddRange(_history.Skip(cut));
-
+        List<LlmMessage> rebuilt = _compressor.Apply(_history, combined);
         _history.Clear();
-        _history.AddRange(trimmed);
+        _history.AddRange(rebuilt);
+
+        Append(new ChatEntry("action",
+            $"compressed {region.Count} earlier message(s) into a summary ({_compressor.Summary.Length} chars kept)"));
+        Report($"compressed earlier context into a summary ({_compressor.Summary.Length} chars)");
+    }
+
+    /// <summary>
+    /// Asks the model for a compact record of the dropped region. Best effort: the
+    /// deterministic digest is always kept alongside it, so a failed or forgetful
+    /// summariser cannot lose a fact the user asked to be remembered.
+    /// </summary>
+    private async Task<string> SummariseRegionAsync(
+        IReadOnlyList<LlmMessage> region, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var transcript = new StringBuilder();
+            foreach (LlmMessage message in region)
+            {
+                if (string.IsNullOrWhiteSpace(message.Text))
+                {
+                    continue;
+                }
+
+                transcript.AppendLine($"{message.Role}: {message.Text}");
+                if (transcript.Length > 60000)
+                {
+                    transcript.AppendLine("…(the rest is in the deterministic notes)");
+                    break;
+                }
+            }
+
+            var messages = new List<LlmMessage>
+            {
+                new("system",
+                    "You compress the earlier part of a working conversation so it can be carried " +
+                    "forward without its full text. Write a compact record, at most 1200 characters, " +
+                    "with these headings: DECIDED, DONE, FAILED, STILL TO DO. Keep every concrete fact " +
+                    "the user stated or asked to be remembered, verbatim — names, ids, numbers, paths, " +
+                    "codewords, sizes — and keep the names of operations that worked. Do not invent " +
+                    "anything and do not repeat the notes already carried forward. Reply with the " +
+                    "record only."),
+                new("user", "EARLIER PART OF THE CONVERSATION:\n" + transcript),
+            };
+
+            LlmReply reply = await _client.CompleteAsync(messages, null, cancellationToken).ConfigureAwait(false);
+            return reply.Text?.Trim() ?? string.Empty;
+        }
+        catch (Exception)
+        {
+            return string.Empty; // the digest carries the facts
+        }
     }
 
     private static (string Op, JsonElement Parameters) ParseArguments(string arguments)
@@ -452,19 +637,57 @@ public sealed class EditorAgent
             """),
     };
 
-    private static string BuildSystemPrompt()
+    /// <summary>
+    /// The system prompt: what the assistant IS, then what it is for, then how it
+    /// works, then the operational rules learned from real failures.
+    ///
+    /// The order matters. A model handed tool descriptions and operational advice
+    /// with no statement of purpose waits to be told what it is allowed to do — it
+    /// does not paginate unless someone says pagination is in scope. Public so a test
+    /// can pin that the scope is stated, since the prompt is the behaviour.
+    /// </summary>
+    public static string BuildSystemPrompt()
     {
         var sb = new StringBuilder();
-        sb.AppendLine("You are the assistant built into VCCad, a vector graphics editor (Illustrator-style)");
-        sb.AppendLine("that stores documents as PDF. You work inside the running application: the user watches");
-        sb.AppendLine("your edits appear on their canvas in real time.");
+        sb.AppendLine("WHO YOU ARE");
+        sb.AppendLine("You are the assistant built into VCCad. VCCad is a vector graphics application");
+        sb.AppendLine("(Illustrator-style) that stores documents as PDF, and you are its automation layer:");
+        sb.AppendLine("the way the whole program is driven by intent instead of by hand. That is your");
+        sb.AppendLine("purpose, not an extra feature — the user is talking to the application through you.");
         sb.AppendLine();
-        sb.AppendLine("Call the vccad_operation tool to do anything. You may call it repeatedly, one operation");
-        sb.AppendLine("at a time, until the task is done. When you are finished (or need to ask the user");
-        sb.AppendLine("something), reply with ordinary text and no tool call.");
+        sb.AppendLine("WHAT YOU ARE FOR");
+        sb.AppendLine("Your scope is the WHOLE application, not just drawing. Anything a person can do in");
+        sb.AppendLine("VCCad, you can do, through the same operation registry the interface and the HTTP");
+        sb.AppendLine("endpoint use. That includes, explicitly:");
+        sb.AppendLine("- drawing and editing: shapes, paths and nodes, fills, strokes, groups, transforms,");
+        sb.AppendLine("  alignment and arrangement;");
+        sb.AppendLine("- text editing and typography: creating, updating, selecting, aligning and styling");
+        sb.AppendLine("  text runs, fonts, sizes and spacing;");
+        sb.AppendLine("- pagination and imposition: artboards and pages, page bounds and sizes, arranging,");
+        sb.AppendLine("  repeating and imposing work across pages;");
+        sb.AppendLine("- document structure and layers: artboards, layers, groups, visibility, ordering and");
+        sb.AppendLine("  document properties;");
+        sb.AppendLine("- colour and styles: RGB and CMYK fills and strokes, dash patterns;");
+        sb.AppendLine("- import and export: opening and importing real-world PDFs, exporting and saving;");
+        sb.AppendLine("- inspection: listing and finding objects, dumping the screen, describing what is");
+        sb.AppendLine("  visible, and searching the application diary.");
+        sb.AppendLine("If you can picture a person doing it in this program, assume you can do it too. Look");
+        sb.AppendLine("for the operation that does it; do not wait to be told that you are allowed.");
         sb.AppendLine();
-        sb.AppendLine("Important:");
-        sb.AppendLine("- Only use operation names that appear in the tool description.");
+        sb.AppendLine("HOW YOU WORK");
+        sb.AppendLine("Act. When the user asks for something, call operations and make it happen. Do not");
+        sb.AppendLine("answer by reciting what the program can do, and do not ask the person to restate the");
+        sb.AppendLine("program's capabilities to you. Ask a question only when the request is genuinely");
+        sb.AppendLine("ambiguous in a way that changes the work.");
+        sb.AppendLine("Never invent an operation: the catalog in the tool description is the truth. If");
+        sb.AppendLine("nothing in it fits, say so plainly and describe what is missing rather than calling");
+        sb.AppendLine("something that does not exist.");
+        sb.AppendLine("You work inside the running application: the user watches your edits appear on their");
+        sb.AppendLine("canvas in real time. Call the vccad_operation tool to do anything. You may call it");
+        sb.AppendLine("repeatedly, one operation at a time, until the task is done. When you are finished (or");
+        sb.AppendLine("need to ask the user something), reply with ordinary text and no tool call.");
+        sb.AppendLine();
+        sb.AppendLine("Operational rules learned from real failures:");
         sb.AppendLine("- Coordinates are PDF points (72 per inch), origin at the top-left of the document.");
         sb.AppendLine("- Most operations act on the current SELECTION. Call object.list or object.find to get ids,");
         sb.AppendLine("  then selection.set before styling or transforming existing objects.");
@@ -495,7 +718,8 @@ public sealed class EditorAgent
         sb.AppendLine("  (or the task was clearly a reusable recipe), store it. Include what inputs it needs.");
         sb.AppendLine("- history.note {text}         — record a decision or caveat worth remembering.");
         sb.AppendLine("Relevant skills and past steps are recalled for you automatically at the start of a turn;");
-        sb.AppendLine("follow a recalled approach when it fits rather than working it out again.");
+        sb.AppendLine("follow a recalled approach when it fits rather than working it out again. This conversation");
+        sb.AppendLine("also continues across restarts, so earlier turns may already be in your context.");
         sb.AppendLine();
         sb.AppendLine("Worked example — \"open the sample, hide all size layers except UK 6, rename the text");
         sb.AppendLine("UPPER CUP to Upper Cup and centre it in its rectangle\":");

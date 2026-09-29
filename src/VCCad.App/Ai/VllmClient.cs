@@ -33,6 +33,47 @@ public sealed class LlmOptions
     /// <summary>Cap on generated tokens per turn.</summary>
     public int MaxTokens { get; set; } = 2000;
 
+    /// <summary>
+    /// The endpoint's real context window, in tokens. The deployed model is served
+    /// with ~94k tokens (the same limit a corpus-sized listing already ran into), and
+    /// the conversation budget is derived from it rather than from a magic number, so
+    /// a larger window is actually used instead of leaving most of it idle.
+    /// </summary>
+    public int ContextTokens { get; set; } =
+        IntFromEnvironment("VCCAD_LLM_CONTEXT_TOKENS") ?? DefaultContextTokens;
+
+    /// <summary>Default context window of the deployed endpoint, in tokens.</summary>
+    public const int DefaultContextTokens = 94_000;
+
+    /// <summary>Rough characters per token for this model's English/code mix.</summary>
+    public const int CharsPerToken = 4;
+
+    /// <summary>
+    /// Share of the window the conversation may occupy. The remainder holds the
+    /// operation catalog (sent with every request), the model's own completion and
+    /// any attached screenshots, none of which appear in the message list.
+    /// </summary>
+    public const double HistoryShareOfContext = 0.5;
+
+    private int? _historyChars = IntFromEnvironment("VCCAD_LLM_HISTORY_CHARS");
+
+    /// <summary>
+    /// Character budget for the conversation before its middle is compressed.
+    /// Derived from <see cref="ContextTokens"/> unless set explicitly; the
+    /// <c>VCCAD_LLM_HISTORY_CHARS</c> environment variable overrides it, which is
+    /// how a test drives compression without a 200,000-character conversation.
+    /// </summary>
+    public int HistoryChars
+    {
+        get => _historyChars ?? (int)(ContextTokens * HistoryShareOfContext * CharsPerToken);
+        set => _historyChars = value;
+    }
+
+    private static int? IntFromEnvironment(string name)
+        => int.TryParse(Environment.GetEnvironmentVariable(name), out int value) && value > 0
+            ? value
+            : null;
+
     /// <summary>Per-request timeout.</summary>
     public TimeSpan Timeout { get; set; } = TimeSpan.FromMinutes(3);
 }
@@ -97,13 +138,20 @@ public sealed class VllmClient
     /// <summary>Current endpoint.</summary>
     public string BaseUrl => _options.BaseUrl;
 
-    /// <summary>Sends a conversation and returns the assistant's reply.</summary>
-    public async Task<LlmReply> CompleteAsync(
-        IReadOnlyList<LlmMessage> messages,
-        IReadOnlyList<LlmTool>? tools = null,
-        CancellationToken cancellationToken = default)
+    /// <summary>Character budget for the conversation before its middle is compressed.</summary>
+    public int HistoryChars => _options.HistoryChars;
+
+    /// <summary>The model's context window in tokens, for display and diagnostics.</summary>
+    public int ContextTokens => _options.ContextTokens;
+
+    /// <summary>
+    /// The JSON body this client posts for a conversation. Public so the wire shape —
+    /// role order, tool-call ids, attached images, the catalog given to the model — can
+    /// be pinned by a test without a live endpoint (there is no way to inspect the
+    /// request that actually leaves the process).
+    /// </summary>
+    public string BuildRequestBody(IReadOnlyList<LlmMessage> messages, IReadOnlyList<LlmTool>? tools = null)
     {
-        string url = _options.BaseUrl.TrimEnd('/') + "/chat/completions";
         var payload = new Dictionary<string, object?>
         {
             ["model"] = _options.Model,
@@ -127,7 +175,17 @@ public sealed class VllmClient
             payload["tool_choice"] = "auto";
         }
 
-        string json = JsonSerializer.Serialize(payload);
+        return JsonSerializer.Serialize(payload);
+    }
+
+    /// <summary>Sends a conversation and returns the assistant's reply.</summary>
+    public async Task<LlmReply> CompleteAsync(
+        IReadOnlyList<LlmMessage> messages,
+        IReadOnlyList<LlmTool>? tools = null,
+        CancellationToken cancellationToken = default)
+    {
+        string url = _options.BaseUrl.TrimEnd('/') + "/chat/completions";
+        string json = BuildRequestBody(messages, tools);
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
