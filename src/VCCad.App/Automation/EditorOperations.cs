@@ -11,6 +11,7 @@ using VCCad.App.ViewModels;
 using VCCad.App.Views.Panes;
 using VCCad.Core.Commands;
 using VCCad.Core.Model;
+using VCCad.Core.Input;
 using VCCad.Core.Selection;
 using VCCad.Core.Serialization;
 using VCCad.Geometry;
@@ -1571,6 +1572,71 @@ public static class EditorOperations
         // *is* the gesture. These deliver actual pointer and keyboard events so text
         // editing - placing a caret, double-clicking a word, typing into a selection -
         // is exercised the way a person exercises it.
+        Add("input.batch",
+            "Replay a whole session of input in one call: an ordered list of events, each with " +
+            "a delta in milliseconds from the one before it. Every event goes through the same " +
+            "injection path a person's events take, so a batch and a hand cannot diverge. This " +
+            "is how a task like drawing by mouse and keyboard is carried out as gestures rather " +
+            "than as operations. kind is one of down, move, up, wheel, hover, hover-out, enter, " +
+            "leave, keydown, keyup, text, pen-down, pen-move, pen-up, touch-down, touch-move, " +
+            "touch-up.",
+            "events:[{kind,x,y,deltaMs,extend?,modifier?,button?,modifiers?,device?,pressure?," +
+            "tiltX?,tiltY?,key?,text?,pointerId?,wheelDelta?}], fast?:bool (skip the waits)",
+            (ctx, p) =>
+            {
+                Avalonia.Visual root = Root(ctx);
+
+                if (!p.TryGetProperty("events", out JsonElement events) ||
+                    events.ValueKind != JsonValueKind.Array)
+                {
+                    throw new EditorOperationException(
+                        "Parameter 'events' is required and must be an array.");
+                }
+
+                var parsed = new List<InputEvent>();
+                int index = 0;
+
+                foreach (JsonElement element in events.EnumerateArray())
+                {
+                    // Case-insensitive: a driver writes "kind", the record calls it Kind, and
+                    // the default options would not bind it - which the batch's own validation
+                    // caught by naming every index rather than silently replaying nothing.
+                    InputEvent? one = element.Deserialize<InputEvent>(InputJson);
+                    if (one is null)
+                    {
+                        throw new EditorOperationException($"Event at index {index} is not an event.");
+                    }
+
+                    parsed.Add(one);
+                    index++;
+                }
+
+                var batch = new InputBatch { Events = parsed };
+
+                bool fast = p.GetBool("fast", false);
+                InputReplayResult done;
+
+                try
+                {
+                    done = batch.Replay(
+                        InjectionInputSink.For(root),
+                        fast ? InputTiming.AsFastAsPossible : InputTiming.RealTime);
+                }
+                catch (InputBatchException bad)
+                {
+                    // The index is the whole value of this: a driver has to be told which event
+                    // was wrong, not merely that the batch was.
+                    throw new EditorOperationException(bad.Message);
+                }
+
+                return new
+                {
+                    delivered = done.Delivered,
+                    milliseconds = Math.Round(done.Duration.TotalMilliseconds, 1),
+                    timing = done.Timing.ToString(),
+                };
+            });
+
         Add("input.pointer",
             "Click at a window coordinate with a real pointer event (x, y in window pixels). " +
             "Use clickCount 2 to double-click, which is how a word is selected for editing.",
@@ -2360,6 +2426,12 @@ public static class EditorOperations
 
         return root.GetVisualDescendants().OfType<VCCad.App.Controls.CanvasWorkspace>().FirstOrDefault();
     }
+    /// <summary>JSON options for reading an input event: names are matched loosely.</summary>
+    private static readonly JsonSerializerOptions InputJson = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
     /// <summary>The canvas, or a failure saying why there is none.</summary>
     private static CanvasWorkspace RequireCanvas(AutomationContext ctx)
         => Workspace(ctx) ?? throw new EditorOperationException("No canvas is available.");
