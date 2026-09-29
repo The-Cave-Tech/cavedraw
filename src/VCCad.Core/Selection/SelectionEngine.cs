@@ -126,6 +126,308 @@ public static class SelectionEngine
         return topmost;
     }
 
+    /// <summary>
+    /// The region of an object that is actually there, after every clip on it.
+    ///
+    /// This is what makes clipping a selection concern: a rectangle cut down to a sliver is
+    /// only that sliver, so a marquee that encloses the sliver encloses the object and one
+    /// that encloses only the cut-away part does not. Non-rectangular clips count - the
+    /// intersection is taken against the clip's own outline, not its box.
+    /// </summary>
+    public static Polygon VisibleRegion(LayerItem item, Vector2D offset)
+    {
+        Polygon region = Flatten(item, offset);
+
+        if (region.IsEmpty)
+        {
+            return region;
+        }
+
+        foreach (ClipSpec clip in item.Clips)
+        {
+            var rings = new List<IEnumerable<Point2D>>();
+
+            foreach (SubPath sub in clip.SubPaths)
+            {
+                rings.Add(Flatten(sub, offset).Points);
+            }
+
+            // An even-odd clip has holes, so its rings go in together: clipping by each ring
+            // separately would keep the contents of the hole.
+            region = region.ClipToConvex(new Polygon(rings));
+
+            if (region.IsEmpty)
+            {
+                return region;
+            }
+        }
+
+        return region;
+    }
+
+    /// <summary>An object's own outline, flattened and moved into document coordinates.</summary>
+    private static Polygon Flatten(LayerItem item, Vector2D offset)
+    {
+        var rings = new List<IEnumerable<Point2D>>();
+
+        switch (item)
+        {
+            case PathItem path:
+                foreach (SubPath sub in path.SubPaths)
+                {
+                    rings.Add(Flatten(sub, offset).Points);
+                }
+
+                break;
+
+            case TextItem text:
+                rings.Add(Box(text.BoundingBox(), offset));
+                break;
+
+            case ImageItem image:
+                rings.Add(Box(image.Placement, offset));
+                break;
+
+            case ArtGroup group:
+                foreach (LayerItem child in group.Children)
+                {
+                    Polygon childRegion = VisibleRegion(child, offset);
+                    if (!childRegion.IsEmpty)
+                    {
+                        rings.Add(childRegion.Points);
+                    }
+                }
+
+                break;
+        }
+
+        return new Polygon(rings);
+    }
+
+    /// <summary>The four corners of a rectangle, moved by an offset.</summary>
+    private static IEnumerable<Point2D> Box(Rect2D box, Vector2D offset) => new[]
+    {
+        new Point2D(box.Left + offset.X, box.Top + offset.Y),
+        new Point2D(box.Right + offset.X, box.Top + offset.Y),
+        new Point2D(box.Right + offset.X, box.Bottom + offset.Y),
+        new Point2D(box.Left + offset.X, box.Bottom + offset.Y),
+    };
+
+    /// <summary>
+    /// A subpath as a polygon, with curves walked at a fixed number of steps.
+    ///
+    /// Straight segments come out exact. A curve does not, and does not need to: the answers
+    /// wanted are "is this point in it" and "is it inside that", and a fine approximation
+    /// gives those for any shape a person would draw.
+    /// </summary>
+    private static Polygon Flatten(SubPath sub, Vector2D offset)
+    {
+        var points = new List<Point2D>();
+        const int Steps = 12;
+
+        if (sub.Nodes.Count == 0)
+        {
+            return new Polygon(points);
+        }
+
+        Point2D At(Point2D p) => new(p.X + offset.X, p.Y + offset.Y);
+        points.Add(At(sub.Nodes[0].Anchor));
+
+        int segments = sub.IsClosed ? sub.Nodes.Count : sub.Nodes.Count - 1;
+
+        for (int i = 0; i < segments; i++)
+        {
+            (int start, int end) = sub.SegmentEndNodes(i);
+            PathNode from = sub.Nodes[start];
+            PathNode to = sub.Nodes[end];
+
+            if (Near(from.OutHandle, from.Anchor) && Near(to.InHandle, to.Anchor))
+            {
+                points.Add(At(to.Anchor));
+                continue;
+            }
+
+            CubicBezier curve = sub.GetSegment(i);
+            for (int step = 1; step <= Steps; step++)
+            {
+                points.Add(At(curve.PointAt((double)step / Steps)));
+            }
+        }
+
+        return new Polygon(points);
+    }
+
+    private static bool Near(Point2D a, Point2D b)
+        => Math.Abs(a.X - b.X) < 1e-9 && Math.Abs(a.Y - b.Y) < 1e-9;
+
+    /// <summary>
+    /// A marquee's path: a rectangle as a rectangular PATH, so the same code serves a lasso.
+    ///
+    /// The corners are the two the pointer went between, in the order visited, and a marquee
+    /// can be dragged in any direction - so they are normalised here rather than by every
+    /// caller, which is how a drag up and to the left ends up selecting nothing.
+    /// </summary>
+    public static Polygon MarqueePath(Point2D first, Point2D second)
+    {
+        double left = Math.Min(first.X, second.X);
+        double right = Math.Max(first.X, second.X);
+        double top = Math.Min(first.Y, second.Y);
+        double bottom = Math.Max(first.Y, second.Y);
+
+        return new Polygon(new[]
+        {
+            new Point2D(left, top), new Point2D(right, top),
+            new Point2D(right, bottom), new Point2D(left, bottom),
+        });
+    }
+
+    /// <summary>
+    /// What a marquee selects, dragged from <paramref name="from"/> to <paramref name="to"/>.
+    ///
+    /// The rules depend on where the drag STARTED, not where it currently is:
+    ///
+    /// - Started inside an artboard, it selects that artboard's objects and disqualifies
+    ///   everything else. Growing past the artboard's edge does not change the rule - a drag
+    ///   that began on a page is about that page however far it is taken, and losing the rule
+    ///   mid-gesture would change what the person is doing without them doing anything.
+    /// - Started outside every artboard, it selects what it touches on the first artboard it
+    ///   meets; once it encloses an artboard whole, the artboard is selected instead of its
+    ///   contents, and every other artboard it reaches comes whole as well.
+    /// </summary>
+    /// <param name="focused">The artboard already focused, if any.</param>
+    public static SelectionResult Marquee(
+        CadDocument document, Point2D from, Point2D to, Artboard? focused = null)
+    {
+        Polygon path = MarqueePath(from, to);
+        Artboard? startedIn = ArtboardAt(document.Artboards, from) ?? focused;
+
+        return startedIn is not null
+            ? WithinArtboard(startedIn, path)
+            : AcrossArtboards(document, path);
+    }
+
+    /// <summary>
+    /// A marquee that began on a page: that page's objects, and nothing else.
+    ///
+    /// Growing beyond the page is allowed and changes nothing. "Objects outside of the focused
+    /// artboard are disqualified from selection" is the rule, and it stays the rule however
+    /// large the marquee gets.
+    /// </summary>
+    private static SelectionResult WithinArtboard(Artboard artboard, Polygon path)
+    {
+        var selected = new List<LayerItem>();
+        Vector2D offset = new(artboard.X, artboard.Y);
+
+        foreach (LayerItem item in ObjectsOf(artboard))
+        {
+            if (Enclosed(item, offset, path))
+            {
+                selected.Add(item);
+            }
+        }
+
+        // The artboard stays focused for the whole drag, even once the pointer has left it.
+        return new SelectionResult(selected, Array.Empty<Artboard>(), artboard);
+    }
+
+    /// <summary>
+    /// A marquee that began on the pasteboard: artboards it covers whole, or the contents of
+    /// the first one it touches.
+    /// </summary>
+    private static SelectionResult AcrossArtboards(CadDocument document, Polygon path)
+    {
+        var whole = new List<Artboard>();
+        Artboard? firstTouched = null;
+        var firstContents = new List<LayerItem>();
+
+        foreach (Artboard artboard in document.Artboards)
+        {
+            if (!artboard.IsVisible)
+            {
+                continue;
+            }
+
+            Polygon box = ArtboardOutline(artboard);
+
+            if (box.IsInside(path))
+            {
+                // Enclosing a page whole selects the page, not what is printed on it.
+                whole.Add(artboard);
+                continue;
+            }
+
+            if (!box.Intersects(path))
+            {
+                continue;
+            }
+
+            // Touched but not enclosed. While nothing is enclosed whole, this is where the
+            // contents come from - the first page met, and no later one.
+            if (whole.Count == 0 && firstTouched is null)
+            {
+                firstTouched = artboard;
+                Vector2D offset = new(artboard.X, artboard.Y);
+
+                foreach (LayerItem item in ObjectsOf(artboard))
+                {
+                    if (Enclosed(item, offset, path))
+                    {
+                        firstContents.Add(item);
+                    }
+                }
+            }
+        }
+
+        if (whole.Count == 0)
+        {
+            return new SelectionResult(firstContents, Array.Empty<Artboard>(), firstTouched);
+        }
+
+        // Something is enclosed whole, so pages win outright: every other artboard the marquee
+        // reaches comes with it, and none of their contents do.
+        foreach (Artboard artboard in document.Artboards)
+        {
+            if (artboard.IsVisible && !whole.Contains(artboard) &&
+                ArtboardOutline(artboard).Intersects(path))
+            {
+                whole.Add(artboard);
+            }
+        }
+
+        return new SelectionResult(Array.Empty<LayerItem>(), whole, whole[0]);
+    }
+
+    /// <summary>An artboard's page box as a polygon.</summary>
+    private static Polygon ArtboardOutline(Artboard artboard) => new(new[]
+    {
+        new Point2D(artboard.Bounds.Left, artboard.Bounds.Top),
+        new Point2D(artboard.Bounds.Right, artboard.Bounds.Top),
+        new Point2D(artboard.Bounds.Right, artboard.Bounds.Bottom),
+        new Point2D(artboard.Bounds.Left, artboard.Bounds.Bottom),
+    });
+
+    /// <summary>Every object directly under an artboard's layers.</summary>
+    private static IEnumerable<LayerItem> ObjectsOf(Artboard artboard)
+        => artboard.Layers.Where(l => l.IsEffectivelyVisible).SelectMany(l => l.Children);
+
+    /// <summary>
+    /// Whether a marquee encloses what is actually visible of an object.
+    ///
+    /// The object's region after its clips is what is tested, so an object cut away to nothing
+    /// by a parent is not selected by a marquee over where it used to be, and one cut down to
+    /// a corner is selected only by a marquee that reaches that corner.
+    /// </summary>
+    private static bool Enclosed(LayerItem item, Vector2D offset, Polygon path)
+    {
+        if (!item.IsEffectivelyVisible() || item.IsLocked)
+        {
+            return false;
+        }
+
+        Polygon region = VisibleRegion(item, offset);
+        return !region.IsEmpty && region.IsInside(path);
+    }
+
     /// <summary>The topmost pasteboard object under a point, or null. World coordinates.</summary>
     public static LayerItem? OrphanAt(CadDocument document, Point2D point)
     {
