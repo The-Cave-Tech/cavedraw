@@ -1206,6 +1206,15 @@ public sealed class CanvasWorkspace : Control
         }
 
         LayerItem? hit = HitTestTopItem(model);
+
+        // Whatever the click found, it also decides which artboard is focused - and that is
+        // what the next marquee is measured against. The engine owns the rule so the canvas
+        // and the tests cannot disagree about it.
+        if (_document is not null)
+        {
+            _focusedArtboard = SelectionEngine.Click(_document, model, _focusedArtboard).Focused;
+        }
+
         if (hit is ArtGroup selectedGroup && _vm.IsObjectSelected(selectedGroup)
             && HitTestChildOf(selectedGroup, model) is { } child)
         {
@@ -1411,6 +1420,15 @@ public sealed class CanvasWorkspace : Control
 
     // ---- marquee ---------------------------------------------------------
 
+    /// <summary>
+    /// The artboard the last gesture focused.
+    ///
+    /// Kept between gestures because it decides what a marquee means: one started on a page is
+    /// about that page, and one started on the pasteboard is about whole pages. Losing it
+    /// between a press and a move would change the answer mid-gesture.
+    /// </summary>
+    private Artboard? _focusedArtboard;
+
     private void BeginMarquee(Point2D model)
     {
         _marqueeActive = true;
@@ -1422,12 +1440,37 @@ public sealed class CanvasWorkspace : Control
     private void FinishMarquee()
     {
         _marqueeActive = false;
-        Rect2D rect = Rect2D.FromPoints(_marqueeStart, _marqueeCurrent);
 
-        // Even a click (zero-area rectangle) resolves the selection: without
-        // Shift it clears it, with Shift it leaves the existing selection alone.
-        List<LayerItem> hits = rect.IsEmpty ? new List<LayerItem>() : ItemsIntersectingRect(rect);
-        _vm!.SelectRange(hits, additive: _shiftHeld);
+        if (_vm is null || _document is null)
+        {
+            InvalidateVisual();
+            return;
+        }
+
+        // The rules live in SelectionEngine and are replayed from a document and a list of
+        // events, so the canvas asks the same code the tests do rather than keeping a second
+        // copy of them that can drift. A marquee that began on a page stays about that page
+        // however far it is dragged, and one that encloses a page whole selects the page.
+        SelectionResult result = SelectionEngine.Marquee(
+            _document, _marqueeStart, _marqueeCurrent, _focusedArtboard);
+
+        _focusedArtboard = result.Focused;
+
+        if (result.Artboards.Count > 0)
+        {
+            _vm.SelectArtboard(result.Artboards[0]);
+        }
+        else if (_shiftHeld)
+        {
+            foreach (LayerItem item in result.Items)
+            {
+                _vm.SelectRange(new[] { item }, additive: true);
+            }
+        }
+        else
+        {
+            _vm.SelectRange(result.Items, additive: false);
+        }
 
         InvalidateVisual();
     }
