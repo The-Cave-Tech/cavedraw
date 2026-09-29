@@ -134,72 +134,53 @@ public sealed class AddItemCommand : IUndoableCommand
 }
 
 /// <summary>
-/// Replaces a path's fill. Undo restores the previous fill, which is captured the
-/// first time Do runs so the command remains correct across Do/Undo/Redo cycles.
+/// Replaces a path's fill and restores <paramref name="previous"/> on undo.
+///
+/// The previous value is supplied by the caller rather than read off the path when the command
+/// first runs. The panels write the new colour onto the path while the person drags and build
+/// the command afterwards, so a command that read the path would record the value it had just
+/// set and Undo would put it straight back - a silent no-op.
 /// </summary>
 public sealed class SetFillCommand : IUndoableCommand
 {
     private readonly PathItem _path;
     private readonly FillSpec _newFill;
-    private FillSpec _previous = FillSpec.None;
-    private bool _captured;
+    private readonly FillSpec _previous;
 
     public string Description => "Change fill";
 
-    public SetFillCommand(PathItem path, FillSpec newFill)
+    public SetFillCommand(PathItem path, FillSpec newFill, FillSpec previous)
     {
         _path = path;
         _newFill = newFill;
+        _previous = previous;
     }
 
-    public void Do()
-    {
-        if (!_captured)
-        {
-            _previous = _path.Fill;
-            _captured = true;
-        }
+    public void Do() => _path.Fill = _newFill;
 
-        _path.Fill = _newFill;
-    }
-
-    public void Undo()
-    {
-        _path.Fill = _previous;
-    }
+    public void Undo() => _path.Fill = _previous;
 }
 
 /// <summary>
-/// Replaces a path's stroke. Mirrors <see cref="SetFillCommand"/>.
+/// Replaces a path's stroke. Mirrors <see cref="SetFillCommand"/>, including why the previous
+/// value is the caller's to supply.
 /// </summary>
 public sealed class SetStrokeCommand : IUndoableCommand
 {
     private readonly PathItem _path;
     private readonly StrokeSpec _newStroke;
-    private StrokeSpec _previous = StrokeSpec.None;
-    private bool _captured;
+    private readonly StrokeSpec _previous;
 
     public string Description => "Change stroke";
 
-    public SetStrokeCommand(PathItem path, StrokeSpec newStroke)
+    public SetStrokeCommand(PathItem path, StrokeSpec newStroke, StrokeSpec previous)
     {
         _path = path;
         _newStroke = newStroke;
+        _previous = previous;
     }
 
-    public void Do()
-    {
-        if (!_captured)
-        {
-            _previous = _path.Stroke;
-            _captured = true;
-        }
+    public void Do() => _path.Stroke = _newStroke;
 
-        _path.Stroke = _newStroke;
-    }
-
-    public void Undo()
-    {
-        _path.Stroke = _previous;
-    }
+    public void Undo() => _path.Stroke = _previous;
 }

@@ -357,8 +357,8 @@ public partial class ColorsPane : UserControl
         {
             FillSpec pathFill = path.Fill with { Color = path.Stroke.Color, IsVisible = path.Stroke.IsVisible };
             StrokeSpec pathStroke = path.Stroke with { Color = path.Fill.Color, IsVisible = path.Fill.IsVisible };
-            edits.Add(new SetFillCommand(path, pathFill));
-            edits.Add(new SetStrokeCommand(path, pathStroke));
+            edits.Add(new SetFillCommand(path, pathFill, path.Fill));
+            edits.Add(new SetStrokeCommand(path, pathStroke, path.Stroke));
         }
 
         if (edits.Count > 0)
@@ -395,15 +395,17 @@ public partial class ColorsPane : UserControl
 
         if (_strokeTarget && _strokeBefore is { Count: > 0 })
         {
+            // `t.Path.Stroke` is the live value the drag already wrote, and `t.Before` is what
+            // it replaced - Undo needs the latter.
             var edits = _strokeBefore
-                .Select(t => (IUndoableCommand)new SetStrokeCommand(t.Path, t.Path.Stroke))
+                .Select(t => (IUndoableCommand)new SetStrokeCommand(t.Path, t.Path.Stroke, t.Before))
                 .ToList();
             _vm.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Stroke colour", edits));
         }
         else if (!_strokeTarget && _fillBefore is { Count: > 0 })
         {
             var edits = _fillBefore
-                .Select(t => (IUndoableCommand)new SetFillCommand(t.Path, t.Path.Fill))
+                .Select(t => (IUndoableCommand)new SetFillCommand(t.Path, t.Path.Fill, t.Before))
                 .ToList();
             _vm.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Fill", edits));
         }

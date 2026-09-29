@@ -360,10 +360,9 @@ public partial class GradientPane : UserControl
     /// <summary>
     /// Commits the live change as ONE undo step.
     ///
-    /// <see cref="SetFillCommand"/> records the value it finds on its first <c>Do</c>, and the live
-    /// pass has already written the new gradient onto the path, so committing naively would record
-    /// the new value as its own "previous" and undo would do nothing. Each path is therefore put
-    /// back to the value it had before the edit first, so the command captures that.
+    /// The live pass has already written the new gradient onto each path, so each command is
+    /// handed the value it is replacing; nothing has to be put back first for the command to
+    /// record the right "previous".
     /// </summary>
     private void Commit()
     {
@@ -377,9 +376,7 @@ public partial class GradientPane : UserControl
             var edits = new List<IUndoableCommand>();
             foreach ((PathItem path, FillSpec before) in _fillBefore)
             {
-                FillSpec after = path.Fill;
-                path.Fill = before;
-                edits.Add(new SetFillCommand(path, after));
+                edits.Add(new SetFillCommand(path, path.Fill, before));
             }
 
             _vm.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Gradient", edits));

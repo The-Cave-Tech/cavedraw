@@ -190,7 +190,7 @@ public sealed class EditorApi
         DocumentSession s = Session(p);
         PathItem path = ResolvePathItem(s.Document, p.RequireGuid("itemId"));
         ColorRgb color = p.ParseColor("color", ColorRgb.Black);
-        s.Stack.Execute(new SetFillCommand(path, FillSpec.Solid(color)));
+        s.Stack.Execute(new SetFillCommand(path, FillSpec.Solid(color), path.Fill));
         return new { itemId = path.Id, fill = new { visible = true, color = new[] { color.R, color.G, color.B } } };
     }
 

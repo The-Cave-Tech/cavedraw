@@ -77,7 +77,7 @@ public class CommandStackTests
         Assert.False(rect.Fill.IsVisible);
 
         var stack = new CommandStack();
-        stack.Execute(new SetFillCommand(rect, FillSpec.Solid(ColorRgb.Red)));
+        stack.Execute(new SetFillCommand(rect, FillSpec.Solid(ColorRgb.Red), rect.Fill));
         Assert.Equal(ColorRgb.Red, rect.Fill.Color);
 
         stack.Undo();
@@ -95,7 +95,7 @@ public class CommandStackTests
         var original = line.Stroke;
 
         var newStroke = new StrokeSpec(true, ColorRgb.Black, 4.0, StrokeCap.Round, StrokeJoin.Bevel, 2.0);
-        stack.Execute(new SetStrokeCommand(line, newStroke));
+        stack.Execute(new SetStrokeCommand(line, newStroke, original));
         Assert.Equal(4.0, line.Stroke.Width, 12);
         Assert.Equal(StrokeJoin.Bevel, line.Stroke.Join);
 

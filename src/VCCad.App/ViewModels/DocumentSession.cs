@@ -1111,7 +1111,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
     {
         CurrentFill = FillSpec.Solid(color, rule);
         var edits = SelectedPaths()
-            .Select(p => (IUndoableCommand)new SetFillCommand(p, FillSpec.Solid(color, rule)))
+            .Select(p => (IUndoableCommand)new SetFillCommand(p, FillSpec.Solid(color, rule), p.Fill))
             .ToList();
         ExecuteIfAny(edits, "Fill");
     }
@@ -1120,7 +1120,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
     public void ClearFill()
     {
         var edits = SelectedPaths()
-            .Select(p => (IUndoableCommand)new SetFillCommand(p, FillSpec.None))
+            .Select(p => (IUndoableCommand)new SetFillCommand(p, FillSpec.None, p.Fill))
             .ToList();
         ExecuteIfAny(edits, "Clear fill");
     }
@@ -1129,7 +1129,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
     public void ClearStroke()
     {
         var edits = SelectedPaths()
-            .Select(p => (IUndoableCommand)new SetStrokeCommand(p, StrokeSpec.None))
+            .Select(p => (IUndoableCommand)new SetStrokeCommand(p, StrokeSpec.None, p.Stroke))
             .ToList();
         ExecuteIfAny(edits, "Clear stroke");
     }
@@ -1146,7 +1146,8 @@ public sealed class DocumentSession : INotifyPropertyChanged
         {
             double width = p.Stroke.Width > 0 ? p.Stroke.Width : 1.0;
             return (IUndoableCommand)new SetStrokeCommand(p,
-                new StrokeSpec(true, color, width, p.Stroke.Cap, p.Stroke.Join, p.Stroke.MiterLimit, p.Stroke.Alignment, p.Stroke.Dash));
+                new StrokeSpec(true, color, width, p.Stroke.Cap, p.Stroke.Join, p.Stroke.MiterLimit, p.Stroke.Alignment, p.Stroke.Dash),
+                p.Stroke);
         }).ToList();
         ExecuteIfAny(edits, "Stroke colour");
     }
@@ -1168,7 +1169,8 @@ public sealed class DocumentSession : INotifyPropertyChanged
             ColorRgb color = p.Stroke.IsVisible ? p.Stroke.Color : ColorRgb.Black;
             DashPattern d = dash ?? p.Stroke.Dash;
             return (IUndoableCommand)new SetStrokeCommand(p,
-                new StrokeSpec(true, color, Math.Max(0, width), cap, join, Math.Max(1, miterLimit), alignment, d));
+                new StrokeSpec(true, color, Math.Max(0, width), cap, join, Math.Max(1, miterLimit), alignment, d),
+                p.Stroke);
         }).ToList();
         ExecuteIfAny(edits, "Stroke");
     }
