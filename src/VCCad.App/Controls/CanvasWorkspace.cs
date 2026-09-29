@@ -1379,6 +1379,7 @@ public sealed class CanvasWorkspace : Control
         if (_selectMoved)
         {
             CommitMoveEdits();
+            RehomeAfterDrag(model);
         }
         else if (_shiftToggleCandidate is not null && _shiftHeld)
         {
@@ -1392,6 +1393,38 @@ public sealed class CanvasWorkspace : Control
         _dragTextOrigins.Clear();
         _shiftToggleCandidate = null;
         _selectMoved = false;
+    }
+
+    /// <summary>
+    /// Moves a dragged selection onto the page it was dropped on, or off the page altogether.
+    ///
+    /// The pointer decides, because during a drag the pointer is the honest answer - unlike a
+    /// translation that arrives through the API, which has nothing to hover with and uses the
+    /// end of its own vector instead. Dragging something off one page and onto another is how
+    /// a person moves it between pages, so where it is dropped is where it now belongs.
+    /// </summary>
+    private void RehomeAfterDrag(Point2D pointer)
+    {
+        if (_document is null || _vm is null)
+        {
+            return;
+        }
+
+        LayerItem[] moving = _vm.SelectedObjects.ToArray();
+        if (moving.Length == 0)
+        {
+            return;
+        }
+
+        if (SelectionEngine.RehomeTarget(_document, moving, pointer) is not { } target)
+        {
+            return;
+        }
+
+        _vm.MoveItems(
+            moving.Where(i => !ReferenceEquals(i.Container, target)).ToArray(),
+            target,
+            target.Children.Count);
     }
 
     /// <summary>Commits a move gesture (paths + text) as one undo step.</summary>
