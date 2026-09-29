@@ -108,8 +108,15 @@ public sealed class Polygon
             return new Polygon(Array.Empty<Point2D>());
         }
 
-        List<Point2D> output = Normalised(Points);
         IReadOnlyList<Point2D> clip = Normalised(outer.Points);
+        var kept = new List<IEnumerable<Point2D>>();
+
+        // Every ring, not just the first. A group's region is one ring per child, and clipping
+        // only the first threw the rest away: a mask holding two shapes lost one of them the
+        // moment anything clipped it, which then made marquees it should not have.
+        foreach (List<Point2D> ring in _rings)
+        {
+        List<Point2D> output = Normalised(ring);
 
         for (int i = 0; i < clip.Count && output.Count > 0; i++)
         {
@@ -144,7 +151,13 @@ public sealed class Polygon
             }
         }
 
-        return new Polygon(output);
+        if (output.Count >= 3)
+        {
+            kept.Add(output);
+        }
+        }
+
+        return new Polygon(kept);
     }
 
     /// <summary>

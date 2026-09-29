@@ -143,7 +143,7 @@ public static class SelectionEngine
             return region;
         }
 
-        foreach (ClipSpec clip in item.Clips)
+        foreach (ClipSpec clip in ClipsOn(item))
         {
             var rings = new List<IEnumerable<Point2D>>();
 
@@ -472,10 +472,35 @@ public static class SelectionEngine
         };
     }
 
-    /// <summary>Whether a point is inside every clip the object carries.</summary>
+    /// <summary>
+    /// Every clip that applies to an object: its own, and those of the groups above it.
+    ///
+    /// A clipping mask clips what is inside it, not merely itself, so a shape nested two
+    /// groups deep is bounded by both. Without walking up, a child looked unclipped however
+    /// tightly its parents held it - which is the other half of the report.
+    /// </summary>
+    public static IReadOnlyList<ClipSpec> ClipsOn(LayerItem item)
+    {
+        var clips = new List<ClipSpec>();
+
+        for (IItemContainer? container = item.Container;
+             container is not null;
+             container = (container as LayerItem)?.Container)
+        {
+            if (container is LayerItem ancestor && ancestor.Clips.Count > 0)
+            {
+                clips.AddRange(ancestor.Clips);
+            }
+        }
+
+        clips.AddRange(item.Clips);
+        return clips;
+    }
+
+    /// <summary>Whether a point survives every clip that applies to an object.</summary>
     private static bool Survives(LayerItem item, Point2D point)
     {
-        foreach (ClipSpec clip in item.Clips)
+        foreach (ClipSpec clip in ClipsOn(item))
         {
             if (!clip.Contains(point))
             {
