@@ -82,7 +82,12 @@ public sealed class PathItem : LayerItem
     public Rect2D WorldBounds()
     {
         Rect2D box = BoundingBox();
-        if (box.IsEmpty)
+
+        // A degenerate box is still geometry. A horizontal line is a box of zero height and
+        // returning it without the artboard origin put the line at the wrong place on any
+        // page not sitting at the document origin. Only a path with no nodes at all has no
+        // world position to report, and that is a question about nodes, not about area.
+        if (!SubPaths.Any(sp => sp.Nodes.Count > 0))
         {
             return box;
         }
