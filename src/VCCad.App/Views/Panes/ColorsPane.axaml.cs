@@ -8,7 +8,6 @@ using VCCad.App.Automation;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
 using VCCad.Core.Commands;
-using ModelFillRule = VCCad.Core.Model.FillRule;
 using HslColor = VCCad.Core.Color.HslColor;
 using HexColor = VCCad.Core.Color.HexColor;
 
@@ -45,14 +44,6 @@ public partial class ColorsPane : UserControl
         Wheel.ColorCommitted += (_, _) => CommitLive();
         OpacityBar.ValueChanged += (_, _) => OnOpacityChanged();
         OpacityBar.Commit += (_, _) => CommitLive();
-        FillRuleBox.SelectionChanged += (_, _) =>
-        {
-            if (!_syncing)
-            {
-                ApplyLive();
-                CommitLive();
-            }
-        };
         HexBox.KeyDown += (_, e) =>
         {
             if (e.Key == Key.Enter)
@@ -185,8 +176,8 @@ public partial class ColorsPane : UserControl
         {
             var swatch = new Button
             {
-                Width = 20,
-                Height = 20,
+                Width = 18,
+                Height = 18,
                 Margin = new Thickness(2),
                 Padding = new Thickness(0),
                 CornerRadius = new CornerRadius(3),
@@ -281,7 +272,6 @@ public partial class ColorsPane : UserControl
             return;
         }
 
-        ModelFillRule rule = FillRuleBox.SelectedIndex == 1 ? ModelFillRule.EvenOdd : ModelFillRule.NonZero;
         ColorRgb color = CurrentColor;
 
         if (_strokeTarget)
@@ -301,7 +291,10 @@ public partial class ColorsPane : UserControl
                 .Select(p => (p, p.Fill)).ToList();
             foreach ((PathItem path, _) in _fillBefore)
             {
-                path.Fill = FillSpec.Solid(color, rule);
+                // Keep each path's own winding rule; the panel no longer offers a
+                // rule chooser, and recolouring must not silently change a donut
+                // from EvenOdd to NonZero.
+                path.Fill = FillSpec.Solid(color, path.Fill.Rule);
             }
         }
 

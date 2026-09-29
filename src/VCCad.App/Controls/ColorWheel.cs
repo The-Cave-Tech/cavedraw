@@ -13,10 +13,10 @@ namespace VCCad.App.Controls;
 
 /// <summary>
 /// The Inkscape/Affinity-style colour picker: a spectrum ring with an equilateral
-/// triangle inscribed so all three corners touch the ring. The triangle's first
-/// corner sits on the ring at the selected position and takes its colour;
-/// clockwise from it the corners are white and black, and the fill is the
-/// barycentric blend of the three.
+/// triangle inscribed inside it, all three corners touching the ring's inner edge
+/// (not its outer edge). The triangle's first corner sits at the selected position
+/// on that inner circle and takes the ring's colour there; clockwise from it the
+/// corners are white and black, and the fill is the barycentric blend of the three.
 ///
 /// Every colour value comes from <see cref="ColorPickerModel"/> in VCCad.Core —
 /// the ring angle, the three corners, the barycentric pick and the conversions are
@@ -34,7 +34,10 @@ public sealed class ColorWheel : Control
 {
     private const int RingTextureSize = 256;
     private const int FieldTextureSize = 128;
-    private const double RingThicknessFraction = 0.17;
+
+    /// <summary>Ring band thickness as a fraction of the control's outer radius.</summary>
+    private const double RingThicknessFraction = 0.16;
+
     private const double OuterMargin = 3.0;
 
     private static WriteableBitmap? _ringTexture;
@@ -84,14 +87,20 @@ public sealed class ColorWheel : Control
 
     // ---- screen <-> model ------------------------------------------------
 
-    private (Point Center, double Radius, double Scale) Geometry()
+    /// <summary>
+    /// The control's geometry: the ring occupies the outermost band, and the
+    /// triangle's circumradius is the ring's *inner* edge, so the triangle sits
+    /// inside the ring rather than straddling it.
+    /// </summary>
+    private (Point Center, double TriangleRadius, double OuterRadius, double Scale) Geometry()
     {
         double width = Bounds.Width;
         double height = Bounds.Height;
         var center = new Point(width / 2.0, height / 2.0);
-        double radius = Math.Max(1.0, Math.Min(width, height) / 2.0 - OuterMargin);
+        double outerRadius = Math.Max(1.0, Math.Min(width, height) / 2.0 - OuterMargin);
+        double triangleRadius = outerRadius * (1.0 - RingThicknessFraction);
         double modelRadius = Math.Max(1e-9, _model.Radius);
-        return (center, radius, radius / modelRadius);
+        return (center, triangleRadius, outerRadius, triangleRadius / modelRadius);
     }
 
     private static Point ToScreen(Point2D model, Point center, double scale)
@@ -104,14 +113,14 @@ public sealed class ColorWheel : Control
 
     public override void Render(DrawingContext context)
     {
-        (Point center, double radius, double scale) = Geometry();
-        if (radius <= 1.0)
+        (Point center, double triangleRadius, double outerRadius, double scale) = Geometry();
+        if (outerRadius <= 1.0)
         {
             return;
         }
 
-        // 1. The spectrum ring.
-        var ringRect = new Rect(center.X - radius, center.Y - radius, radius * 2.0, radius * 2.0);
+        // 1. The spectrum ring, occupying the outermost band.
+        var ringRect = new Rect(center.X - outerRadius, center.Y - outerRadius, outerRadius * 2.0, outerRadius * 2.0);
         context.DrawImage(
             GetRingTexture(),
             new Rect(0.0, 0.0, RingTextureSize, RingTextureSize),
@@ -134,7 +143,7 @@ public sealed class ColorWheel : Control
             geometry);
 
         // 3. The small white selection circle.
-        double markerRadius = Math.Max(4.5, radius * 0.05);
+        double markerRadius = Math.Max(4.0, triangleRadius * 0.06);
         context.DrawEllipse(
             Brushes.White,
             new Pen(new SolidColorBrush(Avalonia.Media.Color.FromArgb(0xCC, 0x20, 0x20, 0x28)), 1.3),
@@ -183,7 +192,7 @@ public sealed class ColorWheel : Control
             return;
         }
 
-        (Point center, _, double scale) = Geometry();
+        (Point center, _, _, double scale) = Geometry();
         int size = FieldTextureSize;
         WriteableBitmap bitmap = _fieldTexture ??= new WriteableBitmap(
             new PixelSize(size, size), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Premul);
@@ -231,7 +240,7 @@ public sealed class ColorWheel : Control
         }
 
         Point point = e.GetPosition(this);
-        (Point center, _, double scale) = Geometry();
+        (Point center, _, _, double scale) = Geometry();
         Point2D modelPoint = ToModel(point, center, scale);
         _dragging = true;
         _ringDrag = !ColorTriangle.Barycentric(modelPoint, _model.Corners).IsInside(0.0);
@@ -245,7 +254,7 @@ public sealed class ColorWheel : Control
         base.OnPointerMoved(e);
         if (_dragging)
         {
-            (Point center, _, double scale) = Geometry();
+            (Point center, _, _, double scale) = Geometry();
             ApplyModelPoint(ToModel(e.GetPosition(this), center, scale));
         }
     }

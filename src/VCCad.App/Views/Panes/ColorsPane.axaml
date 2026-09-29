@@ -3,57 +3,52 @@
              xmlns:controls="using:VCCad.App.Controls"
              x:Class="VCCad.App.Views.Panes.ColorsPane">
   <ScrollViewer>
-    <StackPanel Margin="10,8" Spacing="6">
+    <!-- Deliberately compact: the colour pane shares the right dock with the
+         layers and transform panels, and it is the one that can afford to be
+         short. -->
+    <StackPanel Margin="8,6" Spacing="4">
       <!-- Ring + inscribed triangle, with the fill/stroke target to its left and
            the two-column recent-colour pad to its right. -->
-      <Grid ColumnDefinitions="Auto,8,Auto,8,*">
+      <Grid ColumnDefinitions="Auto,6,Auto,8,*">
         <controls:FillStrokeSelector x:Name="TargetSelector" Grid.Column="0"
-                                     Width="36" Height="36" VerticalAlignment="Top"/>
-        <controls:ColorWheel x:Name="Wheel" Grid.Column="2" Width="128" Height="128"/>
-        <StackPanel Grid.Column="4" Spacing="3">
+                                     Width="32" Height="32" VerticalAlignment="Top"/>
+        <controls:ColorWheel x:Name="Wheel" Grid.Column="2" Width="104" Height="104"/>
+        <StackPanel Grid.Column="4" Spacing="2">
           <TextBlock Text="RECENT" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
                      Foreground="{DynamicResource VcTextDim}"/>
-          <WrapPanel x:Name="SwatchPad" Width="48" ItemWidth="24" ItemHeight="24"/>
+          <WrapPanel x:Name="SwatchPad" Width="44" ItemWidth="22" ItemHeight="22"/>
         </StackPanel>
       </Grid>
 
       <!-- HSL south-west of the circle, the hex field south-east. -->
-      <Grid ColumnDefinitions="*,8,Auto">
+      <Grid ColumnDefinitions="*,6,Auto">
         <Grid Grid.Column="0" ColumnDefinitions="Auto,*,Auto,*,Auto,*" ColumnSpacing="2">
           <TextBlock Text="H" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-          <TextBox x:Name="HueBox" Grid.Column="1"/>
+          <TextBox x:Name="HueBox" Grid.Column="1" Height="24" Padding="4,0"/>
           <TextBlock Text="S" Grid.Column="2" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-          <TextBox x:Name="SatBox" Grid.Column="3"/>
+          <TextBox x:Name="SatBox" Grid.Column="3" Height="24" Padding="4,0"/>
           <TextBlock Text="L" Grid.Column="4" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-          <TextBox x:Name="LightBox" Grid.Column="5"/>
+          <TextBox x:Name="LightBox" Grid.Column="5" Height="24" Padding="4,0"/>
         </Grid>
-        <TextBox x:Name="HexBox" Grid.Column="2" Width="80" Watermark="#RRGGBB"/>
+        <TextBox x:Name="HexBox" Grid.Column="2" Width="76" Height="24" Padding="4,0" Watermark="#RRGGBB"/>
       </Grid>
 
       <!-- Opacity: checkerboard-backed preview, light-to-dark bar, percentage. -->
-      <Grid ColumnDefinitions="Auto,8,*,8,Auto">
-        <Grid Grid.Column="0" Width="22" Height="22" VerticalAlignment="Center">
+      <Grid ColumnDefinitions="Auto,6,*,6,Auto">
+        <Grid Grid.Column="0" Width="20" Height="20" VerticalAlignment="Center">
           <UniformGrid Columns="2" Rows="2">
             <Rectangle Fill="#C8C8C8"/>
             <Rectangle Fill="#8C8C8C"/>
             <Rectangle Fill="#8C8C8C"/>
             <Rectangle Fill="#C8C8C8"/>
           </UniformGrid>
-          <Ellipse x:Name="OpacityPreview" Width="22" Height="22"/>
+          <Ellipse x:Name="OpacityPreview" Width="20" Height="20"/>
         </Grid>
         <controls:ColorWheelOpacityBar x:Name="OpacityBar" Grid.Column="2"
-                                       Height="18" VerticalAlignment="Center"/>
-        <TextBlock x:Name="OpacityText" Grid.Column="4" Width="38" Text="100%"
+                                       Height="16" VerticalAlignment="Center"/>
+        <TextBlock x:Name="OpacityText" Grid.Column="4" Width="36" Text="100%"
                    TextAlignment="Right" VerticalAlignment="Center"
                    Foreground="{DynamicResource VcTextDim}"/>
-      </Grid>
-
-      <Grid ColumnDefinitions="Auto,*">
-        <TextBlock Text="Rule" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <ComboBox x:Name="FillRuleBox" Grid.Column="1" SelectedIndex="0" HorizontalAlignment="Stretch">
-          <ComboBoxItem Content="NonZero"/>
-          <ComboBoxItem Content="EvenOdd"/>
-        </ComboBox>
       </Grid>
     </StackPanel>
   </ScrollViewer>

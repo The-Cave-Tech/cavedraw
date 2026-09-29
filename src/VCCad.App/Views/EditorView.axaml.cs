@@ -328,6 +328,13 @@ public partial class EditorView : UserControl
         appearance.Tabs.Add(new DockTab { Id = "fonts", Title = "Fonts", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => fonts });
         appearance.ActiveTabId = "colors";
 
+        // The colour panel is only as tall as its contents; the Layers panel takes everything
+        // else. Left stretchable, all three split the column into equal thirds, so a compact
+        // picker floated in a third of the screen while the list of objects - the thing people
+        // actually scroll - got the same third.
+        appearance.IsStretchable = false;
+        appearance.Height = 200;
+
         var objectsPanel = new DockPanelModel { Id = "objects", Title = "Layers", Side = DockSide.Right };
         objectsPanel.Tabs.Add(new DockTab { Id = "objects", Title = "Layers", PanelId = "objects", DefaultSide = DockSide.Right, ContentFactory = () => objects, IsOpen = true });
         objectsPanel.ActiveTabId = "objects";
@@ -335,6 +342,11 @@ public partial class EditorView : UserControl
         var transformPanel = new DockPanelModel { Id = "transform", Title = "Transform", Side = DockSide.Right };
         transformPanel.Tabs.Add(new DockTab { Id = "transform", Title = "Transform", PanelId = "transform", DefaultSide = DockSide.Right, ContentFactory = () => transform, IsOpen = true });
         transformPanel.ActiveTabId = "transform";
+
+        // Likewise: Transform is a handful of numeric fields, so it takes what it needs and
+        // leaves the rest to Layers.
+        transformPanel.IsStretchable = false;
+        transformPanel.Height = 160;
 
         foreach (DockPanelModel panel in new[] { appearance, objectsPanel, transformPanel })
         {
