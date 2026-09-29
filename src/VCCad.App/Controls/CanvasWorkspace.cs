@@ -3278,7 +3278,7 @@ public sealed class CanvasWorkspace : Control
 
         if (fillVisible)
         {
-            context.DrawGeometry(ToBrush(path.Fill.Color, opacity), null, geometry);
+            PaintFill(context, path, geometry, opacity);
         }
 
         if (!strokeVisible)
@@ -3300,6 +3300,30 @@ public sealed class CanvasWorkspace : Control
         {
             context.DrawGeometry(null, StrokePen(width * 2), geometry);
         }
+    }
+
+    /// <summary>
+    /// Fills a path, preferring its gradient when it has one.
+    ///
+    /// The gradient geometry is normalised to the object's bounding box, so it is mapped onto the
+    /// world-space bounds of the very geometry being filled. A gradient that cannot be expressed
+    /// as a shader - freeform today - falls back to <see cref="FillSpec.Color"/>, which the model
+    /// keeps meaningful for exactly this reason, so a gradient fill is never a hole.
+    /// </summary>
+    private void PaintFill(DrawingContext context, PathItem path, StreamGeometry geometry, double opacity)
+    {
+        FillSpec fill = path.Fill;
+        if (fill.Gradient is { } gradient)
+        {
+            IBrush? brush = GradientPaint.CreateBrush(gradient, geometry.Bounds, opacity);
+            if (brush is not null)
+            {
+                context.DrawGeometry(brush, null, geometry);
+                return;
+            }
+        }
+
+        context.DrawGeometry(ToBrush(fill.Color, opacity), null, geometry);
     }
 
     /// <summary>Cached world-space geometry for a path (rebuilt when its revision changes).</summary>

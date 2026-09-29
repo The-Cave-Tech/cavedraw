@@ -21,7 +21,56 @@ namespace VCCad.Core.Serialization;
 
 internal sealed record ColorDto(double R, double G, double B, double A = 1.0);
 
-internal sealed record FillDto(bool Visible, ColorDto? Color, FillRule Rule);
+/// <summary>
+/// A fill as it travels in the sidecar.
+///
+/// <see cref="Gradient"/> is the last, optional member and is omitted from the JSON when
+/// null, so a solid fill written before gradients existed is byte-identical to one
+/// written now, and a sidecar without the member deserializes to exactly the solid fill
+/// it meant.
+/// </summary>
+internal sealed record FillDto(
+    bool Visible,
+    ColorDto? Color,
+    FillRule Rule,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GradientDto? Gradient = null);
+
+/// <summary>One stop of a gradient ramp, as it travels in the sidecar.</summary>
+internal sealed record GradientStopDto(
+    double Position,
+    ColorDto Color,
+    double Opacity,
+    double Midpoint,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name = null);
+
+/// <summary>One colour point of a freeform gradient, in artboard coordinates.</summary>
+internal sealed record FreeformPointDto(Point2D Position, ColorDto Color, double Opacity);
+
+/// <summary>One drawn line of a freeform gradient: an index pair into the point list.</summary>
+internal sealed record FreeformLineDto(int From, int To);
+
+/// <summary>
+/// A gradient paint as it travels in the sidecar.
+///
+/// Every field of the model is carried, including geometry belonging to a kind other than
+/// <see cref="Kind"/>: Illustrator lets a gradient's type be switched while its stops and
+/// points are kept, so dropping the freeform points of a radial (or the radial radii of a
+/// linear) would silently lose work the moment the type is switched back.
+/// </summary>
+internal sealed record GradientDto(
+    GradientKind Kind,
+    GradientSpread Spread,
+    GradientStopDto[] Stops,
+    Point2D Start,
+    Point2D End,
+    Point2D Center,
+    double RadiusX,
+    double RadiusY,
+    double Rotation,
+    double Angle,
+    FreeformPointDto[] Points,
+    FreeformMode FreeformMode,
+    FreeformLineDto[] Lines);
 
 internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, StrokeCap Cap, StrokeJoin Join, double MiterLimit, StrokeAlignment Alignment, double[]? Dash = null, double DashOffset = 0.0);
 
@@ -306,7 +355,32 @@ internal abstract record ItemDto
         g.Children.Select(From).ToArray());
 
     private static FillDto ToFill(FillSpec f)
-        => new(f.IsVisible, f.IsVisible ? new ColorDto(f.Color.R, f.Color.G, f.Color.B, f.Color.A) : null, f.Rule);
+        => new(
+            f.IsVisible,
+            f.IsVisible ? ToColor(f.Color) : null,
+            f.Rule,
+            ToGradient(f.Gradient));
+
+    private static GradientDto? ToGradient(GradientSpec? g)
+        => g is null
+            ? null
+            : new GradientDto(
+                g.Kind,
+                g.Spread,
+                g.Stops.Select(s => new GradientStopDto(
+                    s.Position, ToColor(s.Color), s.Opacity, s.Midpoint, s.Name)).ToArray(),
+                g.Start,
+                g.End,
+                g.Center,
+                g.RadiusX,
+                g.RadiusY,
+                g.Rotation,
+                g.Angle,
+                g.Points.Select(p => new FreeformPointDto(p.Position, ToColor(p.Color), p.Opacity)).ToArray(),
+                g.FreeformMode,
+                g.Lines.Select(l => new FreeformLineDto(l.From, l.To)).ToArray());
+
+    private static ColorDto ToColor(ColorRgb c) => new(c.R, c.G, c.B, c.A);
 
     private static StrokeDto ToStroke(StrokeSpec s)
         => new(s.IsVisible, s.IsVisible ? new ColorDto(s.Color.R, s.Color.G, s.Color.B, s.Color.A) : null,
@@ -478,9 +552,169 @@ internal static class ItemDtoExtensions
     }
 
     private static FillSpec ToModel(this FillDto f)
-        => f.Visible && f.Color is not null
+    {
+        GradientSpec? gradient = f.Gradient?.ToModel();
+
+        // A fill is only "none" when it is invisible and there is no gradient behind it.
+        // A gradient on an invisible fill is kept: switching a fill off and on again must
+        // not lose the paint that was configured behind it.
+        if (gradient is not null)
+        {
+            ColorRgb gradientColor = f.Color is null
+                ? ColorRgb.White
+                : new ColorRgb(f.Color.R, f.Color.G, f.Color.B, f.Color.A);
+            return new FillSpec(f.Visible, gradientColor, f.Rule, gradient);
+        }
+
+        return f.Visible && f.Color is not null
             ? FillSpec.Solid(new ColorRgb(f.Color.R, f.Color.G, f.Color.B, f.Color.A), f.Rule)
             : FillSpec.None;
+    }
+
+    /// <summary>
+    /// Rebuilds a gradient, refusing the members that cannot mean anything.
+    ///
+    /// Every finite value is carried through verbatim, including a stop outside 0..1 and
+    /// an unsorted or duplicated stop list: <see cref="GradientSpec.Normalised"/> is what
+    /// evaluation consults, and reordering or clamping on load would make the sidecar
+    /// lossy. What is refused is a value that has no sensible interpretation at all — a
+    /// non-finite number (which JSON could not write back, so a silent accept would only
+    /// defer the failure) and a freeform line index that would read past the point list.
+    /// A missing or empty stop list is not refused: the model's contract is that the ramp
+    /// is never empty, so the record's own default two-stop ramp is the sensible load.
+    /// </summary>
+    private static GradientSpec ToModel(this GradientDto g)
+    {
+        ValidateGradient(g);
+
+        FreeformPointDto[] points = g.Points ?? Array.Empty<FreeformPointDto>();
+        FreeformLineDto[] lines = g.Lines ?? Array.Empty<FreeformLineDto>();
+        GradientStopDto[] stops = g.Stops ?? Array.Empty<GradientStopDto>();
+
+        var spec = new GradientSpec
+        {
+            Kind = g.Kind,
+            Spread = g.Spread,
+            Start = g.Start,
+            End = g.End,
+            Center = g.Center,
+            RadiusX = g.RadiusX,
+            RadiusY = g.RadiusY,
+            Rotation = g.Rotation,
+            Angle = g.Angle,
+            FreeformMode = g.FreeformMode,
+            Points = points
+                .Select(p => new FreeformPoint(
+                    p.Position,
+                    new ColorRgb(p.Color.R, p.Color.G, p.Color.B, p.Color.A),
+                    p.Opacity))
+                .ToArray(),
+            Lines = lines.Select(l => (l.From, l.To)).ToArray(),
+        };
+
+        return stops.Length == 0
+            ? spec
+            : spec with
+            {
+                Stops = stops
+                    .Select(s => new GradientStop(
+                        s.Position,
+                        new ColorRgb(s.Color.R, s.Color.G, s.Color.B, s.Color.A),
+                        s.Opacity,
+                        s.Midpoint,
+                        s.Name))
+                    .ToArray(),
+            };
+    }
+
+    private static void ValidateGradient(GradientDto g)
+    {
+        RequireDefined(g.Kind, "Kind");
+        RequireDefined(g.Spread, "Spread");
+        RequireDefined(g.FreeformMode, "FreeformMode");
+
+        GradientStopDto[] stops = g.Stops ?? Array.Empty<GradientStopDto>();
+        for (int i = 0; i < stops.Length; i++)
+        {
+            RequireFinite(stops[i].Position, $"Stops[{i}].Position");
+            RequireFinite(stops[i].Opacity, $"Stops[{i}].Opacity");
+            RequireFinite(stops[i].Midpoint, $"Stops[{i}].Midpoint");
+            RequireFinite(stops[i].Color, $"Stops[{i}].Color");
+        }
+
+        RequireFinite(g.Start, "Start");
+        RequireFinite(g.End, "End");
+        RequireFinite(g.Center, "Center");
+        RequireFinite(g.RadiusX, "RadiusX");
+        RequireFinite(g.RadiusY, "RadiusY");
+        RequireFinite(g.Rotation, "Rotation");
+        RequireFinite(g.Angle, "Angle");
+
+        FreeformPointDto[] points = g.Points ?? Array.Empty<FreeformPointDto>();
+        for (int i = 0; i < points.Length; i++)
+        {
+            RequireFinite(points[i].Position, $"Points[{i}].Position");
+            RequireFinite(points[i].Opacity, $"Points[{i}].Opacity");
+            RequireFinite(points[i].Color, $"Points[{i}].Color");
+        }
+
+        FreeformLineDto[] lines = g.Lines ?? Array.Empty<FreeformLineDto>();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            FreeformLineDto line = lines[i];
+            if (line.From < 0 || line.From >= points.Length || line.To < 0 || line.To >= points.Length)
+            {
+                throw new JsonException(
+                    $"Gradient Lines[{i}] references point {line.From}->{line.To}, but the gradient "
+                    + $"has {points.Length} freeform point(s).");
+            }
+        }
+    }
+
+    private static void RequireDefined<TEnum>(TEnum value, string member)
+        where TEnum : struct, Enum
+    {
+        if (!Enum.IsDefined(value))
+        {
+            throw new JsonException($"Gradient {member} has an unknown value '{value}'.");
+        }
+    }
+
+    /// <summary>
+    /// A non-finite number has no interpretation and cannot be written back as JSON, so a
+    /// silent accept would only defer the failure.
+    ///
+    /// System.Text.Json usually refuses these spellings first, naming the member in its
+    /// <c>Path</c> — but not always: the artboard path in this same codebase accepts a
+    /// quoted <c>"1e400"</c> as infinity (see <see cref="RequireFiniteArtboard"/> and its
+    /// test). Relying on the framework's inconsistency would leave the guarantee to chance,
+    /// so the refusal is asserted here as well, in the model's own terms.
+    /// </summary>
+    private static void RequireFinite(double value, string member)
+    {
+        if (!double.IsFinite(value))
+        {
+            throw new JsonException($"Gradient {member} is not finite: {value}.");
+        }
+    }
+
+    private static void RequireFinite(Point2D point, string member)
+    {
+        if (!double.IsFinite(point.X) || !double.IsFinite(point.Y))
+        {
+            throw new JsonException($"Gradient {member} is not finite: {point.X},{point.Y}.");
+        }
+    }
+
+    private static void RequireFinite(ColorDto colour, string member)
+    {
+        if (!double.IsFinite(colour.R) || !double.IsFinite(colour.G)
+            || !double.IsFinite(colour.B) || !double.IsFinite(colour.A))
+        {
+            throw new JsonException(
+                $"Gradient {member} has a non-finite channel: {colour.R},{colour.G},{colour.B},{colour.A}.");
+        }
+    }
 
     private static StrokeSpec ToModel(this StrokeDto s)
         => s.Visible && s.Color is not null

@@ -57,6 +57,10 @@ public sealed class ColorWheelOpacityBar : Control
             return;
         }
 
+        // Hit testing follows what is painted, so the round ends of the track and the pixel rows
+        // above and below it are not the control's unless the background is laid down here.
+        context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
+
         var track = new Rect(0.0, 1.0, width, height - 2.0);
         var border = new Pen(new SolidColorBrush(Avalonia.Media.Color.FromRgb(0x6A, 0x6A, 0x72)), 1.0);
 

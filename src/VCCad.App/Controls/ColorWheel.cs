@@ -120,6 +120,11 @@ public sealed class ColorWheel : Control
             return;
         }
 
+        // A control with no background is only hit where it paints, so the square's corners -
+        // outside the ring - used to fall straight through to whatever sat behind the picker.
+        // Laying the background down deliberately makes the whole rectangle the control's.
+        context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
+
         // 1. The spectrum ring, occupying the outermost band.
         var ringRect = new Rect(center.X - outerRadius, center.Y - outerRadius, outerRadius * 2.0, outerRadius * 2.0);
         context.DrawImage(

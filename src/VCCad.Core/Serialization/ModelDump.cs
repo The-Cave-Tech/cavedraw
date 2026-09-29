@@ -200,7 +200,82 @@ public static class ModelDump
     }
 
     private static string Fill(FillSpec fill)
-        => $"{fill.IsVisible}/{Colour(fill.Color)}/{fill.Rule}";
+        => $"{fill.IsVisible}/{Colour(fill.Color)}/{fill.Rule}{Gradient(fill.Gradient)}";
+
+    /// <summary>
+    /// Every value of a gradient fill, or nothing for a solid one.
+    ///
+    /// A driver with no eyes reads the document from this dump, so a gradient has to be
+    /// legible here — and by the same rule as the rest of the file, every field that can
+    /// differ has to be present, or a round trip that dropped one would still compare
+    /// equal. That includes the geometry of kinds other than the current one, because a
+    /// gradient's type can be switched without losing it.
+    /// </summary>
+    private static string Gradient(GradientSpec? gradient)
+    {
+        if (gradient is null)
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder();
+        builder.Append(" gradient=").Append(gradient.Kind).Append('/').Append(gradient.Spread);
+        builder.Append(" stops=[");
+
+        for (int i = 0; i < gradient.Stops.Count; i++)
+        {
+            if (i > 0)
+            {
+                builder.Append(';');
+            }
+
+            GradientStop stop = gradient.Stops[i];
+            builder.Append(Num(stop.Position)).Append(':').Append(Colour(stop.Color))
+                .Append('@').Append(Num(stop.Opacity))
+                .Append('~').Append(Num(stop.Midpoint));
+            if (stop.Name is { Length: > 0 } name)
+            {
+                builder.Append('\'').Append(Escape(name)).Append('\'');
+            }
+        }
+
+        builder.Append(']');
+        builder.Append(" linear=").Append(Point(gradient.Start)).Append("->").Append(Point(gradient.End));
+        builder.Append(" radial=").Append(Point(gradient.Center))
+            .Append('/').Append(Num(gradient.RadiusX))
+            .Append('/').Append(Num(gradient.RadiusY))
+            .Append('/').Append(Num(gradient.Rotation));
+        builder.Append(" angle=").Append(Num(gradient.Angle));
+        builder.Append(" points=[");
+
+        for (int i = 0; i < gradient.Points.Count; i++)
+        {
+            if (i > 0)
+            {
+                builder.Append(';');
+            }
+
+            FreeformPoint point = gradient.Points[i];
+            builder.Append(Point(point.Position)).Append(':').Append(Colour(point.Color))
+                .Append('@').Append(Num(point.Opacity));
+        }
+
+        builder.Append("] mode=").Append(gradient.FreeformMode);
+        builder.Append(" lines=[");
+
+        for (int i = 0; i < gradient.Lines.Count; i++)
+        {
+            if (i > 0)
+            {
+                builder.Append(';');
+            }
+
+            builder.Append(gradient.Lines[i].From).Append('-').Append(gradient.Lines[i].To);
+        }
+
+        builder.Append(']');
+        return builder.ToString();
+    }
 
     private static string Stroke(StrokeSpec stroke)
         => $"{stroke.HasVisibleOutline}/{Colour(stroke.Color)}/{Num(stroke.Width)}" +
