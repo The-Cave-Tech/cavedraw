@@ -800,7 +800,11 @@ public sealed class CanvasWorkspace : Control
 
         switch (_vm?.Tool ?? EditorTool.Select)
         {
-            case EditorTool.Select: SelectPress(model); break;
+            case EditorTool.Select:
+            case EditorTool.Lasso:
+                SelectPress(model);
+                break;
+
             case EditorTool.Node: NodePress(model); break;
             case EditorTool.Pen: PenPress(model); break;
             case EditorTool.Rectangle:
@@ -896,6 +900,15 @@ public sealed class CanvasWorkspace : Control
 
                     break;
                 case EditorTool.Node: NodeDrag(model); break;
+
+                // The lasso's path grows here. Without this case the tool recorded where the
+                // drag began and nothing after it, so every lasso enclosed a zero-area region
+                // and selected nothing - the tool looked broken while the selection rules
+                // underneath were fine all along.
+                case EditorTool.Lasso:
+                    SelectDrag(model);
+                    break;
+
                 case EditorTool.Pen: PenDrag(model); break;
                 case EditorTool.Rectangle:
                 case EditorTool.Ellipse:
@@ -992,6 +1005,11 @@ public sealed class CanvasWorkspace : Control
 
                 break;
             case EditorTool.Node: NodeRelease(); break;
+
+            // The press set the marquee going and the moves grew its path; without this the
+            // release never resolved it, so the whole gesture was thrown away at the end.
+            case EditorTool.Lasso: SelectRelease(model); break;
+
             case EditorTool.Pen: PenRelease(model); break;
             case EditorTool.Rectangle: CreateShape(rect: true); break;
             case EditorTool.Ellipse: CreateShape(rect: false); break;
@@ -1201,6 +1219,12 @@ public sealed class CanvasWorkspace : Control
             {
                 _focusedArtboard = SelectionEngine.Click(_document, model, _focusedArtboard).Focused;
             }
+
+            // The button state is set here rather than after, because the move handler only
+            // follows a drag while the button is down - returning before this made the lasso
+            // record where it started and nothing else, which is why it selected nothing
+            // however carefully it was aimed.
+            _leftDown = true;
 
             BeginMarquee(model);
             return;

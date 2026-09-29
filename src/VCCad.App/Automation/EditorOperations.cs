@@ -2360,6 +2360,10 @@ public static class EditorOperations
 
         return root.GetVisualDescendants().OfType<VCCad.App.Controls.CanvasWorkspace>().FirstOrDefault();
     }
+    /// <summary>The canvas, or a failure saying why there is none.</summary>
+    private static CanvasWorkspace RequireCanvas(AutomationContext ctx)
+        => Workspace(ctx) ?? throw new EditorOperationException("No canvas is available.");
+
     private static Avalonia.Visual Root(AutomationContext ctx)
         => ctx.InputRoot?.Invoke() ?? throw new EditorOperationException("No window is available.");
 
