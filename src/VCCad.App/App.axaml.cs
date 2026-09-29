@@ -159,6 +159,17 @@ public partial class App : Application
         _diagnostics = new DiagnosticsOverlay(host) { IsVisible = false };
         root.Children.Add(_diagnostics);
 
+        // The busy badge goes into the root *after* the overlay, so it stays visible
+        // over it: the person watching a long turn may well have the panel open, and
+        // an indicator that the panel can cover is no indicator at all.
+        var assistantBusy = new Controls.AssistantBusyIndicator
+        {
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Bottom,
+            Margin = new Thickness(14, 0, 0, 34),
+        };
+        root.Children.Add(assistantBusy);
+
         // Reserve the overlay's height when fitting, so a fitted artboard is never
         // hidden behind the panel; `--diagnostics` therefore opens already fitted.
         void SyncOverlayInset()
@@ -211,8 +222,13 @@ public partial class App : Application
         // While the assistant is working the editor is locked: the person must not
         // be able to fight the model for the document. The diagnostics overlay stays
         // enabled, so the transcript keeps updating and Cancel is always reachable.
-        host.BusyChanged += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(
-            () => view.IsEnabled = !host.IsBusy);
+        // The busy badge in the corner of the view is the other half of that: it says
+        // the assistant has control without the panel having to be open or glanced at.
+        host.BusyChanged += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            view.IsEnabled = !host.IsBusy;
+            assistantBusy.SetBusy(host.IsBusy);
+        });
 
         // F12 toggles the overlay (and F9, which some keyboards send for this key).
         window.KeyDown += (_, e) =>

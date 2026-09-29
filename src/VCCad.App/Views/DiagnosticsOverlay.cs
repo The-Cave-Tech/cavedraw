@@ -6,7 +6,6 @@ using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using VCCad.App.Ai;
 using VCCad.App.Automation;
@@ -29,11 +28,10 @@ namespace VCCad.App.Views;
 public sealed class DiagnosticsOverlay : UserControl
 {
     private readonly AutomationHost _host;
-    private readonly ObservableCollection<ChatEntry> _chat = new();
     private readonly ObservableCollection<ApiCallRecord> _calls = new();
     private readonly ObservableCollection<InteractionRecord> _diary = new();
 
-    private readonly ListBox _chatList = new();
+    private readonly ChatTranscript _transcript = new();
     private readonly ListBox _callList = new();
     private readonly ListBox _historyList = new();
     private readonly TextBox _promptBox = new();
@@ -171,11 +169,6 @@ public sealed class DiagnosticsOverlay : UserControl
 
     private Control BuildChatTab()
     {
-        _chatList.Background = Brushes.Transparent;
-        _chatList.ItemTemplate = new FuncDataTemplate<ChatEntry>((entry, _) => BuildChatRow(entry), true);
-        _chatList.ItemsSource = _chat;
-        _chatList.SelectionMode = SelectionMode.Single;
-
         _promptBox.Watermark = "Tell the assistant what to do — it edits the document through the same API a person uses…";
         _promptBox.AcceptsReturn = true;
         _promptBox.Height = 64;
@@ -244,58 +237,14 @@ public sealed class DiagnosticsOverlay : UserControl
 
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto") };
         Grid.SetRow(header, 0);
-        Grid.SetRow(_chatList, 1);
+        Grid.SetRow(_transcript, 1);
         Grid.SetRow(composer, 2);
         Grid.SetRow(_status, 3);
         root.Children.Add(header);
-        root.Children.Add(_chatList);
+        root.Children.Add(_transcript);
         root.Children.Add(composer);
         root.Children.Add(_status);
         return root;
-    }
-
-    private Control BuildChatRow(ChatEntry entry)
-    {
-        var panel = new StackPanel { Spacing = 3, Margin = new Thickness(2) };
-        panel.Children.Add(new TextBlock
-        {
-            Text = entry.Role.ToUpperInvariant(),
-            FontSize = 9,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x8A, 0x94, 0xA0)),
-        });
-        panel.Children.Add(new TextBlock
-        {
-            Text = entry.Text,
-            TextWrapping = TextWrapping.Wrap,
-            Foreground = entry.Role switch
-            {
-                "user" => new SolidColorBrush(Color.FromRgb(0xBB, 0xDE, 0xFB)),
-                "assistant" => Brushes.White,
-                "action" => new SolidColorBrush(Color.FromRgb(0x9C, 0xDC, 0xFE)),
-                _ => new SolidColorBrush(Color.FromRgb(0x9E, 0x9E, 0x9E)),
-            },
-        });
-
-        if (entry.ImagePng is { Length: > 0 })
-        {
-            try
-            {
-                using var stream = new MemoryStream(entry.ImagePng);
-                panel.Children.Add(new Image
-                {
-                    Source = new Bitmap(stream),
-                    Height = 140,
-                    Stretch = Stretch.Uniform,
-                    HorizontalAlignment = HorizontalAlignment.Left,
-                });
-            }
-            catch (Exception)
-            {
-                // A corrupt thumbnail must not break the transcript view.
-            }
-        }
-
-        return panel;
     }
 
     /// <summary>
@@ -764,19 +713,7 @@ public sealed class DiagnosticsOverlay : UserControl
         }
     }
 
-    private void SyncChat()
-    {
-        _chat.Clear();
-        foreach (ChatEntry entry in _host.Agent.Transcript)
-        {
-            _chat.Add(entry);
-        }
-
-        if (_chat.Count > 0)
-        {
-            _chatList.ScrollIntoView(_chat[^1]);
-        }
-    }
+    private void SyncChat() => _transcript.Show(_host.Agent.Transcript);
 
     private void AddCall(ApiCallRecord record)
     {
