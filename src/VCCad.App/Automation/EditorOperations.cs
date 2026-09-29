@@ -637,6 +637,40 @@ public static class EditorOperations
                 return Summary(ctx);
             });
 
+        Add("object.moveToLayer",
+            "Move objects onto another layer, as dragging them in the Layers panel does. This " +
+            "is how an object comes to belong to a different artboard, and without it a driver " +
+            "could not put an object on a second page at all - which is why the cross-page " +
+            "selection rules could not be checked in the running application.",
+            "layerId:guid, itemIds?:guid[] (defaults to the selection)",
+            (ctx, p) =>
+            {
+                Guid layerId = p.RequireGuid("layerId");
+                Layer? target = ctx.Document.Artboards
+                    .SelectMany(a => a.Layers)
+                    .FirstOrDefault(l => l.Id == layerId)
+                    ?? throw new EditorOperationException($"No layer with id '{layerId}'.");
+
+                IReadOnlyList<LayerItem> items = p.TryGetGuidArray("itemIds", out Guid[] ids)
+                    ? ids.Select(id => RequireItem(ctx.Document, id)).ToArray()
+                    : ctx.Session.SelectedObjects.ToArray();
+
+                if (items.Count == 0)
+                {
+                    throw new EditorOperationException(
+                        "Nothing to move: pass itemIds, or select something first.");
+                }
+
+                ctx.ViewModel.MoveItems(items, target, target.Children.Count);
+                return new
+                {
+                    layer = target.Name,
+                    artboard = target.Artboard?.Name,
+                    moved = items.Count,
+                    itemIds = items.Select(i => i.Id).ToArray(),
+                };
+            });
+
         Add("object.move", "Move the selection (or given items) by a delta.", "dx:number, dy:number, itemIds?:guid[]",
             (ctx, p) =>
             {
