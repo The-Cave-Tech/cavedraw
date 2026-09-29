@@ -19,6 +19,10 @@ using Avalonia.Platform.Storage;
 
 namespace VCCad.App.Views;
 
+using Mark = Avalonia.Controls.Shapes.Path;
+using MarkGeometry = Avalonia.Media.Geometry;
+
+
 /// <summary>
 /// The editor shell: a menu bar, a docking area (left/right panel columns, top/
 /// bottom toolbars, central canvas), a drop overlay for docking, and a status
@@ -398,6 +402,7 @@ public partial class EditorView : UserControl
         var bar = new StackPanel { Orientation = Orientation.Vertical, Spacing = 2 };
         bar.Children.Add(ToolButton(EditorTool.Select, "select", "Selection (V)"));
         bar.Children.Add(ToolButton(EditorTool.Node, "node", "Nodes / direct selection (A)"));
+        bar.Children.Add(ToolButton(EditorTool.Lasso, "lasso", "Freehand selection (Q)", LassoMark()));
         bar.Children.Add(ToolButton(EditorTool.Pen, "pen", "Pen (P)"));
         bar.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)), Margin = new Thickness(4, 6) });
         bar.Children.Add(ToolButton(EditorTool.Rectangle, "rectangle", "Rectangle (M)"));
@@ -436,11 +441,72 @@ public partial class EditorView : UserControl
         return button;
     }
 
-    private Button ToolButton(EditorTool tool, string icon, string tip)
+    private Button ToolButton(EditorTool tool, string icon, string tip, Control? mark = null)
     {
-        Button button = IconButton(icon, tip, (_, _) => _viewModel.Tool = tool);
+        // A drawn mark replaces the icon entirely rather than being put over one: asking for a
+        // lasso.png that does not exist throws at startup, which the desktop bootstrap test
+        // caught the moment the button was added.
+        Button button = mark is null
+            ? IconButton(icon, tip, (_, _) => _viewModel.Tool = tool)
+            : MarkButton(mark, tip, (_, _) => _viewModel.Tool = tool);
+
         _toolButtons[tool] = button;
         return button;
+    }
+
+    /// <summary>A toolbar button whose mark is drawn rather than loaded from an icon file.</summary>
+    private static Button MarkButton(
+        Control mark, string tip, EventHandler<Avalonia.Interactivity.RoutedEventArgs> onClick)
+    {
+        mark.Width = 20;
+        mark.Height = 20;
+
+        var button = new Button
+        {
+            Content = mark,
+            Width = 34,
+            Height = 34,
+            Padding = new Thickness(0),
+            Background = Brushes.Transparent,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            [ToolTip.TipProperty] = tip,
+        };
+
+        button.Click += onClick;
+        return button;
+    }
+
+    /// <summary>
+    /// The lasso's toolbar mark, drawn rather than loaded.
+    ///
+    /// There is no lasso icon in Assets/Icons and pointing the button at a different one would
+    /// tell the person it does something it does not. A dashed loop with a tail is what the
+    /// tool is, so the mark is the shape.
+    /// </summary>
+    private static Control LassoMark()
+    {
+        var stroke = new SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xEC));
+
+        var path = new Mark
+        {
+            Stroke = stroke,
+            StrokeThickness = 1.6,
+                      Data = MarkGeometry.Parse("M 10,2 C 15,2 18,5 18,9 C 18,14 14,17 10,17 C 5,17 2,14 2,9 C 2,5 5,2 10,2 Z"),
+        };
+
+
+        var tail = new Mark
+        {
+            Stroke = stroke,
+            StrokeThickness = 1.6,
+            Data = MarkGeometry.Parse("M 10,17 L 13,21"),
+        };
+
+        var canvas = new Canvas();
+        canvas.Children.Add(path);
+        canvas.Children.Add(tail);
+        return canvas;
     }
 
     private void HighlightActiveTool()

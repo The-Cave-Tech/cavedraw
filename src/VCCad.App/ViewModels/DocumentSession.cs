@@ -46,6 +46,16 @@ public enum EditorTool
 
     /// <summary>Click to place a text object, then edit it in the Text pane.</summary>
     Text,
+
+    /// <summary>
+    /// Freehand selection (Q): drag any shape and what it encloses is selected.
+    ///
+    /// The shape closes itself with a straight segment from where the pointer is back to where
+    /// it went down, so a scribble that never returns to its start still encloses something.
+    /// It is the same selection code as the rectangular marquee - a marquee is a rectangular
+    /// path and this is any path - so the two cannot drift apart.
+    /// </summary>
+    Lasso,
 }
 
 /// <summary>

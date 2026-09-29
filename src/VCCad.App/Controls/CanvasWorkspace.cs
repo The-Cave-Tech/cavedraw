@@ -1192,6 +1192,20 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        // The lasso is a selection gesture wherever it starts, so a press begins its path
+        // even over an object - being diverted into moving that object would make the tool
+        // useless in a drawing, which is exactly where it is wanted.
+        if (_vm?.Tool == EditorTool.Lasso)
+        {
+            if (_document is not null)
+            {
+                _focusedArtboard = SelectionEngine.Click(_document, model, _focusedArtboard).Focused;
+            }
+
+            BeginMarquee(model);
+            return;
+        }
+
         LayerItem? hit = HitTestTopItem(model);
 
         // Whatever the click found, it also decides which artboard is focused - and that is
@@ -1284,6 +1298,12 @@ public sealed class CanvasWorkspace : Control
         if (_marqueeActive)
         {
             _marqueeCurrent = model;
+
+            if (_lassoPath.Count > 0)
+            {
+                _lassoPath.Add(model);
+            }
+
             InvalidateVisual();
             return;
         }
@@ -1416,11 +1436,27 @@ public sealed class CanvasWorkspace : Control
     /// </summary>
     private Artboard? _focusedArtboard;
 
+    /// <summary>
+    /// The pointer's own path while the lasso is dragging.
+    ///
+    /// Kept as points rather than as a shape so the freehand gesture and the rectangular
+    /// marquee go through the same selection call: a marquee is a rectangular path, and this
+    /// is any path.
+    /// </summary>
+    private readonly List<Point2D> _lassoPath = new();
+
     private void BeginMarquee(Point2D model)
     {
         _marqueeActive = true;
         _marqueeStart = model;
         _marqueeCurrent = model;
+        _lassoPath.Clear();
+
+        if (_vm?.Tool == EditorTool.Lasso)
+        {
+            _lassoPath.Add(model);
+        }
+
         InvalidateVisual();
     }
 
@@ -1438,8 +1474,14 @@ public sealed class CanvasWorkspace : Control
         // events, so the canvas asks the same code the tests do rather than keeping a second
         // copy of them that can drift. A marquee that began on a page stays about that page
         // however far it is dragged, and one that encloses a page whole selects the page.
-        SelectionResult result = SelectionEngine.Marquee(
-            _document, _marqueeStart, _marqueeCurrent, _focusedArtboard);
+        //
+        // A lasso is the same call with the pointer's own path instead of four corners: the
+        // path is a path either way, which is why there is only one of these.
+        SelectionResult result = _lassoPath.Count >= 2
+            ? SelectionEngine.ByLasso(_document, _marqueeStart, _lassoPath, _focusedArtboard)
+            : SelectionEngine.Marquee(_document, _marqueeStart, _marqueeCurrent, _focusedArtboard);
+
+        _lassoPath.Clear();
 
         _focusedArtboard = result.Focused;
 
@@ -3981,13 +4023,38 @@ public sealed class CanvasWorkspace : Control
 
     private void PaintMarquee(DrawingContext context)
     {
+        var accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
+        var pen = new Pen(accent, 1.0) { DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0) };
+        var fill = new SolidColorBrush(Color.FromArgb(26, 0x4C, 0x9A, 0xFF));
+
+        // A lasso shows the path the pointer has actually taken, closed with a straight
+        // segment back to where it began - the same shape the release will select by, so what
+        // is drawn and what is chosen cannot disagree.
+        if (_lassoPath.Count >= 2)
+        {
+            var geometry = new StreamGeometry();
+
+            using (StreamGeometryContext g = geometry.Open())
+            {
+                g.BeginFigure(ModelToScreen(_lassoPath[0]), true);
+
+                for (int i = 1; i < _lassoPath.Count; i++)
+                {
+                    g.LineTo(ModelToScreen(_lassoPath[i]));
+                }
+
+                g.LineTo(ModelToScreen(_lassoPath[0]));
+                g.EndFigure(true);
+            }
+
+            context.DrawGeometry(fill, pen, geometry);
+            return;
+        }
+
         Rect2D rect = Rect2D.FromPoints(_marqueeStart, _marqueeCurrent);
         Point tl = ModelToScreen(new Point2D(rect.Left, rect.Top));
         var screen = new Rect(tl.X, tl.Y, rect.Width * _layout.Zoom, rect.Height * _layout.Zoom);
 
-        var accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
-        var pen = new Pen(accent, 1.0) { DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0) };
-        var fill = new SolidColorBrush(Color.FromArgb(26, 0x4C, 0x9A, 0xFF));
         context.DrawRectangle(fill, pen, screen);
     }
 
