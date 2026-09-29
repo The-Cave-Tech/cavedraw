@@ -230,6 +230,65 @@ public sealed class Polygon
         return false;
     }
 
+    /// <summary>
+    /// How far a point is from this polygon: zero inside it, otherwise the distance to the
+    /// nearest edge.
+    ///
+    /// Picking uses this. Testing whether a point falls in a bounding box picks things the
+    /// pointer is nowhere near - a diagonal line has a page-sized box - so the distance has to
+    /// be to the shape itself. Zero inside means a filled object is picked from anywhere within
+    /// it, and an unfilled one is picked from beside its outline, which is how a drawing
+    /// program feels.
+    /// </summary>
+    public double DistanceTo(Point2D point)
+    {
+        if (_rings.Count == 0 || _rings.All(r => r.Count == 0))
+        {
+            // Nothing at all to be near. Not IsEmpty: a two-point ring is an open path, which
+            // cannot contain anything but is still a line worth picking.
+            return double.MaxValue;
+        }
+
+        if (Contains(point))
+        {
+            return 0;
+        }
+
+        double nearest = double.MaxValue;
+
+        foreach (List<Point2D> ring in _rings)
+        {
+            for (int i = 0; i < ring.Count; i++)
+            {
+                Point2D a = ring[i];
+                Point2D b = ring[(i + 1) % ring.Count];
+                nearest = Math.Min(nearest, DistanceToSegment(point, a, b));
+            }
+        }
+
+        return nearest;
+    }
+
+    /// <summary>The distance from a point to a line segment.</summary>
+    private static double DistanceToSegment(Point2D p, Point2D a, Point2D b)
+    {
+        double dx = b.X - a.X;
+        double dy = b.Y - a.Y;
+        double lengthSquared = (dx * dx) + (dy * dy);
+
+        if (lengthSquared < 1e-12)
+        {
+            return Math.Sqrt(((p.X - a.X) * (p.X - a.X)) + ((p.Y - a.Y) * (p.Y - a.Y)));
+        }
+
+        // Where along the segment the closest point falls, clamped to its ends.
+        double t = Math.Clamp((((p.X - a.X) * dx) + ((p.Y - a.Y) * dy)) / lengthSquared, 0, 1);
+        double cx = a.X + (t * dx);
+        double cy = a.Y + (t * dy);
+
+        return Math.Sqrt(((p.X - cx) * (p.X - cx)) + ((p.Y - cy) * (p.Y - cy)));
+    }
+
     /// <summary>Twice the signed area; positive when the winding is clockwise in model space.</summary>
     private static double SignedArea(IReadOnlyList<Point2D> points)
     {

@@ -185,7 +185,7 @@ public static class SelectionEngine
                 : new SelectionResult(new[] { loose }, Array.Empty<Artboard>(), null);
         }
 
-        LayerItem? hit = Within(board, point);
+        LayerItem? hit = Nearest(board, point);
         return hit is null
             ? new SelectionResult(Array.Empty<LayerItem>(), Array.Empty<Artboard>(), board)
             : new SelectionResult(new[] { hit }, Array.Empty<Artboard>(), board);
@@ -215,6 +215,67 @@ public static class SelectionEngine
 
         return topmost;
     }
+
+    /// <summary>
+    /// The object of an artboard nearest the point, within the pick tolerance.
+    ///
+    /// Nearest, not merely "near enough". Two objects can both be within the tolerance of a
+    /// click - a line passing close to a shape, a label beside a border - and the one the
+    /// person meant is the one they are closest to. A tie goes to whichever is on top, since
+    /// that is the one they can see.
+    /// </summary>
+    public static LayerItem? Nearest(Artboard artboard, Point2D point, double? tolerance = null)
+    {
+        double limit = tolerance ?? PickTolerance;
+        Point2D local = point - new Vector2D(artboard.X, artboard.Y);
+        LayerItem? nearest = null;
+        double best = double.MaxValue;
+
+        foreach (Layer layer in artboard.Layers)
+        {
+            if (!layer.IsEffectivelyVisible)
+            {
+                continue;
+            }
+
+            foreach (LayerItem item in layer.Children)
+            {
+                if (!item.IsEffectivelyVisible() || item.IsLocked)
+                {
+                    continue;
+                }
+
+                double distance = DistanceTo(item, local);
+                if (distance > limit)
+                {
+                    continue;
+                }
+
+                // A later item is painted above, so it wins an equal distance.
+                if (distance <= best)
+                {
+                    best = distance;
+                    nearest = item;
+                }
+            }
+        }
+
+        return nearest;
+    }
+
+    /// <summary>
+    /// How far a point is from an object's visible shape, or infinity when it has none.
+    ///
+    /// The shape after clipping, so a click beside an object that a parent has cut away is
+    /// measured to where it actually is rather than to where it used to be.
+    ///
+    /// Note there is no "is it empty" guard here. An open path is two points and cannot
+    /// contain anything, so it reads as empty - but it is still a line, and a line is exactly
+    /// the thing a person expects to be able to click. Guarding on emptiness made every open
+    /// path unpickable.
+    /// </summary>
+    public static double DistanceTo(LayerItem item, Point2D point)
+        => VisibleRegion(item, default).DistanceTo(point);
 
     /// <summary>
     /// The region of an object that is actually there, after every clip on it.

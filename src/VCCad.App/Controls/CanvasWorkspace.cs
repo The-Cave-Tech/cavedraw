@@ -628,23 +628,10 @@ public sealed class CanvasWorkspace : Control
 
         if (board is not null)
         {
-            Point2D local = model - new Vector2D(board.X, board.Y);
-
-            foreach (Layer layer in board.Layers)
-            {
-                if (!layer.IsEffectivelyVisible)
-                {
-                    continue;
-                }
-
-                foreach (LayerItem item in layer.Children)
-                {
-                    if (HitTestItem(item, local, tolerance) is not null)
-                    {
-                        topmost = item;
-                    }
-                }
-            }
+            // Nearest, not merely near enough: two objects can both fall within the pick
+            // tolerance of one click, and the one the person meant is the one they are
+            // closest to. The engine owns that rule so the canvas and the tests agree.
+            topmost = SelectionEngine.Nearest(board, model, tolerance) ?? topmost;
         }
 
         // Pasteboard/orphan objects live in world coordinates.
