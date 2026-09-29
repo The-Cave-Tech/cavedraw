@@ -3,30 +3,49 @@
              xmlns:controls="using:VCCad.App.Controls"
              x:Class="VCCad.App.Views.Panes.ColorsPane">
   <ScrollViewer>
-    <StackPanel Margin="10,8" Spacing="8">
-      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+    <StackPanel Margin="10,8" Spacing="6">
+      <!-- Ring + inscribed triangle, with the fill/stroke target to its left and
+           the two-column recent-colour pad to its right. -->
+      <Grid ColumnDefinitions="Auto,8,Auto,8,*">
         <controls:FillStrokeSelector x:Name="TargetSelector" Grid.Column="0"
-                                     Width="44" Height="44" HorizontalAlignment="Left"/>
-        <StackPanel Grid.Column="1" Spacing="6" VerticalAlignment="Top">
-          <Slider x:Name="ValueSlider" Minimum="0" Maximum="100" Value="100"/>
-          <TextBox x:Name="HexBox" Watermark="#RRGGBB"/>
+                                     Width="36" Height="36" VerticalAlignment="Top"/>
+        <controls:ColorWheel x:Name="Wheel" Grid.Column="2" Width="128" Height="128"/>
+        <StackPanel Grid.Column="4" Spacing="3">
+          <TextBlock Text="RECENT" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
+                     Foreground="{DynamicResource VcTextDim}"/>
+          <WrapPanel x:Name="SwatchPad" Width="48" ItemWidth="24" ItemHeight="24"/>
         </StackPanel>
       </Grid>
 
-      <controls:ColorWheel x:Name="Wheel" Width="112" Height="112" HorizontalAlignment="Left"/>
+      <!-- HSL south-west of the circle, the hex field south-east. -->
+      <Grid ColumnDefinitions="*,8,Auto">
+        <Grid Grid.Column="0" ColumnDefinitions="Auto,*,Auto,*,Auto,*" ColumnSpacing="2">
+          <TextBlock Text="H" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+          <TextBox x:Name="HueBox" Grid.Column="1"/>
+          <TextBlock Text="S" Grid.Column="2" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+          <TextBox x:Name="SatBox" Grid.Column="3"/>
+          <TextBlock Text="L" Grid.Column="4" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+          <TextBox x:Name="LightBox" Grid.Column="5"/>
+        </Grid>
+        <TextBox x:Name="HexBox" Grid.Column="2" Width="80" Watermark="#RRGGBB"/>
+      </Grid>
 
-      <!-- Swatches of colours currently used in the document -->
-      <WrapPanel x:Name="SwatchStrip"/>
-
-      <Grid ColumnDefinitions="Auto,*,6,Auto,*,6,Auto,*,6,Auto,*" ColumnSpacing="2">
-        <TextBlock Text="r:" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="FillR" Grid.Column="1"/>
-        <TextBlock Text="g:" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="FillG" Grid.Column="4"/>
-        <TextBlock Text="b:" Grid.Column="6" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="FillB" Grid.Column="7"/>
-        <TextBlock Text="a:" Grid.Column="9" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="AlphaBox" Grid.Column="10"/>
+      <!-- Opacity: checkerboard-backed preview, light-to-dark bar, percentage. -->
+      <Grid ColumnDefinitions="Auto,8,*,8,Auto">
+        <Grid Grid.Column="0" Width="22" Height="22" VerticalAlignment="Center">
+          <UniformGrid Columns="2" Rows="2">
+            <Rectangle Fill="#C8C8C8"/>
+            <Rectangle Fill="#8C8C8C"/>
+            <Rectangle Fill="#8C8C8C"/>
+            <Rectangle Fill="#C8C8C8"/>
+          </UniformGrid>
+          <Ellipse x:Name="OpacityPreview" Width="22" Height="22"/>
+        </Grid>
+        <controls:ColorWheelOpacityBar x:Name="OpacityBar" Grid.Column="2"
+                                       Height="18" VerticalAlignment="Center"/>
+        <TextBlock x:Name="OpacityText" Grid.Column="4" Width="38" Text="100%"
+                   TextAlignment="Right" VerticalAlignment="Center"
+                   Foreground="{DynamicResource VcTextDim}"/>
       </Grid>
 
       <Grid ColumnDefinitions="Auto,*">

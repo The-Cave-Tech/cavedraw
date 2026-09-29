@@ -4,99 +4,240 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using VCCad.Core.Color;
 using VCCad.Core.Model;
+using Point2D = VCCad.Geometry.Point2D;
+using MediaGeometry = Avalonia.Media.Geometry;
 
 namespace VCCad.App.Controls;
 
 /// <summary>
-/// A Photoshop-style circular colour picker: hue runs around the ring, saturation
-/// from the centre outwards, and value (brightness) is a separate property. The
-/// full spectrum is reachable by clicking/dragging anywhere in the disc; a ring
-/// marks the current position.
+/// The Inkscape/Affinity-style colour picker: a spectrum ring with an equilateral
+/// triangle inscribed so all three corners touch the ring. The triangle's first
+/// corner sits on the ring at the selected position and takes its colour;
+/// clockwise from it the corners are white and black, and the fill is the
+/// barycentric blend of the three.
+///
+/// Every colour value comes from <see cref="ColorPickerModel"/> in VCCad.Core —
+/// the ring angle, the three corners, the barycentric pick and the conversions are
+/// never re-derived here. The model works in a normalised space (centre at the
+/// origin, circumradius <see cref="Model.Radius"/>), and the control scales that
+/// to its own pixels, so the same model can be shared with the automation
+/// registry and a point means the same thing in both.
+///
+/// Pressing outside the triangle (i.e. on or near the ring) re-orients the
+/// triangle to the pointer's angle and dragging carries it all the way round;
+/// pressing inside the triangle selects the colour under the pointer. Releasing
+/// commits.
 /// </summary>
 public sealed class ColorWheel : Control
 {
-    private const int BitmapSize = 256;
+    private const int RingTextureSize = 256;
+    private const int FieldTextureSize = 128;
+    private const double RingThicknessFraction = 0.17;
+    private const double OuterMargin = 3.0;
 
-    private static WriteableBitmap? _wheelBitmap;
+    private static WriteableBitmap? _ringTexture;
 
-    private double _hue;          // 0..360
-    private double _saturation;   // 0..1
-    private double _value = 1.0;  // 0..1
+    private ColorPickerModel _model = new(new Point2D(0.0, 0.0), 100.0, ColorRgb.Red);
+    private WriteableBitmap? _fieldTexture;
     private bool _dragging;
+    private bool _ringDrag;
 
-    /// <summary>Raised whenever the selected colour changes (live, while dragging).</summary>
+    /// <summary>Raised on every change, including live drag.</summary>
     public event EventHandler? ColorChanged;
 
-    /// <summary>Raised when the user finishes choosing (drag released / value set),
-    /// so callers can apply the colour as a single undo step.</summary>
+    /// <summary>Raised when the press/drag finishes, so the caller can commit one undo step.</summary>
     public event EventHandler? ColorCommitted;
 
-    /// <summary>Value/brightness in 0..1 (kept separate from the disc).</summary>
-    public double Value
+    /// <summary>
+    /// The headless picker model this control drives and draws. Set it to share the
+    /// picker's state with the automation registry, so a colour set through the API
+    /// and a colour clicked in the panel are the same colour. The model is expected
+    /// to live in normalised coordinates (centre at the origin, radius 100).
+    /// </summary>
+    public ColorPickerModel Model
     {
-        get => _value;
+        get => _model;
         set
         {
-            _value = Math.Clamp(value, 0, 1);
+            _model = value ?? throw new ArgumentNullException(nameof(value));
             InvalidateVisual();
-            ColorChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
-    /// <summary>The current colour.</summary>
-    public ColorRgb Color => HsvToRgb(_hue, _saturation, _value);
+    /// <summary>The selected colour (opaque; the pane applies opacity separately).</summary>
+    public ColorRgb Color => _model.Color.WithAlpha(1.0);
 
-    /// <summary>Sets the colour (updating hue/saturation/value).</summary>
+    /// <summary>The selected ring angle in degrees, clockwise from +X.</summary>
+    public double AngleDegrees => _model.AngleDegrees;
+
+    /// <summary>Adopts a colour, orienting the ring to its hue.</summary>
     public void SetColor(ColorRgb color)
     {
-        (double h, double s, double v) = RgbToHsv(color);
-        _hue = h;
-        _saturation = s;
-        _value = v;
+        _model.SetColor(color.WithAlpha(1.0));
         InvalidateVisual();
     }
 
+    /// <summary>Redraws after the model was changed from outside the control.</summary>
+    public void Refresh() => InvalidateVisual();
+
+    // ---- screen <-> model ------------------------------------------------
+
+    private (Point Center, double Radius, double Scale) Geometry()
+    {
+        double width = Bounds.Width;
+        double height = Bounds.Height;
+        var center = new Point(width / 2.0, height / 2.0);
+        double radius = Math.Max(1.0, Math.Min(width, height) / 2.0 - OuterMargin);
+        double modelRadius = Math.Max(1e-9, _model.Radius);
+        return (center, radius, radius / modelRadius);
+    }
+
+    private static Point ToScreen(Point2D model, Point center, double scale)
+        => new(center.X + model.X * scale, center.Y + model.Y * scale);
+
+    private static Point2D ToModel(Point screen, Point center, double scale)
+        => new((screen.X - center.X) / scale, (screen.Y - center.Y) / scale);
+
+    // ---- drawing ---------------------------------------------------------
+
     public override void Render(DrawingContext context)
     {
-        double size = Math.Min(Bounds.Width, Bounds.Height);
-        if (size <= 1)
+        (Point center, double radius, double scale) = Geometry();
+        if (radius <= 1.0)
         {
             return;
         }
 
-        double radius = size / 2 - 2;
-        var center = new Point(Bounds.Width / 2, Bounds.Height / 2);
-        var dest = new Rect(center.X - radius, center.Y - radius, radius * 2, radius * 2);
+        // 1. The spectrum ring.
+        var ringRect = new Rect(center.X - radius, center.Y - radius, radius * 2.0, radius * 2.0);
+        context.DrawImage(
+            GetRingTexture(),
+            new Rect(0.0, 0.0, RingTextureSize, RingTextureSize),
+            ringRect);
 
-        WriteableBitmap wheel = GetWheelBitmap();
-        context.DrawImage(wheel, new Rect(0, 0, BitmapSize, BitmapSize), dest);
+        // 2. The inscribed triangle: a barycentric colour field clipped to the
+        //    triangle, so the fill really is the blend of the three corners.
+        TriangleCorners corners = _model.Corners;
+        CornerColors colors = _model.CornerColors;
+        Point a = ToScreen(corners.First, center, scale);
+        Point b = ToScreen(corners.Second, center, scale);
+        Point c = ToScreen(corners.Third, center, scale);
+        StreamGeometry geometry = BuildTriangle(a, b, c);
 
-        // Value darkening overlay.
-        if (_value < 1.0)
+        DrawTriangleField(context, geometry, a, b, c, corners, colors);
+
+        context.DrawGeometry(
+            null,
+            new Pen(new SolidColorBrush(Avalonia.Media.Color.FromArgb(0x55, 0, 0, 0)), 1.0),
+            geometry);
+
+        // 3. The small white selection circle.
+        double markerRadius = Math.Max(4.5, radius * 0.05);
+        context.DrawEllipse(
+            Brushes.White,
+            new Pen(new SolidColorBrush(Avalonia.Media.Color.FromArgb(0xCC, 0x20, 0x20, 0x28)), 1.3),
+            ToScreen(_model.MarkerPoint, center, scale),
+            markerRadius,
+            markerRadius);
+    }
+
+    private static StreamGeometry BuildTriangle(Point a, Point b, Point c)
+    {
+        var geometry = new StreamGeometry();
+        using (StreamGeometryContext ctx = geometry.Open())
         {
-            byte alpha = (byte)Math.Round((1.0 - _value) * 255);
-            context.DrawEllipse(new SolidColorBrush(Avalonia.Media.Color.FromArgb(alpha, 0, 0, 0)), null, center, radius, radius);
+            ctx.BeginFigure(a, isFilled: true);
+            ctx.LineTo(b);
+            ctx.LineTo(c);
+            ctx.EndFigure(isClosed: true);
         }
 
-        // Current-position marker.
-        double angle = _hue * Math.PI / 180.0;
-        double markerRadius = _saturation * radius;
-        var marker = new Point(center.X + Math.Cos(angle) * markerRadius, center.Y + Math.Sin(angle) * markerRadius);
-        context.DrawEllipse(null, new Pen(Brushes.Black, 2), marker, 6, 6);
-        context.DrawEllipse(null, new Pen(Brushes.White, 1.5), marker, 5, 5);
+        return geometry;
     }
+
+    /// <summary>
+    /// Renders the barycentric colour field to a small bitmap and draws it into
+    /// the triangle's bounding box under a geometry clip. The model's
+    /// <see cref="ColorTriangle.ColorAt(Barycentric, CornerColors)"/> is
+    /// evaluated per pixel, so the fill is exact rather than a mesh
+    /// approximation.
+    /// </summary>
+    private void DrawTriangleField(
+        DrawingContext context,
+        MediaGeometry clip,
+        Point a,
+        Point b,
+        Point c,
+        TriangleCorners corners,
+        CornerColors colors)
+    {
+        double minX = Math.Min(a.X, Math.Min(b.X, c.X));
+        double minY = Math.Min(a.Y, Math.Min(b.Y, c.Y));
+        double maxX = Math.Max(a.X, Math.Max(b.X, c.X));
+        double maxY = Math.Max(a.Y, Math.Max(b.Y, c.Y));
+        Rect bounds = new Rect(minX, minY, maxX - minX, maxY - minY).Inflate(1.0);
+        if (bounds.Width <= 0.0 || bounds.Height <= 0.0)
+        {
+            return;
+        }
+
+        (Point center, _, double scale) = Geometry();
+        int size = FieldTextureSize;
+        WriteableBitmap bitmap = _fieldTexture ??= new WriteableBitmap(
+            new PixelSize(size, size), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Premul);
+
+        using (ILockedFramebuffer framebuffer = bitmap.Lock())
+        {
+            unsafe
+            {
+                byte* basePtr = (byte*)framebuffer.Address;
+                for (int y = 0; y < size; y++)
+                {
+                    byte* row = basePtr + y * framebuffer.RowBytes;
+                    double screenY = bounds.Y + (y + 0.5) / size * bounds.Height;
+                    double modelY = (screenY - center.Y) / scale;
+                    for (int x = 0; x < size; x++)
+                    {
+                        double screenX = bounds.X + (x + 0.5) / size * bounds.Width;
+                        double modelX = (screenX - center.X) / scale;
+                        Barycentric weights = ColorTriangle.Barycentric(new Point2D(modelX, modelY), corners);
+                        ColorRgb color = ColorTriangle.ColorAt(weights, colors);
+                        byte* pixel = row + x * 4;
+                        pixel[0] = ToByte(color.B);
+                        pixel[1] = ToByte(color.G);
+                        pixel[2] = ToByte(color.R);
+                        pixel[3] = 255;
+                    }
+                }
+            }
+        }
+
+        using (context.PushGeometryClip(clip))
+        {
+            context.DrawImage(bitmap, new Rect(0.0, 0.0, size, size), bounds);
+        }
+    }
+
+    // ---- pointer ---------------------------------------------------------
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
-        if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
-            _dragging = true;
-            e.Pointer.Capture(this);
-            UpdateFromPoint(e.GetPosition(this));
-            e.Handled = true;
+            return;
         }
+
+        Point point = e.GetPosition(this);
+        (Point center, _, double scale) = Geometry();
+        Point2D modelPoint = ToModel(point, center, scale);
+        _dragging = true;
+        _ringDrag = !ColorTriangle.Barycentric(modelPoint, _model.Corners).IsInside(0.0);
+        e.Pointer.Capture(this);
+        ApplyModelPoint(modelPoint);
+        e.Handled = true;
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
@@ -104,146 +245,103 @@ public sealed class ColorWheel : Control
         base.OnPointerMoved(e);
         if (_dragging)
         {
-            UpdateFromPoint(e.GetPosition(this));
+            (Point center, _, double scale) = Geometry();
+            ApplyModelPoint(ToModel(e.GetPosition(this), center, scale));
         }
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
+        if (!_dragging)
+        {
+            return;
+        }
+
         _dragging = false;
         e.Pointer.Capture(null);
         ColorCommitted?.Invoke(this, EventArgs.Empty);
     }
 
-    private void UpdateFromPoint(Point point)
+    private void ApplyModelPoint(Point2D modelPoint)
     {
-        double size = Math.Min(Bounds.Width, Bounds.Height);
-        double radius = Math.Max(1, size / 2 - 2);
-        var center = new Point(Bounds.Width / 2, Bounds.Height / 2);
-
-        double dx = point.X - center.X;
-        double dy = point.Y - center.Y;
-        _saturation = Math.Clamp(Math.Sqrt(dx * dx + dy * dy) / radius, 0, 1);
-        _hue = Math.Atan2(dy, dx) * 180.0 / Math.PI;
-        if (_hue < 0)
+        if (_ringDrag)
         {
-            _hue += 360;
+            _model.SelectRingPoint(modelPoint);
+        }
+        else
+        {
+            _model.SelectTrianglePoint(modelPoint);
         }
 
         InvalidateVisual();
         ColorChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>Builds (once) the full-saturation hue/saturation wheel bitmap.</summary>
-    private static WriteableBitmap GetWheelBitmap()
+    // ---- textures --------------------------------------------------------
+
+    /// <summary>
+    /// Builds (once) the spectrum ring: a static hue wheel with a transparent
+    /// hole. Hues come from Core's <see cref="SpectrumRing"/>, so the ring and
+    /// the triangle's corner colour can never disagree.
+    /// </summary>
+    private static WriteableBitmap GetRingTexture()
     {
-        if (_wheelBitmap is not null)
+        if (_ringTexture is not null)
         {
-            return _wheelBitmap;
+            return _ringTexture;
         }
 
-        var bitmap = new WriteableBitmap(new PixelSize(BitmapSize, BitmapSize), new Vector(96, 96),
-            PixelFormat.Bgra8888, AlphaFormat.Premul);
-        double center = BitmapSize / 2.0;
-        double radius = center - 1;
+        int size = RingTextureSize;
+        var bitmap = new WriteableBitmap(
+            new PixelSize(size, size), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Premul);
+        double center = size / 2.0;
+        double outer = center;
+        double inner = outer * (1.0 - RingThicknessFraction);
 
-        using (ILockedFramebuffer buffer = bitmap.Lock())
+        using (ILockedFramebuffer framebuffer = bitmap.Lock())
         {
             unsafe
             {
-                byte* basePtr = (byte*)buffer.Address;
-                for (int y = 0; y < BitmapSize; y++)
+                byte* basePtr = (byte*)framebuffer.Address;
+                for (int y = 0; y < size; y++)
                 {
-                    byte* row = basePtr + y * buffer.RowBytes;
-                    for (int x = 0; x < BitmapSize; x++)
+                    byte* row = basePtr + y * framebuffer.RowBytes;
+                    double dy = y + 0.5 - center;
+                    for (int x = 0; x < size; x++)
                     {
-                        double dx = x - center;
-                        double dy = y - center;
+                        double dx = x + 0.5 - center;
                         double distance = Math.Sqrt(dx * dx + dy * dy);
-                        byte* px = row + x * 4;
+                        byte* pixel = row + x * 4;
 
-                        if (distance > radius)
+                        // One-pixel coverage ramp at both edges keeps the thin
+                        // ring from aliasing when it is scaled down.
+                        double coverage = Math.Clamp(outer + 0.5 - distance, 0.0, 1.0)
+                                          * Math.Clamp(distance - inner + 0.5, 0.0, 1.0);
+                        if (coverage <= 0.0)
                         {
-                            px[0] = px[1] = px[2] = px[3] = 0;
+                            pixel[0] = pixel[1] = pixel[2] = pixel[3] = 0;
                             continue;
                         }
 
-                        double hue = Math.Atan2(dy, dx) * 180.0 / Math.PI;
-                        if (hue < 0)
-                        {
-                            hue += 360;
-                        }
-
-                        double sat = distance / radius;
-                        ColorRgb rgb = HsvToRgb(hue, sat, 1.0);
-                        px[0] = (byte)Math.Round(rgb.B * 255); // B
-                        px[1] = (byte)Math.Round(rgb.G * 255); // G
-                        px[2] = (byte)Math.Round(rgb.R * 255); // R
-                        px[3] = 255;
+                        double angle = Math.Atan2(dy, dx) * 180.0 / Math.PI;
+                        ColorRgb color = SpectrumRing.ColorAtAngle(angle);
+                        pixel[0] = Premultiply(color.B, coverage);
+                        pixel[1] = Premultiply(color.G, coverage);
+                        pixel[2] = Premultiply(color.R, coverage);
+                        pixel[3] = (byte)Math.Round(coverage * 255.0);
                     }
                 }
             }
         }
 
-        _wheelBitmap = bitmap;
+        _ringTexture = bitmap;
         return bitmap;
     }
 
-    // ---- HSV <-> RGB -----------------------------------------------------
+    private static byte Premultiply(double channel, double coverage)
+        => (byte)Math.Round(Math.Clamp(channel, 0.0, 1.0) * coverage * 255.0);
 
-    private static ColorRgb HsvToRgb(double hue, double sat, double val)
-    {
-        double c = val * sat;
-        double h = hue / 60.0;
-        double x = c * (1 - Math.Abs(h % 2 - 1));
-        double m = val - c;
-
-        (double r, double g, double b) = h switch
-        {
-            >= 0 and < 1 => (c, x, 0.0),
-            >= 1 and < 2 => (x, c, 0.0),
-            >= 2 and < 3 => (0.0, c, x),
-            >= 3 and < 4 => (0.0, x, c),
-            >= 4 and < 5 => (x, 0.0, c),
-            _ => (c, 0.0, x),
-        };
-
-        return new ColorRgb(r + m, g + m, b + m);
-    }
-
-    private static (double Hue, double Saturation, double Value) RgbToHsv(ColorRgb color)
-    {
-        double r = Math.Clamp(color.R, 0, 1);
-        double g = Math.Clamp(color.G, 0, 1);
-        double b = Math.Clamp(color.B, 0, 1);
-        double max = Math.Max(r, Math.Max(g, b));
-        double min = Math.Min(r, Math.Min(g, b));
-        double delta = max - min;
-
-        double hue = 0;
-        if (delta > 1e-9)
-        {
-            if (max == r)
-            {
-                hue = 60 * (((g - b) / delta) % 6);
-            }
-            else if (max == g)
-            {
-                hue = 60 * ((b - r) / delta + 2);
-            }
-            else
-            {
-                hue = 60 * ((r - g) / delta + 4);
-            }
-        }
-
-        if (hue < 0)
-        {
-            hue += 360;
-        }
-
-        double saturation = max <= 1e-9 ? 0 : delta / max;
-        return (hue, saturation, max);
-    }
+    private static byte ToByte(double channel)
+        => (byte)Math.Round(Math.Clamp(channel, 0.0, 1.0) * 255.0);
 }

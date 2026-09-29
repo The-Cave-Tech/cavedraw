@@ -407,6 +407,26 @@ public class InputReplayTests
     }
 
     [Fact]
+    public void AReplayCanReachTheRealSinkAndTheRecorderAtOnce()
+    {
+        // This is how a batch that is played is also a batch that is recorded: the event goes
+        // to the window and to the recorder in the same delivery.
+        var clock = new RecordingClock();
+        var recorder = new InputRecorder(clock);
+        var sink = new CollectingSink();
+
+        InputBatch batch = Batch(
+            new InputEvent(InputKinds.Down, 10, 10, 100, Button: "left"),
+            new InputEvent(InputKinds.Move, 40, 20, 50),
+            new InputEvent(InputKinds.Up, 40, 20, 25));
+
+        batch.Replay(new TeeInputSink(sink, recorder), InputTiming.RealTime, clock);
+
+        Assert.Equal(batch.Events, sink.Received);
+        Assert.Equal(batch.Events, recorder.Finish().Events);
+    }
+
+    [Fact]
     public void AHeadlessBatchPicksTheSameObjectAClickWould()
     {
         CadDocument document = Page(Box("target", 100, 100));

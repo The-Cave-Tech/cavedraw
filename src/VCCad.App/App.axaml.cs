@@ -245,7 +245,10 @@ public partial class App : Application
 
         // If the last run ended badly, the journal is still there: offer the work back,
         // with the command queue that produced it.
-        if (SessionJournal.HasRecoverableSession)
+        //
+        // Skipped when a driver asked for it: the prompt covers the whole editing area and eats
+        // pointer events, so a headless run that does not dismiss it never reaches the canvas.
+        if (SessionJournal.HasRecoverableSession && !options.NoRecovery)
         {
             CadDocument? recovered = SessionJournal.TryRecover();
             if (recovered is not null)

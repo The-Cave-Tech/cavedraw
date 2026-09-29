@@ -81,20 +81,23 @@ public class ColorWheelTests
     // ---- Ring -------------------------------------------------------------
 
     [Theory]
-    [InlineData(-720.0)]
-    [InlineData(-359.0)]
-    [InlineData(-30.0)]
-    [InlineData(0.0)]
-    [InlineData(45.25)]
-    [InlineData(180.0)]
-    [InlineData(359.999)]
-    [InlineData(360.0)]
-    [InlineData(720.5)]
-    public void RingHueAndAngle_RoundTripWithNoDrift(double angle)
+    [InlineData(-720.0, 0.0)]
+    [InlineData(-359.0, 1.0)]
+    [InlineData(-30.0, 330.0)]
+    [InlineData(0.0, 0.0)]
+    [InlineData(45.25, 45.25)]
+    [InlineData(180.0, 180.0)]
+    [InlineData(359.999, 359.999)]
+    [InlineData(360.0, 0.0)]
+    [InlineData(720.5, 0.5)]
+    public void RingHueAndAngle_RoundTripWithNoDrift(double angle, double expected)
     {
-        double back = SpectrumRing.AngleForHue(SpectrumRing.HueForAngle(angle));
-        Assert.Equal(SpectrumRing.NormalizeAngle(angle), back, 12);
-        Assert.Equal(SpectrumRing.HueForAngle(angle), back, 12);
+        // Expected wrap values are spelled out rather than compared against
+        // NormalizeAngle, so a NormalizeAngle that stopped wrapping cannot make
+        // this test agree with itself.
+        Assert.Equal(expected, SpectrumRing.NormalizeAngle(angle), 12);
+        Assert.Equal(expected, SpectrumRing.HueForAngle(angle), 12);
+        Assert.Equal(expected, SpectrumRing.AngleForHue(SpectrumRing.HueForAngle(angle)), 12);
     }
 
     [Theory]

@@ -21,6 +21,16 @@ public sealed class EditorColorState
     /// <summary>The editor's colour state.</summary>
     public static EditorColorState Shared { get; } = new();
 
+    /// <summary>
+    /// Raised whenever the working colour or the recents change.
+    ///
+    /// Without this the panel only caught up when something in it was clicked, so
+    /// <c>color.set</c> through the API changed the colour and the picker went on showing the
+    /// old one until a person happened to touch it. A driver and a person would then be looking
+    /// at two different colours, which is exactly the divergence the registry exists to prevent.
+    /// </summary>
+    public event EventHandler? Changed;
+
     /// <summary>The headless picker model: ring angle, triangle, marker and conversions.</summary>
     public ColorPickerModel Model { get; } = new(
         new VCCad.Geometry.Point2D(0, 0), 100, new ColorRgb(0.13, 0.13, 0.13));
@@ -39,16 +49,29 @@ public sealed class EditorColorState
     {
         Model.SetColor(color);
         Remember(color);
+        Changed?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Moves the ring's selected angle, keeping saturation and value.</summary>
-    public void SelectAngle(double degrees) => Model.SelectAngle(degrees);
+    public void SelectAngle(double degrees)
+    {
+        Model.SelectAngle(degrees);
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
 
     /// <summary>Picks inside the triangle; outside is pulled onto the nearest edge.</summary>
-    public void SelectTrianglePoint(VCCad.Geometry.Point2D point) => Model.SelectTrianglePoint(point);
+    public void SelectTrianglePoint(VCCad.Geometry.Point2D point)
+    {
+        Model.SelectTrianglePoint(point);
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
 
     /// <summary>Sets the opacity, clamped.</summary>
-    public void SetAlpha(double alpha) => Model.SetAlpha(alpha);
+    public void SetAlpha(double alpha)
+    {
+        Model.SetAlpha(alpha);
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
 
     /// <summary>Adds a colour to the recents, newest first and without duplicates.</summary>
     public void Remember(ColorRgb color)
@@ -60,8 +83,17 @@ public sealed class EditorColorState
         {
             _recent.RemoveAt(_recent.Count - 1);
         }
+
+        // Raised here too, because this is reachable on its own through color.remember. Leaving
+        // it out was found by comparing two screenshots byte for byte: the state changed and the
+        // swatch pad did not, and nothing else would have shown that.
+        Changed?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Empties the recents.</summary>
-    public void ClearRecent() => _recent.Clear();
+    public void ClearRecent()
+    {
+        _recent.Clear();
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
 }

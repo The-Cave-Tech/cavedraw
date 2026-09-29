@@ -1721,55 +1721,65 @@ public static class EditorOperations
             {
                 Avalonia.Visual root = Root(ctx);
 
-                if (!p.TryGetProperty("events", out JsonElement events) ||
-                    events.ValueKind != JsonValueKind.Array)
+                var batch = new InputBatch { Events = ReadInputEvents(p) };
+                return ReplayInputBatch(
+                    ctx, root, batch, p.GetBool("fast", false), p.GetString("save"));
+            });
+
+        Add("input.batchFile",
+            "Load a batch file and replay it through the same input path a person's events " +
+            "take, optionally recording it again and saving the recording somewhere else. A " +
+            "session captured in one run replays in another with no window logic of its own.",
+            "path:string, fast?:bool, save?:string",
+            (ctx, p) =>
+            {
+                string path = RequireExistingFile(p, "path");
+                InputBatch batch = InputBatch.Load(path);
+                return ReplayInputBatch(
+                    ctx, Root(ctx), batch, p.GetBool("fast", false), p.GetString("save"));
+            });
+
+        Add("input.save",
+            "Write a batch to its shared gesture file without playing it, so a gesture can be " +
+            "prepared and stored, then replayed by input.batchFile. The same file is readable as " +
+            "a selection fixture: one file format for a gesture, whatever produced it.",
+            "path:string, name?:string, events:[{kind,x,y,deltaMs,...}]",
+            (ctx, p) =>
+            {
+                string path = p.GetString("path")
+                    ?? throw new EditorOperationException("Parameter 'path' is required.");
+
+                var batch = new InputBatch
                 {
-                    throw new EditorOperationException(
-                        "Parameter 'events' is required and must be an array.");
-                }
-
-                var parsed = new List<InputEvent>();
-                int index = 0;
-
-                foreach (JsonElement element in events.EnumerateArray())
-                {
-                    // Case-insensitive: a driver writes "kind", the record calls it Kind, and
-                    // the default options would not bind it - which the batch's own validation
-                    // caught by naming every index rather than silently replaying nothing.
-                    InputEvent? one = element.Deserialize<InputEvent>(InputJson);
-                    if (one is null)
-                    {
-                        throw new EditorOperationException($"Event at index {index} is not an event.");
-                    }
-
-                    parsed.Add(one);
-                    index++;
-                }
-
-                var batch = new InputBatch { Events = parsed };
-
-                bool fast = p.GetBool("fast", false);
-                InputReplayResult done;
-
-                try
-                {
-                    done = batch.Replay(
-                        InjectionInputSink.For(root),
-                        fast ? InputTiming.AsFastAsPossible : InputTiming.RealTime);
-                }
-                catch (InputBatchException bad)
-                {
-                    // The index is the whole value of this: a driver has to be told which event
-                    // was wrong, not merely that the batch was.
-                    throw new EditorOperationException(bad.Message);
-                }
-
-                return new
-                {
-                    delivered = done.Delivered,
-                    milliseconds = Math.Round(done.Duration.TotalMilliseconds, 1),
-                    timing = done.Timing.ToString(),
+                    Name = p.GetString("name"),
+                    Events = ReadInputEvents(p),
                 };
+
+                // Validate before writing: a file that names the offending index is worth more
+                // than one that replays nothing later.
+                batch.Validate();
+
+                string full = Path.GetFullPath(path);
+                string? directory = Path.GetDirectoryName(full);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                batch.Save(full);
+                return new { saved = full, events = batch.Events.Count };
+            });
+
+        Add("input.last",
+            "What was replayed last: the events in order with the deltas the replay used. A " +
+            "batch that was played is a batch that can be recorded, and this is that recording.",
+            "",
+            (ctx, p) =>
+            {
+                InputBatch? last = LastInputBatch;
+                return last is null
+                    ? new { count = 0, events = Array.Empty<InputEvent>() }
+                    : (object)new { count = last.Events.Count, events = last.Events };
             });
 
         Add("input.pointer",
@@ -2566,6 +2576,99 @@ public static class EditorOperations
     {
         PropertyNameCaseInsensitive = true,
     };
+
+    /// <summary>
+    /// Reads an "events" array into input events, tolerating the case a driver writes.
+    ///
+    /// The binding is case-insensitive because a JSON author writes "kind" while the record
+    /// calls it Kind; an element that will not bind is reported with its index rather than
+    /// silently dropped.
+    /// </summary>
+    private static List<InputEvent> ReadInputEvents(JsonElement p)
+    {
+        if (!p.TryGetProperty("events", out JsonElement events) ||
+            events.ValueKind != JsonValueKind.Array)
+        {
+            throw new EditorOperationException(
+                "Parameter 'events' is required and must be an array.");
+        }
+
+        var parsed = new List<InputEvent>();
+        int index = 0;
+
+        foreach (JsonElement element in events.EnumerateArray())
+        {
+            InputEvent? one = element.Deserialize<InputEvent>(InputJson);
+            if (one is null)
+            {
+                throw new EditorOperationException($"Event at index {index} is not an event.");
+            }
+
+            parsed.Add(one);
+            index++;
+        }
+
+        return parsed;
+    }
+
+    /// <summary>
+    /// Replays a batch into the window while recording it, so a batch that was played is also a
+    /// batch that can be saved and replayed.
+    ///
+    /// The recorder and the replay share one clock, so the deltas that come out are the deltas
+    /// that were waited. <paramref name="fast"/> keeps those deltas but does not wait. The sink
+    /// is the existing injection path, not a second implementation of input; a malformed batch
+    /// is rejected by index before anything is played.
+    /// </summary>
+    private static object ReplayInputBatch(
+        AutomationContext ctx, Avalonia.Visual root, InputBatch batch, bool fast, string? savePath)
+    {
+        var clock = new SystemInputClock();
+        var recorder = new InputRecorder(clock);
+        InputReplayResult done;
+
+        try
+        {
+            done = batch.Replay(
+                new TeeInputSink(recorder, InjectionInputSink.For(root)),
+                fast ? InputTiming.AsFastAsPossible : InputTiming.RealTime,
+                clock);
+        }
+        catch (InputBatchException bad)
+        {
+            // The index is the whole value of this: a driver has to be told which event was
+            // wrong, not merely that the batch was.
+            throw new EditorOperationException(bad.Message);
+        }
+
+        LastInputBatch = recorder.Finish(
+            batch.Name, ctx.Document, batch.FocusedArtboard, batch.Expected);
+
+        string? file = null;
+        if (!string.IsNullOrWhiteSpace(savePath))
+        {
+            file = Path.GetFullPath(savePath);
+            string? directory = Path.GetDirectoryName(file);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            LastInputBatch.Save(file);
+        }
+
+        return new
+        {
+            delivered = done.Delivered,
+            milliseconds = Math.Round(done.Duration.TotalMilliseconds, 1),
+            timing = done.Timing.ToString(),
+            recorded = LastInputBatch.Events.Count,
+            file,
+        };
+    }
+
+    /// <summary>The last batch played through the registry, for input.last.</summary>
+    private static InputBatch? LastInputBatch { get; set; }
 
     /// <summary>The working colour, described the way color.get describes it.</summary>
     private static object DescribeColor()

@@ -306,6 +306,15 @@ public sealed class DesktopStartupOptions
     /// <summary>Skip UI event recording (pointer, keyboard, drag and drop).</summary>
     public bool NoRecording { get; set; }
 
+    /// <summary>
+    /// Do not offer to recover a session left behind by a run that ended badly.
+    ///
+    /// The prompt is a modal covering the whole editing area and it swallows pointer events, so
+    /// a driver's gestures hit the overlay and the canvas never takes focus. A headless run that
+    /// does not dismiss it first does nothing at all, silently, which is a bad way to fail.
+    /// </summary>
+    public bool NoRecovery { get; set; }
+
     /// <summary>Where the diary is stored; defaults to the per-user application data.</summary>
     public string? HistoryDirectory { get; set; }
 
@@ -341,6 +350,10 @@ public sealed class DesktopStartupOptions
                     options.NoDiagnostics = true;
                     options.ShowDiagnostics = false;
                     break;
+                case "--no-recovery":
+                    options.NoRecovery = true;
+                    break;
+
                 case "--no-recording":
                 case "--no-diary":
                     options.NoRecording = true;
