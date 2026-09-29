@@ -22,6 +22,7 @@ internal sealed class PdfContentImporter
 {
     private readonly PdfFile _file;
     private readonly double _pageHeight;
+    private readonly double _pageWidth;
 
     // Font resource object → code→Unicode map from its /ToUnicode CMap.
     private readonly Dictionary<object, Dictionary<int, string>> _toUnicodeCache = new();
@@ -30,11 +31,21 @@ internal sealed class PdfContentImporter
     private readonly Dictionary<object, EmbeddedFont?> _embeddedFontCache = new();
     private readonly Dictionary<Dictionary<string, object?>, Dictionary<int, string>?> _encodingCache = new();
 
-    public PdfContentImporter(PdfFile file, double pageHeight)
+    public PdfContentImporter(PdfFile file, double pageHeight, double pageWidth = 0,
+        List<string>? notes = null)
     {
         _file = file;
         _pageHeight = pageHeight;
+        _pageWidth = pageWidth;
+        Notes = notes ?? new List<string>();
     }
+
+    /// <summary>
+    /// Lossy approximations this import had to make — an unsupported shading type
+    /// approximated by the closest supported one, a radial inner radius the model cannot
+    /// express. Reported rather than dropped silently.
+    /// </summary>
+    public List<string> Notes { get; }
 
     public List<PdfImportedItem> ParsePage(Dictionary<string, object?> pageDict)
     {
@@ -231,6 +242,7 @@ internal sealed class PdfContentImporter
             }
 
             _clips.Add(clip);
+            _clipJustTaken = true;
         }
 
         SubPath? currentPath = null;
@@ -343,6 +355,15 @@ internal sealed class PdfContentImporter
             {
                 reader.Advance();
                 continue;
+            }
+
+            // Consumed by the next painting operator. A cm/gs between the clip and sh is a
+            // coordinate or state change rather than paint, so it keeps the flag: a radial
+            // gradient emits its shaping matrix exactly there.
+            bool clipJustTaken = _clipJustTaken;
+            if (op is not ("cm" or "gs"))
+            {
+                _clipJustTaken = false;
             }
 
             switch (op)
@@ -748,10 +769,377 @@ internal sealed class PdfContentImporter
                 case "Do" when operands.Count >= 1 && operands[0] is PdfName xname:
                     DrawXObject(resources, xname.Value, current, items, depth, currentLayer, fillColor);
                     break;
+                case "sh" when operands.Count >= 1 && operands[0] is PdfName shadingName:
+                    PaintShading(resources, shadingName.Value, current, items, currentLayer,
+                        clipJustTaken, fillSpace);
+                    break;
             }
 
             operands.Clear();
         }
+    }
+
+    /// <summary>
+    /// Paints a shading (<c>sh</c>) as a gradient-filled path.
+    ///
+    /// A shading paints the whole current clip, so the shape is not the painted path - it
+    /// is the clip the file set immediately before <c>sh</c> (<c>path W n /Sh sh</c>).
+    /// That clip becomes the item's geometry, which is what keeps a gradient inside its
+    /// shape on the way back out. When no clip was just taken the shading covers the page,
+    /// and a page rectangle is used.
+    /// </summary>
+    private void PaintShading(Dictionary<string, object?> resources, string name,
+        AffineTransform ctm, List<PdfImportedItem> items, string? layer, bool clipIsShape,
+        object? fallbackSpace)
+    {
+        if (_file.ResolveDict(resources.GetValueOrDefault("Shading")) is not { } shadings ||
+            _file.ResolveDict(shadings.GetValueOrDefault(name)) is not { } shading)
+        {
+            Notes.Add($"shading /{name} was not found in the /Shading resources; the gradient was skipped.");
+            return;
+        }
+
+        ClipSpec? shape = null;
+        if (clipIsShape && _clips.Count > 0)
+        {
+            shape = _clips[^1];
+            _clips.RemoveAt(_clips.Count - 1);
+        }
+
+        if (shape is null)
+        {
+            if (_pageWidth <= 0 || _pageHeight <= 0)
+            {
+                Notes.Add($"shading /{name} has no clip and the page size is unknown; the gradient was skipped.");
+                return;
+            }
+
+            shape = new ClipSpec();
+            shape.SubPaths.Add(PageRectangle());
+        }
+
+        Rect2D bounds = BoundsOf(shape);
+        if (bounds.Width <= 1e-9 || bounds.Height <= 1e-9)
+        {
+            Notes.Add($"shading /{name} has zero-area bounds; the gradient was skipped.");
+            return;
+        }
+
+        GradientSpec? gradient = ReadShadingGradient(shading, bounds, ctm, fallbackSpace, resources);
+        if (gradient is null)
+        {
+            return;
+        }
+
+        var item = new PathItem { Name = "Gradient" };
+        foreach (SubPath sub in shape.SubPaths)
+        {
+            item.SubPaths.Add(sub.Clone());
+        }
+
+        // The flattened colour is what a viewer with no shading support shows, so it is a
+        // stop from the middle of the ramp rather than white.
+        IReadOnlyList<GradientStop> stops = gradient.Normalised();
+        item.Fill = FillSpec.WithGradient(gradient, shape.Rule, stops[stops.Count / 2].Color);
+        item.Stroke = StrokeSpec.None;
+        Attach(item);
+        items.Add(new PdfImportedItem(layer, item));
+    }
+
+    /// <summary>
+    /// Maps one shading to a <see cref="GradientSpec"/>. Axial (2) becomes linear and
+    /// radial (3) becomes radial; every other shading type is approximated by the closest
+    /// supported one and reported rather than dropped.
+    /// </summary>
+    private GradientSpec? ReadShadingGradient(Dictionary<string, object?> shading, Rect2D bounds,
+        AffineTransform ctm, object? fallbackSpace, Dictionary<string, object?> resources)
+    {
+        int type = (int)(_file.ResolveNumber(shading.GetValueOrDefault("ShadingType")) ?? 0);
+        object? space = _file.Resolve(shading.GetValueOrDefault("ColorSpace")) ?? fallbackSpace;
+        object? function = shading.GetValueOrDefault("Function");
+
+        if (type == 2)
+        {
+            double[]? coords = ReadNumbers(shading.GetValueOrDefault("Coords"));
+            if (coords is not { Length: >= 4 })
+            {
+                return null;
+            }
+
+            Point2D start = ToModelPoint(ctm, coords[0], coords[1]);
+            Point2D end = ToModelPoint(ctm, coords[2], coords[3]);
+            List<GradientStop> stops = StopsFromFunction(function, space, resources, out (double Low, double High) domain);
+            return new GradientSpec
+            {
+                Kind = GradientKind.Linear,
+                Stops = stops,
+                Spread = SpreadFromFunction(function, space, domain, resources),
+                Start = NormaliseToBounds(start, bounds),
+                End = NormaliseToBounds(end, bounds),
+            };
+        }
+
+        if (type == 3)
+        {
+            double[]? coords = ReadNumbers(shading.GetValueOrDefault("Coords"));
+            if (coords is not { Length: >= 6 })
+            {
+                return null;
+            }
+
+            // Coords are [x0 y0 r0 x1 y1 r1]. A non-zero r0 is an inner radius - a ramp
+            // that starts part-way out instead of at the centre - which the model has no
+            // field for, so it is reported and the ramp is taken from the centre.
+            if (Math.Abs(coords[2]) > 1e-9)
+            {
+                Notes.Add($"radial shading has an inner radius ({PdfDocumentExporter.Num(coords[2])}); " +
+                          "the model has no inner radius, so the ramp is taken from the centre out.");
+            }
+
+            Point2D centre = ToModelPoint(ctm, coords[3], coords[4]);
+            Point2D xEdge = ToModelPoint(ctm, coords[3] + coords[5], coords[4]);
+            Point2D yEdge = ToModelPoint(ctm, coords[3], coords[4] + coords[5]);
+            double rx = Math.Sqrt(((xEdge.X - centre.X) * (xEdge.X - centre.X)) +
+                                  ((xEdge.Y - centre.Y) * (xEdge.Y - centre.Y)));
+            double ry = Math.Sqrt(((yEdge.X - centre.X) * (yEdge.X - centre.X)) +
+                                  ((yEdge.Y - centre.Y) * (yEdge.Y - centre.Y)));
+
+            List<GradientStop> radialStops = StopsFromFunction(function, space, resources, out (double Low, double High) radialDomain);
+            return new GradientSpec
+            {
+                Kind = GradientKind.Radial,
+                Stops = radialStops,
+                Spread = SpreadFromFunction(function, space, radialDomain, resources),
+                Center = NormaliseToBounds(centre, bounds),
+                RadiusX = rx / bounds.Width,
+                RadiusY = ry / bounds.Height,
+                Rotation = Math.Atan2(xEdge.Y - centre.Y, xEdge.X - centre.X) * 180.0 / Math.PI,
+            };
+        }
+
+        return ApproximateUnsupported(type, function, space, resources);
+    }
+
+    /// <summary>
+    /// Reads the stops out of a shading's function. A <c>FunctionType 3</c> gives them
+    /// directly - its sub-functions are the stop pairs and its <c>/Bounds</c> are the
+    /// interior stop positions - and a single <c>FunctionType 2</c> is a two-stop ramp.
+    /// Anything else is sampled, which is an approximation but not a dropped gradient.
+    /// </summary>
+    private List<GradientStop> StopsFromFunction(object? function, object? space,
+        Dictionary<string, object?> resources, out (double Low, double High) domain)
+    {
+        domain = (0.0, 1.0);
+        var dict = _file.ResolveDict(function);
+        if (dict is null)
+        {
+            return new List<GradientStop> { new(0.0, ColorRgb.Black), new(1.0, ColorRgb.White) };
+        }
+
+        int functionType = (int)(_file.ResolveNumber(dict.GetValueOrDefault("FunctionType")) ?? 4);
+        double[]? bounds = ReadNumbers(dict.GetValueOrDefault("Bounds"));
+        var subs = _file.Resolve(dict.GetValueOrDefault("Functions")) as List<object?>;
+        double[]? functionDomain = ReadNumbers(dict.GetValueOrDefault("Domain"));
+
+        if (functionType == 3 && subs is { Count: > 0 } && bounds is not null)
+        {
+            double low = functionDomain is { Length: >= 2 } ? functionDomain[0] : 0.0;
+            double high = functionDomain is { Length: >= 2 } ? functionDomain[1] : 1.0;
+            domain = (low, high);
+
+            // A widened domain is a spread extension: the ramp is one period, and the
+            // sub-functions beyond it are copies. The base stops are the [0,1] period.
+            if (low < -1e-9 || high > 1.0 + 1e-9)
+            {
+                return SampleRamp(function, space, resources, 9);
+            }
+
+            var stops = new List<GradientStop>(subs.Count + 1);
+            double position = low;
+            for (int i = 0; i < subs.Count; i++)
+            {
+                GradientStop stop = new(
+                    position,
+                    EvalFunctionColor(subs[i], space, 0.0, resources),
+                    1.0,
+                    MidpointOfFunction(_file.ResolveDict(subs[i])));
+                stops.Add(stop);
+                position = i < bounds.Length ? bounds[i] : high;
+            }
+
+            stops.Add(new GradientStop(high, EvalFunctionColor(subs[^1], space, 1.0, resources)));
+            return stops;
+        }
+
+        if (functionType == 2)
+        {
+            return new List<GradientStop>
+            {
+                new(0.0, EvalFunctionColor(function, space, 0.0, resources), 1.0, MidpointOfFunction(dict)),
+                new(1.0, EvalFunctionColor(function, space, 1.0, resources)),
+            };
+        }
+
+        return SampleRamp(function, space, resources, 9);
+    }
+
+    /// <summary>
+    /// Samples a ramp at even positions. Used when the function is not a stitching of
+    /// exponentials (a sampled or calculator function), where there are no stop positions
+    /// to read and sampling is the honest approximation.
+    /// </summary>
+    private List<GradientStop> SampleRamp(object? function, object? space,
+        Dictionary<string, object?> resources, int samples)
+    {
+        var stops = new List<GradientStop>(samples);
+        for (int i = 0; i < samples; i++)
+        {
+            double t = i / (double)(samples - 1);
+            stops.Add(new GradientStop(t, EvalFunctionColor(function, space, t, resources)));
+        }
+
+        return stops;
+    }
+
+    /// <summary>
+    /// Recovers the spread from an extended function domain. A domain wider than 0..1 only
+    /// exists because the author extended the function for Reflect or Repeat, so probing
+    /// whether the function repeats or mirrors identifies which. Neither means the
+    /// extension is something else, and Pad is the safe approximation - reported.
+    /// </summary>
+    private GradientSpread SpreadFromFunction(object? function, object? space,
+        (double Low, double High) domain, Dictionary<string, object?> resources)
+    {
+        if (domain.Low >= -1e-9 && domain.High <= 1.0 + 1e-9)
+        {
+            return GradientSpread.Pad;
+        }
+
+        bool repeat = true;
+        bool reflect = true;
+        for (int i = 1; i <= 9; i++)
+        {
+            double t = i / 10.0;
+            ColorRgb baseColour = EvalFunctionColor(function, space, t, resources);
+            if (!NearlyEqual(baseColour, EvalFunctionColor(function, space, t + 1.0, resources)))
+            {
+                repeat = false;
+            }
+
+            if (!NearlyEqual(baseColour, EvalFunctionColor(function, space, -t, resources)))
+            {
+                reflect = false;
+            }
+        }
+
+        if (reflect)
+        {
+            return GradientSpread.Reflect;
+        }
+
+        if (repeat)
+        {
+            return GradientSpread.Repeat;
+        }
+
+        Notes.Add(
+            $"shading function domain [{PdfDocumentExporter.Num(domain.Low)} " +
+            $"{PdfDocumentExporter.Num(domain.High)}] extends past 0..1 but is neither a " +
+            "repeat nor a reflection; spread approximated as Pad.");
+        return GradientSpread.Pad;
+    }
+
+    /// <summary>
+    /// An unsupported shading type (function-based, or one of the mesh types) has no
+    /// <see cref="GradientSpec"/> equivalent, so it is approximated by a linear ramp of
+    /// samples from its function and the approximation is reported. A mesh with no
+    /// function has nothing to sample and is reported as dropped - never silently.
+    /// </summary>
+    private GradientSpec? ApproximateUnsupported(int type, object? function, object? space,
+        Dictionary<string, object?> resources)
+    {
+        if (function is null)
+        {
+            Notes.Add($"shading type {type} is not supported and has no /Function; the gradient was dropped.");
+            return null;
+        }
+
+        List<GradientStop> stops = SampleRamp(function, space, resources, 9);
+        Notes.Add($"shading type {type} is not supported; approximated as a {stops.Count}-stop linear gradient.");
+        return new GradientSpec
+        {
+            Kind = GradientKind.Linear,
+            Stops = stops,
+            Spread = GradientSpread.Pad,
+            Start = new Point2D(0.0, 0.5),
+            End = new Point2D(1.0, 0.5),
+        };
+    }
+
+    /// <summary>Evaluates a shading function and converts its output through the colour space.</summary>
+    private ColorRgb EvalFunctionColor(object? function, object? space, double t,
+        Dictionary<string, object?> resources)
+    {
+        try
+        {
+            double[] components = ApplyFunction(function, new[] { t }, resources);
+            return ResolveColor(space, components, resources);
+        }
+        catch (Exception)
+        {
+            return ColorRgb.Black;
+        }
+    }
+
+    /// <summary>
+    /// A stop's blend midpoint from an exponential sub-function's <c>N</c>. The model's
+    /// midpoint is the power curve PDF's exponential applies, so this inverts
+    /// <c>N = log(0.5)/log(midpoint)</c>.
+    /// </summary>
+    private double MidpointOfFunction(Dictionary<string, object?>? dict)
+    {
+        double n = dict is null
+            ? 1.0
+            : _file.ResolveNumber(dict.GetValueOrDefault("N")) ?? 1.0;
+        if (!(n > 0) || Math.Abs(n - 1.0) < 1e-9 || !double.IsFinite(n))
+        {
+            return 0.5;
+        }
+
+        return Math.Clamp(Math.Pow(0.5, 1.0 / n), 0.0, 1.0);
+    }
+
+    private static bool NearlyEqual(ColorRgb a, ColorRgb b)
+        => Math.Abs(a.R - b.R) < 0.02 && Math.Abs(a.G - b.G) < 0.02 && Math.Abs(a.B - b.B) < 0.02;
+
+    private Point2D ToModelPoint(AffineTransform ctm, double x, double y)
+    {
+        Point2D p = ctm.Transform(new Point2D(x, y));
+        return new Point2D(p.X, _pageHeight - p.Y);
+    }
+
+    private static Point2D NormaliseToBounds(Point2D p, Rect2D bounds)
+        => new((p.X - bounds.Left) / bounds.Width, (p.Y - bounds.Top) / bounds.Height);
+
+    private static Rect2D BoundsOf(ClipSpec clip)
+    {
+        Rect2D box = Rect2D.Empty;
+        foreach (SubPath sub in clip.SubPaths)
+        {
+            box = box.Union(sub.BoundingBox());
+        }
+
+        return box;
+    }
+
+    private SubPath PageRectangle()
+    {
+        var rect = new SubPath { IsClosed = true };
+        rect.Nodes.Add(new PathNode(new Point2D(0, 0)));
+        rect.Nodes.Add(new PathNode(new Point2D(_pageWidth, 0)));
+        rect.Nodes.Add(new PathNode(new Point2D(_pageWidth, _pageHeight)));
+        rect.Nodes.Add(new PathNode(new Point2D(0, _pageHeight)));
+        return rect;
     }
 
     private void DrawXObject(Dictionary<string, object?> resources, string name,
@@ -2204,6 +2592,14 @@ internal sealed class PdfContentImporter
     /// <summary>Whether the path just built is a clip, and by which rule.</summary>
     private bool _pendingClip;
     private FillRule _pendingClipRule = FillRule.NonZero;
+
+    /// <summary>
+    /// Set when a clip was taken by the immediately preceding path. A gradient is painted
+    /// by <c>sh</c> through the current clip, and the usual file shape is
+    /// <c>path W n /Sh sh</c>: when the clip was taken just before the shading, that clip
+    /// is the gradient's shape and becomes the path's geometry.
+    /// </summary>
+    private bool _clipJustTaken;
 
     /// <summary>
     /// The text block the last show operation added, and where it ended in model space.

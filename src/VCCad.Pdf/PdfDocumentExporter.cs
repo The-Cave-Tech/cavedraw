@@ -51,6 +51,22 @@ public static class PdfDocumentExporter
     }
 
     /// <summary>
+    /// Exports the document and additionally reports every lossy approximation the export
+    /// had to make - a gradient spread PDF cannot express, per-stop opacity, a freeform
+    /// gradient with no native PDF shading. An approximation that is reported is honest;
+    /// one that is not is a silently wrong document.
+    /// </summary>
+    public static byte[] Export(CadDocument document, out IReadOnlyList<string> notes,
+        IReadOnlyList<string>? history = null)
+    {
+        var collected = new List<string>();
+        using var buffer = new MemoryStream();
+        Export(document, buffer, history, collected);
+        notes = collected;
+        return buffer.ToArray();
+    }
+
+    /// <summary>
     /// Exports the document into <paramref name="output"/>.
     ///
     /// <paramref name="history"/> is our own private data: the command queue that produced
@@ -61,6 +77,10 @@ public static class PdfDocumentExporter
     /// </summary>
     public static void Export(CadDocument document, Stream output,
         IReadOnlyList<string>? history = null)
+        => Export(document, output, history, null);
+
+    private static void Export(CadDocument document, Stream output,
+        IReadOnlyList<string>? history, List<string>? notes)
     {
         var assembler = new PdfAssembler();
 
@@ -125,8 +145,19 @@ public static class PdfDocumentExporter
         // many pages place it; unused entries in a resource dictionary are legal.
         var imageObjects = new PdfImageObjects(assembler, AllImages(document));
 
+        // Gradient shadings are allocated while an artboard's content stream is built
+        // (each usage carries its own geometry), so the content is written first and the
+        // resource dictionary - which must name every shading - is assembled afterwards.
+        var shadingObjects = new PdfShadingObjects(assembler, notes ?? new List<string>());
+        var contents = new byte[document.Artboards.Count][];
+        for (int i = 0; i < document.Artboards.Count; i++)
+        {
+            contents[i] = BuildArtboardContent(
+                document.Artboards[i], embedder, alphaStates, imageObjects, shadingObjects);
+        }
+
         string resources =
-            $"/Resources << {embedder.FontDict()}{alphaStates.Dict()}{imageObjects.Dict()}>>";
+            $"/Resources << {embedder.FontDict()}{alphaStates.Dict()}{imageObjects.Dict()}{shadingObjects.Dict()}>>";
 
         // ------------------------------------------------------------------
         // Sidecar: lossless model JSON, zlib (RFC 1950) compressed — the PDF
@@ -166,10 +197,10 @@ public static class PdfDocumentExporter
         for (int i = 0; i < document.Artboards.Count; i++)
         {
             Artboard artboard = document.Artboards[i];
-            byte[] content = BuildArtboardContent(artboard, embedder, alphaStates, imageObjects);
+
             // Content streams are FlateDecode-filtered like the sidecar; the raw
             // operator text is compressed here before being wrapped.
-            assembler.SetBody(contentNumbers[i], MakeStreamObject(Compress(content)));
+            assembler.SetBody(contentNumbers[i], MakeStreamObject(Compress(contents[i])));
 
             assembler.SetBody(
                 pageNumbers[i],
@@ -237,7 +268,7 @@ public static class PdfDocumentExporter
     /// mapping rules. The returned bytes are the plain content (uncompressed);
     /// callers wrap them via <see cref="MakeStreamObject"/>.
     /// </summary>
-    private static byte[] BuildArtboardContent(Artboard artboard, PdfFontEmbedder embedder, PdfAlphaStates alphaStates, PdfImageObjects? images = null)
+    private static byte[] BuildArtboardContent(Artboard artboard, PdfFontEmbedder embedder, PdfAlphaStates alphaStates, PdfImageObjects? images = null, PdfShadingObjects? shadings = null)
     {
         var ops = new List<string>();
 
@@ -258,7 +289,7 @@ public static class PdfDocumentExporter
 
                 foreach (LayerItem item in layer.Children)
                 {
-                    PaintItem(ops, item, AffineTransform.Identity, 1.0, alphaStates, images);
+                    PaintItem(ops, item, AffineTransform.Identity, 1.0, alphaStates, images, shadings);
                 }
             }
         }
@@ -408,7 +439,7 @@ public static class PdfDocumentExporter
         }
     }
 
-    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfImageObjects? images = null)
+    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfImageObjects? images = null, PdfShadingObjects? shadings = null)
     {
         if (!item.IsEffectivelyVisible())
         {
@@ -441,7 +472,7 @@ public static class PdfDocumentExporter
         switch (item)
         {
             case PathItem path:
-                PaintPath(ops, path, toDoc, opacity, alphaStates);
+                PaintPath(ops, path, toDoc, opacity, alphaStates, shadings);
                 break;
 
             case ImageItem image:
@@ -454,7 +485,7 @@ public static class PdfDocumentExporter
                 AffineTransform childToDoc = toDoc.Compose(group.Transform);
                 foreach (LayerItem child in group.Children)
                 {
-                    PaintItem(ops, child, childToDoc, opacity * group.Opacity, alphaStates, images);
+                    PaintItem(ops, child, childToDoc, opacity * group.Opacity, alphaStates, images, shadings);
                 }
 
                 break;
@@ -511,7 +542,7 @@ public static class PdfDocumentExporter
     /// closed (fillable) and open (stroke-only), so the renderer never fills an
     /// open path as PDF would implicitly do.
     /// </summary>
-    private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates)
+    private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfShadingObjects? shadings = null)
     {
         // Bake geometry into artboard space: anchors and both handles per node.
         var contours = new List<Contour>();
@@ -593,15 +624,46 @@ public static class PdfDocumentExporter
         var open = contours.Where(c => !c.IsClosed).ToList();
 
         // --- Fill (all contours; `f` implicitly closes open subpaths) --------
+        // A gradient fill is a native PDF shading: the shape becomes the clip and `sh`
+        // paints the ramp through it, so the gradient never escapes its shape. A gradient
+        // PDF cannot represent falls back to the fill's flat colour (reported by
+        // PdfShadingObjects).
+        ShadingPaint? shading = null;
+        if (fillVisible && path.Fill.Gradient is { } gradient && shadings is not null)
+        {
+            shading = shadings.NameFor(gradient, path.BoundingBox(), toDoc);
+        }
+
         if (fillVisible && contours.Count > 0)
         {
-            if (alphaStates.HasTransparency)
+            if (shading is { } paint)
             {
-                ops.Add($"{alphaStates.NameFor(path.Fill.Color.A * opacity)} gs");
-            }
+                ops.Add("q");
+                if (alphaStates.HasTransparency)
+                {
+                    ops.Add($"{alphaStates.NameFor(path.Fill.Color.A * opacity)} gs");
+                }
 
-            WriteContours(ops, contours);
-            ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "f*" : "f");
+                WriteContours(ops, contours);
+                ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "W* n" : "W n");
+                if (paint.Matrix is not null)
+                {
+                    ops.Add($"{paint.Matrix} cm");
+                }
+
+                ops.Add($"/{paint.ResourceName} sh");
+                ops.Add("Q");
+            }
+            else
+            {
+                if (alphaStates.HasTransparency)
+                {
+                    ops.Add($"{alphaStates.NameFor(path.Fill.Color.A * opacity)} gs");
+                }
+
+                WriteContours(ops, contours);
+                ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "f*" : "f");
+            }
         }
 
         if (!strokeVisible)

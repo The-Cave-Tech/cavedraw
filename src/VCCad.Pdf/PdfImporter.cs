@@ -29,8 +29,19 @@ public static class PdfImporter
     /// was read.
     /// </exception>
     public static CadDocument Import(byte[] pdfBytes)
+        => Import(pdfBytes, out _);
+
+    /// <summary>
+    /// Imports <paramref name="pdfBytes"/> and additionally reports every lossy
+    /// approximation the import had to make — an unsupported shading type approximated by
+    /// the closest supported one, a radial inner radius the model cannot hold. An
+    /// approximation that is not reported is a silently wrong document.
+    /// </summary>
+    public static CadDocument Import(byte[] pdfBytes, out IReadOnlyList<string> notes)
     {
-        CadDocument document = ImportCore(pdfBytes);
+        var collected = new List<string>();
+        notes = collected;
+        CadDocument document = ImportCore(pdfBytes, collected);
 
         // Illustrator private data lives outside the PDF content model, so it is
         // captured separately and attached here, once, on every import path. A
@@ -49,7 +60,7 @@ public static class PdfImporter
     /// fallback. Split out of <see cref="Import"/> so the private-data capture
     /// happens exactly once without being repeated at each of the early returns.
     /// </summary>
-    private static CadDocument ImportCore(byte[] pdfBytes)
+    private static CadDocument ImportCore(byte[] pdfBytes, List<string> notes)
     {
         // 0) A file that is not a PDF at all is refused here, before any parser
         //    gets a chance to fall through and hand back a fabricated A4.
@@ -77,7 +88,7 @@ public static class PdfImporter
             var pageDicts = EnumeratePages(file).ToList();
             if (pageDicts.Count > 0)
             {
-                return BuildFromPages(file, pageDicts);
+                return BuildFromPages(file, pageDicts, notes);
             }
         }
         catch (Parsing.PdfNestingLimitException)
@@ -178,7 +189,7 @@ public static class PdfImporter
     }
 
     private static CadDocument BuildFromPages(Parsing.PdfFile file,
-        IReadOnlyList<Dictionary<string, object?>> pageDicts)
+        IReadOnlyList<Dictionary<string, object?>> pageDicts, List<string>? notes = null)
     {
         var document = new CadDocument { Name = "Imported" };
 
@@ -197,6 +208,7 @@ public static class PdfImporter
         {
             Dictionary<string, object?> page = pageDicts[i];
             double h = sizes[i].Height;
+            double w = sizes[i].Width;
             Artboard artboard = document.AddArtboard(sizes[i], $"Page {i + 1}", origins[i]);
 
             // Preserve the PDF's optional-content layers (Illustrator layers). Items
@@ -215,7 +227,7 @@ public static class PdfImporter
             }
 
             foreach (PdfImportedItem imported in
-                     new PdfContentImporter(file, h).ParsePage(page))
+                     new PdfContentImporter(file, h, w, notes).ParsePage(page))
             {
                 LayerFor(imported.Layer).AddItem(imported.Item);
             }
