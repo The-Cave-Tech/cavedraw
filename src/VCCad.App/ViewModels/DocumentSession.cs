@@ -938,7 +938,14 @@ public sealed class DocumentSession : INotifyPropertyChanged
 
     /// <summary>Selected paths whose geometry can be edited. Selecting a group
     /// expands to every path inside it (groups have no coordinates of their own).</summary>
-    public IEnumerable<PathItem> SelectedPaths()
+    /// <summary>
+    /// The paths a transform should act on.
+    ///
+    /// By default a selected group brings its contents with it, which is what a group is for.
+    /// <paramref name="ownOnly"/> - the platform modifier - says the group itself and nothing
+    /// inside it, so its contents are not expanded here.
+    /// </summary>
+    public IEnumerable<PathItem> SelectedPaths(bool ownOnly = false)
     {
         foreach (LayerItem item in _selectedObjects)
         {
@@ -947,7 +954,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 case PathItem path:
                     yield return path;
                     break;
-                case ArtGroup group:
+                case ArtGroup group when !ownOnly:
                     foreach (PathItem nested in DescendantPaths(group))
                     {
                         yield return nested;
@@ -1196,7 +1203,9 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// translate by <paramref name="translation"/>, scale by sx/sy about the pivot,
     /// then rotate by <paramref name="rotationDegrees"/> about the pivot.
     /// </summary>
-    public void ApplyTransform(Point2D pivot, Vector2D translation, double scaleX, double scaleY, double rotationDegrees)
+    public void ApplyTransform(
+        Point2D pivot, Vector2D translation, double scaleX, double scaleY, double rotationDegrees,
+        bool ownOnly = false)
     {
         if (!HasTransformableSelection)
         {
@@ -1212,7 +1221,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
         }
 
         var edits = new List<IUndoableCommand>();
-        foreach (PathItem path in SelectedPaths())
+        foreach (PathItem path in SelectedPaths(ownOnly))
         {
             PathItem before = path.GeometrySnapshot();
 

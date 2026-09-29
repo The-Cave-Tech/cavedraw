@@ -683,6 +683,70 @@ public static class SelectionEngine
         return new Rect2D(box.X + offset.X, box.Y + offset.Y, box.Width, box.Height);
     }
 
+    /// <summary>
+    /// What a transform should actually be applied to.
+    ///
+    /// By default a transform reaches the children: moving a group moves what is in it, which
+    /// is what a group is for. Holding the platform modifier says "this object only" - the
+    /// group's own placement moves and its contents stay where they are - which is how a
+    /// container is nudged without disturbing a drawing placed carefully inside it.
+    ///
+    /// Command on macOS and Control elsewhere, which is the platform's own convention rather
+    /// than a choice of ours.
+    /// </summary>
+    /// <param name="selection">The selected objects.</param>
+    /// <param name="ownOnly">Whether the platform modifier is held.</param>
+    public static IReadOnlyList<LayerItem> TransformTargets(
+        IReadOnlyList<LayerItem> selection, bool ownOnly)
+    {
+        if (ownOnly)
+        {
+            return selection.ToList();
+        }
+
+        var all = new List<LayerItem>();
+
+        foreach (LayerItem item in selection)
+        {
+            if (!all.Contains(item))
+            {
+                all.Add(item);
+            }
+
+            foreach (LayerItem descendant in Descendants(item))
+            {
+                if (!all.Contains(descendant))
+                {
+                    all.Add(descendant);
+                }
+            }
+        }
+
+        return all;
+    }
+
+    /// <summary>The key that means "this object only" on the platform we are running on.</summary>
+    public static bool IsOwnTransformModifier => OperatingSystem.IsMacOS();
+
+    /// <summary>Everything inside an object: its children, their children, and so on.</summary>
+    public static IEnumerable<LayerItem> Descendants(LayerItem item)
+    {
+        if (item is not ArtGroup group)
+        {
+            yield break;
+        }
+
+        foreach (LayerItem child in group.Children)
+        {
+            yield return child;
+
+            foreach (LayerItem nested in Descendants(child))
+            {
+                yield return nested;
+            }
+        }
+    }
+
     /// <summary>The topmost pasteboard object under a point, or null. World coordinates.</summary>
     public static LayerItem? OrphanAt(CadDocument document, Point2D point)
     {

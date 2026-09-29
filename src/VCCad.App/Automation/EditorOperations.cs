@@ -726,7 +726,8 @@ public static class EditorOperations
 
         Add("object.transform",
             "Transform the selection about a pivot. Angles in degrees.",
-            "pivotX?,pivotY?,translateX?,translateY?,scaleX?,scaleY?,rotationDegrees?",
+            "pivotX?,pivotY?,translateX?,translateY?,scaleX?,scaleY?,rotationDegrees?,ownOnly?:bool " +
+            "(true acts on the selected objects alone, as the platform modifier does)",
             (ctx, p) =>
             {
                 Rect2D bounds = ctx.Session.SelectionBounds();
@@ -738,7 +739,8 @@ public static class EditorOperations
                     p.GetDouble("scaleX", 1),
                     p.GetDouble("scaleY", 1),
                     p.GetDouble("rotationDegrees", 0),
-                    new Point2D(px, py));
+                    new Point2D(px, py),
+                    p.GetBool("ownOnly", false));
                 return Summary(ctx);
             });
 
@@ -3004,11 +3006,11 @@ public static class EditorOperations
 
     private static void ApplyTransform(
         DocumentSession session, Vector2D translation, double scaleX, double scaleY, double rotationDegrees,
-        Point2D? pivot = null)
+        Point2D? pivot = null, bool ownOnly = false)
     {
         Rect2D bounds = session.SelectionBounds();
         Point2D p = pivot ?? (bounds.IsEmpty ? new Point2D(0, 0) : bounds.Center);
-        session.ApplyTransform(p, translation, scaleX, scaleY, rotationDegrees);
+        session.ApplyTransform(p, translation, scaleX, scaleY, rotationDegrees, ownOnly);
     }
 
     private static int IndexIn(IItemContainer container, LayerItem item)
