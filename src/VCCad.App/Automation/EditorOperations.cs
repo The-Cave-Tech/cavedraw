@@ -11,6 +11,7 @@ using VCCad.App.ViewModels;
 using VCCad.App.Views.Panes;
 using VCCad.Core.Commands;
 using VCCad.Core.Model;
+using VCCad.Core.Selection;
 using VCCad.Core.Serialization;
 using VCCad.Geometry;
 
@@ -671,7 +672,11 @@ public static class EditorOperations
                 };
             });
 
-        Add("object.move", "Move the selection (or given items) by a delta.", "dx:number, dy:number, itemIds?:guid[]",
+        Add("object.move", "Move the selection (or given items) by a delta. Objects moved off " +
+            "the page they were on are rehomed to the page that now holds them, or to the " +
+            "pasteboard; with no pointer to hover with, the END of the translation vector " +
+            "decides, measured from the centre of the selection.",
+            "dx:number, dy:number, itemIds?:guid[]",
             (ctx, p) =>
             {
                 if (p.TryGetGuidArray("itemIds", out Guid[] ids))
@@ -679,7 +684,23 @@ public static class EditorOperations
                     ctx.Session.SelectRange(ids.Select(id => RequireItem(ctx.Document, id)).ToArray(), additive: false);
                 }
 
-                ApplyTransform(ctx.Session, new Vector2D(p.GetDouble("dx", 0), p.GetDouble("dy", 0)), 1, 1, 0);
+                LayerItem[] moving = ctx.Session.SelectedObjects.ToArray();
+                Point2D centreBefore = SelectionEngine.CentreOf(moving);
+                var delta = new Vector2D(p.GetDouble("dx", 0), p.GetDouble("dy", 0));
+
+                ApplyTransform(ctx.Session, delta, 1, 1, 0);
+
+                IItemContainer? target = SelectionEngine.RehomeTarget(
+                    ctx.Document, moving, null, centreBefore, delta);
+
+                if (target is not null)
+                {
+                    ctx.ViewModel.MoveItems(
+                        moving.Where(i => !ReferenceEquals(i.Container, target)).ToArray(),
+                        target,
+                        target.Children.Count);
+                }
+
                 return Summary(ctx);
             });
 

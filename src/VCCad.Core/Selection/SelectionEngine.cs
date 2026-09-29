@@ -518,6 +518,110 @@ public static class SelectionEngine
         return !region.IsEmpty && region.IsInside(path);
     }
 
+    /// <summary>
+    /// Where objects belong when they are dropped at a point: an artboard's layer, or the
+    /// pasteboard.
+    ///
+    /// Dragging something off the page it started on is how a person moves it between pages,
+    /// and where it lands decides which page now owns it. A point outside every artboard means
+    /// the pasteboard, which is a place objects can live rather than a place they are lost.
+    /// </summary>
+    public static IItemContainer ContainerAt(CadDocument document, Point2D point)
+    {
+        Artboard? board = ArtboardAt(document.Artboards, point);
+
+        if (board is null)
+        {
+            return document.Orphans;
+        }
+
+        return board.Layers.FirstOrDefault(l => l.IsEffectivelyVisible)
+            ?? board.Layers.FirstOrDefault()
+            ?? (IItemContainer)document.Orphans;
+    }
+
+    /// <summary>
+    /// Whether items should be rehomed after being translated, and to what, or null to leave
+    /// them where they are.
+    ///
+    /// <paramref name="pointer"/> is where the pointer is - the honest answer during a drag.
+    /// A translation that arrives through the API has no pointer, so there is nothing to
+    /// substitute for it but the transformation itself: the vector's END, with its origin at
+    /// the CENTRE OF THE SELECTION. That is what makes a scripted move behave the way the same
+    /// move by hand does, which is the point of the parity rule - an operation and a gesture
+    /// must not disagree about where an object ends up.
+    /// </summary>
+    /// <param name="pointer">Where the pointer is, when there is one.</param>
+    /// <param name="centreBefore">The selection's centre before the move.</param>
+    /// <param name="delta">The translation applied.</param>
+    public static IItemContainer? RehomeTarget(
+        CadDocument document,
+        IReadOnlyList<LayerItem> items,
+        Point2D? pointer = null,
+        Point2D? centreBefore = null,
+        Vector2D? delta = null)
+    {
+        if (items.Count == 0)
+        {
+            return null;
+        }
+
+        Point2D deciding = pointer ??
+            (centreBefore is { } centre && delta is { } move
+                ? centre + move
+                : CentreOf(items));
+
+        IItemContainer target = ContainerAt(document, deciding);
+
+        // Already there: nothing to do, and saying so keeps this from rebuilding the tree on
+        // every move that stays where it belongs.
+        return ReferenceEquals(target, items[0].Container) ? null : target;
+    }
+
+    /// <summary>The centre of a selection's combined bounds, in document coordinates.</summary>
+    public static Point2D CentreOf(IReadOnlyList<LayerItem> items)
+    {
+        bool any = false;
+        double left = 0, top = 0, right = 0, bottom = 0;
+
+        foreach (LayerItem item in items)
+        {
+            Rect2D box = BoundsOf(item, item.ArtboardOffset());
+
+            if (!any)
+            {
+                left = box.Left;
+                top = box.Top;
+                right = box.Right;
+                bottom = box.Bottom;
+                any = true;
+                continue;
+            }
+
+            left = Math.Min(left, box.Left);
+            top = Math.Min(top, box.Top);
+            right = Math.Max(right, box.Right);
+            bottom = Math.Max(bottom, box.Bottom);
+        }
+
+        return any ? new Point2D((left + right) / 2, (top + bottom) / 2) : default;
+    }
+
+    /// <summary>An object's bounds in document coordinates.</summary>
+    private static Rect2D BoundsOf(LayerItem item, Vector2D offset)
+    {
+        Rect2D box = item switch
+        {
+            PathItem path => path.BoundingBox(),
+            TextItem text => text.BoundingBox(),
+            ImageItem image => image.Placement,
+            ArtGroup group when group.Children.Count > 0 => group.BoundingBox(),
+            _ => Rect2D.Empty,
+        };
+
+        return new Rect2D(box.X + offset.X, box.Y + offset.Y, box.Width, box.Height);
+    }
+
     /// <summary>The topmost pasteboard object under a point, or null. World coordinates.</summary>
     public static LayerItem? OrphanAt(CadDocument document, Point2D point)
     {
