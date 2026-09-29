@@ -38,7 +38,8 @@ public sealed class ColorWheel : Control
     /// <summary>Ring band thickness as a fraction of the control's outer radius.</summary>
     private const double RingThicknessFraction = 0.16;
 
-    private const double OuterMargin = 3.0;
+    /// <summary>Transparent breathing room around the ring inside the control.</summary>
+    private const double OuterMargin = 2.0;
 
     private static WriteableBitmap? _ringTexture;
 
@@ -137,16 +138,12 @@ public sealed class ColorWheel : Control
 
         DrawTriangleField(context, geometry, a, b, c, corners, colors);
 
-        context.DrawGeometry(
-            null,
-            new Pen(new SolidColorBrush(Avalonia.Media.Color.FromArgb(0x55, 0, 0, 0)), 1.0),
-            geometry);
-
-        // 3. The small white selection circle.
+        // 3. The small white selection circle. No outline: it is pure white, and a dark ring
+        //    around it read as a second, competing stroke.
         double markerRadius = Math.Max(4.0, triangleRadius * 0.06);
         context.DrawEllipse(
             Brushes.White,
-            new Pen(new SolidColorBrush(Avalonia.Media.Color.FromArgb(0xCC, 0x20, 0x20, 0x28)), 1.3),
+            null,
             ToScreen(_model.MarkerPoint, center, scale),
             markerRadius,
             markerRadius);

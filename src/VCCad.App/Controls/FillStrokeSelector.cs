@@ -116,18 +116,18 @@ public sealed class FillStrokeSelector : Control
     }
 
     /// <summary>
-    /// Where the swap arc lives: a small double-ended arrow north-east of the two
-    /// circles, tucked into the corner so it is clear of both of them.
+    /// Where the flip arc lives: a small double-ended arrow north-east of the two circles,
+    /// sitting on the same NW-SE diagonal they do.
     /// </summary>
     private (Point Center, double Radius, double HitRadius) SwapLayout()
     {
         double min = Math.Min(Bounds.Width, Bounds.Height);
-        return (new Point(Bounds.Width * 0.82, Bounds.Height * 0.16), min * 0.14, min * 0.18);
+        return (new Point(Bounds.Width * 0.78, Bounds.Height * 0.22), min * 0.19, min * 0.22);
     }
 
     /// <summary>
-    /// The swap glyph: an arc with a head at each end, so it reads as "exchange these
-    /// two" rather than a plain arrow. Clicking anywhere near it swaps fill and stroke.
+    /// The flip glyph: a 120-degree arc with a head at each end, rotated 45 degrees clockwise
+    /// so it echoes the diagonal the ring and circle lie on.
     /// </summary>
     private void DrawSwapArc(DrawingContext context)
     {
@@ -137,10 +137,13 @@ public sealed class FillStrokeSelector : Control
             return;
         }
 
-        var brush = new SolidColorBrush(Color.FromRgb(0xC9, 0xC9, 0xD4));
-        double thickness = Math.Max(1.2, radius * 0.22);
-        const double startDeg = 150.0;
-        const double endDeg = 30.0;
+        var brush = new SolidColorBrush(Color.FromRgb(0xD2, 0xD2, 0xDC));
+        double thickness = Math.Max(1.2, radius * 0.17);
+
+        // 315 degrees (up and to the right) is the midpoint; 120 degrees of sweep centred there.
+        const double startDeg = 255.0;
+        const double sweepDeg = 120.0;
+        double endDeg = startDeg + sweepDeg;
 
         Point At(double deg) => new(
             center.X + radius * Math.Cos(deg * Math.PI / 180.0),
@@ -153,15 +156,15 @@ public sealed class FillStrokeSelector : Control
         using (StreamGeometryContext ctx = arc.Open())
         {
             ctx.BeginFigure(start, false);
-            ctx.ArcTo(end, new Size(radius, radius), 0, true, SweepDirection.Clockwise);
+            ctx.ArcTo(end, new Size(radius, radius), 0, false, SweepDirection.Clockwise);
             ctx.EndFigure(false);
         }
 
         context.DrawGeometry(null, new Pen(brush, thickness), arc);
 
-        // Each head points along the tangent and away from the other end.
-        DrawArrowHead(context, brush, start, Tangent(startDeg, -1.0), radius * 0.62);
-        DrawArrowHead(context, brush, end, Tangent(endDeg, 1.0), radius * 0.62);
+        // A head at each end, pointing out along the tangent, so the glyph reads both ways.
+        DrawArrowHead(context, brush, start, Tangent(startDeg, -1.0), radius * 0.46);
+        DrawArrowHead(context, brush, end, Tangent(endDeg, 1.0), radius * 0.46);
     }
 
     /// <summary>Unit direction of travel around the arc at an angle (y-down, so clockwise).</summary>

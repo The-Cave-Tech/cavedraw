@@ -331,9 +331,10 @@ public partial class EditorView : UserControl
         // The colour panel is only as tall as its contents; the Layers panel takes everything
         // else. Left stretchable, all three split the column into equal thirds, so a compact
         // picker floated in a third of the screen while the list of objects - the thing people
-        // actually scroll - got the same third.
+        // actually scroll - got the same third. The picker has no scroller, so this has to be
+        // enough to show it whole with a little padding.
         appearance.IsStretchable = false;
-        appearance.Height = 200;
+        appearance.Height = 220;
 
         var objectsPanel = new DockPanelModel { Id = "objects", Title = "Layers", Side = DockSide.Right };
         objectsPanel.Tabs.Add(new DockTab { Id = "objects", Title = "Layers", PanelId = "objects", DefaultSide = DockSide.Right, ContentFactory = () => objects, IsOpen = true });

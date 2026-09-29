@@ -2,66 +2,70 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:controls="using:VCCad.App.Controls"
              x:Class="VCCad.App.Views.Panes.ColorsPane">
-  <ScrollViewer>
-    <!-- Deliberately compact: the colour pane shares the right dock with the
-         layers and transform panels, and it is the one that can afford to be
-         short. -->
-    <StackPanel Margin="8,4" Spacing="3">
-      <!-- Ring + inscribed triangle, with the fill/stroke target to its left and
-           the two-column recent-colour pad to its right. -->
-      <Grid ColumnDefinitions="Auto,6,Auto,8,*">
-        <controls:FillStrokeSelector x:Name="TargetSelector" Grid.Column="0"
-                                     Width="56" Height="56" VerticalAlignment="Top"/>
-        <controls:ColorWheel x:Name="Wheel" Grid.Column="2" Width="92" Height="92"/>
-        <StackPanel Grid.Column="4" Spacing="2">
-          <TextBlock Text="RECENT" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
-                     Foreground="{DynamicResource VcTextDim}"/>
-          <WrapPanel x:Name="SwatchPad" Width="44" ItemWidth="22" ItemHeight="22"/>
-        </StackPanel>
-      </Grid>
-
-      <!-- South-west of the ring: the HSL values, stacked, as readouts. -->
-      <Grid ColumnDefinitions="Auto,*,Auto">
-        <Grid Grid.Column="0" ColumnDefinitions="Auto,4,28" RowDefinitions="Auto,Auto,Auto"
-              RowSpacing="0" VerticalAlignment="Top">
-          <TextBlock Text="H" FontSize="{DynamicResource VcFontSize}"
-                     Foreground="{DynamicResource VcTextDim}"/>
-          <TextBlock x:Name="HueText" Grid.Column="2" FontSize="{DynamicResource VcFontSize}"/>
-          <TextBlock Text="S" Grid.Row="1" FontSize="{DynamicResource VcFontSize}"
-                     Foreground="{DynamicResource VcTextDim}"/>
-          <TextBlock x:Name="SatText" Grid.Row="1" Grid.Column="2" FontSize="{DynamicResource VcFontSize}"/>
-          <TextBlock Text="L" Grid.Row="2" FontSize="{DynamicResource VcFontSize}"
-                     Foreground="{DynamicResource VcTextDim}"/>
-          <TextBlock x:Name="LightText" Grid.Row="2" Grid.Column="2" FontSize="{DynamicResource VcFontSize}"/>
-        </Grid>
-
-        <!-- South-east of the ring: the hex entry, captioned '#' and holding eight
-             characters (RRGGBBAA). -->
-        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="3" VerticalAlignment="Top">
-          <TextBlock Text="#" VerticalAlignment="Center" FontSize="{DynamicResource VcFontSize}"
-                     Foreground="{DynamicResource VcTextDim}"/>
-          <TextBox x:Name="HexBox" Width="86" Height="22" Padding="4,0"
-                   MaxLength="8" Watermark="RRGGBBAA"/>
-        </StackPanel>
-      </Grid>
-
-      <!-- Opacity: checkerboard-backed preview, light-to-dark bar, percentage. -->
-      <Grid ColumnDefinitions="Auto,6,*,6,Auto">
-        <Grid Grid.Column="0" Width="18" Height="18" VerticalAlignment="Center">
-          <UniformGrid Columns="2" Rows="2">
-            <Rectangle Fill="#C8C8C8"/>
-            <Rectangle Fill="#8C8C8C"/>
-            <Rectangle Fill="#8C8C8C"/>
-            <Rectangle Fill="#C8C8C8"/>
-          </UniformGrid>
-          <Ellipse x:Name="OpacityPreview" Width="18" Height="18"/>
-        </Grid>
-        <controls:ColorWheelOpacityBar x:Name="OpacityBar" Grid.Column="2"
-                                       Height="14" VerticalAlignment="Center"/>
-        <TextBlock x:Name="OpacityText" Grid.Column="4" Width="36" Text="100%"
-                   TextAlignment="Right" VerticalAlignment="Center"
+  <!-- No ScrollViewer: the picker is a fixed panel, and a scroller here swallowed wheel
+       events and let the top of the pane slide out of view. The dock row is sized to fit
+       the content instead. -->
+  <StackPanel Margin="8,3" Spacing="2">
+    <!-- Ring + inscribed triangle, with the fill/stroke target to its left and the
+         two-column recent-colour pad to its right. -->
+    <Grid ColumnDefinitions="Auto,6,Auto,8,*">
+      <controls:FillStrokeSelector x:Name="TargetSelector" Grid.Column="0"
+                                   Width="56" Height="56" VerticalAlignment="Top"/>
+      <controls:ColorWheel x:Name="Wheel" Grid.Column="2" Width="106" Height="106"/>
+      <StackPanel Grid.Column="4" Spacing="2">
+        <TextBlock Text="RECENT" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
                    Foreground="{DynamicResource VcTextDim}"/>
+        <WrapPanel x:Name="SwatchPad" Width="44" ItemWidth="22" ItemHeight="22"/>
+      </StackPanel>
+    </Grid>
+
+    <!-- South-west of the ring: the HSL values, stacked, as readouts. -->
+    <Grid ColumnDefinitions="Auto,*,Auto">
+      <Grid Grid.Column="0" ColumnDefinitions="Auto,4,28" RowDefinitions="Auto,Auto,Auto"
+            RowSpacing="0" VerticalAlignment="Top">
+        <TextBlock Text="H" FontSize="{DynamicResource VcFontSize}" LineHeight="13"
+                   Foreground="{DynamicResource VcTextDim}"/>
+        <TextBlock x:Name="HueText" Grid.Column="2" FontSize="{DynamicResource VcFontSize}" LineHeight="13"/>
+        <TextBlock Text="S" Grid.Row="1" FontSize="{DynamicResource VcFontSize}" LineHeight="13"
+                   Foreground="{DynamicResource VcTextDim}"/>
+        <TextBlock x:Name="SatText" Grid.Row="1" Grid.Column="2" FontSize="{DynamicResource VcFontSize}" LineHeight="13"/>
+        <TextBlock Text="L" Grid.Row="2" FontSize="{DynamicResource VcFontSize}" LineHeight="13"
+                   Foreground="{DynamicResource VcTextDim}"/>
+        <TextBlock x:Name="LightText" Grid.Row="2" Grid.Column="2" FontSize="{DynamicResource VcFontSize}" LineHeight="13"/>
       </Grid>
-    </StackPanel>
-  </ScrollViewer>
+
+      <!-- South-east of the ring: the hex entry, captioned '#' and holding eight
+           characters (RRGGBBAA). -->
+      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="3" VerticalAlignment="Top">
+        <TextBlock Text="#" VerticalAlignment="Center" FontSize="{DynamicResource VcFontSize}"
+                   Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="HexBox" Width="86" Height="22" Padding="4,0"
+                 VerticalContentAlignment="Center" MaxLength="8" Watermark="RRGGBBAA"/>
+      </StackPanel>
+    </Grid>
+
+    <!-- Opacity: checkerboard-backed preview, light-to-dark bar, editable percentage. -->
+    <Grid ColumnDefinitions="Auto,6,*,6,Auto,Auto">
+      <Grid Grid.Column="0" Width="18" Height="18" VerticalAlignment="Center">
+        <!-- The checkerboard is clipped to the circle, so its square corners never show. -->
+        <Grid.Clip>
+          <EllipseGeometry Center="9,9" RadiusX="9" RadiusY="9"/>
+        </Grid.Clip>
+        <UniformGrid Columns="2" Rows="2">
+          <Rectangle Fill="#C8C8C8"/>
+          <Rectangle Fill="#8C8C8C"/>
+          <Rectangle Fill="#8C8C8C"/>
+          <Rectangle Fill="#C8C8C8"/>
+        </UniformGrid>
+        <Ellipse x:Name="OpacityPreview" Width="18" Height="18"/>
+      </Grid>
+      <controls:ColorWheelOpacityBar x:Name="OpacityBar" Grid.Column="2"
+                                     Height="14" VerticalAlignment="Center"/>
+      <TextBox x:Name="OpacityBox" Grid.Column="4" Width="40" Height="22" Padding="4,0"
+               VerticalContentAlignment="Center" TextAlignment="Right"/>
+      <TextBlock Grid.Column="5" Text="%" Margin="2,0,0,0" VerticalAlignment="Center"
+                 FontSize="{DynamicResource VcFontSize}"
+                 Foreground="{DynamicResource VcTextDim}"/>
+    </Grid>
+  </StackPanel>
 </UserControl>

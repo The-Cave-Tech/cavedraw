@@ -55,6 +55,19 @@ public partial class ColorsPane : UserControl
         };
         HexBox.LostFocus += (_, _) => ApplyHex();
 
+        // The hex entry is live: valid contents are applied as they are typed.
+        HexBox.TextChanged += (_, _) => ApplyHexLive();
+
+        OpacityBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                ApplyOpacityText();
+                e.Handled = true;
+            }
+        };
+        OpacityBox.LostFocus += (_, _) => ApplyOpacityText();
+
         TargetSelector.TargetChanged += (_, stroke) =>
         {
             _strokeTarget = stroke;
@@ -423,7 +436,13 @@ public partial class ColorsPane : UserControl
 
         OpacityBar.Color = Wheel.Color;
         OpacityBar.SetValue(Colors.Alpha);
-        OpacityText.Text = Math.Round(Colors.Alpha * 100.0).ToString("0", CultureInfo.InvariantCulture) + "%";
+
+        // The percentage is editable, so only write it when the person is not in the field.
+        if (!OpacityBox.IsFocused)
+        {
+            OpacityBox.Text = Math.Round(Colors.Alpha * 100.0).ToString("0", CultureInfo.InvariantCulture);
+        }
+
         OpacityPreview.Fill = new SolidColorBrush(ToColor(color));
         _syncing = false;
         UpdateSelectorState();
@@ -442,7 +461,45 @@ public partial class ColorsPane : UserControl
             stroke.Color, stroke.IsVisible, _strokeTarget);
     }
 
-    private void ApplyHex()
+    /// <summary>
+    /// Applies the opacity field: a bare number is a percentage. Text that cannot be read as
+    /// one is discarded and the field is put back to the opacity that is actually in force,
+    /// so a typo can never leave the panel showing a value it is not using.
+    /// </summary>
+    private void ApplyOpacityText()
+    {
+        if (_syncing)
+        {
+            return;
+        }
+
+        string text = (OpacityBox.Text ?? string.Empty).Trim().TrimEnd('%').Trim();
+        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double percent)
+            && percent >= 0.0 && percent <= 100.0)
+        {
+            _syncing = true;
+            Colors.SetAlpha(percent / 100.0);
+            OpacityBar.Color = Wheel.Color;
+            OpacityBar.SetValue(Colors.Alpha);
+            _syncing = false;
+            UpdateReadouts();
+            ApplyLive();
+            CommitLive();
+            return;
+        }
+
+        // Invalid: leave the value alone and show what it really is.
+        _syncing = true;
+        OpacityBox.Text = Math.Round(Colors.Alpha * 100.0).ToString("0", CultureInfo.InvariantCulture);
+        _syncing = false;
+    }
+
+    /// <summary>
+    /// Applies the hex field as it is typed, but only when it reads as a colour. The opacity
+    /// byte is honoured for a four- or eight-digit entry; a six-digit one leaves the bar where
+    /// the person put it.
+    /// </summary>
+    private void ApplyHexLive()
     {
         if (_syncing)
         {
@@ -455,8 +512,32 @@ public partial class ColorsPane : UserControl
             return;
         }
 
-        // A four- or eight-digit entry carries opacity; a six-digit one leaves the
-        // bar where the person put it.
+        ApplyParsedHex(text, parsed);
+    }
+
+    private void ApplyHex()
+    {
+        if (_syncing)
+        {
+            return;
+        }
+
+        string text = (HexBox.Text ?? string.Empty).Trim();
+        if (!HexColor.TryParse(text, out ColorRgb parsed))
+        {
+            // Invalid on leaving the field: put the colour's own hex back.
+            _syncing = true;
+            HexBox.Text = HexColor.Format(CurrentColor, includeAlpha: true).TrimStart('#');
+            _syncing = false;
+            return;
+        }
+
+        ApplyParsedHex(text, parsed);
+        CommitLive();
+    }
+
+    private void ApplyParsedHex(string text, ColorRgb parsed)
+    {
         int digits = text.TrimStart('#').Length;
 
         _syncing = true;
@@ -472,7 +553,6 @@ public partial class ColorsPane : UserControl
         _syncing = false;
         UpdateReadouts();
         ApplyLive();
-        CommitLive();
     }
 
     private static Color ToColor(ColorRgb c) => Color.FromArgb(
