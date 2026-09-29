@@ -34,6 +34,16 @@ public sealed class ClipSpec
     /// </summary>
     public bool Contains(Point2D point)
     {
+        // An outline with a non-finite coordinate has no inside. Left to the winding
+        // tests below it answers "inside" for every query point — NaN fails every
+        // comparison, so the edges never straddle and the winding stays 0 for the
+        // wrong reason — and a clipped item then paints as though it were not clipped
+        // at all. Refusing the outline up front makes the answer "nothing is inside".
+        if (!HasFiniteOutline())
+        {
+            return false;
+        }
+
         if (Rule == FillRule.EvenOdd)
         {
             bool inside = false;
@@ -51,6 +61,28 @@ public sealed class ClipSpec
         int winding = SubPaths.Sum(sub => Winding(sub, point));
         return winding != 0;
     }
+
+    /// <summary>
+    /// Whether every node of every subpath has finite anchor and handles. A single
+    /// non-finite coordinate makes the whole outline unusable.
+    /// </summary>
+    private bool HasFiniteOutline()
+    {
+        foreach (SubPath sub in SubPaths)
+        {
+            foreach (PathNode node in sub.Nodes)
+            {
+                if (!IsFinite(node.Anchor) || !IsFinite(node.InHandle) || !IsFinite(node.OutHandle))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsFinite(Point2D p) => double.IsFinite(p.X) && double.IsFinite(p.Y);
 
     /// <summary>A copy, so a clip is never shared between two items that might diverge.</summary>
     public ClipSpec Clone()

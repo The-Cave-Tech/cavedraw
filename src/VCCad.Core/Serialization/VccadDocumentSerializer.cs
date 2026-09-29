@@ -188,10 +188,10 @@ internal abstract record ItemDto
         foreach (ClipDto clip in dto.Clips ?? Array.Empty<ClipDto>())
         {
             var spec = new ClipSpec { Rule = clip.Rule };
-            foreach (SubPathDto sub in clip.SubPaths)
+            foreach (SubPathDto sub in VccadDocumentSerializer.RequireArray(clip.SubPaths, nameof(clip.SubPaths)))
             {
                 var restored = new SubPath { IsClosed = sub.Closed };
-                foreach (NodeDto node in sub.Nodes)
+                foreach (NodeDto node in VccadDocumentSerializer.RequireArray(sub.Nodes, nameof(sub.Nodes)))
                 {
                     restored.Nodes.Add(new PathNode(node.Anchor, node.InHandle, node.OutHandle));
                 }
@@ -424,7 +424,7 @@ internal static class ItemDtoExtensions
         item.ParagraphSpacing = t.ParagraphSpacing;
         item.SourceCmyk = t.SourceCmyk;
         item.RestoreIdentity(t.Id);
-        foreach (TextRunDto run in t.Runs)
+        foreach (TextRunDto run in VccadDocumentSerializer.RequireArray(t.Runs, nameof(t.Runs)))
         {
             item.Runs.Add(run.ToModel());
         }
@@ -446,7 +446,7 @@ internal static class ItemDtoExtensions
             SourceStrokeCmyk = p.SourceStrokeCmyk,
         };
         path.RestoreIdentity(p.Id);
-        foreach (SubPathDto sp in p.SubPaths)
+        foreach (SubPathDto sp in VccadDocumentSerializer.RequireArray(p.SubPaths, nameof(p.SubPaths)))
         {
             var sub = path.AddSubPath(sp.Closed);
             foreach (NodeDto n in sp.Nodes)
@@ -469,7 +469,7 @@ internal static class ItemDtoExtensions
             Opacity = g.Opacity,
         };
         group.RestoreIdentity(g.Id);
-        foreach (ItemDto child in g.Children)
+        foreach (ItemDto child in VccadDocumentSerializer.RequireArray(g.Children, nameof(g.Children)))
         {
             group.AddItem(child.ToModel());
         }
@@ -556,12 +556,29 @@ public static class VccadDocumentSerializer
     public static string Serialize(CadDocument document)
     {
         DocumentDto dto = ToDto(document);
-        return JsonSerializer.Serialize(dto, Options);
+        try
+        {
+            return JsonSerializer.Serialize(dto, Options);
+        }
+        catch (ArgumentException ex)
+        {
+            throw NotWritable(document, ex);
+        }
     }
 
     /// <summary>Serializes a document to UTF-8 bytes (for embedding and hashing).</summary>
     public static byte[] SerializeToBytes(CadDocument document)
-        => JsonSerializer.SerializeToUtf8Bytes(ToDto(document), Options);
+    {
+        DocumentDto dto = ToDto(document);
+        try
+        {
+            return JsonSerializer.SerializeToUtf8Bytes(dto, Options);
+        }
+        catch (ArgumentException ex)
+        {
+            throw NotWritable(document, ex);
+        }
+    }
 
     /// <summary>Deserializes a document previously produced by <see cref="Serialize"/>.</summary>
     public static CadDocument Deserialize(string json)
@@ -588,7 +605,9 @@ public static class VccadDocumentSerializer
     }
 
     private static DocumentDto ToDto(CadDocument d)
-        => new(
+    {
+        ValidateFiniteArtboards(d);
+        return new(
             CurrentVersion,
             d.Id,
             d.Name,
@@ -610,6 +629,7 @@ public static class VccadDocumentSerializer
             d.AiPrivateData is null
                 ? null
                 : new AiPrivateDataDto(d.AiPrivateData.Text, d.AiPrivateData.Format));
+    }
 
     private static CadDocument ToModel(DocumentDto dto)
     {
@@ -619,13 +639,17 @@ public static class VccadDocumentSerializer
                 $"Document format v{dto.Version} is newer than this build supports (v{CurrentVersion}).");
         }
 
+        ArtboardDto[] artboards = RequireArray(dto.Artboards, nameof(dto.Artboards));
+        ItemDto[] orphans = RequireArray(dto.Orphans, nameof(dto.Orphans));
+
         var document = new CadDocument { Name = dto.Name };
         document.RestoreIdentity(dto.Id);
-        foreach (ArtboardDto a in dto.Artboards)
+        foreach (ArtboardDto a in artboards)
         {
+            RequireFiniteArtboard(a);
             var artboard = new Artboard(new Size2D(a.Width, a.Height), new Point2D(a.X, a.Y)) { Name = a.Name };
             artboard.RestoreIdentity(a.Id);
-            foreach (LayerDto l in a.Layers)
+            foreach (LayerDto l in RequireArray(a.Layers, nameof(a.Layers)))
             {
                 var layer = new Layer
                 {
@@ -635,7 +659,7 @@ public static class VccadDocumentSerializer
                     Opacity = l.Opacity,
                 };
                 layer.RestoreIdentity(l.Id);
-                foreach (ItemDto item in l.Items)
+                foreach (ItemDto item in RequireArray(l.Items, nameof(l.Items)))
                 {
                     layer.AddItem(item.ToModel());
                 }
@@ -646,7 +670,7 @@ public static class VccadDocumentSerializer
             document.AddArtboard(artboard);
         }
 
-        foreach (ItemDto orphan in dto.Orphans ?? Array.Empty<ItemDto>())
+        foreach (ItemDto orphan in orphans)
         {
             document.Orphans.AddItem(orphan.ToModel());
         }
@@ -658,6 +682,134 @@ public static class VccadDocumentSerializer
             document.AiPrivateData = new AiPrivateData(ai.Text ?? string.Empty, ai.Format);
         }
 
+        EnsureUniqueIdentities(document);
         return document;
+    }
+
+    /// <summary>
+    /// A structural array that a well-formed sidecar always carries. System.Text.Json
+    /// leaves a missing member null; dereferencing it is a
+    /// <see cref="NullReferenceException"/> that names neither the document nor the
+    /// member, so every array the reader walks is checked here first.
+    /// </summary>
+    internal static T[] RequireArray<T>(T[]? values, string member)
+        => values ?? throw new JsonException($"Serialized document is missing the '{member}' array.");
+
+    /// <summary>
+    /// Refuses an artboard whose rectangle is not finite before it reaches layout.
+    ///
+    /// System.Text.Json parses the quoted string <c>"1e400"</c> as a number (its
+    /// UTF-8 parser reports overflow as infinity) while refusing <c>"NaN"</c>,
+    /// <c>"Infinity"</c> and a bare <c>1e400</c>. Validating the parsed value
+    /// therefore catches every spelling, and a non-finite artboard — which would
+    /// otherwise compute NaN fits and silently draw nothing — is refused by name.
+    /// </summary>
+    private static void RequireFiniteArtboard(ArtboardDto a)
+    {
+        if (double.IsFinite(a.X) && double.IsFinite(a.Y)
+            && double.IsFinite(a.Width) && double.IsFinite(a.Height))
+        {
+            return;
+        }
+
+        throw new JsonException(
+            $"Artboard '{a.Name}' ({a.Id}) has a non-finite rectangle: "
+            + $"X={a.X}, Y={a.Y}, Width={a.Width}, Height={a.Height}. "
+            + "A non-finite artboard cannot be laid out, fitted or rendered.");
+    }
+
+    /// <summary>
+    /// Refuses a document holding a non-finite artboard before any JSON is written.
+    ///
+    /// System.Text.Json's own refusal is an <see cref="ArgumentException"/> about
+    /// "positive and negative infinity" that names neither the document nor the
+    /// artboard, so a person whose imported page arrived with a NaN MediaBox has
+    /// nothing to act on. Naming the value and the artboard it sits on turns the
+    /// failure into a diagnosis. (Keeping a non-finite value out of the model in the
+    /// first place is the importer's job; this is the last line of defence.)
+    /// </summary>
+    private static void ValidateFiniteArtboards(CadDocument document)
+    {
+        for (int i = 0; i < document.Artboards.Count; i++)
+        {
+            Artboard a = document.Artboards[i];
+            if (double.IsFinite(a.X) && double.IsFinite(a.Y)
+                && double.IsFinite(a.Width) && double.IsFinite(a.Height))
+            {
+                continue;
+            }
+
+            throw new ArgumentException(
+                $"Document '{document.Name}' cannot be saved: artboard {i} '{a.Name}' has a non-finite "
+                + $"rectangle (X={a.X}, Y={a.Y}, Width={a.Width}, Height={a.Height}). A non-finite "
+                + "artboard cannot be laid out, fitted or rendered.", nameof(document));
+        }
+    }
+
+    private static ArgumentException NotWritable(CadDocument document, ArgumentException inner)
+        => new(
+            $"Document '{document.Name}' contains a number that cannot be written as JSON: {inner.Message}",
+            nameof(document),
+            inner);
+
+    /// <summary>
+    /// Gives every object a distinct identity.
+    ///
+    /// A crafted sidecar can carry the same id on two items. Restoring both verbatim
+    /// leaves two objects answering to one id, and every id-addressed operation then
+    /// silently picks one of them — a wrong answer, not a crash. The first holder
+    /// keeps the id; each later duplicate is renumbered, so the drawing still loads
+    /// and both objects stay addressable.
+    /// </summary>
+    private static void EnsureUniqueIdentities(CadDocument document)
+    {
+        var seen = new HashSet<Guid>();
+        document.RestoreIdentity(UniqueIdentity(document.Id, seen));
+        foreach (Artboard artboard in document.Artboards)
+        {
+            artboard.RestoreIdentity(UniqueIdentity(artboard.Id, seen));
+            foreach (Layer layer in artboard.Layers)
+            {
+                layer.RestoreIdentity(UniqueIdentity(layer.Id, seen));
+                foreach (LayerItem item in layer.Children)
+                {
+                    EnsureUniqueIdentity(item, seen);
+                }
+            }
+        }
+
+        foreach (LayerItem item in document.Orphans.Children)
+        {
+            EnsureUniqueIdentity(item, seen);
+        }
+    }
+
+    private static void EnsureUniqueIdentity(LayerItem item, HashSet<Guid> seen)
+    {
+        item.RestoreIdentity(UniqueIdentity(item.Id, seen));
+        if (item is ArtGroup group)
+        {
+            foreach (LayerItem child in group.Children)
+            {
+                EnsureUniqueIdentity(child, seen);
+            }
+        }
+    }
+
+    private static Guid UniqueIdentity(Guid id, HashSet<Guid> seen)
+    {
+        if (seen.Add(id))
+        {
+            return id;
+        }
+
+        Guid fresh;
+        do
+        {
+            fresh = Guid.NewGuid();
+        }
+        while (!seen.Add(fresh));
+
+        return fresh;
     }
 }

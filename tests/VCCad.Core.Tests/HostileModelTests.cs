@@ -18,14 +18,14 @@ namespace VCCad.Core.Tests;
 /// duplicate identities, missing members, absurd version numbers, and nesting
 /// deeper than the reader's.
 ///
-/// Tests named as requirements (…IsRefused…) fail against the current build and
-/// pin real defects; they are deliberately left failing.
+/// Tests named as requirements (…IsRefused…) pin the behaviour the sidecar contract
+/// needs; the serializer refuses malformed input by name rather than crashing on it.
 /// </summary>
 public class HostileModelTests
 {
     // ------------------------------------------------------------------
-    // Defect 1 — a syntactically valid but incomplete sidecar hits a
-    // NullReferenceException rather than a clear refusal.
+    // Defect 1 — a syntactically valid but incomplete sidecar must be
+    // refused with a clear message, never a NullReferenceException.
     // ------------------------------------------------------------------
 
     public static IEnumerable<object[]> IncompleteSidecars()
@@ -50,8 +50,9 @@ public class HostileModelTests
     }
 
     // ------------------------------------------------------------------
-    // Defect 2 — two objects with the same Id are accepted, so every
-    // id-addressed operation silently picks one of them.
+    // Defect 2 — two objects must never share one identity. A duplicate id
+    // in a sidecar is resolved (the later holder is renumbered) rather than
+    // producing two objects that answer to the same id.
     // ------------------------------------------------------------------
 
     [Fact]
@@ -75,6 +76,33 @@ public class HostileModelTests
         Assert.Equal(2, paths.Count);
         Assert.NotEqual(
             paths[0].Id, paths[1].Id);
+    }
+
+    // ------------------------------------------------------------------
+    // Defect 3 — a document holding a non-finite value cannot be saved at
+    // all, and the framework's refusal names neither the document nor the
+    // artboard. Keeping such a value out of the model is the importer's job
+    // (issue #11 D2); this pins the serializer's last-line-of-defence
+    // refusal, which has to be a diagnosis rather than a raw
+    // "positive and negative infinity cannot be written as valid JSON".
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void SerializingANonFiniteArtboardNamesTheValueAndTheArtboard()
+    {
+        CadDocument doc = CadDocument.CreateDefault("nonfinite");
+        doc.Artboards[0].Name = "Imported page";
+        doc.Artboards[0].Width = double.NaN;
+
+        ArgumentException thrown =
+            Assert.Throws<ArgumentException>(() => VccadDocumentSerializer.Serialize(doc));
+
+        Assert.Contains("nonfinite", thrown.Message);
+        Assert.Contains("Imported page", thrown.Message);
+        Assert.Contains("NaN", thrown.Message);
+        Assert.DoesNotContain("positive and negative infinity", thrown.Message);
+
+        Assert.Throws<ArgumentException>(() => VccadDocumentSerializer.SerializeToBytes(doc));
     }
 
     // ------------------------------------------------------------------
@@ -404,10 +432,11 @@ public class HostileModelTests
     }
 
     /// <summary>
-    /// A NaN rectangle is reported as having extent, because every comparison in
-    /// <c>IsEmpty</c> is false for NaN. Callers that guard with
-    /// <c>if (box.IsEmpty) return;</c> therefore carry NaN straight into layout,
-    /// fitting and export.
+    /// A rectangle whose width or height is NaN or infinite has no usable
+    /// extent, so it is reported as empty. Every comparison in a naive
+    /// <c>IsEmpty</c> is false for NaN, which let such a box pass the
+    /// <c>if (box.IsEmpty) return;</c> guards on its way into layout, fitting
+    /// and export.
     /// </summary>
     [Fact]
     public void ANaNBoundingBoxIsReportedAsEmpty()
@@ -433,9 +462,10 @@ public class HostileModelTests
     }
 
     /// <summary>
-    /// A clip outline containing NaN has no inside. Today the winding test answers
-    /// "inside" for any query point, so a clipped item paints as though it were
-    /// not clipped at all — a silent wrong answer from malformed geometry.
+    /// A clip outline containing NaN has no inside. A winding test left to answer
+    /// for itself says "inside" for any query point — NaN fails every comparison,
+    /// so the edges never straddle — and a clipped item then paints as though it
+    /// were not clipped at all: a silent wrong answer from malformed geometry.
     /// </summary>
     [Fact]
     public void AClipMadeOfNaNGeometryIsNotTreatedAsContainingEveryPoint()

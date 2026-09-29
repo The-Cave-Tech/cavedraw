@@ -31,8 +31,19 @@ public readonly record struct Rect2D(double X, double Y, double Width, double He
     /// <summary>The rectangle as a size.</summary>
     public Size2D Size => new(Width, Height);
 
-    /// <summary>Whether the rectangle has zero or negative extent in either axis.</summary>
-    public bool IsEmpty => Width <= 0.0 || Height <= 0.0;
+    /// <summary>
+    /// Whether the rectangle has no usable extent: a width or height that is not a
+    /// positive finite number.
+    ///
+    /// The finiteness test is not decoration. Every comparison against NaN is
+    /// false, so a plain <c>Width &lt;= 0.0</c> reports a NaN box as having extent
+    /// — and a NaN box then passes every <c>if (box.IsEmpty) return;</c> guard in
+    /// the codebase on its way into layout, fit and export. An infinite box is
+    /// likewise unusable (it cannot be fitted, clipped or rendered), and is
+    /// reported as empty for the same reason.
+    /// </summary>
+    public bool IsEmpty
+        => Width <= 0.0 || Height <= 0.0 || !double.IsFinite(Width) || !double.IsFinite(Height);
 
     /// <summary>
     /// Builds a rectangle from two corner points, normalising so that X,Y is the
