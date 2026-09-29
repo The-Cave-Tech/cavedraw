@@ -390,6 +390,54 @@ The window opens **docked to the right half of the primary screen**, because
 development happens with the agent harness on the left; `--no-dock` disables that
 and `--no-server` disables the HTTP endpoint.
 
+### 4.2b Ports, naming, and crash reporting
+
+**An explicit port is a promise.** `--port N` means port `N` or a refusal — never a
+different port. A taken port exits **2** with a message naming it, on both stdout and
+stderr. This used to fall back to an ephemeral port silently, which meant a driver that
+launched the app and called `5099` reached a *different* instance and could not tell; a
+`WinExe` has no console, so even a warning would have gone nowhere (issue #8).
+
+```powershell
+# arbitrary port, named so a caller can find it without guessing
+VCCad.App.Desktop.exe --name transform-panel
+#   → [vccad] automation endpoint listening on http://127.0.0.1:57398
+#     (instance 'transform-panel', %APPDATA%\VCCad\instances\transform-panel.json)
+
+# read the file for {name,pid,port,started,args,state}, then talk to that port.
+# poll for state:"listening" - the name is claimed before the endpoint exists.
+```
+
+A name is **exclusive**: a second instance with the same name exits 2 naming the holder.
+A file whose pid is dead is stale and reclaimable; a clean exit removes it. `--port 0` and
+`--port-any` also accept any port, and are the only ways to do so. `GET /api/v1/health`
+reports the receiver's own port, so a caller can confirm whom it is talking to.
+
+**Crash reporting.** Uncaught exceptions are recorded — never swallowed. The app behaves
+exactly as it would have; the difference is that there is now evidence.
+
+| | |
+|---|---|
+| Hooks | `AppDomain.UnhandledException`, `TaskScheduler.UnobservedTaskException`, `Dispatcher.UIThread.UnhandledException` |
+| Files | `%APPDATA%\VCCad\crashes\crash-<stamp>-<id>.json`, one per crash, `Flush(true)`d inside the handler |
+| Contents | type/message/stack/inner chain, session id, last 20 operations plus the failing one, document summary, app/runtime/OS/arch/pid/argv |
+| Switches | `--dev` / `--no-dev`, `--crash-test`; `VCCAD_DEV`, `VCCAD_CRASH_TEST`, `VCCAD_CRASH_DIR` |
+
+With `--dev` (or `VCCAD_DEV=1`) a crash is also **filed as a GitHub issue** against
+`darrenstarr/cavedraw`, via native `gh` or through WSL. Filing is **off by default** — it
+is the only path that sends anything off the machine. Before an issue is written the body
+is **redacted**: absolute paths reduced to file names, the document name dropped,
+`--api-key` and `Bearer` tokens stripped. Repeats are deduplicated on a crash id (SHA-256
+of exception type plus top stack frame), which comments on the existing open issue instead
+of opening another. Any filing failure keeps the local file.
+
+`--crash-test` triggers the pipeline deliberately, so it can be exercised without waiting
+for a real fault.
+
+Two honest limits: filing is synchronous inside the handler, so a crash can take up to 60 s
+to die in dev mode; and dedup reads the first 100 open issues rather than searching, which
+would need GitHub search if the backlog ever passed that.
+
 The view **auto-fits** the artboard on every resize until the person zooms manually,
 on every new/imported/activated document, and the fit reserves the diagnostics
 overlay's height — so a fitted artboard is never hidden behind the panel and an
