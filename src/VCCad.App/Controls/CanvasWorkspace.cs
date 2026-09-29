@@ -3744,6 +3744,8 @@ public sealed class CanvasWorkspace : Control
             Rect2D selection = ChromeRect();
             if (!selection.IsEmpty)
             {
+                // The outlines first, so the box and its handles sit on top of them.
+                PaintSelectionOutlines(context);
                 PaintSelectChrome(context);
             }
         }
@@ -3797,6 +3799,71 @@ public sealed class CanvasWorkspace : Control
 
     /// <summary>Selection chrome in the Select tool: an ORIENTED dashed outline (no
     /// fill) that rotates with the objects, with draggable resize handles and a
+    /// rotation knob above its top edge.</summary>
+    /// <summary>
+    /// Traces each selected object in the selection colour, along its own shape.
+    ///
+    /// Stroked, never filled. A selected object that was filled in the selection colour would
+    /// hide the very thing the person is looking at to check it is the right one - and with
+    /// several objects selected the fill would merge them into one blob. Stroking says "this
+    /// one, exactly this outline" without covering anything up, which is why every drawing
+    /// program does it this way.
+    ///
+    /// Text is traced round its block rather than round each glyph: the block is what is
+    /// selected and what moves, and stroking every glyph of a paragraph would be a mess.
+    /// </summary>
+    private void PaintSelectionOutlines(DrawingContext context)
+    {
+        IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
+
+        // Screen-thick, so the trace stays visible when zoomed out and does not become a
+        // slab when zoomed in.
+        double z = _layout.Zoom <= 0 ? 1 : _layout.Zoom;
+        var pen = new Pen(accent, Math.Max(1.0, 1.4 / z));
+
+        foreach (LayerItem item in _vm!.SelectedObjects)
+        {
+            switch (item)
+            {
+                case PathItem path:
+                    context.DrawGeometry(null, pen, BuildGeometry(path, outsideClip: false));
+                    break;
+
+                case TextItem text:
+                    PaintOutlineOf(context, pen, text.BoundingBox(),
+                        text.OwningLayer()?.Artboard);
+                    break;
+
+                case ImageItem image:
+                    PaintOutlineOf(context, pen, image.Placement, null);
+                    break;
+
+                case ArtGroup group:
+                    PaintOutlineOf(context, pen, group.BoundingBox(),
+                        group.OwningLayer()?.Artboard);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Strokes a box, offset into document coordinates. No fill, deliberately.</summary>
+    private void PaintOutlineOf(DrawingContext context, Pen pen, Rect2D box, Artboard? artboard)
+    {
+        if (box.IsEmpty)
+        {
+            return;
+        }
+
+        var offset = new Vector2D(artboard?.X ?? 0, artboard?.Y ?? 0);
+        Point tl = ModelToScreen(new Point2D(box.Left + offset.X, box.Top + offset.Y));
+        Point br = ModelToScreen(new Point2D(box.Right + offset.X, box.Bottom + offset.Y));
+
+        context.DrawRectangle(null, pen, new Rect(
+            Math.Min(tl.X, br.X), Math.Min(tl.Y, br.Y),
+            Math.Abs(br.X - tl.X), Math.Abs(br.Y - tl.Y)));
+    }
+
+    /// <summary>Paints the select tool's dashed box, its eight handles and the
     /// rotation knob above its top edge.</summary>
     private void PaintSelectChrome(DrawingContext context)
     {
