@@ -59,6 +59,12 @@ public sealed class CanvasWorkspace : Control
     private bool _selectMoved;
     private LayerItem? _shiftToggleCandidate;
 
+    /// <summary>
+    /// The object a press landed on when it was already part of the selection. If the
+    /// gesture turns out to be a click rather than a drag, the selection reduces to it.
+    /// </summary>
+    private LayerItem? _plainClickCandidate;
+
     // Marquee (rubber-band) selection.
     private bool _marqueeActive;
     private Point2D _marqueeStart;
@@ -1300,6 +1306,18 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        // A press on a member of the current selection keeps the whole selection, so the
+        // drag moves all of it. Replacing the selection here is what made a drag on one of
+        // several objects drop the others on the floor. A press that never moves is a click,
+        // and reduces the selection to this object on release.
+        if (_vm.IsObjectSelected(hit))
+        {
+            _plainClickCandidate = hit;
+            BeginObjectMoveTargets(model);
+            InvalidateVisual();
+            return;
+        }
+
         _vm.SelectObject(hit);
         BeginObjectMoveTargets(model);
         InvalidateVisual();
@@ -1425,6 +1443,12 @@ public sealed class CanvasWorkspace : Control
             CommitMoveEdits();
             RehomeAfterDrag(model);
         }
+        else if (_plainClickCandidate is not null)
+        {
+            // The press kept a multi-selection so it could be dragged; it never moved, so it
+            // was a click, and a click reduces the selection to what was clicked.
+            _vm!.SelectObject(_plainClickCandidate);
+        }
         else if (_shiftToggleCandidate is not null && _shiftHeld)
         {
             // A Shift click (no drag) on an already-selected object removes it.
@@ -1436,6 +1460,7 @@ public sealed class CanvasWorkspace : Control
         _dragTexts.Clear();
         _dragTextOrigins.Clear();
         _shiftToggleCandidate = null;
+        _plainClickCandidate = null;
         _selectMoved = false;
     }
 
