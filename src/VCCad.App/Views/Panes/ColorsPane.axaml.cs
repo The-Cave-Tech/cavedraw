@@ -8,6 +8,7 @@ using VCCad.App.Automation;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
 using VCCad.Core.Commands;
+using ModelFillRule = VCCad.Core.Model.FillRule;
 using HslColor = VCCad.Core.Color.HslColor;
 using HexColor = VCCad.Core.Color.HexColor;
 
@@ -58,8 +59,11 @@ public partial class ColorsPane : UserControl
         {
             _strokeTarget = stroke;
             ResetBefore();
-            LoadTargetColor();
+            // Switching the target switches the picker to that target's colour at once,
+            // whether or not anything is selected: the ring and circle drive the picker.
+            SyncFromCurrent();
         };
+        TargetSelector.SwapRequested += (_, _) => SwapFillStroke();
         TargetSelector.ClearRequested += (_, stroke) =>
         {
             if (stroke)
@@ -126,6 +130,11 @@ public partial class ColorsPane : UserControl
             Wheel.Refresh();
             UpdateReadouts();
             RefreshRecent();
+
+            // An external colour set (color.set through the API) is the same act as choosing
+            // a colour in the picker: the active current value, the selection and the diagram
+            // must all follow it, or a driver and a person would see different colours.
+            ApplyLive();
         }
         finally
         {
@@ -135,19 +144,50 @@ public partial class ColorsPane : UserControl
 
     private ColorRgb CurrentColor => Colors.Color.WithAlpha(Colors.Alpha);
 
+    /// <summary>
+    /// The fill and stroke the diagram is showing: the selected path's own values when
+    /// something is selected, otherwise the editor's current fill/stroke. Reading the
+    /// current values when nothing is selected is what stops the diagram and the picker
+    /// from disagreeing.
+    /// </summary>
+    private (FillSpec Fill, StrokeSpec Stroke) TargetState()
+        => _vm?.PrimarySelection is PathItem path
+            ? (path.Fill, path.Stroke)
+            : (_vm?.CurrentFill ?? FillSpec.None, _vm?.CurrentStroke ?? StrokeSpec.Hairline(ColorRgb.Black));
+
     private void Refresh()
     {
         ResetBefore();
-        if (_vm?.PrimarySelection is not PathItem path)
+        SyncFromCurrent();
+    }
+
+    /// <summary>
+    /// Pushes the current fill/stroke into the diagram and loads the active target's colour
+    /// into the picker, so the two always agree.
+    /// </summary>
+    private void SyncFromCurrent()
+    {
+        if (_vm is null)
         {
-            // Nothing selected: still show what the picker itself is pointing at.
-            UpdateReadouts();
             return;
         }
 
-        TargetSelector.SetState(path.Fill.Color, path.Fill.IsVisible,
-            path.Stroke.Color, path.Stroke.IsVisible, _strokeTarget);
-        LoadTargetColor();
+        (FillSpec fill, StrokeSpec stroke) = TargetState();
+        TargetSelector.SetState(fill.Color, fill.IsVisible,
+            stroke.Color, stroke.IsVisible, _strokeTarget);
+
+        ColorRgb target = _strokeTarget ? stroke.Color : fill.Color;
+        bool visible = _strokeTarget ? stroke.IsVisible : fill.IsVisible;
+
+        _syncing = true;
+        Colors.Model.SetColor(target);
+        // Keep the spectrum fully opaque for a "none" target so it stays legible.
+        Colors.Model.SetAlpha(visible ? target.A : 1.0);
+        Wheel.Refresh();
+        OpacityBar.Color = Wheel.Color;
+        OpacityBar.SetValue(Colors.Alpha);
+        _syncing = false;
+        UpdateReadouts();
     }
 
     /// <summary>Rebuilds the two-column recent-colour pad.</summary>
@@ -205,30 +245,6 @@ public partial class ColorsPane : UserControl
         _strokeBefore = null;
     }
 
-    private void LoadTargetColor()
-    {
-        if (_vm?.PrimarySelection is not PathItem path)
-        {
-            return;
-        }
-
-        TargetSelector.SetState(path.Fill.Color, path.Fill.IsVisible,
-            path.Stroke.Color, path.Stroke.IsVisible, _strokeTarget);
-
-        ColorRgb targetColor = _strokeTarget ? path.Stroke.Color : path.Fill.Color;
-        bool visible = _strokeTarget ? path.Stroke.IsVisible : path.Fill.IsVisible;
-
-        _syncing = true;
-        Colors.Model.SetColor(targetColor);
-        // Keep the spectrum fully opaque for a "none" target so it stays legible.
-        Colors.Model.SetAlpha(visible ? targetColor.A : 1.0);
-        Wheel.Refresh();
-        OpacityBar.Color = Wheel.Color;
-        OpacityBar.SetValue(Colors.Alpha);
-        _syncing = false;
-        UpdateReadouts();
-    }
-
     private void OnWheelChanged()
     {
         if (_syncing)
@@ -252,52 +268,108 @@ public partial class ColorsPane : UserControl
         ApplyLive();
     }
 
-    /// <summary>Mutates the selection immediately (no command) for live feedback.</summary>
+    /// <summary>
+    /// Mutates the selection immediately (no command) for live feedback, and always updates
+    /// the editor's current fill/stroke — that is what the ring and circle stand for, so it
+    /// has to follow the picker whether or not anything is selected.
+    /// </summary>
     private void ApplyLive()
     {
-        if (_vm is null || _syncing || _vm.PrimarySelection is not PathItem)
+        if (_vm is null || _syncing)
         {
             return;
         }
 
         ColorRgb color = CurrentColor;
+        bool hasSelection = _vm.PrimarySelection is PathItem;
 
         if (_strokeTarget)
         {
-            _strokeBefore ??= _vm.SelectedPaths()
-                .Select(p => (p, p.Stroke)).ToList();
-            foreach ((PathItem path, _) in _strokeBefore)
+            if (hasSelection)
             {
-                double width = path.Stroke.Width > 0 ? path.Stroke.Width : 1.0;
-                path.Stroke = new StrokeSpec(true, color, width, path.Stroke.Cap, path.Stroke.Join,
-                    path.Stroke.MiterLimit, path.Stroke.Alignment, path.Stroke.Dash);
+                _strokeBefore ??= _vm.SelectedPaths()
+                    .Select(p => (p, p.Stroke)).ToList();
+                foreach ((PathItem path, _) in _strokeBefore)
+                {
+                    double width = path.Stroke.Width > 0 ? path.Stroke.Width : 1.0;
+                    path.Stroke = new StrokeSpec(true, color, width, path.Stroke.Cap, path.Stroke.Join,
+                        path.Stroke.MiterLimit, path.Stroke.Alignment, path.Stroke.Dash);
+                }
             }
-        }
-        else
-        {
-            _fillBefore ??= _vm.SelectedPaths()
-                .Select(p => (p, p.Fill)).ToList();
-            foreach ((PathItem path, _) in _fillBefore)
-            {
-                // Keep each path's own winding rule; the panel no longer offers a
-                // rule chooser, and recolouring must not silently change a donut
-                // from EvenOdd to NonZero.
-                path.Fill = FillSpec.Solid(color, path.Fill.Rule);
-            }
-        }
 
-        // Keep the "current style" in sync so new objects inherit these colours.
-        if (_strokeTarget)
-        {
-            _vm.CurrentStroke = _vm.PrimarySelection is PathItem sp ? sp.Stroke : _vm.CurrentStroke;
+            StrokeSpec basis = _vm.PrimarySelection is PathItem sp ? sp.Stroke : _vm.CurrentStroke;
+            _vm.CurrentStroke = new StrokeSpec(true, color,
+                basis.Width > 0 ? basis.Width : 1.0,
+                basis.Cap, basis.Join, basis.MiterLimit, basis.Alignment, basis.Dash);
         }
         else
         {
-            _vm.CurrentFill = _vm.PrimarySelection is PathItem fp ? fp.Fill : _vm.CurrentFill;
+            if (hasSelection)
+            {
+                _fillBefore ??= _vm.SelectedPaths()
+                    .Select(p => (p, p.Fill)).ToList();
+                foreach ((PathItem path, _) in _fillBefore)
+                {
+                    // Keep each path's own winding rule; the panel no longer offers a
+                    // rule chooser, and recolouring must not silently change a donut
+                    // from EvenOdd to NonZero.
+                    path.Fill = FillSpec.Solid(color, path.Fill.Rule);
+                }
+            }
+
+            ModelFillRule rule = _vm.PrimarySelection is PathItem fp ? fp.Fill.Rule : _vm.CurrentFill.Rule;
+            _vm.CurrentFill = FillSpec.Solid(color, rule);
         }
 
         UpdateSelectorState();
         _vm.RaiseTransformChanged(); // repaint without a full refresh
+    }
+
+    /// <summary>
+    /// Flips the fill and stroke colours — what the arc north-east of the circles does. The
+    /// two current values swap, and any selected paths swap with them as one undo step; each
+    /// spec keeps its own width, rule, caps and so on, so only the colours trade places.
+    /// </summary>
+    private void SwapFillStroke()
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        (FillSpec fill, StrokeSpec stroke) = TargetState();
+
+        var edits = new List<IUndoableCommand>();
+        foreach (PathItem path in _vm.SelectedPaths())
+        {
+            FillSpec pathFill = path.Fill with { Color = path.Stroke.Color, IsVisible = path.Stroke.IsVisible };
+            StrokeSpec pathStroke = path.Stroke with { Color = path.Fill.Color, IsVisible = path.Fill.IsVisible };
+            edits.Add(new SetFillCommand(path, pathFill));
+            edits.Add(new SetStrokeCommand(path, pathStroke));
+        }
+
+        if (edits.Count > 0)
+        {
+            _vm.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Swap fill and stroke", edits));
+        }
+
+        // With a selection the swapped values now live on the paths; without one they are the
+        // new current style.
+        if (_vm.PrimarySelection is PathItem primary)
+        {
+            _vm.CurrentFill = primary.Fill;
+            _vm.CurrentStroke = primary.Stroke;
+        }
+        else
+        {
+            _vm.CurrentFill = fill with { Color = stroke.Color, IsVisible = stroke.IsVisible };
+            _vm.CurrentStroke = stroke with { Color = fill.Color, IsVisible = fill.IsVisible };
+        }
+
+        ResetBefore();
+        SyncFromCurrent();
+        RefreshRecent();
+        _vm.RaiseTransformChanged();
     }
 
     /// <summary>Commits the live change as one undo step.</summary>
@@ -357,16 +429,17 @@ public partial class ColorsPane : UserControl
         UpdateSelectorState();
     }
 
-    /// <summary>The fill/stroke circles show the currently selected colours.</summary>
+    /// <summary>The fill/stroke circles show the values the diagram stands for.</summary>
     private void UpdateSelectorState()
     {
-        if (_vm?.PrimarySelection is not PathItem path)
+        if (_vm is null)
         {
             return;
         }
 
-        TargetSelector.SetState(path.Fill.Color, path.Fill.IsVisible,
-            path.Stroke.Color, path.Stroke.IsVisible, _strokeTarget);
+        (FillSpec fill, StrokeSpec stroke) = TargetState();
+        TargetSelector.SetState(fill.Color, fill.IsVisible,
+            stroke.Color, stroke.IsVisible, _strokeTarget);
     }
 
     private void ApplyHex()

@@ -11,7 +11,8 @@ namespace VCCad.App.Controls;
 /// (south-east) overlapping a stroke ring (north-west), the selected one drawn on
 /// top, plus a small "transparent" swatch (white circle with a red NE→SW slash) in
 /// the south-west corner. Clicking a circle chooses which colour is being edited;
-/// clicking the small swatch clears the active target.
+/// clicking the small swatch clears the active target; clicking the little
+/// double-ended arc north-east of the circles swaps the fill and stroke colours.
 /// </summary>
 public sealed class FillStrokeSelector : Control
 {
@@ -20,6 +21,9 @@ public sealed class FillStrokeSelector : Control
 
     /// <summary>Raised when the transparent swatch is clicked (true = stroke).</summary>
     public event EventHandler<bool>? ClearRequested;
+
+    /// <summary>Raised when the swap arc is clicked: flip the fill and stroke colours.</summary>
+    public event EventHandler? SwapRequested;
 
     private ColorRgb _fill = ColorRgb.Black;
     private ColorRgb _stroke = ColorRgb.Black;
@@ -55,6 +59,11 @@ public sealed class FillStrokeSelector : Control
 
     public override void Render(DrawingContext context)
     {
+        // A control with no background is only hit where it paints, so the gaps between the
+        // circles — including the middle of the swap arc — would swallow clicks. Laying down
+        // a transparent rectangle makes the whole control a target.
+        context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
+
         (Point strokeCenter, Point fillCenter, Point noneCenter, double r) = Layout();
 
         void DrawStroke()
@@ -101,6 +110,88 @@ public sealed class FillStrokeSelector : Control
         double nr = r * 0.5;
         context.DrawEllipse(Brushes.White, new Pen(new SolidColorBrush(Color.FromRgb(0x9A, 0x9A, 0xA3)), 1), noneCenter, nr, nr);
         DrawSlash(context, noneCenter, nr * 0.9, Brushes.Red);
+
+        // The swap arc sits last so it is never hidden by the circles.
+        DrawSwapArc(context);
+    }
+
+    /// <summary>
+    /// Where the swap arc lives: a small double-ended arrow north-east of the two
+    /// circles, tucked into the corner so it is clear of both of them.
+    /// </summary>
+    private (Point Center, double Radius, double HitRadius) SwapLayout()
+    {
+        double min = Math.Min(Bounds.Width, Bounds.Height);
+        return (new Point(Bounds.Width * 0.82, Bounds.Height * 0.16), min * 0.14, min * 0.18);
+    }
+
+    /// <summary>
+    /// The swap glyph: an arc with a head at each end, so it reads as "exchange these
+    /// two" rather than a plain arrow. Clicking anywhere near it swaps fill and stroke.
+    /// </summary>
+    private void DrawSwapArc(DrawingContext context)
+    {
+        (Point center, double radius, _) = SwapLayout();
+        if (radius <= 1.0)
+        {
+            return;
+        }
+
+        var brush = new SolidColorBrush(Color.FromRgb(0xC9, 0xC9, 0xD4));
+        double thickness = Math.Max(1.2, radius * 0.22);
+        const double startDeg = 150.0;
+        const double endDeg = 30.0;
+
+        Point At(double deg) => new(
+            center.X + radius * Math.Cos(deg * Math.PI / 180.0),
+            center.Y + radius * Math.Sin(deg * Math.PI / 180.0));
+
+        Point start = At(startDeg);
+        Point end = At(endDeg);
+
+        var arc = new StreamGeometry();
+        using (StreamGeometryContext ctx = arc.Open())
+        {
+            ctx.BeginFigure(start, false);
+            ctx.ArcTo(end, new Size(radius, radius), 0, true, SweepDirection.Clockwise);
+            ctx.EndFigure(false);
+        }
+
+        context.DrawGeometry(null, new Pen(brush, thickness), arc);
+
+        // Each head points along the tangent and away from the other end.
+        DrawArrowHead(context, brush, start, Tangent(startDeg, -1.0), radius * 0.62);
+        DrawArrowHead(context, brush, end, Tangent(endDeg, 1.0), radius * 0.62);
+    }
+
+    /// <summary>Unit direction of travel around the arc at an angle (y-down, so clockwise).</summary>
+    private static Vector Tangent(double degrees, double sign)
+    {
+        double radians = degrees * Math.PI / 180.0;
+        return new Vector(-Math.Sin(radians), Math.Cos(radians)) * sign;
+    }
+
+    private static void DrawArrowHead(DrawingContext context, IBrush brush, Point tip, Vector direction, double size)
+    {
+        double length = direction.Length;
+        if (length <= 0.0)
+        {
+            return;
+        }
+
+        Vector forward = direction / length;
+        Vector side = new(-forward.Y, forward.X);
+        Point back = tip - forward * size;
+        var head = new StreamGeometry();
+        using (StreamGeometryContext ctx = head.Open())
+        {
+            ctx.BeginFigure(tip, true);
+            ctx.LineTo(back + side * (size * 0.55));
+            ctx.LineTo(back - side * (size * 0.55));
+            ctx.EndFigure(true);
+        }
+
+        context.DrawGeometry(brush, null, head);
     }
 
     private static void DrawSlash(DrawingContext context, Point center, double radius, IBrush brush)
@@ -131,6 +222,8 @@ public sealed class FillStrokeSelector : Control
         double dStroke = Distance(p, strokeCenter);
         double dNone = Distance(p, noneCenter);
 
+        // The circles own their hit areas: the swap arc is only considered when the click is
+        // outside all three, so it can never steal a click meant for the fill or the stroke.
         if (dNone <= r * 0.7)
         {
             ClearRequested?.Invoke(this, _strokeSelected);
@@ -151,6 +244,14 @@ public sealed class FillStrokeSelector : Control
                 _strokeSelected = true;
                 TargetChanged?.Invoke(this, true);
                 InvalidateVisual();
+            }
+        }
+        else
+        {
+            (Point swapCenter, _, double swapHit) = SwapLayout();
+            if (Distance(p, swapCenter) <= swapHit)
+            {
+                SwapRequested?.Invoke(this, EventArgs.Empty);
             }
         }
 

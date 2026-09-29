@@ -7,6 +7,37 @@ using Avalonia.Threading;
 namespace VCCad.App.Automation;
 
 /// <summary>
+/// Raised when the automation endpoint cannot bind the port it was asked for.
+///
+/// It carries the requested port so a launcher can name it, and whether the
+/// cause was <see cref="SocketError.AddressAlreadyInUse"/> — the one case where
+/// "somebody else has it" is a reason to consider an arbitrary port instead of a
+/// reason to fail. Every other socket error is a transport problem that must be
+/// surfaced, not papered over with an ephemeral bind.
+/// </summary>
+public sealed class AutomationPortUnavailableException : Exception
+{
+    /// <summary>Creates the exception from the underlying bind failure.</summary>
+    public AutomationPortUnavailableException(int requestedPort, SocketException cause)
+        : base(Describe(requestedPort, cause), cause)
+    {
+        RequestedPort = requestedPort;
+        AddressInUse = cause.SocketErrorCode == SocketError.AddressAlreadyInUse;
+    }
+
+    /// <summary>The port that could not be bound.</summary>
+    public int RequestedPort { get; }
+
+    /// <summary>True when the port is held by another process.</summary>
+    public bool AddressInUse { get; }
+
+    private static string Describe(int port, SocketException cause)
+        => cause.SocketErrorCode == SocketError.AddressAlreadyInUse
+            ? $"automation port {port} is already in use"
+            : $"automation port {port} could not be bound: {cause.SocketErrorCode} ({cause.Message})";
+}
+
+/// <summary>
 /// The application's automation endpoint: a small JSON HTTP server bound to the
 /// loopback interface.
 ///
@@ -50,11 +81,48 @@ public sealed class AutomationServer : IDisposable
     /// <summary>The port actually bound (useful when 0 was requested).</summary>
     public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
 
-    /// <summary>Starts the server on <paramref name="port"/> (0 picks a free port).</summary>
+    /// <summary>
+    /// The named instance this endpoint publishes itself under, if any. Set by
+    /// <see cref="AutomationHost.Create"/>; a clean shutdown removes the discovery
+    /// file so the name is free for the next run.
+    /// </summary>
+    public string? InstanceName { get; set; }
+
+    /// <summary>
+    /// Starts the server on <paramref name="port"/> (0 picks a free port).
+    ///
+    /// A bind failure surfaces as <see cref="AutomationPortUnavailableException"/>
+    /// naming the requested port. It is never swallowed and retried on another
+    /// port: a caller that asked for 5099 and silently got 58482 is the defect this
+    /// class exists to make impossible.
+    /// </summary>
     public static AutomationServer Start(AutomationContext context, int port = 5099)
     {
         var listener = new TcpListener(IPAddress.Loopback, port);
-        listener.Start();
+        try
+        {
+            listener.Start();
+        }
+        catch (SocketException ex)
+        {
+            listener.Dispose();
+            throw new AutomationPortUnavailableException(port, ex);
+        }
+
+        return Attach(context, listener);
+    }
+
+    /// <summary>
+    /// Starts the server on a listener the launcher has already bound (see
+    /// <see cref="AutomationHost.PrepareAutomationPort"/>). Reusing the caller's
+    /// listener is what makes an explicit port a promise: the port is held from
+    /// before the UI starts, so there is no window in which it can be taken.
+    /// </summary>
+    public static AutomationServer Start(AutomationContext context, TcpListener listener)
+        => Attach(context, listener);
+
+    private static AutomationServer Attach(AutomationContext context, TcpListener listener)
+    {
         var server = new AutomationServer(context, listener);
         server._acceptThread = new Thread(server.AcceptLoop)
         {
@@ -425,5 +493,9 @@ public sealed class AutomationServer : IDisposable
         }
 
         _stopping.Dispose();
+
+        // A named instance only holds its name while it is alive; a stale file is
+        // also reclaimable by pid, but a clean exit must not make the next run wait.
+        AutomationInstanceRegistry.Release(InstanceName);
     }
 }

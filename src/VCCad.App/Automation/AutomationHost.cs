@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using VCCad.App.Ai;
 using VCCad.App.ViewModels;
 
@@ -123,7 +125,8 @@ public sealed class AutomationHost
         Func<Avalonia.Controls.Control?>? uiRoot = null,
         ViewportActions? viewport = null,
         HostActions? host = null,
-        InteractionLog? history = null)
+        InteractionLog? history = null,
+        string? instanceName = null)
     {
         options ??= new LlmOptions();
         var created = new AutomationHost(
@@ -131,22 +134,147 @@ public sealed class AutomationHost
 
         if (startServer)
         {
-            // A port clash must not prevent the editor from starting: fall back to
-            // an ephemeral port so automation is still available.
-            try
+            // An explicit port is a promise. The launcher has already reserved the
+            // listener (PrepareAutomationPort), so adopt it; the port is held from
+            // before the UI starts and cannot be taken in the meantime. Without a
+            // reservation — tests, an embedding host — bind here, and let an
+            // explicit port fail loudly rather than drifting to another one.
+            TcpListener? reserved = TakeReservation(port);
+            created.Server = reserved is null
+                ? AutomationServer.Start(created.Context, port)
+                : AutomationServer.Start(created.Context, reserved);
+
+            // A named instance publishes where it actually ended up, so a driver
+            // that launched it can find the port without having seen stdout.
+            // The name normally comes from the launcher's claim; an embedding
+            // caller can pass one explicitly instead of relying on that global.
+            string? name = instanceName ?? AutomationInstanceRegistry.Current;
+            if (name is not null)
             {
-                created.Server = AutomationServer.Start(created.Context, port);
-            }
-            catch (System.Net.Sockets.SocketException)
-            {
-                created.Server = AutomationServer.Start(created.Context, 0);
+                AutomationInstanceRegistry.Publish(name, created.Server.Port);
+                created.Server.InstanceName = name;
             }
         }
 
         Current = created;
+
+        // The truth at startup, on every run: the port actually bound. On a WinExe
+        // the console is not attached, so this is a convenience; the diary and the
+        // named-instance file are the durable records.
+        int bound = created.Port;
+        Report(bound > 0
+            ? $"automation endpoint listening on http://127.0.0.1:{bound}" +
+              (port != 0 && bound != port ? $" (port {port} was not available)" : string.Empty) +
+              (created.Server!.InstanceName is { } named
+                  ? $" (instance '{named}', {AutomationInstanceRegistry.FileFor(named)})"
+                  : string.Empty)
+            : "automation endpoint disabled (--no-server)");
+
         DiagnosticsLog.Add(ApiCallSource.System, "host.ready",
-            $"{{\"port\":{created.Port},\"model\":\"{options.Model}\"}}", null, true, 0);
+            $"{{\"port\":{bound},\"requested\":{port},\"model\":\"{options.Model}\"}}", null, true, 0);
         return created;
+    }
+
+    /// <summary>
+    /// Writes a startup fact where a launcher can see it. A WinExe has no console
+    /// attached, so this can go nowhere; it must never be the only record and it
+    /// must never stop the editor.
+    /// </summary>
+    private static void Report(string message)
+    {
+        try
+        {
+            Console.Out.WriteLine($"[vccad] {message}");
+            Console.Out.Flush();
+        }
+        catch (Exception)
+        {
+            // No console, or a closed pipe. The diary and the instance file remain.
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // The explicit port is a promise
+    // ------------------------------------------------------------------
+
+    private static readonly object ReserveGate = new();
+    private static TcpListener? _reservedListener;
+    private static int _reservedFor;
+
+    /// <summary>
+    /// Secures the port the caller asked for, before the UI starts, so a launcher
+    /// gets a truthful failure and a non-zero exit code instead of a window that
+    /// quietly answers on a different port.
+    ///
+    /// Returns <c>null</c> when the port is secured (or when an arbitrary port was
+    /// requested), otherwise a message naming what failed. The reserved listener is
+    /// adopted by <see cref="Create"/>.
+    /// </summary>
+    public static string? PrepareAutomationPort(DesktopStartupOptions options)
+    {
+        if (options.NoServer)
+        {
+            return string.IsNullOrWhiteSpace(options.Name)
+                ? null
+                : "--name publishes an automation endpoint, but --no-server disables it; " +
+                  "drop --no-server or drop --name";
+        }
+
+        // Claim the name first: two instances must never share one, and the name
+        // must be free before any port is bound for it.
+        if (!string.IsNullOrWhiteSpace(options.Name))
+        {
+            string? claimError = AutomationInstanceRegistry.Claim(
+                options.Name, options.OriginalArguments ?? Array.Empty<string>());
+            if (claimError is not null)
+            {
+                return claimError;
+            }
+        }
+
+        // 0 is the sanctioned opt-in: bind whatever is free and report it.
+        if (options.Port == 0)
+        {
+            return null;
+        }
+
+        var listener = new TcpListener(IPAddress.Loopback, options.Port);
+        try
+        {
+            listener.Start();
+        }
+        catch (SocketException ex)
+        {
+            listener.Dispose();
+            AutomationInstanceRegistry.Release(options.Name);
+            return new AutomationPortUnavailableException(options.Port, ex).Message +
+                   "; pass --port 0 (or --name NAME) to accept an arbitrary port";
+        }
+
+        lock (ReserveGate)
+        {
+            _reservedListener?.Dispose();
+            _reservedListener = listener;
+            _reservedFor = options.Port;
+        }
+
+        return null;
+    }
+
+    /// <summary>The launcher's reservation for <paramref name="port"/>, if any.</summary>
+    private static TcpListener? TakeReservation(int port)
+    {
+        lock (ReserveGate)
+        {
+            if (_reservedListener is null || _reservedFor != port)
+            {
+                return null;
+            }
+
+            TcpListener listener = _reservedListener;
+            _reservedListener = null;
+            return listener;
+        }
     }
 
     /// <summary>Runs one chat turn.</summary>
@@ -278,11 +406,344 @@ public sealed class AutomationHost
     };
 }
 
+/// <summary>
+/// Named instances: a driver picks a name, the app publishes where it is, and two
+/// live instances can never share one.
+///
+/// A name is a promise in the same way an explicit port is. The port is not the
+/// thing a caller should have to negotiate — it invites the exact failure this
+/// exists to remove, where a launch is followed by a call to a port that turns out
+/// to be someone else's. Instead the app binds an arbitrary free port and writes
+/// <c>%APPDATA%\VCCad\instances\&lt;name&gt;.json</c>, which the caller reads.
+///
+/// The file is created exclusively, so two simultaneous launches cannot both win
+/// the name; it is deleted on a clean exit; and a file whose pid is no longer
+/// running is treated as stale, so a crash does not hold the name for ever.
+/// </summary>
+public static class AutomationInstanceRegistry
+{
+    /// <summary>Overrides the instance directory (used by tests and CI).</summary>
+    public const string DirectoryVariable = "VCCAD_INSTANCE_DIR";
+
+    private static readonly object Gate = new();
+    private static string? _claimed;
+    private static string[] _claimedArguments = Array.Empty<string>();
+    private static bool _exitHookInstalled;
+
+    /// <summary>
+    /// The last-resort release. The endpoint is normally disposed on shutdown, but
+    /// a clean exit must free the name even if that wiring is bypassed, so the hook
+    /// is installed when a name is claimed and releases whatever is still held.
+    /// A process that is killed outright cannot run this — the pid check in
+    /// <see cref="Claim"/> is what makes that case recoverable.
+    /// </summary>
+    private static void InstallExitHook()
+    {
+        if (_exitHookInstalled)
+        {
+            return;
+        }
+
+        _exitHookInstalled = true;
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => Release(Current);
+    }
+
+    /// <summary>Where instance files live: <c>%APPDATA%\VCCad\instances</c>.</summary>
+    public static string Directory
+    {
+        get
+        {
+            string? custom = Environment.GetEnvironmentVariable(DirectoryVariable);
+            if (!string.IsNullOrWhiteSpace(custom))
+            {
+                return custom;
+            }
+
+            string root = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            if (string.IsNullOrEmpty(root))
+            {
+                root = Path.Combine(Path.GetTempPath(), "vccad");
+            }
+
+            return Path.Combine(root, "VCCad", "instances");
+        }
+    }
+
+    /// <summary>The discovery file for <paramref name="name"/>.</summary>
+    public static string FileFor(string name) => Path.Combine(Directory, name + ".json");
+
+    /// <summary>The name this process has claimed, or null.</summary>
+    public static string? Current
+    {
+        get
+        {
+            lock (Gate)
+            {
+                return _claimed;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Claims <paramref name="name"/> for this process. Returns <c>null</c> on
+    /// success, otherwise a message explaining who holds it.
+    /// </summary>
+    public static string? Claim(string name, string[] arguments)
+    {
+        if (!IsValidName(name, out string? invalid))
+        {
+            return invalid;
+        }
+
+        lock (Gate)
+        {
+            string directory = Directory;
+            try
+            {
+                System.IO.Directory.CreateDirectory(directory);
+            }
+            catch (Exception ex)
+            {
+                return $"cannot create the instance directory '{directory}': {ex.Message}";
+            }
+
+            string path = FileFor(name);
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                try
+                {
+                    using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    {
+                        WriteEntry(stream, name, port: 0, arguments, claimOnly: true);
+                    }
+
+                    _claimed = name;
+                    _claimedArguments = arguments;
+                    InstallExitHook();
+                    return null;
+                }
+                catch (IOException)
+                {
+                    // Either a live instance holds the name or a stale file is in
+                    // the way; both are decided below.
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    return $"cannot claim instance name '{name}': {ex.Message}";
+                }
+
+                InstanceEntry? existing = Read(path);
+                if (existing is not null && IsAlive(existing.Pid))
+                {
+                    string where = existing.Port > 0 ? $" (http://127.0.0.1:{existing.Port})" : string.Empty;
+                    return $"instance name '{name}' is already in use by pid {existing.Pid}{where}; " +
+                           $"pick another --name or stop that process";
+                }
+
+                // Stale: the process that wrote it is gone. Reclaim the name.
+                try
+                {
+                    File.Delete(path);
+                }
+                catch (Exception)
+                {
+                    return $"instance name '{name}' is held by a stale file that cannot be replaced: {path}";
+                }
+            }
+
+            return $"instance name '{name}' is already in use, and the stale file could not be taken over: {path}";
+        }
+    }
+
+    /// <summary>
+    /// Rewrites the instance file now that the endpoint is up, so a caller polling
+    /// it sees the port. Best effort: the app must start even if this fails.
+    /// </summary>
+    public static void Publish(string name, int port)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        lock (Gate)
+        {
+            // The launcher's claim carries the original command line; an explicit
+            // name has no such record, so its file simply has no args.
+            string[] arguments = string.Equals(name, _claimed, StringComparison.Ordinal)
+                ? _claimedArguments
+                : Array.Empty<string>();
+
+            try
+            {
+                System.IO.Directory.CreateDirectory(Directory);
+                using var stream = new FileStream(FileFor(name), FileMode.Create, FileAccess.Write, FileShare.None);
+                WriteEntry(stream, name, port, arguments, claimOnly: false);
+            }
+            catch (Exception)
+            {
+                // Discovery is a convenience; never stop the editor for it.
+            }
+        }
+    }
+
+    /// <summary>Releases <paramref name="name"/> if this process holds it.</summary>
+    public static void Release(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        lock (Gate)
+        {
+            if (string.Equals(name, _claimed, StringComparison.Ordinal))
+            {
+                _claimed = null;
+            }
+
+            try
+            {
+                InstanceEntry? existing = Read(FileFor(name));
+                if (existing is not null && existing.Pid == Environment.ProcessId)
+                {
+                    File.Delete(FileFor(name));
+                }
+            }
+            catch (Exception)
+            {
+                // A leftover file is reclaimable by pid; nothing to do here.
+            }
+        }
+    }
+
+    /// <summary>The entry as written to disk, when it can be read.</summary>
+    public sealed record InstanceEntry(string Name, int Pid, int Port, string Started, string Args);
+
+    /// <summary>Reads an instance file, or null when it is missing or unreadable.</summary>
+    public static InstanceEntry? Read(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            using var json = System.Text.Json.JsonDocument.Parse(reader.ReadToEnd());
+            System.Text.Json.JsonElement root = json.RootElement;
+
+            return new InstanceEntry(
+                root.TryGetProperty("name", out var n) ? n.GetString() ?? string.Empty : string.Empty,
+                root.TryGetProperty("pid", out var p) ? p.GetInt32() : 0,
+                root.TryGetProperty("port", out var o) ? o.GetInt32() : 0,
+                root.TryGetProperty("started", out var s) ? s.GetString() ?? string.Empty : string.Empty,
+                root.TryGetProperty("args", out var a) ? a.GetString() ?? string.Empty : string.Empty);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>True when <paramref name="pid"/> is a running process.</summary>
+    public static bool IsAlive(int pid)
+    {
+        if (pid <= 0)
+        {
+            return false;
+        }
+
+        if (pid == Environment.ProcessId)
+        {
+            return true;
+        }
+
+        try
+        {
+            using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>A name must be one path-safe component, so it cannot escape the directory.</summary>
+    public static bool IsValidName(string name, out string? error)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            error = "--name needs a value, for example --name transform-panel";
+            return false;
+        }
+
+        if (name.Length > 64)
+        {
+            error = $"instance name '{name}' is too long (64 characters maximum)";
+            return false;
+        }
+
+        foreach (char c in name)
+        {
+            bool ok = char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.';
+            if (!ok)
+            {
+                error = $"instance name '{name}' may only contain letters, digits, '-', '_' and '.'";
+                return false;
+            }
+        }
+
+        error = null;
+        return true;
+    }
+
+    private static void WriteEntry(Stream stream, string name, int port, string[] arguments, bool claimOnly)
+    {
+        var entry = new
+        {
+            name,
+            pid = Environment.ProcessId,
+            port,
+            started = DateTime.UtcNow.ToString("o"),
+            args = string.Join(' ', arguments),
+            state = claimOnly ? "claiming" : "listening",
+        };
+
+        using var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        writer.Write(System.Text.Json.JsonSerializer.Serialize(entry));
+        writer.Flush();
+    }
+}
+
 /// <summary>Options parsed from the desktop host's command line.</summary>
 public sealed class DesktopStartupOptions
 {
     /// <summary>Automation port (0 = ephemeral).</summary>
     public int Port { get; set; } = 5099;
+
+    /// <summary>Whether <c>--port</c> appeared on the command line.</summary>
+    public bool PortExplicit { get; set; }
+
+    /// <summary>
+    /// Named instance: bind an arbitrary port and publish it under
+    /// <c>%APPDATA%\VCCad\instances\&lt;name&gt;.json</c>. Two live instances
+    /// cannot share a name.
+    /// </summary>
+    public string? Name { get; set; }
+
+    /// <summary>
+    /// A command-line value that cannot be honoured. The host reports it and exits
+    /// non-zero rather than starting with something other than what was asked for.
+    /// </summary>
+    public string? ArgumentError { get; set; }
 
     /// <summary>Disable the HTTP automation endpoint.</summary>
     public bool NoServer { get; set; }
@@ -365,11 +826,30 @@ public sealed class DesktopStartupOptions
                     options.HistoryDirectory = Next();
                     break;
                 case "--port":
-                    if (int.TryParse(Next(), out int port))
+                    string? portText = Next();
+                    if (int.TryParse(portText, out int port) && port is >= 0 and <= 65535)
                     {
                         options.Port = port;
+                        options.PortExplicit = true;
+                    }
+                    else
+                    {
+                        options.ArgumentError =
+                            $"--port needs a number between 0 and 65535, got '{portText ?? "(nothing)"}'";
                     }
 
+                    break;
+
+                // The sanctioned ways to get an arbitrary port. --port-any is the
+                // older spelling of --port 0 and is kept so a driver that learned it
+                // does not start failing.
+                case "--port-any":
+                    options.Port = 0;
+                    options.PortExplicit = true;
+                    break;
+
+                case "--name":
+                    options.Name = Next();
                     break;
                 case "--no-server":
                     options.NoServer = true;
@@ -399,6 +879,22 @@ public sealed class DesktopStartupOptions
             }
         }
 
+        // A name is about *which* instance, not which port: unless the caller also
+        // pinned a port, bind whatever is free and publish it. Hunting for 5099 and
+        // then moving would rebuild the race the name exists to remove.
+        if (!string.IsNullOrWhiteSpace(options.Name))
+        {
+            if (!options.PortExplicit)
+            {
+                options.Port = 0;
+            }
+
+            if (!AutomationInstanceRegistry.IsValidName(options.Name, out string? nameError))
+            {
+                options.ArgumentError = nameError;
+            }
+        }
+
         return options;
     }
 
@@ -417,7 +913,15 @@ public sealed class DesktopStartupOptions
           --history-dir DIR   where the interaction diary is stored
                               (default %APPDATA%\VCCad\history, env VCCAD_HISTORY_DIR)
           --no-dock           do not dock the window to the right half of the screen
-          --port N            automation endpoint port (default 5099, 0 = ephemeral)
+          --name NAME         name this instance and publish its endpoint to
+                              %APPDATA%\VCCad\instances\NAME.json
+                              (binds an arbitrary free port unless --port pins one;
+                               a second live instance with the same name is an error)
+          --port N            automation endpoint port, default 5099
+                              (N != 0 is a promise: if N cannot be bound the app
+                               fails naming N rather than moving elsewhere)
+          --port 0            bind an arbitrary free port and report it
+          --port-any          synonym for --port 0
           --no-server         do not start the automation endpoint
           --no-screenshot     do not attach a workspace screenshot to --chat
           --model NAME        model name (default qwen3.8-27b)
@@ -425,7 +929,8 @@ public sealed class DesktopStartupOptions
           --api-key KEY       bearer token for the model endpoint
           --help              show this help
 
-        Environment: VCCAD_LLM_MODEL, VCCAD_LLM_BASE, VCCAD_LLM_KEY, VCCAD_HISTORY_DIR
+        Environment: VCCAD_LLM_MODEL, VCCAD_LLM_BASE, VCCAD_LLM_KEY,
+                     VCCAD_HISTORY_DIR, VCCAD_INSTANCE_DIR
         """;
 }
 

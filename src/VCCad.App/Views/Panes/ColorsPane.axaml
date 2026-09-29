@@ -11,7 +11,7 @@
            the two-column recent-colour pad to its right. -->
       <Grid ColumnDefinitions="Auto,6,Auto,8,*">
         <controls:FillStrokeSelector x:Name="TargetSelector" Grid.Column="0"
-                                     Width="30" Height="30" VerticalAlignment="Top"/>
+                                     Width="56" Height="56" VerticalAlignment="Top"/>
         <controls:ColorWheel x:Name="Wheel" Grid.Column="2" Width="92" Height="92"/>
         <StackPanel Grid.Column="4" Spacing="2">
           <TextBlock Text="RECENT" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
