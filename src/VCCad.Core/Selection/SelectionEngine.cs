@@ -567,6 +567,11 @@ public static class SelectionEngine
     /// The object's region after its clips is what is tested, so an object cut away to nothing
     /// by a parent is not selected by a marquee over where it used to be, and one cut down to
     /// a corner is selected only by a marquee that reaches that corner.
+    ///
+    /// A line is a two-point ring and has no area, so it reads as an empty region - but it is
+    /// still geometry, and a marquee over it must select it. Clicking a line has always worked
+    /// (see <see cref="DistanceTo"/>, which explicitly does not guard on emptiness); a marquee
+    /// that did guard on it selected everything except the lines.
     /// </summary>
     private static bool Enclosed(LayerItem item, Vector2D offset, Polygon path)
     {
@@ -575,8 +580,7 @@ public static class SelectionEngine
             return false;
         }
 
-        Polygon region = VisibleRegion(item, offset);
-        return !region.IsEmpty && region.IsInside(path);
+        return VisibleRegion(item, offset).IsEnclosedBy(path);
     }
 
     /// <summary>

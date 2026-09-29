@@ -181,4 +181,50 @@ public class SelectionEngineTests
         // Later in the layer paints above, which is what the pointer should find.
         Assert.Equal("over", Assert.Single(result.Items).Name);
     }
+
+    /// <summary>A marquee that covers a closed object still selects it (the area case).</summary>
+    [Fact]
+    public void AMarqueeSelectsAClosedObjectItCovers()
+    {
+        CadDocument document = Pages(1, (board, _) => board.Layers[0].AddItem(Box("box", 100, 100)));
+
+        SelectionResult result = SelectionEngine.Marquee(
+            document, new Point2D(80, 80), new Point2D(200, 200));
+
+        Assert.Equal("box", Assert.Single(result.Items).Name);
+    }
+
+    /// <summary>
+    /// A line has no area, so it flattens to a two-point ring and reports itself as an
+    /// empty region - but it is still geometry, and a marquee that covers it must select
+    /// it. Clicking a line has always worked; the marquee must agree.
+    /// </summary>
+    [Fact]
+    public void AMarqueeThatCoversALineSelectsIt()
+    {
+        var line = PathFactory.CreateLine("line", new Point2D(100, 100), new Point2D(200, 100));
+        CadDocument document = Pages(1, (board, _) => board.Layers[0].AddItem(line));
+
+        SelectionResult result = SelectionEngine.Marquee(
+            document, new Point2D(80, 80), new Point2D(220, 140));
+
+        Assert.Contains(result.Items, item => ReferenceEquals(item, line));
+    }
+
+    /// <summary>
+    /// The negative: a marquee that only cuts a line does not enclose it. Without this,
+    /// "select every line" would pass the test above.
+    /// </summary>
+    [Fact]
+    public void AMarqueeThatOnlyCutsALineDoesNotSelectIt()
+    {
+        var line = PathFactory.CreateLine("line", new Point2D(100, 100), new Point2D(200, 100));
+        CadDocument document = Pages(1, (board, _) => board.Layers[0].AddItem(line));
+
+        // Covers the right half only: the left end of the line is outside.
+        SelectionResult result = SelectionEngine.Marquee(
+            document, new Point2D(150, 80), new Point2D(220, 120));
+
+        Assert.DoesNotContain(result.Items, item => ReferenceEquals(item, line));
+    }
 }

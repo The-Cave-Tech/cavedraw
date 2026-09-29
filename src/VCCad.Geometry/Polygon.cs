@@ -161,6 +161,53 @@ public sealed class Polygon
     }
 
     /// <summary>
+    /// Whether the whole of this shape lies inside <paramref name="outer"/>, where this
+    /// shape may be degenerate.
+    ///
+    /// A closed path has an area and a line does not: an open path flattens to a two-point
+    /// ring, which cannot contain anything and is therefore "empty" by
+    /// <see cref="IsEmpty"/>. It is still geometry, and it still has an answer to "is it
+    /// inside the marquee" - every point of it is, and no point of a rectangle between two
+    /// points inside a convex region escapes it either. <see cref="IsInside"/> keeps the
+    /// area-only meaning it was written for; this is the question selection actually asks.
+    /// </summary>
+    public bool IsEnclosedBy(Polygon outer)
+    {
+        if (_rings.Count == 0 || _rings.All(r => r.Count == 0))
+        {
+            return false;
+        }
+
+        if (outer.IsEmpty)
+        {
+            return false;
+        }
+
+        foreach (Point2D point in _rings.SelectMany(r => r))
+        {
+            if (!outer.Contains(point))
+            {
+                return false;
+            }
+        }
+
+        // A shape with area is only enclosed when the outer shape does not poke into it.
+        // A line has no inside, so there is nothing for the outer shape to be inside of.
+        if (!IsEmpty)
+        {
+            foreach (Point2D point in outer.Points)
+            {
+                if (Contains(point))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Whether this polygon lies entirely inside <paramref name="outer"/>.
     ///
     /// Every corner inside and no edge crossing means inside - enough for a convex outer, and
