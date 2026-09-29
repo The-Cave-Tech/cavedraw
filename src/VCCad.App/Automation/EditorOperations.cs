@@ -1714,7 +1714,9 @@ public static class EditorOperations
             "is how a task like drawing by mouse and keyboard is carried out as gestures rather " +
             "than as operations. kind is one of down, move, up, wheel, hover, hover-out, enter, " +
             "leave, keydown, keyup, text, pen-down, pen-move, pen-up, touch-down, touch-move, " +
-            "touch-up.",
+            "touch-up. x and y are WINDOW pixels, NOT model points: convert with view.toScreen " +
+            "before aiming a gesture. A batch focuses the canvas before its key events, so a " +
+            "shortcut and a drag can go in one call without a separate click.",
             "events:[{kind,x,y,deltaMs,extend?,modifier?,button?,modifiers?,device?,pressure?," +
             "tiltX?,tiltY?,key?,text?,pointerId?,wheelDelta?}], fast?:bool (skip the waits)",
             (ctx, p) =>

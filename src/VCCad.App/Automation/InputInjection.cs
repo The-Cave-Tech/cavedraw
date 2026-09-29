@@ -144,9 +144,17 @@ public static class InputInjection
         return $"released at ({x:F0},{y:F0})";
     }
 
-    public static string Type(Visual root, string text)
+    public static string Type(Visual root, string text) => Type(Focused(root), text);
+
+    /// <summary>
+    /// Types text into a named element, as the keyboard would.
+    ///
+    /// A batch aims at the canvas, and the focus manager may not have moved there yet inside
+    /// the batch's own synchronous pass, so a batch hands its keys to the canvas directly
+    /// rather than to whatever <see cref="Focused"/> happens to say.
+    /// </summary>
+    public static string Type(InputElement target, string text)
     {
-        InputElement target = Focused(root);
         target.RaiseEvent(new TextInputEventArgs
         {
             RoutedEvent = InputElement.TextInputEvent,
@@ -197,8 +205,17 @@ public static class InputInjection
 
     /// <summary>Sends a key, with modifiers, to the focused control.</summary>
     public static string Key(Visual root, Key key, KeyModifiers modifiers)
+        => Key(Focused(root), key, modifiers);
+
+    /// <summary>
+    /// Sends a key, with modifiers, to a named element.
+    ///
+    /// A batch uses this to put its shortcut on the canvas without waiting for the focus
+    /// manager: raising the event on the window instead is what made a batch's "L" silently
+    /// do nothing and its drag select rather than draw.
+    /// </summary>
+    public static string Key(InputElement target, Key key, KeyModifiers modifiers)
     {
-        InputElement target = Focused(root);
         target.RaiseEvent(new KeyEventArgs
         {
             RoutedEvent = InputElement.KeyDownEvent,

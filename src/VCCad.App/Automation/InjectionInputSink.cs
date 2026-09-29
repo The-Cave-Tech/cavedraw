@@ -1,3 +1,4 @@
+using Avalonia.VisualTree;
 using VCCad.Core.Input;
 
 namespace VCCad.App.Automation;
@@ -52,16 +53,40 @@ public static class InjectionInputSink
                 case InputKinds.KeyDown:
                 case InputKinds.KeyUp:
                 case InputKinds.Text:
+                    // A batch is a gesture aimed at the canvas, so its keys belong to the
+                    // canvas even when the press that would have focused it landed on a pane,
+                    // or no press was sent at all. The event is raised on the canvas directly:
+                    // Focus() inside the batch's own synchronous pass does not reach the
+                    // focus manager in time, and raising on the window instead made a batch's
+                    // "L" silently do nothing and its drag select rather than draw.
+                    Avalonia.Controls.Control? canvas = Canvas(root);
+
                     // Text goes through the platform's text-input path and a key through the
                     // key path, because that is the distinction the platform itself makes -
                     // a batch recorded from a person carries them as separate events.
                     if (input.Kind == InputKinds.Text && input.Text is { Length: > 0 } literal)
                     {
-                        InputInjection.Type(root, literal);
+                        if (canvas is Avalonia.Input.InputElement textTarget)
+                        {
+                            textTarget.Focus();
+                            InputInjection.Type(textTarget, literal);
+                        }
+                        else
+                        {
+                            InputInjection.Type(root, literal);
+                        }
                     }
                     else if (ParseKey(input.Key) is { } key)
                     {
-                        InputInjection.Key(root, key, ParseModifiers(input.Modifiers));
+                        if (canvas is Avalonia.Input.InputElement keyTarget)
+                        {
+                            keyTarget.Focus();
+                            InputInjection.Key(keyTarget, key, ParseModifiers(input.Modifiers));
+                        }
+                        else
+                        {
+                            InputInjection.Key(root, key, ParseModifiers(input.Modifiers));
+                        }
                     }
 
                     break;
@@ -76,6 +101,12 @@ public static class InjectionInputSink
             }
         }
     }
+
+    /// <summary>The canvas inside the window, or null when this host has none.</summary>
+    private static Avalonia.Controls.Control? Canvas(Avalonia.Visual root)
+        => root.GetVisualDescendants()
+            .OfType<VCCad.App.Controls.CanvasWorkspace>()
+            .FirstOrDefault();
 
     /// <summary>A key name as the platform's key, or null when it is not one.</summary>
     private static Avalonia.Input.Key? ParseKey(string? name)

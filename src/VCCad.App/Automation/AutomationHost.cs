@@ -350,6 +350,9 @@ public sealed class DesktopStartupOptions
                     options.NoDiagnostics = true;
                     options.ShowDiagnostics = false;
                     break;
+                // --no-recover is the documented spelling; --no-recovery is kept because it
+                // was in use for a day and a flag that stops working is worse than two names.
+                case "--no-recover":
                 case "--no-recovery":
                     options.NoRecovery = true;
                     break;
