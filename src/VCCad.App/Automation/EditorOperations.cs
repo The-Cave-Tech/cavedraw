@@ -11,6 +11,7 @@ using VCCad.App.ViewModels;
 using VCCad.App.Views.Panes;
 using VCCad.Core.Commands;
 using VCCad.Core.Model;
+using VCCad.Core.Color;
 using VCCad.Core.Input;
 using VCCad.Core.Selection;
 using VCCad.Core.Serialization;
@@ -1572,6 +1573,140 @@ public static class EditorOperations
         // *is* the gesture. These deliver actual pointer and keyboard events so text
         // editing - placing a caret, double-clicking a word, typing into a selection -
         // is exercised the way a person exercises it.
+        Add("color.get",
+            "The colour the editor is currently working in, in every form the picker shows: " +
+            "RGB, hex, HSL and opacity, plus where the ring and the small white marker sit. " +
+            "This is the same state the panel reads, so a colour set here is the colour a " +
+            "person sees there.",
+            "",
+            (ctx, _) =>
+            {
+                ColorPickerSnapshot snap = EditorColorState.Shared.Model.Snapshot();
+
+                return new
+                {
+                    r = Math.Round(snap.Color.R, 6),
+                    g = Math.Round(snap.Color.G, 6),
+                    b = Math.Round(snap.Color.B, 6),
+                    hex = snap.Hex,
+                    alpha = Math.Round(snap.Alpha, 4),
+                    h = Math.Round(snap.Hue, 4),
+                    s = Math.Round(snap.Saturation, 6),
+                    l = Math.Round(snap.Lightness, 6),
+                    angleDegrees = Math.Round(snap.AngleDegrees, 4),
+                    markerX = Math.Round(snap.MarkerPoint.X, 3),
+                    markerY = Math.Round(snap.MarkerPoint.Y, 3),
+                };
+            });
+
+        Add("color.set",
+            "Set the working colour from any one of its forms: hex, rgb, hsl or a ring angle. " +
+            "Whatever a person can set in the picker, a driver can set here.",
+            "hex?:string, r?,g?,b?:number (0..1), h?,s?,l? (degrees and 0..1), angle? (degrees), " +
+            "alpha?:number (0..1)",
+            (ctx, p) =>
+            {
+                EditorColorState state = EditorColorState.Shared;
+
+                if (p.GetString("hex") is { Length: > 0 } hex)
+                {
+                    state.SetColor(HexColor.Parse(hex).WithAlpha(state.Alpha));
+                }
+                else if (p.TryGetProperty("r", out _) || p.TryGetProperty("g", out _) ||
+                         p.TryGetProperty("b", out _))
+                {
+                    state.SetColor(new ColorRgb(
+                        p.GetDouble("r", 0), p.GetDouble("g", 0), p.GetDouble("b", 0)));
+                }
+                else if (p.TryGetProperty("h", out _) || p.TryGetProperty("s", out _) ||
+                         p.TryGetProperty("l", out _))
+                {
+                    state.SetColor(new HslColor(
+                        p.GetDouble("h", 0), p.GetDouble("s", 0), p.GetDouble("l", 0))
+                        .ToRgb(state.Alpha));
+                }
+                else if (p.TryGetProperty("angle", out _))
+                {
+                    state.SelectAngle(p.GetDouble("angle", 0));
+                }
+
+                if (p.TryGetProperty("alpha", out _))
+                {
+                    state.SetAlpha(p.GetDouble("alpha", 1));
+                }
+
+                return DescribeColor();
+            });
+
+        Add("color.pickInTriangle",
+            "Click inside the triangle: selects the colour at that point and moves the marker " +
+            "there. A point outside is pulled onto the nearest edge rather than ignored.",
+            "x:number, y:number (relative to the ring's centre)",
+            (ctx, p) =>
+            {
+                EditorColorState.Shared.SelectTrianglePoint(new VCCad.Geometry.Point2D(
+                    p.GetDouble("x", 0), p.GetDouble("y", 0)));
+
+                return DescribeColor();
+            });
+
+        Add("color.recent",
+            "The recently used colours, newest first, or clears them. This is the two-column " +
+            "swatch pad beside the ring.",
+            "clear?:bool",
+            (ctx, p) =>
+            {
+                EditorColorState state = EditorColorState.Shared;
+
+                if (p.GetBool("clear", false))
+                {
+                    state.ClearRecent();
+                }
+
+                return new
+                {
+                    colours = state.Recent.Select(c => new
+                    {
+                        r = Math.Round(c.R, 6),
+                        g = Math.Round(c.G, 6),
+                        b = Math.Round(c.B, 6),
+                        hex = HexColor.Format(c),
+                    }).ToArray(),
+                };
+            });
+
+        Add("color.remember",
+            "Add a colour to the recently used swatches, as picking one does.",
+            "r:number, g:number, b:number (0..1)",
+            (ctx, p) =>
+            {
+                var color = new ColorRgb(
+                    p.GetDouble("r", 0), p.GetDouble("g", 0), p.GetDouble("b", 0));
+
+                EditorColorState.Shared.Remember(color);
+                return new { hex = HexColor.Format(color), count = EditorColorState.Shared.Recent.Count };
+            });
+
+        Add("color.apply",
+            "Apply the working colour to the selection as a fill or a stroke, so the colour " +
+            "chosen in the picker reaches the artwork without clicking the fields.",
+            "target:string (fill|stroke, default fill)",
+            (ctx, p) =>
+            {
+                ColorRgb color = EditorColorState.Shared.Color;
+
+                if (string.Equals(p.GetString("target"), "stroke", StringComparison.OrdinalIgnoreCase))
+                {
+                    ctx.Session.ApplyStrokeColor(color);
+                }
+                else
+                {
+                    ctx.Session.ApplyFill(color, FillRule.NonZero);
+                }
+
+                return Summary(ctx);
+            });
+
         Add("input.batch",
             "Replay a whole session of input in one call: an ordered list of events, each with " +
             "a delta in milliseconds from the one before it. Every event goes through the same " +
@@ -2431,6 +2566,25 @@ public static class EditorOperations
     {
         PropertyNameCaseInsensitive = true,
     };
+
+    /// <summary>The working colour, described the way color.get describes it.</summary>
+    private static object DescribeColor()
+    {
+        ColorPickerSnapshot snap = EditorColorState.Shared.Model.Snapshot();
+
+        return new
+        {
+            r = Math.Round(snap.Color.R, 6),
+            g = Math.Round(snap.Color.G, 6),
+            b = Math.Round(snap.Color.B, 6),
+            hex = snap.Hex,
+            alpha = Math.Round(snap.Alpha, 4),
+            h = Math.Round(snap.Hue, 4),
+            s = Math.Round(snap.Saturation, 6),
+            l = Math.Round(snap.Lightness, 6),
+            angleDegrees = Math.Round(snap.AngleDegrees, 4),
+        };
+    }
 
     /// <summary>The canvas, or a failure saying why there is none.</summary>
     private static CanvasWorkspace RequireCanvas(AutomationContext ctx)
