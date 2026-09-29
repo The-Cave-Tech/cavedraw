@@ -346,7 +346,7 @@ public partial class EditorView : UserControl
         // Likewise: Transform is a handful of numeric fields, so it takes what it needs and
         // leaves the rest to Layers.
         transformPanel.IsStretchable = false;
-        transformPanel.Height = 160;
+        transformPanel.Height = 142;
 
         foreach (DockPanelModel panel in new[] { appearance, objectsPanel, transformPanel })
         {

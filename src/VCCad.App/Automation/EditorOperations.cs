@@ -14,6 +14,7 @@ using VCCad.Core.Model;
 using VCCad.Core.Color;
 using VCCad.Core.Input;
 using VCCad.Core.Selection;
+using VCCad.Core.Units;
 using VCCad.Core.Serialization;
 using VCCad.Geometry;
 
@@ -1573,6 +1574,67 @@ public static class EditorOperations
         // *is* the gesture. These deliver actual pointer and keyboard events so text
         // editing - placing a caret, double-clicking a word, typing into a selection -
         // is exercised the way a person exercises it.
+        Add("units.get",
+            "The unit every measurement is displayed in, and the units available. Fields and " +
+            "dialogs show this unit, so what is returned here is what a person is reading.",
+            "",
+            (ctx, _) => new
+            {
+                unit = UnitSettings.Current.Unit.ToString().ToLowerInvariant(),
+                abbreviation = LengthUnits.Abbreviation(UnitSettings.Current.Unit),
+                available = LengthUnits.All.Select(u => new
+                {
+                    unit = u.ToString().ToLowerInvariant(),
+                    abbreviation = LengthUnits.Abbreviation(u),
+                }).ToArray(),
+            });
+
+        Add("units.set",
+            "Change the unit measurements are displayed in. Every readout follows immediately.",
+            "unit:string (mm|cm|in|pt|pc, or the full name)",
+            (ctx, p) =>
+            {
+                string name = p.GetString("unit")
+                    ?? throw new EditorOperationException("Parameter 'unit' is required.");
+
+                if (!LengthUnits.TryParse(name, out LengthUnit unit))
+                {
+                    throw new EditorOperationException(
+                        $"Unknown unit '{name}'. Use one of: " +
+                        string.Join(", ", LengthUnits.All.Select(u => LengthUnits.Abbreviation(u))));
+                }
+
+                UnitSettings.Current.Unit = unit;
+                return new
+                {
+                    unit = unit.ToString().ToLowerInvariant(),
+                    abbreviation = LengthUnits.Abbreviation(unit),
+                };
+            });
+
+        Add("units.evaluate",
+            "Evaluate a measurement typed into a field, exactly as the panel would: an " +
+            "expression with units, arithmetic and parentheses. Returns the length in the " +
+            "configured unit and in millimetres, or an error naming what was wrong.",
+            "expression:string",
+            (ctx, p) =>
+            {
+                string text = p.GetString("expression") ?? string.Empty;
+
+                if (!LengthExpression.TryEvaluate(
+                        text, UnitSettings.Current.Unit, out Length length, out string? error))
+                {
+                    throw new EditorOperationException($"'{text}' is not a measurement: {error}");
+                }
+
+                return new
+                {
+                    millimetres = Math.Round(length.Millimetres, 9),
+                    display = UnitSettings.Current.FormatWithUnit(length),
+                    unit = UnitSettings.Current.Unit.ToString().ToLowerInvariant(),
+                };
+            });
+
         Add("color.get",
             "The colour the editor is currently working in, in every form the picker shows: " +
             "RGB, hex, HSL and opacity, plus where the ring and the small white marker sit. " +

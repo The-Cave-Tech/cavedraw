@@ -7,6 +7,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
+using VCCad.Core.Units;
 using VCCad.Geometry;
 using ModelFillRule = VCCad.Core.Model.FillRule;
 
@@ -17,7 +18,10 @@ namespace VCCad.App.Views.Panes;
 public partial class TransformPane : UserControl
 {
     private EditorViewModel? _vm;
-    private int _pivot = 4;
+    // Top-left is where a transform is normally measured from: a position is the corner the
+    // object starts at, not its middle. The panel opens there and the person can pick
+    // another of the nine.
+    private int _pivot = 0;
     private readonly List<Button> _pivotButtons = new();
     private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
     private static readonly IBrush IdleBrush = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x52));
@@ -26,7 +30,7 @@ public partial class TransformPane : UserControl
     {
         InitializeComponent();
         BuildPivotPicker();
-        foreach (TextBox box in new[] { XBox, YBox, WBox, HBox, AngleBox })
+        foreach (TextBox box in new[] { XBox, YBox, WBox, HBox, AngleBox, SkewBox })
         {
             box.LostFocus += (_, _) => CommitFromField(box);
         }
@@ -52,23 +56,19 @@ public partial class TransformPane : UserControl
             RowDefinitions = new RowDefinitions("*,*,*"),
         };
 
-        // Guide lines through the centre.
-        var horizontal = new Border
+        // A square the nine marks sit on. A cross-hair through the middle said "nine points in
+        // a grid"; a square says "nine points of this object", which is what the reference
+        // shows and what the control actually means.
+        var square = new Border
         {
-            Height = 1,
-            Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)),
-            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(7),
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x52)),
+            CornerRadius = new CornerRadius(1),
         };
-        var vertical = new Border
-        {
-            Width = 1,
-            Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)),
-            HorizontalAlignment = HorizontalAlignment.Center,
-        };
-        Grid.SetColumnSpan(horizontal, 3);
-        Grid.SetRowSpan(vertical, 3);
-        grid.Children.Add(horizontal);
-        grid.Children.Add(vertical);
+        Grid.SetColumnSpan(square, 3);
+        Grid.SetRowSpan(square, 3);
+        grid.Children.Add(square);
 
         for (int i = 0; i < 9; i++)
         {
@@ -116,6 +116,7 @@ public partial class TransformPane : UserControl
         SetBoxText(WBox, null);
         SetBoxText(HBox, null);
         SetBoxText(AngleBox, null);
+        SetBoxText(SkewBox, null);
 
         // Artboards have a document rectangle; transform them like objects
         // (position + size; rotation not applicable).
@@ -166,6 +167,13 @@ public partial class TransformPane : UserControl
         WBox.IsEnabled = objectMode;
         HBox.IsEnabled = objectMode;
         AngleBox.IsEnabled = objectMode;
+
+        // Shown, because the reference shows an S field and a person should see the control
+        // that will one day be there - but disabled, because the model has no skew and a field
+        // that accepts a value and ignores it is worse than one that says it cannot.
+        SetBoxText(SkewBox, 0);
+        SkewBox.IsEnabled = false;
+        ToolTip.SetTip(SkewBox, "Skew is not supported by the model yet");
     }
 
     private void OnFieldKeyDown(object? sender, KeyEventArgs e)
@@ -255,8 +263,41 @@ public partial class TransformPane : UserControl
         Refresh();
     }
 
+    /// <summary>
+    /// A field's text as a number of document units.
+    ///
+    /// The text is an EXPRESSION, not a number: "5.5in * 5 / 2" is a length and evaluates to
+    /// 349.25 mm, and a bare "5" means five of the configured unit. Reading it with
+    /// double.TryParse - which is what this used to do - silently yields 0 for anything with
+    /// arithmetic in it, so a person typing a sum would watch the field snap to zero.
+    ///
+    /// A rotation is an angle rather than a length, so it is read from the same evaluator and
+    /// then taken as degrees.
+    /// </summary>
     private static bool TryRead(TextBox box, out double value)
-        => double.TryParse(box.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+    {
+        value = 0;
+        string text = box.Text?.Trim() ?? string.Empty;
+
+        if (text.Length == 0)
+        {
+            return false;
+        }
+
+        if (LengthExpression.TryEvaluate(text, UnitSettings.Current.Unit, out Length length, out _))
+        {
+            // Angles carry a degree sign or none; a length with a unit is still a number of
+            // degrees here, because the field says so.
+            value = length.Millimetres;
+            return true;
+        }
+
+        return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+    }
+
+    /// <summary>A length in the configured unit, written the way the field shows it.</summary>
+    private static string Format(double millimetres)
+        => UnitSettings.Current.FormatWithUnit(Length.FromMillimetres(millimetres));
 
     private static Point2D ReferencePoint(Rect2D bounds, int pivot)
     {
@@ -272,6 +313,16 @@ public partial class TransformPane : UserControl
             return;
         }
 
-        box.Text = value.HasValue ? value.Value.ToString("0.###", CultureInfo.InvariantCulture) : string.Empty;
+        if (!value.HasValue)
+        {
+            box.Text = string.Empty;
+            return;
+        }
+
+        // Positions and sizes are lengths and carry the configured unit. Rotation and skew are
+        // angles and carry a degree sign, which is a unit too.
+        box.Text = box == AngleBox || box == SkewBox
+            ? value.Value.ToString("0.##", CultureInfo.InvariantCulture) + "\u00b0"
+            : Format(value.Value);
     }
 }
