@@ -18,6 +18,12 @@ public sealed class GeometryReplaceCommand : IUndoableCommand
     private readonly PathItem _before;
     private readonly PathItem _after;
 
+    // The shape definition travels with the geometry. A snapshot is geometry only, so without these
+    // an undone shape edit would leave the parameters describing a shape the outline no longer is -
+    // and the handles would then move a star that is not the star on screen.
+    private readonly ShapeDefinition? _beforeShape;
+    private readonly ShapeDefinition? _afterShape;
+
     public string Description { get; }
 
     public GeometryReplaceCommand(PathItem path, PathItem before, PathItem after, string? description = null)
@@ -25,12 +31,22 @@ public sealed class GeometryReplaceCommand : IUndoableCommand
         _path = path;
         _before = before.GeometrySnapshot();
         _after = after.GeometrySnapshot();
+        _beforeShape = before.Shape;
+        _afterShape = after.Shape;
         Description = description ?? "Edit path";
     }
 
-    public void Do() => _path.RestoreGeometryFrom(_after);
+    public void Do()
+    {
+        _path.RestoreGeometryFrom(_after);
+        _path.Shape = _afterShape;
+    }
 
-    public void Undo() => _path.RestoreGeometryFrom(_before);
+    public void Undo()
+    {
+        _path.RestoreGeometryFrom(_before);
+        _path.Shape = _beforeShape;
+    }
 }
 
 /// <summary>

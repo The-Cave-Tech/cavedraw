@@ -146,6 +146,10 @@ public sealed class PathItem : LayerItem
             }
         }
 
+        // The definition travels with the snapshot: a snapshot that forgot it would restore a
+        // star's nodes and leave the path claiming not to be a shape, which is what an undo across a
+        // shape edit used to do.
+        copy.Shape = Shape;
         return copy;
     }
 
@@ -162,6 +166,10 @@ public sealed class PathItem : LayerItem
             }
         }
 
+        // And what the path *is*, not only where its nodes are: restoring geometry without restoring
+        // the definition leaves the parameters describing a shape the outline no longer is, which is
+        // what an undo across a shape edit used to do.
+        Shape = snapshot.Shape;
         TouchGeometry();
     }
 

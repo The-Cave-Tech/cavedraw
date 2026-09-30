@@ -200,6 +200,55 @@ public class ShapeLibraryTests
         Assert.Equal(260, tailed.BoundingBox().Bottom, 3);
     }
 
+    /// <summary>
+    /// A rounded rectangle's corners are quarter circles about the corner centres.
+    ///
+    /// This is the test that would have caught a corner built from the wrong tangents: the shape still
+    /// had eight segments and the right bounding box, so it passed everything else while drawing a
+    /// spiky quadrilateral. A point on a quarter circle is a fact, and measuring it is the difference
+    /// between a rounded rectangle and something that merely has eight nodes.
+    /// </summary>
+    [Fact]
+    public void ARoundedRectanglesCornersAreQuarterCircles()
+    {
+        double radius = 24;
+        var parameters = new ShapeParameters
+        {
+            Centre = new Point2D(0, 0),
+            Width = 300,
+            Height = 200,
+            CornerRadius = radius,
+        };
+
+        SubPath sub = First(ShapeLibrary.Create(ShapeKind.RoundedRectangle, parameters));
+        Assert.Equal(8, sub.Nodes.Count);
+
+        // The arc's CENTRE is the inner point, one radius in from each edge of the corner - not the
+        // corner of the box. Every point of it is `radius` from there, which is the fact being checked.
+        (Point2D Centre, int Segment)[] corners =
+        {
+            (new Point2D(-150 + radius, -100 + radius), 0),
+            (new Point2D(150 - radius, -100 + radius), 2),
+            (new Point2D(150 - radius, 100 - radius), 4),
+            (new Point2D(-150 + radius, 100 - radius), 6),
+        };
+
+        foreach ((Point2D corner, int segment) in corners)
+        {
+            int count = sub.Nodes.Count;
+            PathNode a = sub.Nodes[segment];
+            PathNode b = sub.Nodes[(segment + 1) % count];
+
+            var middle = new Point2D(
+                (a.Anchor.X + (3 * a.OutHandle.X) + (3 * b.InHandle.X) + b.Anchor.X) / 8,
+                (a.Anchor.Y + (3 * a.OutHandle.Y) + (3 * b.InHandle.Y) + b.Anchor.Y) / 8);
+
+            double distance = Math.Sqrt(
+                Math.Pow(middle.X - corner.X, 2) + Math.Pow(middle.Y - corner.Y, 2));
+
+            Assert.Equal(radius, distance, 1);
+        }
+    }
     /// <summary>Every kind has a name for a person and an operation to use.</summary>
     [Fact]
     public void EveryKindIsNamed()

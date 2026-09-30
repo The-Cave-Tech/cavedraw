@@ -879,6 +879,188 @@ public static class EditorOperations
             "type:string, x?,y?,width?,height?,cx?,cy?,rx?,ry?,x1?,y1?,x2?,y2?,points?:[x,y][], name?, fillColor?:[r,g,b], strokeColor?:[r,g,b], strokeWidth?:number, layerId?:string",
             CreateObject);
 
+        Add("shape.create",
+            "Create a paint shape as a closed path: rectangle, rounded-rectangle, star, polygon, " +
+            "trapezoid, cloud, callout, heart or arrow, with the parameters that shape has. The " +
+            "parameters are kept, so the shape stays adjustable rather than becoming an outline.",
+            "kind:string, x?,y?,width?,height?,rotation?,cornerRadius?,points?,innerRatio?,topRatio?," +
+            "headLength?,headWidth?,shaftWidth?,tailX?,tailY?,layerId?,fillColor?,strokeColor?," +
+            "strokeWidth?,name?",
+            (ctx, p) =>
+            {
+                string kindName = p.GetString("kind")
+                    ?? throw new EditorOperationException("Parameter 'kind' is required.");
+
+                ShapeKind? kind = null;
+                foreach (ShapeKind candidate in ShapeLibrary.All)
+                {
+                    if (string.Equals(ShapeLibrary.Name(candidate), kindName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        kind = candidate;
+                    }
+                }
+
+                if (kind is null)
+                {
+                    throw new EditorOperationException(
+                        $"Unknown shape '{kindName}'. Use " +
+                        string.Join("|", ShapeLibrary.All.Select(ShapeLibrary.Name)) + ".");
+                }
+
+                var centre = new Point2D(p.GetDouble("x", 100), p.GetDouble("y", 100));
+                (Layer layer, Vector2D offset) = ctx.Session.TargetFor(centre);
+
+                PathItem item = ShapeLibrary.Create(kind.Value, ReadShapeParameters(p, offset));
+                if (p.GetString("name") is { Length: > 0 } given)
+                {
+                    item.Name = given;
+                }
+
+                if (p.TryGetColorArray("fillColor", out ColorRgb fill) ||
+                    p.TryGetColorArray("color", out fill))
+                {
+                    item.Fill = FillSpec.Solid(fill);
+                }
+                else
+                {
+                    // A shape with no fill is invisible, which reads as a failure rather than as a
+                    // choice: give it something to see and let the caller change it.
+                    item.Fill = FillSpec.Solid(new ColorRgb(0.2, 0.2, 0.25));
+                }
+
+                if (p.TryGetColorArray("strokeColor", out ColorRgb stroke) ||
+                    p.TryGetColorArray("stroke", out stroke))
+                {
+                    item.Stroke = new StrokeSpec(true, stroke, p.GetDouble("strokeWidth", 1),
+                        StrokeCap.Butt, StrokeJoin.Miter, 4);
+                }
+
+                if (p.TryGetGuid("layerId", out Guid targetLayer))
+                {
+                    layer = RequireLayer(ctx.Document, targetLayer);
+                }
+
+                ctx.Session.Execute(new AddItemCommand(layer, item));
+                ctx.Session.SelectObject(item);
+                ctx.ViewModel.NotifyDocumentChanged();
+                return DescribeShape(item);
+            });
+
+        Add("shape.get",
+            "What a shape is: its kind, its parameters, its segment count and how many segments its " +
+            "symmetry ties together. Reports shape:false for a path that is not one.",
+            "itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem? path = FindSelectedPath(ctx, p);
+                return path?.Shape is null ? new { shape = false } : DescribeShape(path);
+            });
+
+        Add("shape.setParameters",
+            "Change a shape's parameters and rebuild its geometry, in one undo step. Only the members " +
+            "sent change, and coordinates are in document space as shape.create takes them.",
+            "itemId?:guid, x?,y?,width?,height?,rotation?,cornerRadius?,points?,innerRatio?,topRatio?," +
+            "headLength?,headWidth?,shaftWidth?,tailX?,tailY?",
+            (ctx, p) =>
+            {
+                PathItem path = RequireShape(ctx, p, out ShapeDefinition shape);
+                ShapeParameters current = shape.Parameters;
+                Vector2D offset = path.ArtboardOffset();
+
+                Point2D centre = p.TryGetProperty("x", out _) || p.TryGetProperty("y", out _)
+                    ? new Point2D(
+                        p.GetDouble("x", current.Centre.X + offset.X) - offset.X,
+                        p.GetDouble("y", current.Centre.Y + offset.Y) - offset.Y)
+                    : current.Centre;
+
+                ShapeParameters merged = current with
+                {
+                    Centre = centre,
+                    Width = p.GetDouble("width", current.Width),
+                    Height = p.GetDouble("height", current.Height),
+                    Rotation = p.GetDouble("rotation", current.Rotation),
+                    CornerRadius = p.GetDouble("cornerRadius", current.CornerRadius),
+                    Points = (int)Math.Round(p.GetDouble("points", current.Points)),
+                    InnerRatio = p.GetDouble("innerRatio", current.InnerRatio),
+                    TopRatio = p.GetDouble("topRatio", current.TopRatio),
+                    HeadLength = p.GetDouble("headLength", current.HeadLength),
+                    HeadWidth = p.GetDouble("headWidth", current.HeadWidth),
+                    ShaftWidth = p.GetDouble("shaftWidth", current.ShaftWidth),
+                };
+
+                bool hasTail = p.TryGetProperty("tailX", out JsonElement tailX);
+                p.TryGetProperty("tailY", out JsonElement tailY);
+                if (hasTail)
+                {
+                    merged = merged with
+                    {
+                        HasTail = true,
+                        Tail = new Point2D(tailX.GetDouble() - offset.X, tailY.GetDouble() - offset.Y),
+                    };
+                }
+
+                var before = path.GeometrySnapshot();
+                new ShapeDefinition(shape.Kind, merged).ApplyTo(path);
+                ctx.Session.Execute(new GeometryReplaceCommand(path, before, path, "Change shape"));
+
+                ctx.ViewModel.NotifyDocumentChanged();
+                return DescribeShape(path);
+            });
+
+        Add("shape.detach",
+            "Stop a path being a shape, keeping its outline exactly as it is. How a person says keep " +
+            "this shape and let me edit it freely - its segments then move independently.",
+            "itemId?:guid",
+            (ctx, p) =>
+            {
+                PathItem path = RequireShape(ctx, p, out ShapeDefinition shape);
+                ShapeDefinition was = path.DetachShape()!;
+                ctx.Session.Execute(new GeometryReplaceCommand(
+                    path, path.GeometrySnapshot(), path, "Detach shape"));
+
+                ctx.ViewModel.NotifyDocumentChanged();
+                return new { detached = true, was = ShapeLibrary.Name(was.Kind), itemId = path.Id };
+            });
+
+        Add("shape.bowSegment",
+            "Bow one segment of a shape, and every equivalent segment with it. Positive is away from " +
+            "the shape's centre and negative is toward it, so making a star's segment concave makes " +
+            "all ten of them concave.",
+            "itemId?:guid, segment:number, amount:number",
+            (ctx, p) =>
+            {
+                PathItem path = RequireShape(ctx, p, out ShapeDefinition shape);
+                int segment = (int)Math.Round(p.GetDouble("segment", 0));
+                double amount = p.GetDouble("amount", 0);
+
+                if (amount == 0)
+                {
+                    throw new EditorOperationException("Parameter 'amount' is required and must not be 0.");
+                }
+
+                IReadOnlyList<int> orbit = ShapeSymmetry.Orbit(path, segment);
+                if (orbit.Count == 0)
+                {
+                    throw new EditorOperationException(
+                        $"Segment {segment} is not on '{path.Name}'.");
+                }
+
+                var before = path.GeometrySnapshot();
+                ShapeSymmetry.Bow(path, segment, amount);
+                ctx.Session.Execute(new GeometryReplaceCommand(path, before, path, "Bow shape segments"));
+
+                ctx.ViewModel.NotifyDocumentChanged();
+                return new
+                {
+                    itemId = path.Id,
+                    kind = ShapeLibrary.Name(shape.Kind),
+                    segment,
+                    amount,
+                    moved = orbit,
+                    symmetric = orbit.Count,
+                };
+            });
+
         Add("object.delete", "Delete the selected objects.", "", (ctx, _) =>
         {
             ctx.Session.DeleteSelection();
@@ -4088,6 +4270,107 @@ public static class EditorOperations
         ctx.Session.SelectObject(item);
         ctx.ViewModel.NotifyDocumentChanged();
         return DescribeOne(item);
+    }
+
+    // ---- shapes ---------------------------------------------------------
+    // A shape is a closed path that knows what it is, so the parameters the handles move are the
+    // parameters the geometry came from. Everything here goes through the command stack, for the same
+    // reason object.create does: an edit that bypasses it cannot be undone and never marks the
+    // document as having unsaved changes.
+
+    private static ShapeParameters ReadShapeParameters(JsonElement p, Vector2D offset)
+    {
+        var centre = new Point2D(p.GetDouble("x", 100) - offset.X, p.GetDouble("y", 100) - offset.Y);
+        bool hasTail = p.TryGetProperty("tailX", out JsonElement tailX);
+        p.TryGetProperty("tailY", out JsonElement tailY);
+
+        return new ShapeParameters
+        {
+            Centre = centre,
+            Width = p.GetDouble("width", 100),
+            Height = p.GetDouble("height", 100),
+            Rotation = p.GetDouble("rotation", 0),
+            CornerRadius = p.GetDouble("cornerRadius", 12),
+            Points = (int)Math.Round(p.GetDouble("points", 5)),
+            InnerRatio = p.GetDouble("innerRatio", 0.45),
+            TopRatio = p.GetDouble("topRatio", 0.55),
+            HeadLength = p.GetDouble("headLength", 0.35),
+            HeadWidth = p.GetDouble("headWidth", 1.0),
+            ShaftWidth = p.GetDouble("shaftWidth", 0.32),
+            HasTail = hasTail,
+            Tail = hasTail
+                ? new Point2D(tailX.GetDouble() - offset.X, tailY.GetDouble() - offset.Y)
+                : centre,
+        };
+    }
+
+    private static object DescribeShape(PathItem path)
+    {
+        ShapeDefinition shape = path.Shape!;
+        ShapeParameters p = shape.Parameters;
+
+        return new
+        {
+            itemId = path.Id,
+            kind = ShapeLibrary.Name(shape.Kind),
+            name = path.Name,
+            centre = new { x = p.Centre.X, y = p.Centre.Y },
+            width = p.Width,
+            height = p.Height,
+            rotation = p.Rotation,
+            cornerRadius = p.CornerRadius,
+            points = p.Points,
+            innerRatio = p.InnerRatio,
+            topRatio = p.TopRatio,
+            headLength = p.HeadLength,
+            headWidth = p.HeadWidth,
+            shaftWidth = p.ShaftWidth,
+            hasTail = p.HasTail,
+            tail = new { x = p.Tail.X, y = p.Tail.Y },
+            segments = path.SubPaths.Count > 0 ? path.SubPaths[0].SegmentCount : 0,
+
+            // How many segments the shape's own symmetry ties together: the number that has to agree
+            // when one of them is edited, and the number a driver needs to check the symmetry at all.
+            symmetry = ShapeSymmetry.Orbit(path, 0).Count,
+            rotationOrder = ShapeSymmetry.RotationOrder(path),
+            mirrored = ShapeSymmetry.Mirrors(path),
+            bounds = new
+            {
+                x = path.BoundingBox().X,
+                y = path.BoundingBox().Y,
+                width = path.BoundingBox().Width,
+                height = path.BoundingBox().Height,
+            },
+        };
+    }
+
+    private static PathItem RequireShape(AutomationContext ctx, JsonElement p, out ShapeDefinition shape)
+    {
+        PathItem? path = FindSelectedPath(ctx, p);
+        if (path is null)
+        {
+            throw new EditorOperationException("Select a path, or pass itemId.");
+        }
+
+        shape = path.Shape
+            ?? throw new EditorOperationException(
+                $"'{path.Name}' is not a shape - it has no parameters to change. Detach it to edit it freely.");
+
+        return path;
+    }
+
+    private static PathItem? FindSelectedPath(AutomationContext ctx, JsonElement p)
+    {
+        if (p.TryGetGuid("itemId", out Guid id))
+        {
+            return ctx.Document.Artboards
+                .SelectMany(a => a.Layers)
+                .SelectMany(l => l.Children)
+                .OfType<PathItem>()
+                .FirstOrDefault(item => item.Id == id);
+        }
+
+        return ctx.Session.SelectedPaths().FirstOrDefault();
     }
 
     private static List<Point2D> ReadPoints(JsonElement p, Vector2D offset)

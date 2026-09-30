@@ -208,25 +208,29 @@ public static class ShapeLibrary
         var path = new PathItem();
         SubPath sub = path.AddSubPath(closed: true);
 
-        void Corner(double x, double y, double towardX, double towardY)
+        // Clockwise from the top-left. Each corner is one arc, given as the point it is entered from
+        // and the point it leaves at, with the tangent handle each end wants - and the tangents
+        // alternate with the corner, which is the thing that is easy to get wrong: a helper that
+        // always emitted "horizontal then vertical" leaves the ring cutting diagonally across each
+        // corner, which draws a spiky quadrilateral rather than a rounded rectangle.
+        void Arc(
+            double fromX, double fromY, double toX, double toY,
+            double handleX, double handleY, double endHandleX, double endHandleY)
         {
-            // The tangent runs along the side being left and the side being joined; the two ends of
-            // the arc are the corner offset by the radius along each.
-            double ax = x - (towardX * radius);
-            double ay = y;
-            double bx = x;
-            double by = y - (towardY * radius);
-            PathNode a = sub.AppendNode(Place(p, ax, ay));
-            a.InHandle = Place(p, ax - (towardX * k), ay);
-            PathNode b = sub.AppendNode(Place(p, bx, by));
-            b.OutHandle = Place(p, bx, by + (towardY * k));
+            PathNode from = sub.AppendNode(Place(p, fromX, fromY));
+            from.OutHandle = Place(p, handleX, handleY);
+            PathNode to = sub.AppendNode(Place(p, toX, toY));
+            to.InHandle = Place(p, endHandleX, endHandleY);
         }
 
-        // Top-left, top-right, bottom-right, bottom-left; `toward` says which way each corner turns.
-        Corner(-hw, -hh, -1, -1);
-        Corner(hw, -hh, 1, -1);
-        Corner(hw, hh, 1, 1);
-        Corner(-hw, hh, -1, 1);
+        // Top-left: up the left edge, turning right along the top.
+        Arc(-hw, -hh + radius, -hw + radius, -hh, -hw, -hh + radius - k, -hw + radius - k, -hh);
+        // Top-right: right along the top, turning down.
+        Arc(hw - radius, -hh, hw, -hh + radius, hw - radius + k, -hh, hw, -hh + radius - k);
+        // Bottom-right: down the right edge, turning left.
+        Arc(hw, hh - radius, hw - radius, hh, hw, hh - radius + k, hw - radius + k, hh);
+        // Bottom-left: left along the bottom, turning up.
+        Arc(-hw + radius, hh, -hw, hh - radius, -hw + radius - k, hh, -hw, hh - radius + k);
         return path;
     }
 
@@ -306,23 +310,37 @@ public static class ShapeLibrary
         var path = new PathItem();
         SubPath sub = path.AddSubPath(closed: true);
 
-        for (int i = 0; i < lobes * 2; i++)
-        {
-            double angle = (Math.PI * i / lobes) - (Math.PI / 2);
-            // Alternating long and short radii give the billow; the pair is the lobe.
-            double scale = i % 2 == 0 ? 1.0 : 0.72;
-            double x = hw * scale * Math.Cos(angle);
-            double y = hh * scale * Math.Sin(angle) * (Math.Sin(angle) > 0 ? 1.0 : 0.82);
+        // Valleys sit on an inner ellipse and each lobe is the arc between two of them, bulging out to
+        // the full radius. Two nodes per lobe, and the handles carry the bulge: for a cubic whose ends
+        // are the valleys, the middle sits three quarters of the way to whatever the handles are
+        // pushed out by, so a lobe of height h needs handles at 4h/3 along the lobe's own radial.
+        double inner = 0.74;
+        double bulge = (1.0 - inner) * 0.75;
 
-            // The handle runs along the circle through the point, so consecutive lobes meet in a
-            // smooth billow rather than a crease.
-            double tangent = Math.PI * (i + 0.5) / lobes;
-            double k = 0.55 * (i % 2 == 0 ? hw : hw * 0.72);
-            Point2D inHandle = Place(p, x - (k * Math.Cos(tangent)), y - (k * Math.Sin(tangent)));
-            Point2D outHandle = Place(p, x + (k * Math.Cos(tangent)), y + (k * Math.Sin(tangent)));
-            PathNode node = sub.AppendNode(Place(p, x, y));
-            node.InHandle = inHandle;
-            node.OutHandle = outHandle;
+        for (int i = 0; i < lobes; i++)
+        {
+            double a0 = (2 * Math.PI * i / lobes) - (Math.PI / 2);
+            double a1 = (2 * Math.PI * (i + 1) / lobes) - (Math.PI / 2);
+            double mid = (a0 + a1) / 2;
+
+            double lift = (4.0 / 3.0) * bulge;
+            Point2D v0 = Place(p, hw * inner * Math.Cos(a0), hh * inner * Math.Sin(a0));
+            Point2D v1 = Place(p, hw * inner * Math.Cos(a1), hh * inner * Math.Sin(a1));
+
+            // Both handles push outward along the lobe's direction, which is what makes the arc bow.
+            Point2D out1 = Place(
+                p,
+                (hw * inner * Math.Cos(a0)) + (hw * lift * Math.Cos(mid)),
+                (hh * inner * Math.Sin(a0)) + (hh * lift * Math.Sin(mid)));
+            Point2D out2 = Place(
+                p,
+                (hw * inner * Math.Cos(a1)) + (hw * lift * Math.Cos(mid)),
+                (hh * inner * Math.Sin(a1)) + (hh * lift * Math.Sin(mid)));
+
+            PathNode a = sub.AppendNode(v0);
+            a.OutHandle = out1;
+            PathNode b = sub.AppendNode(v1);
+            b.InHandle = out2;
         }
 
         return path;
@@ -337,39 +355,46 @@ public static class ShapeLibrary
     {
         (double hw, double hh) = Half(p);
         double radius = Math.Clamp(p.CornerRadius, 0, Math.Min(hw, hh) * 0.9);
+        double k = radius * PathFactory.Kappa;
+
+        if (!p.HasTail)
+        {
+            // Without a tail a callout is just a rounded box, and it should look like one.
+            PathItem box = RoundedRectangle(p);
+            box.Name = Name(ShapeKind.Callout);
+            return box;
+        }
 
         var path = new PathItem();
         SubPath sub = path.AddSubPath(closed: true);
-
-        // The box, with square corners for now: the tail's join needs the plain edge, and the corners
-        // are arced below by the same construction the rounded rectangle uses.
         double tailBase = Math.Clamp(hw * 0.25, 0, hw);
 
-        if (p.HasTail)
+        // Clockwise from the top-left, the same four arcs a rounded rectangle uses, with the tail
+        // spliced into the bottom edge so the outline is one closed ring: the box and its tail fill
+        // and stroke together rather than as two shapes that happen to touch.
+        void Arc(
+            double fromX, double fromY, double toX, double toY,
+            double handleX, double handleY, double endHandleX, double endHandleY)
         {
-            // Clockwise from the top-left, with the tail hanging off the bottom edge.
-            sub.AppendNode(Place(p, -hw + radius, -hh));
-            sub.AppendNode(Place(p, hw - radius, -hh));
-            sub.AppendNode(Place(p, hw, -hh + radius));
-            sub.AppendNode(Place(p, hw, hh - radius));
-            sub.AppendNode(Place(p, hw - radius, hh));
-            sub.AppendNode(Place(p, tailBase, hh));
-            sub.AppendNode(p.Tail);
-            sub.AppendNode(Place(p, -tailBase, hh));
-            sub.AppendNode(Place(p, -hw + radius, hh));
-            sub.AppendNode(Place(p, -hw, hh - radius));
-            sub.AppendNode(Place(p, -hw, -hh + radius));
-
-            // The two corners that want a curve get one, by pulling the handle toward the corner.
-            double k = radius * PathFactory.Kappa;
-            sub.Nodes[0].InHandle = Place(p, -hw + radius - k, -hh);
-            sub.Nodes[1].OutHandle = Place(p, hw - radius + k, -hh);
-            return path;
+            PathNode from = sub.AppendNode(Place(p, fromX, fromY));
+            from.OutHandle = Place(p, handleX, handleY);
+            PathNode to = sub.AppendNode(Place(p, toX, toY));
+            to.InHandle = Place(p, endHandleX, endHandleY);
         }
 
-        PathItem box = RoundedRectangle(p);
-        box.Name = Name(ShapeKind.Callout);
-        return box;
+        Arc(-hw, -hh + radius, -hw + radius, -hh, -hw, -hh + radius - k, -hw + radius - k, -hh);
+        Arc(hw - radius, -hh, hw, -hh + radius, hw - radius + k, -hh, hw, -hh + radius - k);
+
+        // Down the right edge to the tail, out to the tip and back, then on to the bottom-left.
+        PathNode rightBottom = sub.AppendNode(Place(p, hw, hh - radius));
+        rightBottom.OutHandle = Place(p, hw, hh - radius + k);
+
+        sub.AppendNode(Place(p, tailBase, hh));
+        sub.AppendNode(p.Tail);
+        sub.AppendNode(Place(p, -tailBase, hh));
+
+        Arc(-hw + radius, hh, -hw, hh - radius, -hw + radius - k, hh, -hw, hh - radius + k);
+        return path;
     }
 
     /// <summary>
