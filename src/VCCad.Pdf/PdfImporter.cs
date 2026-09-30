@@ -29,7 +29,17 @@ public static class PdfImporter
     /// was read.
     /// </exception>
     public static CadDocument Import(byte[] pdfBytes)
-        => Import(pdfBytes, out _);
+        => Import(pdfBytes, password: null, out _);
+
+    /// <summary>
+    /// Imports a PDF that needs a password to open.
+    ///
+    /// Encryption protects streams and strings, not structure, so a protected file parses perfectly and
+    /// yields **nothing** - it opens empty rather than failing. A password that opens it is what turns
+    /// that back into a drawing, which is why this path exists at all.
+    /// </summary>
+    public static CadDocument Import(byte[] pdfBytes, string? password)
+        => Import(pdfBytes, password, out _);
 
     /// <summary>
     /// Imports <paramref name="pdfBytes"/> and additionally reports every lossy
@@ -38,10 +48,14 @@ public static class PdfImporter
     /// approximation that is not reported is a silently wrong document.
     /// </summary>
     public static CadDocument Import(byte[] pdfBytes, out IReadOnlyList<string> notes)
+        => Import(pdfBytes, password: null, out notes);
+
+    /// <summary>The same, with a password, and reporting every lossy approximation.</summary>
+    public static CadDocument Import(byte[] pdfBytes, string? password, out IReadOnlyList<string> notes)
     {
         var collected = new List<string>();
         notes = collected;
-        CadDocument document = ImportCore(pdfBytes, collected);
+        CadDocument document = ImportCore(pdfBytes, collected, password);
 
         // Illustrator private data lives outside the PDF content model, so it is
         // captured separately and attached here, once, on every import path. A
@@ -55,7 +69,7 @@ public static class PdfImporter
         // What the file was protected with travels with the document, read from the /Encrypt
         // dictionary - which is not itself encrypted, so the permissions are readable even when the
         // file could not be opened, which is exactly when a person most needs telling.
-        document.Security ??= ReadSecurity(pdfBytes);
+        document.Security ??= ReadSecurity(pdfBytes, password);
 
         return document;
     }
@@ -66,7 +80,7 @@ public static class PdfImporter
     /// Guarded by a byte scan for <c>/Encrypt</c> because this runs on every import and a second
     /// parse of a corpus-sized file is not free; an unprotected file costs one scan and no parse.
     /// </summary>
-    private static DocumentSecurity? ReadSecurity(byte[] pdfBytes)
+    private static DocumentSecurity? ReadSecurity(byte[] pdfBytes, string? password = null)
     {
         if (!Contains(pdfBytes, "/Encrypt"))
         {
@@ -75,7 +89,7 @@ public static class PdfImporter
 
         try
         {
-            var file = new Parsing.PdfFile(pdfBytes);
+            var file = new Parsing.PdfFile(pdfBytes, password);
             if (!file.IsEncrypted)
             {
                 return null;
@@ -123,7 +137,7 @@ public static class PdfImporter
     /// fallback. Split out of <see cref="Import"/> so the private-data capture
     /// happens exactly once without being repeated at each of the early returns.
     /// </summary>
-    private static CadDocument ImportCore(byte[] pdfBytes, List<string> notes)
+    private static CadDocument ImportCore(byte[] pdfBytes, List<string> notes, string? password = null)
     {
         // 0) A file that is not a PDF at all is refused here, before any parser
         //    gets a chance to fall through and hand back a fabricated A4.
@@ -147,7 +161,7 @@ public static class PdfImporter
         // 2) Full vector import: parse the PDF object model and content streams.
         try
         {
-            var file = new Parsing.PdfFile(pdfBytes);
+            var file = new Parsing.PdfFile(pdfBytes, password);
             var pageDicts = EnumeratePages(file).ToList();
             if (pageDicts.Count > 0)
             {
@@ -231,10 +245,14 @@ public static class PdfImporter
     /// corpus sweep to measure genuine parsing coverage.
     /// </summary>
     internal static bool TryImportVector(byte[] pdfBytes, out CadDocument? document)
+        => TryImportVector(pdfBytes, password: null, out document);
+
+    /// <summary>The same, with a password, for a protected file.</summary>
+    internal static bool TryImportVector(byte[] pdfBytes, string? password, out CadDocument? document)
     {
         try
         {
-            var file = new Parsing.PdfFile(pdfBytes);
+            var file = new Parsing.PdfFile(pdfBytes, password);
             var pageDicts = EnumeratePages(file).ToList();
             if (pageDicts.Count > 0)
             {

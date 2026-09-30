@@ -2577,11 +2577,14 @@ public static class EditorOperations
         // ---- files without a dialog -------------------------------------
         // The native file picker is the one thing a headless driver cannot operate,
         // so the import/export *effects* are exposed directly as well.
-        Add("document.openFile", "Open a PDF from disk as a new document (no dialog).", "path:string",
+        Add("document.openFile", "Open a PDF from disk as a new document (no dialog). A password opens a protected file.", "path:string, password?:string",
             (ctx, p) =>
             {
                 string path = RequireExistingFile(p, "path");
-                ctx.ViewModel.ImportPdf(File.ReadAllBytes(path));
+
+                // A protected file parses perfectly and yields nothing without this; the password is what
+                // turns it back into a drawing.
+                ctx.ViewModel.ImportPdf(File.ReadAllBytes(path), password: p.GetString("password"));
                 return new { opened = path, document = ctx.Document.Name, artboards = ctx.Document.Artboards.Count };
             });
 

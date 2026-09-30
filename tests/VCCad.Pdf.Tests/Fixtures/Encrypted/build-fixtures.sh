@@ -31,6 +31,12 @@ qpdf --object-streams=disable --allow-weak-crypto --encrypt "" owner 128 -- plai
 qpdf --object-streams=disable --allow-weak-crypto --encrypt "" owner 128 --use-aes=y -- plain-normalised.pdf aes-128.pdf
 qpdf --object-streams=disable --encrypt "" owner 256 -- plain-normalised.pdf aes-256.pdf
 
+# The same handler levels again, but with a password a person has to TYPE. Without one of these there
+# is no way to tell "this file opened because the handler works" from "this file never needed a
+# password", which is the whole point of the password-entry tests.
+qpdf --object-streams=disable --allow-weak-crypto --encrypt secret owner 128 -- plain-normalised.pdf rc4-128-password.pdf
+qpdf --object-streams=disable --allow-weak-crypto --encrypt secret owner 128 --use-aes=y -- plain-normalised.pdf aes-128-password.pdf
+
 rm -f plain.pdf
 ls -la
 echo "--- what qpdf says each one is ---"

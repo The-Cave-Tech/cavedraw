@@ -46,9 +46,16 @@ internal sealed class PdfFile
     private bool _securityResolved;
     private PdfStandardSecurity? _security;
 
-    public PdfFile(byte[] data)
+    private readonly string? _password;
+
+    /// <param name="password">
+    /// The password to open the file with, when it needs one. Tried before the empty password, and
+    /// falling back to it, so supplying a password for a file that never needed one still opens.
+    /// </param>
+    public PdfFile(byte[] data, string? password = null)
     {
         _data = data;
+        _password = string.IsNullOrEmpty(password) ? null : password;
         ReadXref();
     }
 
@@ -67,7 +74,11 @@ internal sealed class PdfFile
             if (!_securityResolved)
             {
                 _securityResolved = true;
-                _security = Unlock(string.Empty);
+
+                // The password that was supplied, then the empty one: a file carrying only an owner
+                // password has nothing to type, and a password supplied for a file that never needed one
+                // must not stop it opening.
+                _security = (_password is null ? null : Unlock(_password)) ?? Unlock(string.Empty);
             }
 
             return _security;

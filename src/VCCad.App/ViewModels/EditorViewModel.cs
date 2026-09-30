@@ -158,9 +158,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public void NewDocument(string? name = null) => AddDocument(CadDocument.CreateDefault(name));
 
     /// <summary>Imports a PDF (vector content) as a new document tab.</summary>
-    public DocumentSession ImportPdf(byte[] pdfBytes, string? path = null)
+    /// <param name="password">The password, for a file that needs one to open at all.</param>
+    public DocumentSession ImportPdf(byte[] pdfBytes, string? path = null, string? password = null)
     {
-        CadDocument document = VCCad.Pdf.PdfImporter.Import(pdfBytes);
+        CadDocument document = VCCad.Pdf.PdfImporter.Import(pdfBytes, password);
         if (!string.IsNullOrWhiteSpace(path))
         {
             document.Name = System.IO.Path.GetFileNameWithoutExtension(path);
