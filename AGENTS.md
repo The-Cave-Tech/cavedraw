@@ -67,6 +67,9 @@ When the person says **"another issue"** — or reports a defect, a gap, or a pi
 in that spirit — the **first** action is to create the issue on GitHub, before
 investigating and before writing any code:
 
+`gh` is **not installed on Windows** on this machine, so this is one of the two things
+that legitimately go through WSL (see 4.0):
+
 ```bash
 wsl -e bash -lc "cd /mnt/c/Development/vccad/main && gh issue create \
     --repo darrenstarr/cavedraw --title '<the symptom, in the person's terms>' \
@@ -250,7 +253,9 @@ describe when a visual judgement is needed.
    with a conventional message (`feat:`, `fix:`, `test:`, `docs:`, `build:`,
    `chore:`). Commit *before* starting the next item, not at the end of a session: an
    uncommitted tree is invisible history, and a change that is not in `git log` cannot
-   be reviewed, bisected or reverted. **Push it too**: a commit that is not pushed is not built, not tested and not visible to anyone, and git status reporting head N means the evidence does not exist yet. Keep the tree clean when handing off.
+   be reviewed, bisected or reverted. **Push it too**: a commit that is not pushed is not
+   built, not tested and not visible to anyone, and `git status` reporting `ahead N` means
+   the evidence does not exist yet. Keep the tree clean when handing off.
 2. **Never add comments to code unless asked** — but this repo *does* want
    explanatory comments on math/formulas and public APIs; match surrounding style.
 3. **Deployment archives `HEAD`** (`git archive HEAD`). Uncommitted work is *not*
@@ -324,6 +329,29 @@ unzip -q verapdf-installer.zip && cd verapdf-greenfield-*/   # then run the izpa
 
 ## 4. Build, test, run
 
+### 4.0 Windows-native, unless there is a reason not to be
+
+**Development is Windows-native at the moment.** The checkout is
+`C:\Development\vccad\main`, and `git`, `dotnet` and `python` are all on the Windows PATH.
+Build, test, run and edit **there**, from a normal PowerShell prompt.
+
+**Do not reach for WSL out of habit.** It is not a faster or a more capable path here - it
+is a second filesystem boundary that turns simple things into quoting problems and makes a
+stale-looking result hard to explain. Earlier revisions of this file routed even `gh`
+through it, which is why the examples further down do.
+
+WSL is the right answer for exactly two things on this machine:
+
+1. **`gh`** - not installed on Windows. Issues, comments and CI logs go through it, with the
+   checkout visible as `/mnt/c/Development/vccad/main`.
+2. **The PDF verification tools `qpdf`, poppler (`pdftoppm`/`pdftotext`), `mutool` and
+   Ghostscript (`gs`)** - also not on Windows. Anything that renders or validates a PDF with
+   an independent engine, and the corpus sweeps that need them.
+
+Everything else - building, testing, running the editor, driving the automation endpoint,
+staging files - is Windows work. `scripts/test-all.ps1` and `scripts/publish-desktop.ps1`
+exist for exactly this reason; the `.sh` equivalents are for the Linux/Docker side.
+
 ```bash
 # Build everything (Release)
 dotnet build VCCad.sln -c Release
@@ -376,7 +404,7 @@ dotnet run --project src/VCCad.App.Desktop        # run on this machine
 #   → artifacts/desktop/{win-x64,linux-x64}/VCCad.App.Desktop[.exe]
 ```
 
-### 4.1 Windows-native workflow (recommended on this machine)
+### 4.1 Windows-native workflow (the default - see 4.0)
 
 When the checkout is reached from Windows, build and run **natively** — it is much
 faster than the WSL path and the desktop app is a normal Windows process.
@@ -824,4 +852,4 @@ Dockerfile notes:
 | `wasm-tools` missing / browser publish fails | `dotnet workload install wasm-tools` (needs python3 on PATH in containers) |
 | Font renders as a substitute on canvas | the programme isn't registered: check `EmbeddedFontManager.Register` ran and `TextRun.GlyphIds` is non-null |
 | Headless XAML load fails with "No precompiled XAML found for VCCad.App.App" after a crashed build (`MSB4166`) | a killed MSBuild child left a *corrupted incremental* `VCCad.App.dll` missing its compiled-XAML IL. Rebuild that project: `dotnet build src/VCCad.App/VCCad.App.csproj -c Release -t:Rebuild` |
-| Editing the checkout from Windows fails with `ENOTSUP`/`EIO` | the repo lives on the WSL ext4 filesystem over 9p, which has no hardlink+rename — VS Code / VS over `\\wsl.localhost\...` are fine, but simple atomic-replace writers are not. `scripts/stage-apply.sh <relpath>` installs a file staged under the Windows temp dir, and `scripts/replace-text.py` performs exact-substring patches |
+| Editing a checkout that lives on the WSL ext4 filesystem fails with `ENOTSUP`/`EIO` | only when the repo is on the WSL filesystem over 9p, which has no hardlink+rename (ours is on `C:\`, so this does not apply - see 4.0) — VS Code / VS over `\\wsl.localhost\...` are fine, but simple atomic-replace writers are not. `scripts/stage-apply.sh <relpath>` installs a file staged under the Windows temp dir, and `scripts/replace-text.py` performs exact-substring patches |
