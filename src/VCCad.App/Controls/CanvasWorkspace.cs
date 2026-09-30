@@ -233,6 +233,15 @@ public sealed class CanvasWorkspace : Control
 
     // Shape tools (Rectangle / Ellipse).
     private Point2D? _shapeStart;
+
+    /// <summary>Whether a shape drag is armed. Exposed for tests: it is the one piece of state that
+    /// decides whether a release creates anything, and it cannot be seen from outside otherwise.</summary>
+    internal bool ShapeDragArmed => _shapeStart is not null;
+
+    /// <summary>Where the shape drag has been pulled to, and whether the button is still down.</summary>
+    internal Point2D ShapeDragCurrent => _shapeCurrent;
+
+    internal bool LeftDownForTests => _leftDown;
     private Point2D _shapeCurrent;
 
     // Artboard tool gesture state.
@@ -971,6 +980,11 @@ public sealed class CanvasWorkspace : Control
                 case EditorTool.Pen: PenDrag(model); break;
                 case EditorTool.Rectangle:
                 case EditorTool.Ellipse:
+
+                // And the shape tool, which was missing here when it was added: without this case it armed
+                // the drag on the press and never recorded a later point, so every release looked like a
+                // click and no shape was ever created - the identical mistake the lasso made, two cases up.
+                case EditorTool.Shape:
                     if (_shapeStart is not null)
                     {
                         _shapeCurrent = _shiftHeld ? ConstrainSquare(_shapeStart.Value, model) : model;
