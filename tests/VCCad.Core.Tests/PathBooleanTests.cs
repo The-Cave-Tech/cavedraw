@@ -264,4 +264,63 @@ public class PathBooleanTests
         Assert.Null(PathBoolean.Combine(
             new[] { Square(0, 0, 100), Square(500, 500, 100) }, BooleanOp.Intersect));
     }
+
+    // ---- divide ----------------------------------------------------------------
+
+    /// <summary>
+    /// Two overlapping squares divide into **three** pieces - each square's own part and the overlap -
+    /// and together they are the union, which is the check that nothing was lost or counted twice.
+    /// </summary>
+    [Fact]
+    public void TwoOverlappingSquaresDivideIntoThreePieces()
+    {
+        IReadOnlyList<PathItem> pieces = PathBoolean.Divide(new[] { Square(0, 0, 100), Square(50, 50, 100) });
+
+        Assert.Equal(3, pieces.Count);
+        Assert.All(pieces, piece => Assert.Single(piece.SubPaths));
+
+        var areas = pieces.Select(Area).OrderBy(a => a).ToList();
+        Assert.Equal(2500, areas[0], 0);   // the overlap
+        Assert.Equal(7500, areas[1], 0);   // one square's own part
+        Assert.Equal(7500, areas[2], 0);   // the other's
+
+        Assert.Equal(17500, areas.Sum(), 0);
+    }
+
+    /// <summary>Shapes that only touch divide into their own pieces and nothing else.</summary>
+    [Fact]
+    public void DisjointShapesDivideIntoThemselves()
+    {
+        IReadOnlyList<PathItem> pieces = PathBoolean.Divide(new[] { Square(0, 0, 100), Square(200, 0, 100) });
+
+        Assert.Equal(2, pieces.Count);
+        Assert.All(pieces, piece => Assert.Equal(10000, Area(piece), 0));
+    }
+
+    /// <summary>
+    /// A shape inside another divides into the inner shape and the ring around it - two pieces, not
+    /// three, because there is no region that is both inside and outside.
+    /// </summary>
+    [Fact]
+    public void AContainedShapeDividesIntoItAndItsRing()
+    {
+        IReadOnlyList<PathItem> pieces = PathBoolean.Divide(new[] { Square(0, 0, 100), Square(25, 25, 50) });
+
+        Assert.Equal(2, pieces.Count);
+
+        var areas = pieces.Select(Area).OrderBy(a => a).ToList();
+        Assert.Equal(2500, areas[0], 0);
+        Assert.Equal(7500, areas[1], 0);
+    }
+
+    /// <summary>Divide refuses a selection so large the combination count would explode.</summary>
+    [Fact]
+    public void DivideRefusesTooManyPaths()
+    {
+        var many = Enumerable.Range(0, PathBoolean.MaxDivideInputs + 1)
+            .Select(i => Square(i * 10, 0, 20))
+            .ToArray();
+
+        Assert.Throws<InvalidOperationException>(() => PathBoolean.Divide(many));
+    }
 }

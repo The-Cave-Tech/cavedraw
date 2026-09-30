@@ -193,6 +193,66 @@ public static class PathBoolean
         return result;
     }
 
+    /// <summary>
+    /// Divide: cut the paths into their separate regions, one object per region. A shape crossed by two
+    /// lines becomes the pieces, which is what a person uses divide for - so unlike the other four this
+    /// returns several objects rather than one.
+    ///
+    /// Each region is one **combination** of the inputs: the part inside a given subset of them and
+    /// outside all the others, which is the boolean already built. With N inputs there are 2^N - 1
+    /// combinations, so this is capped rather than allowed to explode.
+    /// </summary>
+    public static IReadOnlyList<PathItem> Divide(IReadOnlyList<PathItem> paths)
+    {
+        var regions = new List<PathItem>();
+        if (paths.Count < 2)
+        {
+            return regions;
+        }
+
+        if (paths.Count > MaxDivideInputs)
+        {
+            throw new InvalidOperationException(
+                $"Divide works on up to {MaxDivideInputs} paths at once; {paths.Count} would give " +
+                $"{Math.Pow(2, paths.Count) - 1} combinations.");
+        }
+
+        int combinations = 1 << paths.Count;
+        for (int mask = 1; mask < combinations; mask++)
+        {
+            var inside = new List<PathItem>();
+            var outside = new List<PathItem>();
+
+            for (int i = 0; i < paths.Count; i++)
+            {
+                ((mask & (1 << i)) != 0 ? inside : outside).Add(paths[i]);
+            }
+
+            PathItem? region = inside.Count == 1 ? Copy(inside[0]) : Combine(inside, BooleanOp.Intersect);
+            if (region is null)
+            {
+                continue;
+            }
+
+            if (outside.Count > 0)
+            {
+                var subtract = new List<PathItem> { region };
+                subtract.AddRange(outside);
+                region = Combine(subtract, BooleanOp.Subtract);
+            }
+
+            if (region is not null && region.SubPaths.Count > 0)
+            {
+                regions.Add(region);
+            }
+        }
+
+        return regions;
+    }
+
+    /// <summary>How many paths divide takes: 2^N - 1 regions, so eight is already 255.</summary>
+    public const int MaxDivideInputs = 8;
+
     private static List<Segment> CollectEdges(List<(IReadOnlyList<FlattenedOutline> Outlines, FillRule Rule)> inputs)
     {
         var edges = new List<Segment>();
@@ -486,16 +546,32 @@ public static class PathBoolean
     private static double Cross(Vector2D a, Vector2D b) => (a.X * b.Y) - (a.Y * b.X);
 
     /// <summary>
-    /// A path carrying the source's appearance but none of its geometry: the result is built from
-    /// contours, and the styling is the front-most path's because that is the object that survived.
+    /// A deep copy: the source's appearance **and** its geometry. Both are wanted - the geometry for a
+    /// one-path region, and the appearance for a result built from contours.
     /// </summary>
-    private static PathItem Copy(PathItem source) => new()
+    private static PathItem Copy(PathItem source)
     {
-        Name = source.Name,
-        Fill = source.Fill,
-        Stroke = source.Stroke,
-        Opacity = source.Opacity,
-    };
+        PathItem copy = new()
+        {
+            Name = source.Name,
+            Fill = source.Fill,
+            Stroke = source.Stroke,
+            Opacity = source.Opacity,
+            Shape = source.Shape,
+        };
+
+        foreach (SubPath sub in source.SubPaths)
+        {
+            SubPath target = copy.AddSubPath(sub.IsClosed);
+            foreach (PathNode node in sub.Nodes)
+            {
+                target.Nodes.Add(new PathNode(node.Anchor, node.InHandle, node.OutHandle));
+            }
+        }
+
+        copy.GeometryChanged();
+        return copy;
+    }
 
     private readonly record struct Segment(Point2D A, Point2D B, int Owner)
     {
