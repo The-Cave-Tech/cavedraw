@@ -90,10 +90,10 @@ jobs:
 
           # The application assembly. A Blazor WebAssembly publish puts it in `_framework` alongside the
           # runtime, not at the publish root - which is what the previous version of this step asserted, and
-          # why it failed every time it was reached. Either location is accepted so an SDK that changes its
-          # mind again does not fail the build for a path.
-          test -f artifacts/wasm/wwwroot/_framework/VCCad.App.Browser.dll ||
-            test -f artifacts/wasm/VCCad.App.Browser.dll
+          # why it failed every time it was reached. Matched by name rather than by extension as well,
+          # because .NET 8 publishes assemblies as `.webcil` by default: demanding a `.dll` would fail for a
+          # reason that has nothing to do with whether a browser can load the app.
+          find artifacts/wasm -name 'VCCad.App.Browser.*' -print -quit | grep .
           echo "wasm bundle OK"
 
       - name: Upload wasm bundle

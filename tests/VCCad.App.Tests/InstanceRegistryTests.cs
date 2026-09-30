@@ -31,6 +31,23 @@ public class InstanceRegistryTests
         }
     }
 
+    /// <summary>
+    /// Writes a record directly, which is how a stale or live record from another process is simulated.
+    ///
+    /// The directory is created first, and that is not ceremony: `Claim` creates it, but these tests write a
+    /// file *before* claiming - and on a machine that has never run the editor the directory does not exist
+    /// yet. It does exist on a development box, from all the instances that have run there, so the omission
+    /// passed locally and failed on CI with a `DirectoryNotFoundException`.
+    /// </summary>
+    private static void WriteRecord(string name, int pid, int port, string state)
+    {
+        Directory.CreateDirectory(AutomationInstanceRegistry.Directory);
+        File.WriteAllText(
+            AutomationInstanceRegistry.FileFor(name),
+            $"{{\"name\":\"{name}\",\"pid\":{pid},\"port\":{port}," +
+            $"\"started\":\"2026-01-01T00:00:00Z\",\"args\":\"\",\"state\":\"{state}\"}}");
+    }
+
     /// <summary>A claimed name is written immediately, marked as claiming rather than listening.</summary>
     [Fact]
     public void ClaimingWritesAClaimingRecord()
@@ -68,10 +85,7 @@ public class InstanceRegistryTests
         try
         {
             // The process holding it is this one, so it is genuinely alive.
-            File.WriteAllText(
-                AutomationInstanceRegistry.FileFor(name),
-                $"{{\"name\":\"{name}\",\"pid\":{Environment.ProcessId},\"port\":5123," +
-                "\"started\":\"2026-01-01T00:00:00Z\",\"args\":\"\",\"state\":\"listening\"}");
+            WriteRecord(name, Environment.ProcessId, port: 5123, state: "listening");
 
             string? error = AutomationInstanceRegistry.Claim(name, Array.Empty<string>());
 
@@ -101,11 +115,7 @@ public class InstanceRegistryTests
         try
         {
             // A pid that cannot be running: the maximum on this platform, offset so it is certainly unused.
-            int deadPid = int.MaxValue - 1;
-            File.WriteAllText(
-                AutomationInstanceRegistry.FileFor(name),
-                $"{{\"name\":\"{name}\",\"pid\":{deadPid},\"port\":5124," +
-                "\"started\":\"2026-01-01T00:00:00Z\",\"args\":\"\",\"state\":\"listening\"}");
+            WriteRecord(name, int.MaxValue - 1, port: 5124, state: "listening");
 
             Assert.Null(AutomationInstanceRegistry.Claim(name, Array.Empty<string>()));
 
