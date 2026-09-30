@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.IO.Compression;
 using System.Text;
+using VCCad.Pdf.Encryption;
 
 namespace VCCad.Pdf.Parsing;
 
@@ -17,6 +18,16 @@ internal sealed class PdfStream
     public required Dictionary<string, object?> Dict { get; init; }
 
     public required byte[] Raw { get; init; }
+
+    /// <summary>
+    /// The object this stream was parsed as. The standard security handler mixes it into the key,
+    /// which is what stops a stream being lifted out of one object into another, so a stream that
+    /// does not know its own number cannot be decrypted.
+    /// </summary>
+    public int Number { get; set; }
+
+    /// <summary>The object's generation, the other half of that key material.</summary>
+    public int Generation { get; set; }
 }
 
 /// <summary>
@@ -31,11 +42,75 @@ internal sealed class PdfFile
     private readonly Dictionary<int, (int StreamObj, int Index)> _inObjectStream = new();
     private readonly Dictionary<int, object?> _cache = new();
     private readonly Dictionary<int, object?[]> _objectStreams = new();
+    private Dictionary<string, object?>? _trailer;
+    private bool _securityResolved;
+    private PdfStandardSecurity? _security;
 
     public PdfFile(byte[] data)
     {
         _data = data;
         ReadXref();
+    }
+
+    /// <summary>
+    /// The standard security handler in force, or null when the file is not protected.
+    ///
+    /// Resolved lazily, because the trailer it needs is only found once the cross-reference has been
+    /// read - and a file whose xref has to be found by brute-force scanning gets its trailer late.
+    /// The empty password is the one tried: a file carrying only an owner password has nothing for a
+    /// person to type, and it is the common case for the artwork this program exists to open.
+    /// </summary>
+    public PdfStandardSecurity? Security
+    {
+        get
+        {
+            if (!_securityResolved)
+            {
+                _securityResolved = true;
+                _security = Unlock(string.Empty);
+            }
+
+            return _security;
+        }
+    }
+
+    /// <summary>Whether the file is protected at all, whatever the password situation.</summary>
+    public bool IsEncrypted => EncryptDictionary() is not null;
+
+    /// <summary>
+    /// Unlocks the file with a password, or returns null when it does not open it. An unprotected
+    /// file returns null as well: there is nothing to unlock and nothing to decrypt.
+    /// </summary>
+    public PdfStandardSecurity? Unlock(string password)
+    {
+        if (_trailer is null || EncryptDictionary() is not { } encrypt)
+        {
+            return null;
+        }
+
+        return PdfStandardSecurity.TryCreate(encrypt, FirstFileId(), password);
+    }
+
+    private Dictionary<string, object?>? EncryptDictionary()
+        => _trailer is null ? null : ResolveDict(_trailer.GetValueOrDefault("Encrypt"));
+
+    /// <summary>
+    /// The first file identifier, which the key derivation is salted with. A file that declares no
+    /// /ID gets none rather than a failure: the hash simply has nothing appended.
+    /// </summary>
+    private byte[] FirstFileId()
+    {
+        if (_trailer?.GetValueOrDefault("ID") is not List<object?> ids || ids.Count == 0)
+        {
+            return Array.Empty<byte>();
+        }
+
+        return Resolve(ids[0]) switch
+        {
+            string text => Encoding.Latin1.GetBytes(text),
+            byte[] raw => raw,
+            _ => Array.Empty<byte>(),
+        };
     }
 
     /// <summary>All object numbers known from the xref.</summary>
@@ -101,6 +176,19 @@ internal sealed class PdfFile
     public byte[] GetStreamData(PdfStream stream)
     {
         byte[] data = stream.Raw;
+
+        // Decrypt BEFORE the filters, never after: the filters describe the plaintext, and what was
+        // encrypted is the filtered bytes. This one place is the whole of reading a protected file -
+        // the importer, the renderer and the model above it never learn that it was encrypted, which
+        // is why they needed no changes at all.
+        string? type = stream.Dict.GetValueOrDefault("Type") is PdfName { Value: var t } ? t : null;
+
+        // An XRef stream is never encrypted (ISO 32000-1, 7.5.8.2), and a metadata stream is only
+        // encrypted when the handler says so.
+        if (type != "XRef" && Security is { } security)
+        {
+            data = security.Decrypt(stream.Number, stream.Generation, data, type == "Metadata");
+        }
         object? filter = Resolve(stream.Dict.GetValueOrDefault("Filter"));
 
         bool flate = filter is PdfName { Value: "FlateDecode" }
@@ -251,10 +339,15 @@ internal sealed class PdfFile
         }
 
         if (reader.TryReadKeyword("trailer") &&
-            reader.ReadObject(this) is Dictionary<string, object?> trailer &&
-            ResolveNumber(trailer.GetValueOrDefault("Prev")) is double prev)
+            reader.ReadObject(this) is Dictionary<string, object?> trailer)
         {
-            return (long)prev;
+            // The trailer carries /Encrypt and /ID, which is everything the security handler needs.
+            _trailer ??= trailer;
+
+            if (ResolveNumber(trailer.GetValueOrDefault("Prev")) is double prev)
+            {
+                return (long)prev;
+            }
         }
 
         return null;
@@ -262,6 +355,9 @@ internal sealed class PdfFile
 
     private void ReadXrefStream(PdfStream xref)
     {
+        // An xref STREAM carries the trailer's entries in its own dictionary, so an incremental
+        // update that uses one brings /Encrypt and /ID with it.
+        _trailer ??= xref.Dict;
         if (Resolve(xref.Dict.GetValueOrDefault("W")) is not List<object?> widths || widths.Count < 3)
         {
             BruteForceScan();
@@ -394,10 +490,18 @@ internal sealed class PdfFile
         var reader = new PdfReader(_data, (int)offset);
 
         // Skip the "N G obj" header before the object body.
-        reader.ReadInteger();
-        reader.ReadInteger();
+        long? number = reader.ReadInteger();
+        long? generation = reader.ReadInteger();
         reader.TryReadKeyword("obj");
-        return reader.ReadObject(this, parseStream: true);
+        object? result = reader.ReadObject(this, parseStream: true);
+
+        if (result is PdfStream stream)
+        {
+            stream.Number = (int)(number ?? expectedNumber);
+            stream.Generation = (int)(generation ?? 0);
+        }
+
+        return result;
     }
 
     private int LastIndexOf(string token)

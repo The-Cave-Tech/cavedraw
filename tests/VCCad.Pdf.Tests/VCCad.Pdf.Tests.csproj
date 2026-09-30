@@ -21,4 +21,12 @@
     <ProjectReference Include="..\..\src\VCCad.Pdf\VCCad.Pdf.csproj" />
   </ItemGroup>
 
+  <!-- The encryption fixtures: a tiny PDF and the same file written by qpdf at each level of the
+       standard security handler. They are checked in because qpdf is not available to every test
+       run, and they are what makes the security-handler tests an independent check rather than our
+       decryptor being measured against our encryptor. Rebuild them with build-fixtures.sh. -->
+  <ItemGroup>
+    <Content Include="Fixtures\**\*.pdf" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
