@@ -438,6 +438,7 @@ public partial class EditorView : UserControl
         var bar = new StackPanel { Orientation = Orientation.Vertical, Spacing = 2 };
         bar.Children.Add(ToolButton(EditorTool.Select, "select", "Selection (V)"));
         bar.Children.Add(ToolButton(EditorTool.Node, "node", "Nodes / direct selection (A)"));
+        bar.Children.Add(ToolButton(EditorTool.Corner, "node", "Round a corner: drag it out"));
         bar.Children.Add(ToolButton(EditorTool.Lasso, "lasso", "Freehand selection (Q)", LassoMark()));
         bar.Children.Add(ToolButton(EditorTool.Pen, "pen", "Pen (P)"));
         bar.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)), Margin = new Thickness(4, 6) });

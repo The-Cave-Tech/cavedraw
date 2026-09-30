@@ -150,6 +150,13 @@ public sealed class CanvasWorkspace : Control
 
     // Edit-box handle drag: which handle, and where the drag began.
     private int _frameResizeHandle = -1;
+
+    // The corner tool's drag state.
+    private PathItem? _roundPath;
+    private PathItem? _roundBefore;
+    private Point2D _roundCorner;
+    private int _roundSubPath;
+    private int _roundNode;
     private double _frameResizeStartWidth;
     private double _frameResizeStartLocalX;
 
@@ -836,6 +843,7 @@ public sealed class CanvasWorkspace : Control
                 break;
 
             case EditorTool.Node: NodePress(model); break;
+                case EditorTool.Corner: CornerPress(model); break;
             case EditorTool.Pen: PenPress(model); break;
             case EditorTool.Rectangle:
             case EditorTool.Ellipse:
@@ -938,6 +946,7 @@ public sealed class CanvasWorkspace : Control
 
                     break;
                 case EditorTool.Node: NodeDrag(model); break;
+                case EditorTool.Corner: CornerDrag(model); break;
 
                 // The lasso's path grows here. Without this case the tool recorded where the
                 // drag began and nothing after it, so every lasso enclosed a zero-area region
@@ -1053,6 +1062,7 @@ public sealed class CanvasWorkspace : Control
 
                 break;
             case EditorTool.Node: NodeRelease(); break;
+                case EditorTool.Corner: CornerRelease(); break;
 
             // The press set the marquee going and the moves grew its path; without this the
             // release never resolved it, so the whole gesture was thrown away at the end.
@@ -2276,6 +2286,65 @@ public sealed class CanvasWorkspace : Control
     // Node tool: nodes, handles and segments
     // ------------------------------------------------------------------
 
+    // ---- the corner tool -----------------------------------------------
+    // Press on a corner, drag, release. The radius is the distance from the pointer to the original
+    // corner, and the corner itself does not move while dragging - it is what the radius is measured
+    // from. The geometry is previewed live by restoring the pre-drag snapshot and rounding again, so the
+    // whole drag is one undo step rather than one per mouse move.
+
+    /// <summary>Begins rounding a corner, if the press landed on one.</summary>
+    private void CornerPress(Point2D model)
+    {
+        (PathItem Path, int SubPath, int Node, double Distance)? hit =
+            _vm.NearestCorner(model, Math.Max(PickTolerance, 6));
+
+        if (hit is null)
+        {
+            return;
+        }
+
+        _roundPath = hit.Value.Path;
+        _roundSubPath = hit.Value.SubPath;
+        _roundNode = hit.Value.Node;
+        // In document space, because that is where the pointer is: the anchor itself is artboard-local.
+        _roundCorner = _roundPath.SubPaths[_roundSubPath].Nodes[_roundNode].Anchor + _roundPath.ArtboardOffset();
+
+        // The snapshot the drag restores from, so every preview starts from the same shape.
+        _roundBefore = _roundPath.GeometrySnapshot();
+    }
+
+    /// <summary>Previews the rounding: the radius is how far the pointer is from the corner.</summary>
+    private void CornerDrag(Point2D model)
+    {
+        if (_roundPath is null || _roundBefore is null)
+        {
+            return;
+        }
+
+        double radius = model.DistanceTo(_roundCorner);
+        if (radius <= 0)
+        {
+            return;
+        }
+
+        _roundPath.RestoreGeometryFrom(_roundBefore);
+        _vm.RoundCornerByDrag(_roundPath, _roundSubPath, _roundNode, radius);
+        _gestureMoved = true;
+        InvalidateVisual();
+    }
+
+    /// <summary>Ends the drag: one undo step for the whole gesture.</summary>
+    private void CornerRelease()
+    {
+        if (_roundPath is not null && _roundBefore is not null && _gestureMoved)
+        {
+            _vm.CommitGeometry(_roundPath, _roundBefore, "Round corner");
+        }
+
+        _roundPath = null;
+        _roundBefore = null;
+        _gestureMoved = false;
+    }
     private void NodePress(Point2D model)
     {
         if (_vm is null)

@@ -429,6 +429,23 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     /// <summary>Puts a message in the status bar - how a panel reports something it could not do.</summary>
     public void ReportStatus(string message) => Status = message;
+
+    // ---- the corner tool ------------------------------------------------
+    // Delegated to the session, which the operation also calls: the drag and `path.roundCorner` must be
+    // one implementation, or a person and the assistant get different shapes from the same request.
+
+    /// <summary>Rounds a corner by dragging: the radius is how far the pointer is from the corner.</summary>
+    public void RoundCornerByDrag(PathItem path, int subPath, int node, double radius)
+        => _active.RoundCorner(path, subPath, node, radius);
+
+    /// <summary>The corner of the selection nearest a point, or null when none is within reach.</summary>
+    public (PathItem Path, int SubPath, int Node, double Distance)? NearestCorner(Point2D point, double within)
+        => _active.NearestCorner(point, within);
+
+    /// <summary>Commits a geometry change that was previewed live, as one undo step.</summary>
+    public void CommitGeometry(PathItem path, PathItem before, string description)
+        => _active.CommitGeometry(path, before, description);
+
     public void JoinSelection() => _active.JoinSelection();
 
     public void ApplyFill(ColorRgb color, FillRule rule) => _active.ApplyFill(color, rule);

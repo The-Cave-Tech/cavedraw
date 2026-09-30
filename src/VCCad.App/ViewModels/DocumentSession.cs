@@ -35,6 +35,12 @@ public enum EditorTool
     /// anchor to close (P).</summary>
     Pen,
 
+    /// <summary>
+    /// Round a corner: press on a corner of a path and drag, and the distance dragged becomes the
+    /// radius of the arc that replaces it. The corner stays put - it is where the radius is measured
+    /// from - so pulling out from the corner a person is looking at grows the round predictably.
+    /// </summary>
+    Corner,
     /// <summary>Drag out a closed rectangle between two corner points.</summary>
     Rectangle,
 
@@ -695,7 +701,11 @@ public sealed class DocumentSession : INotifyPropertyChanged
                         continue;
                     }
 
-                    Point2D anchor = sub.Nodes[n].Anchor;
+                    // Paths store artboard-local coordinates and the pointer is in document space, so the
+                    // anchor is moved into the same space before the distance means anything. Skipping
+                    // that does not fail loudly: it either misses the corner or finds the wrong one, and
+                    // the radius - measured from a corner in the wrong place - comes out wrong.
+                    Point2D anchor = sub.Nodes[n].Anchor + path.ArtboardOffset();
                     double distance = Math.Sqrt(
                         Math.Pow(anchor.X - point.X, 2) + Math.Pow(anchor.Y - point.Y, 2));
 
@@ -708,6 +718,17 @@ public sealed class DocumentSession : INotifyPropertyChanged
         }
 
         return best;
+    }
+    /// <summary>
+    /// Records a geometry change that has already been applied - a drag previews by mutating and
+    /// restoring, so at the end the path is already where it should be and only the undo record is
+    /// missing. Without this a drag would have to either push a command per mouse move or leave the
+    /// change unrecorded, and an unrecorded change never marks the document modified.
+    /// </summary>
+    public void CommitGeometry(PathItem path, PathItem before, string description)
+    {
+        Execute(new GeometryReplaceCommand(path, before, path.GeometrySnapshot(), description));
+        SetStatus(description);
     }
     /// <summary>Joins two selected paths that share an endpoint (closing the result
     /// if its ends meet).</summary>
