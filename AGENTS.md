@@ -37,6 +37,33 @@ assertion, not deleted.
 Every corpus theory **must emit a skip sentinel when its data source is absent**;
 a theory that yields no data is a CI error.
 
+### Every reported issue is filed on GitHub before it is fixed
+
+When the person says **"another issue"** — or reports a defect, a gap, or a piece of work
+in that spirit — the **first** action is to create the issue on GitHub, before
+investigating and before writing any code:
+
+```bash
+wsl -e bash -lc "cd /mnt/c/Development/vccad/main && gh issue create \
+    --repo darrenstarr/cavedraw --title '<the symptom, in the person's terms>' \
+    --body-file artifacts/issue-<slug>.md"
+```
+
+The body **is** the documentation, and it is written to be read cold by someone who was
+not there: what happens, how to see it for yourself (the exact gesture, file and
+coordinates), why it happens once that is known, what "resolved" means, and what the
+parity half is when a person can already do it. File it even when the fix lands in the
+same session — *especially* then, because the issue is the part that survives the
+conversation.
+
+Then resolve it, and in the commit say `Closes #NN`. If it cannot honestly be closed —
+the work turns out to be a feature rather than a fix, or part of it is still missing —
+say so on the issue with the evidence and leave it **open**. Never close an issue to
+tidy the list; a wrongly-closed issue is worse than an open one.
+
+A fix with no issue is invisible history: it cannot be found, re-opened, prioritised or
+read by anyone who was not in the conversation. This is not bookkeeping for its own sake.
+
 ### CI/CD is the gate, not an afterthought
 
 `.github/workflows/` builds, tests and publishes on every push; tags publish the
@@ -151,6 +178,10 @@ describe when a visual judgement is needed.
    deployed. Commit before running `scripts/deploy-remote.sh`.
 4. Keep the working tree clean when handing off (`git status` empty).
 5. Prefer the specialized tools (Read/Grep/Glob/Edit) over shell `cat`/`grep`/`sed`.
+6. **A reported issue is filed on GitHub before it is fixed.** "Another issue" is the
+   trigger: create the issue with a body someone can work from, resolve it, and say
+   `Closes #NN` in the commit. File it even when the fix lands in the same session. See
+   §1.1.
 
 ---
 
