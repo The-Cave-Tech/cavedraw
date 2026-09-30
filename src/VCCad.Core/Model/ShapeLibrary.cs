@@ -82,6 +82,33 @@ public sealed record ShapeParameters
 /// vertices sit slightly inside it, looks right in a thumbnail and is wrong in a drawing. So each
 /// shape is built to its stated size, and the tests measure rather than look.
 /// </summary>
+/// <summary>
+/// A path that is still a shape: the kind it was made as, and the parameters it was made from.
+///
+/// The path is what paints and exports - a shape is not a new kind of geometry - and this is what
+/// makes it editable again. The parameters panel, the control handles and the symmetric segment edit
+/// all work from here, which is why it travels with the object through the lossless sidecar: a star
+/// re-opened tomorrow is still a star, not an anonymous outline that happens to have ten points.
+/// </summary>
+public sealed record ShapeDefinition(ShapeKind Kind, ShapeParameters Parameters)
+{
+    /// <summary>The geometry this definition describes, as a fresh path.</summary>
+    public PathItem CreatePath() => ShapeLibrary.Create(Kind, Parameters);
+
+    /// <summary>
+    /// Rebuilds <paramref name="path"/>'s geometry from this definition, in place, keeping its
+    /// identity, its name, its fill and its stroke.
+    ///
+    /// One source of truth: a parameter change and the geometry can never disagree, because the
+    /// geometry is only ever the definition rendered.
+    /// </summary>
+    public void ApplyTo(PathItem path)
+    {
+        path.RestoreGeometryFrom(CreatePath());
+        path.Shape = this;
+    }
+}
+
 public static class ShapeLibrary
 {
     /// <summary>The names a person sees and an operation accepts.</summary>
@@ -107,6 +134,10 @@ public static class ShapeLibrary
     {
         PathItem path = Build(kind, parameters);
         path.Name = Name(kind);
+
+        // The definition is attached here, at the one place every kind is created, so no caller can
+        // produce a shape that does not know what it is.
+        path.Shape = new ShapeDefinition(kind, parameters);
         return path;
     }
 

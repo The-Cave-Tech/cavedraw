@@ -24,6 +24,15 @@ public sealed class PathItem : LayerItem
     private double _opacity = 1.0;
 
     /// <summary>Subpaths in draw order; usually one, but compound shapes use many.</summary>
+    /// <summary>
+    /// The shape this path was made as, or null when it is an ordinary path.
+    ///
+    /// The path is the geometry that paints; this is what makes it a *shape* - the parameters the
+    /// control handles move, and the symmetry a segment edit follows. It is deliberately nullable and
+    /// deliberately clearable: a shape whose nodes have been edited away from its definition has to
+    /// stop claiming to be one, or the handles would describe something that is no longer there.
+    /// </summary>
+    public ShapeDefinition? Shape { get; set; }
     public List<SubPath> SubPaths { get; } = new();
 
     /// <summary>Incremented whenever the geometry changes. Renderers cache compiled
@@ -148,6 +157,32 @@ public sealed class PathItem : LayerItem
         }
 
         TouchGeometry();
+    }
+
+    /// <summary>
+    /// Rebuilds this path's geometry from its <see cref="Shape"/>. Returns false for an ordinary path,
+    /// which is the caller's answer to "was there anything to regenerate".
+    /// </summary>
+    public bool RegenerateShape()
+    {
+        if (Shape is null)
+        {
+            return false;
+        }
+
+        Shape.ApplyTo(this);
+        return true;
+    }
+
+    /// <summary>
+    /// Stops this path being a shape and returns the definition it had, leaving the geometry exactly
+    /// as it is. This is how a person says "keep this outline, stop keeping it regular".
+    /// </summary>
+    public ShapeDefinition? DetachShape()
+    {
+        ShapeDefinition? detached = Shape;
+        Shape = null;
+        return detached;
     }
 
     /// <summary>Translates every anchor and handle by <paramref name="delta"/> (in
@@ -280,6 +315,10 @@ public sealed class PathItem : LayerItem
             SourceStrokeCmyk = SourceStrokeCmyk is null ? null : (double[])SourceStrokeCmyk.Clone(),
         };
         copy.SubPaths.AddRange(SubPaths.Select(sp => sp.Clone()));
+
+        // Shared, not cloned: the definition is immutable, and a copy that forgot it would turn a
+        // duplicated star into an anonymous outline.
+        copy.Shape = Shape;
         return copy;
     }
 }

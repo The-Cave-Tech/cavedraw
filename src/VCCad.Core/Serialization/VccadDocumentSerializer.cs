@@ -140,7 +140,13 @@ internal sealed record PathDto(
     double Opacity,
     SubPathDto[] SubPaths,
     double[]? SourceFillCmyk = null,
-    double[]? SourceStrokeCmyk = null) : ItemDto;
+    double[]? SourceStrokeCmyk = null,
+
+    // A shape stays a shape: the kind and parameters it was made from, so re-opening a document
+    // gives back an editable star rather than ten anonymous points. Optional, so every file written
+    // before shapes existed still loads unchanged.
+    ShapeKind? ShapeKind = null,
+    ShapeParameters? ShapeParameters = null) : ItemDto;
 
 internal sealed record GroupDto(
     Guid Id,
@@ -345,7 +351,9 @@ internal abstract record ItemDto
             sp.IsClosed,
             sp.Nodes.Select(n => new NodeDto(n.Anchor, n.InHandle, n.OutHandle)).ToArray())).ToArray(),
         p.SourceFillCmyk,
-        p.SourceStrokeCmyk);
+        p.SourceStrokeCmyk,
+        p.Shape?.Kind,
+        p.Shape?.Parameters);
 
     private static GroupDto ToGroup(ArtGroup g) => new(
         g.Id,
@@ -521,6 +529,12 @@ internal static class ItemDtoExtensions
             Opacity = p.Opacity,
             SourceFillCmyk = p.SourceFillCmyk,
             SourceStrokeCmyk = p.SourceStrokeCmyk,
+
+            // Read back after the geometry, so a definition that no longer matches its nodes is still
+            // reported: the shape is what the file says it is, and regenerating is a deliberate act.
+            Shape = p.ShapeKind is { } kind && p.ShapeParameters is { } parameters
+                ? new ShapeDefinition(kind, parameters)
+                : null,
         };
         path.RestoreIdentity(p.Id);
         foreach (SubPathDto sp in VccadDocumentSerializer.RequireArray(p.SubPaths, nameof(p.SubPaths)))
