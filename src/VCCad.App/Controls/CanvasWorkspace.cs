@@ -3564,36 +3564,22 @@ public sealed class CanvasWorkspace : Control
                 // The highlight covers the glyphs: it starts at the caret's x and spans
                 // the line's full height, so it sits behind the characters rather than
                 // floating above or below them.
+                // `metrics.Y[i]` is the TOP of the line, which is where the glyphs start: the run
+                // is drawn from there. Subtracting the ascent as well lifted the highlight a
+                // three-quarter of an em clear of the text it was supposed to cover.
                 Point2D p0 = text.Origin + offset + new Vector2D(
                     metrics.X[i],
-                    metrics.Y[i] - VCCad.Core.Text.TextMeasurement.EstimatedAscent(metrics.Size[i]));
+                    metrics.Y[i]);
                 double w = metrics.Y[i + 1] == metrics.Y[i]
                     ? metrics.X[i + 1] - metrics.X[i]
                     : metrics.Size[i] * 0.3;
                 double h = metrics.Size[i] * 1.05;
 
-                if (Math.Abs(text.RotationRadians) > 1e-9)
-                {
-                    Point2D a0 = RotateAbout(text, p0);
-                    Point2D a1 = RotateAbout(text, p0 + new Vector2D(Math.Max(0.5, w), 0));
-                    Point2D a2 = RotateAbout(text, p0 + new Vector2D(Math.Max(0.5, w), h));
-                    Point2D a3 = RotateAbout(text, p0 + new Vector2D(0, h));
-                    var quad = new Avalonia.Media.StreamGeometry();
-                    using (var g = quad.Open())
-                    {
-                        g.BeginFigure(ModelToScreen(a0), true);
-                        g.LineTo(ModelToScreen(a1));
-                        g.LineTo(ModelToScreen(a2));
-                        g.LineTo(ModelToScreen(a3));
-                        g.EndFigure(true);
-                    }
-
-                    context.DrawGeometry(selBrush, null, quad);
-                }
-                else
-                {
-                    context.FillRectangle(selBrush, new Rect(p0.X, p0.Y, Math.Max(0.5, w), h));
-                }
+                // One rectangle, in the block's own upright space. The rotation is already on the
+                // context (pushed above), so turning the quad here as well - and then converting it
+                // through ModelToScreen on top - drew the highlight at the screen position of the
+                // model position: twice transformed, and nowhere near the characters it covers.
+                context.FillRectangle(selBrush, new Rect(p0.X, p0.Y, Math.Max(0.5, w), h));
             }
         }
 
@@ -4505,7 +4491,9 @@ public sealed class CanvasWorkspace : Control
     {
         _editingText = text;
         _editBefore = (TextItem)text.Clone();
-        _caret = caretAt is { } point && TextContains(text, point)
+        // A click that opened the block puts the caret on the character nearest it, rather than at
+        // the end: the second click of a double-click was aimed at a word.
+        _caret = caretAt is { } point
             ? IndexAtLocal(text, ToTextLocal(text, point))
             : TextEditing.Length(text);
         _editAnchor = _caret;
@@ -5041,66 +5029,52 @@ public sealed class CanvasWorkspace : Control
         InvalidateVisual();
     }
 
-    private void PaintTextCaret(DrawingContext context)
+    /// <summary>
+    /// The two ends of the caret, in screen coordinates, or null when no block is being edited.
+    ///
+    /// The caret runs down the block's own vertical axis - from the top of the line to its foot -
+    /// so a turned block turns the caret with it. Exposing the line is how that gets checked
+    /// without pixels, which the blink would make flaky: it draws nothing half the time.
+    /// </summary>
+    public (Point Top, Point Bottom)? CaretLine()
     {
         if (_editingText is null)
+        {
+            return null;
+        }
+
+        TextMetrics metrics = MeasureText(_editingText);
+        int index = Math.Clamp(_caret, 0, metrics.X.Length - 1);
+        double size = metrics.Size[index];
+
+        // `metrics.Y[i]` is the TOP of the line, which is where the glyphs start. It used to have
+        // the ascent subtracted from it as well, which drew the caret three quarters of an em clear
+        // of the text - and, because the line was also nailed to the screen's vertical, at right
+        // angles to a turned block.
+        Point2D local = new(metrics.X[index], metrics.Y[index]);
+        return (
+            ModelToScreen(TextLocalToWorld(_editingText, local)),
+            ModelToScreen(TextLocalToWorld(
+                _editingText, new Point2D(local.X, local.Y + (size * 1.05)))));
+    }
+
+    private void PaintTextCaret(DrawingContext context)
+    {
+        if (CaretLine() is not { } caret)
         {
             return;
         }
 
-        Vector2D offset = _editingText.ArtboardOffset();
-        TextMetrics metrics = MeasureText(_editingText);
-        int index = Math.Clamp(_caret, 0, metrics.X.Length - 1);
-
-        Point2D local = new(metrics.X[index], metrics.Y[index]);
-        Point2D world = _editingText.Origin + new Vector2D(local.X, local.Y);
-        if (Math.Abs(_editingText.RotationRadians) > 1e-9)
-        {
-            double cos = Math.Cos(_editingText.RotationRadians);
-            double sin = Math.Sin(_editingText.RotationRadians);
-            double dx = world.X - _editingText.Origin.X;
-            double dy = world.Y - _editingText.Origin.Y;
-            world = new Point2D(_editingText.Origin.X + dx * cos - dy * sin,
-                _editingText.Origin.Y + dx * sin + dy * cos);
-        }
-
-        Point screen = ModelToScreen(world + offset);
-
-        // The caret spans the line's full height (ymax to ymin), not a fixed multiple of
-        // the font size, so it brackets the glyphs rather than floating inside them.
-        double size = metrics.Size[index];
-        double ascent = VCCad.Core.Text.TextMeasurement.EstimatedAscent(size);
-        double descent = VCCad.Core.Text.TextMeasurement.EstimatedDescent(size);
-        double h = Math.Max((ascent + descent) * _layout.Zoom, 4);
-
         // Dark, because the page is white: a white caret on white paper is no caret.
         var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x10, 0x10, 0x10)), 1.5);
-        Point top = new(screen.X, screen.Y - ascent * _layout.Zoom);
-        context.DrawLine(pen, top, new Point(top.X, top.Y + h));
+        context.DrawLine(pen, caret.Top, caret.Bottom);
     }
 
-    /// <summary>Nearest character index for a local text point (click/drag).</summary>
     /// <summary>
     /// A world point in a text block's own coordinates — the space its metrics are laid
     /// out in. A rotated block has to be turned back before it can be hit-tested, or a
     /// click lands somewhere else entirely and the caret jumps.
     /// </summary>
-    /// <summary>A world point turned about a text block's origin by its rotation.</summary>
-    private static Point2D RotateAbout(TextItem text, Point2D point)
-    {
-        if (Math.Abs(text.RotationRadians) < 1e-9)
-        {
-            return point;
-        }
-
-        double cos = Math.Cos(text.RotationRadians);
-        double sin = Math.Sin(text.RotationRadians);
-        double dx = point.X - text.Origin.X;
-        double dy = point.Y - text.Origin.Y;
-        return new Point2D(text.Origin.X + dx * cos - dy * sin,
-            text.Origin.Y + dx * sin + dy * cos);
-    }
-
     private static Point2D ToTextLocal(TextItem text, Point2D world)
     {
         Point2D point = world - text.ArtboardOffset();
@@ -5120,8 +5094,12 @@ public sealed class CanvasWorkspace : Control
     /// <summary>Whether a world point falls inside a text block, rotation included.</summary>
     private static bool TextContains(TextItem text, Point2D world)
     {
+        // `local` has been turned back into the block's own upright space, so it is the upright
+        // extent that answers this. Measuring it against the rotated bounds put the two in
+        // different frames: on a turned label every click inside the text read as a miss, and the
+        // caret went to the end of the block instead of the word under the pointer.
         Point2D local = ToTextLocal(text, world);
-        Rect2D box = text.BoundingBox();
+        Rect2D box = text.LocalBounds();
         return local.X >= -1 && local.X <= box.Width + 1 &&
                local.Y >= -1 && local.Y <= box.Height + 1;
     }

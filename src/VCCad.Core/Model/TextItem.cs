@@ -178,7 +178,7 @@ public sealed class TextItem : LayerItem
     /// installed a measurer, which is the headless case; see
     /// <see cref="TextMeasurement.IsReal"/>.
     /// </summary>
-    public Rect2D BoundingBox()
+    public Rect2D LocalBounds()
     {
         var lines = TextWrapping.Lines(this);
 
@@ -220,13 +220,24 @@ public sealed class TextItem : LayerItem
             return TextMeasurement.AdvanceAtEnd(Runs.Count > 0 ? Runs[^1] : new TextRun());
         }
 
-        var local = new Rect2D(Origin.X, Origin.Y, width, height);
+        return new Rect2D(Origin.X, Origin.Y, width, height);
+    }
+
+    /// <summary>
+    /// The block's bounds with its rotation folded in: the axis-aligned box of the turned corners.
+    ///
+    /// This answers "what does this text cover on the page". A caller working *inside* the block
+    /// wants <see cref="LocalBounds"/> instead - a point turned back into the block's own space is
+    /// upright there, and measuring it against this box compares two different things.
+    /// </summary>
+    public Rect2D BoundingBox()
+    {
+        Rect2D local = LocalBounds();
         if (Math.Abs(RotationRadians) < 1e-9)
         {
             return local;
         }
 
-        // Rotated block: return the axis-aligned box of the rotated corners.
         Point2D Rotate(Point2D p)
         {
             double cos = Math.Cos(RotationRadians);
@@ -236,14 +247,13 @@ public sealed class TextItem : LayerItem
             return new Point2D(Origin.X + dx * cos - dy * sin, Origin.Y + dx * sin + dy * cos);
         }
 
-        var corners = new[]
+        return Rect2D.FromPoints(new[]
         {
             Rotate(new Point2D(local.Left, local.Top)),
             Rotate(new Point2D(local.Right, local.Top)),
             Rotate(new Point2D(local.Right, local.Bottom)),
             Rotate(new Point2D(local.Left, local.Bottom)),
-        };
-        return Rect2D.FromPoints(corners);
+        });
     }
 
     /// <summary>Bounds in document/world space (local bounds + artboard origin).</summary>

@@ -87,6 +87,32 @@ public class TextMeasurementTests : IDisposable
         Assert.Equal(10, block.BoundingBox().Height, 3);
     }
 
+    /// <summary>
+    /// The rotation belongs to the bounds the page sees, not to the block's own rectangle.
+    ///
+    /// The two are not interchangeable. A caller working inside the block turns a point back into
+    /// that block's space, where it is upright; measuring it against the rotated box compares two
+    /// different frames, and on a turned label that made every click inside the text read as a
+    /// miss and sent the caret to the end of the block.
+    /// </summary>
+    [Fact]
+    public void RotationFoldsIntoTheBoundsButNotIntoTheBlocksOwnRectangle()
+    {
+        TextMeasurement.Current = new FixedMetrics(perChar: 2);
+
+        TextItem block = Block("0123456789"); // 20pt wide, one 10pt line
+        block.RotationRadians = Math.PI / 2;
+
+        Rect2D upright = block.LocalBounds();
+        Assert.Equal(20, upright.Width, 3);
+        Assert.Equal(10, upright.Height, 3);
+
+        // A quarter turn: the same rectangle the other way round.
+        Rect2D turned = block.BoundingBox();
+        Assert.Equal(10, turned.Width, 3);
+        Assert.Equal(20, turned.Height, 3);
+    }
+
     [Fact]
     public void ParagraphSpacingAddsLeadingBetweenParagraphsOnly()
     {
