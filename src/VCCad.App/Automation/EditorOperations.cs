@@ -2068,6 +2068,18 @@ public static class EditorOperations
             "itemId?:guid, index?:number",
             (ctx, p) => ReverseSubpath(ctx, p));
 
+        Add("path.expandStroke",
+            "Turn the selected objects' strokes into filled outlines - Illustrator's Outline Stroke. " +
+            "Open paths expand with their caps, closed paths to both sides, and a compound path's holes " +
+            "to the inside of each hole. The outline gets its own stroke width by the rule: below 4pt " +
+            "the original over four, otherwise 1pt.",
+            "",
+            (ctx, _) =>
+            {
+                int count = ctx.Session.ExpandSelectedStrokes();
+                ctx.ViewModel.NotifyDocumentChanged();
+                return new { expanded = count };
+            });
         Add("path.join", "Join two selected open paths at a shared endpoint.", "", (ctx, _) =>
         {
             ctx.Session.JoinSelection();

@@ -536,6 +536,67 @@ public sealed class DocumentSession : INotifyPropertyChanged
         return new PathBooleanResult(
             description, targets.Count, results.Count, results.Sum(r => r.SubPaths.Count));
     }
+    /// <summary>
+    /// Expands the selected objects' strokes into filled outlines: the ink becomes geometry. One undo
+    /// step, and the result is selected - a person who has just turned a stroke into a shape wants the
+    /// shape, not the shape plus the stroke that made it.
+    ///
+    /// A path with no stroke is left alone rather than silently removed: expanding it would produce
+    /// nothing, and deleting something because it had nothing to expand would be a surprise.
+    /// </summary>
+    public int ExpandSelectedStrokes()
+    {
+        var edits = new List<IUndoableCommand>();
+        var expanded = new List<LayerItem>();
+
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            PathItem? outline = StrokeExpander.Expand(path);
+            if (outline is null)
+            {
+                expanded.Add(path);
+                continue;
+            }
+
+            Layer? layer = LayerOf(path);
+            if (layer is null)
+            {
+                continue;
+            }
+
+            edits.Add(new RemoveItemCommand(path));
+            edits.Add(new AddItemCommand(layer, outline));
+            expanded.Add(outline);
+        }
+
+        if (edits.Count == 0)
+        {
+            SetStatus("Nothing to expand: the selection has no stroke");
+            return 0;
+        }
+
+        Execute(new CompositeCommand("Expand stroke", edits));
+        SelectRange(expanded, additive: false);
+        SetStatus($"Expanded {edits.Count / 2} stroke(s) into outlines");
+        return edits.Count / 2;
+    }
+
+    /// <summary>The layer an item sits on, or null when it is not in the document.</summary>
+    private Layer? LayerOf(LayerItem item)
+    {
+        foreach (Artboard artboard in Document.Artboards)
+        {
+            foreach (Layer layer in artboard.Layers)
+            {
+                if (layer.Children.Contains(item))
+                {
+                    return layer;
+                }
+            }
+        }
+
+        return null;
+    }
     /// <summary>Joins two selected paths that share an endpoint (closing the result
     /// if its ends meet).</summary>
     public void JoinSelection()
