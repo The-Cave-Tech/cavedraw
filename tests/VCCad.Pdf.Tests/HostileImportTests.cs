@@ -149,6 +149,15 @@ public class HostileImportTests
     /// declared entry (measured ~3.8 ns each on the dev box, so 2e9 ≈ 7–8 s and
     /// 1e12 ≈ an hour). The work is proportional to a number in the file, not to
     /// the file.
+    ///
+    /// **The import runs on this thread, not in a `Task.Run`.** Its first version wrapped a synchronous,
+    /// CPU-bound call in `Task.Run(...).Wait(1s)` and read the result as "still parsing": on CI the suite's
+    /// other tests saturate the thread pool, the work item waits for a worker, and a sub-millisecond parse
+    /// is reported as a timeout. That is a race in the test, not a defect in the parser - and the parser
+    /// *is* bounded: the xref loop stops the moment the bytes run out.
+    ///
+    /// The budget is deliberately generous. A correct parse is microseconds, so two seconds still fails
+    /// loudly for the defect this pins (seconds of work) while never failing for a busy machine.
     /// </summary>
     [Fact]
     public void AnXrefDeclaringBillionsOfEntriesCannotMakeATwoHundredByteFileParseForSeconds()
@@ -156,13 +165,13 @@ public class HostileImportTests
         byte[] bytes = XrefDeclaring(2_000_000_000);
 
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
-        bool finished = Task.Run(() => PdfImporter.Import(bytes)).Wait(TimeSpan.FromSeconds(1));
+        PdfImporter.Import(bytes);
         elapsed.Stop();
 
-        Assert.True(finished,
-            $"a {bytes.Length}-byte file declaring 2,000,000,000 xref entries was still parsing " +
-            $"after {elapsed.ElapsedMilliseconds} ms: the xref loop iterates the declared count " +
-            "rather than the bytes actually present.");
+        Assert.True(elapsed.ElapsedMilliseconds < 2000,
+            $"a {bytes.Length}-byte file declaring 2,000,000,000 xref entries took " +
+            $"{elapsed.ElapsedMilliseconds} ms: work proportional to a number in the file rather than to " +
+            "the file.");
     }
 
     private static byte[] XrefDeclaring(long count)
