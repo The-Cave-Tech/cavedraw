@@ -46,6 +46,12 @@ public sealed class PathItem : LayerItem
         NotifyPropertyChanged(nameof(SubPaths));
     }
 
+    /// <summary>
+    /// Announces that the geometry changed in place, for edits that write nodes directly rather than
+    /// replacing the subpaths. Without it a renderer's cached geometry goes stale - which is exactly
+    /// what the symmetric segment edit does when it bows ten segments at once.
+    /// </summary>
+    public void GeometryChanged() => TouchGeometry();
     /// <summary>The fill paint. See class remarks for the open/closed rule.</summary>
     public FillSpec Fill
     {
