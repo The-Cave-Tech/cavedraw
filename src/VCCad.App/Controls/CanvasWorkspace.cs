@@ -5662,6 +5662,29 @@ public sealed class CanvasWorkspace : Control
                 e.Handled = true;
                 break;
 
+            // Q was in the lasso's tooltip from the day it was added and never bound, which is worse than
+            // no shortcut: a person presses it, nothing happens, and they stop believing the tooltips. The
+            // tools added since are bound here too, and every one of them is named in its own tip.
+            case Key.Q:
+                _vm.Tool = EditorTool.Lasso;
+                e.Handled = true;
+                break;
+
+            case Key.C:
+                _vm.Tool = EditorTool.Corner;
+                e.Handled = true;
+                break;
+
+            case Key.N:
+                _vm.Tool = EditorTool.Pencil;
+                e.Handled = true;
+                break;
+
+            case Key.S:
+                _vm.Tool = EditorTool.Shape;
+                e.Handled = true;
+                break;
+
             case Key.Delete:
                 if (_vm.HasSegmentSelection)
                 {

@@ -98,7 +98,7 @@ public sealed class ShapeFlyoutButton : UserControl
             CornerRadius = new CornerRadius(6),
         };
 
-        ToolTip.SetTip(_button, "Shapes: click to draw, hold for the rest");
+        ToolTip.SetTip(_button, "Shapes (S): click to draw, hold for the rest");
 
         _button.PointerPressed += OnPressed;
         _button.PointerMoved += OnMoved;
@@ -408,7 +408,7 @@ public sealed class ShapeFlyoutButton : UserControl
         }
 
         _mark.Data = Avalonia.Media.Geometry.Parse(OutlineOf(_viewModel.CurrentShape));
-        ToolTip.SetTip(_button, $"Shapes: {ShapeLibrary.Name(_viewModel.CurrentShape)} (hold for the rest)");
+        ToolTip.SetTip(_button, $"Shapes (S): {ShapeLibrary.Name(_viewModel.CurrentShape)} (hold for the rest)");
 
         foreach ((ShapeKind kind, Button button) in _entryButtons)
         {
