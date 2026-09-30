@@ -380,7 +380,9 @@ public static class StrokeExpander
         {
             double start = a0 + (step * i);
             double end = start + step;
-            double k = (4.0 / 3.0) * Math.Tan(step / 4.0) * radius;
+            // The magnitude: a clockwise sweep has a negative step, and the tangent of a negative angle
+            // makes k negative, which points both handles backwards and turns the join inside out.
+            double k = (4.0 / 3.0) * Math.Tan(Math.Abs(step) / 4.0) * radius;
 
             var startPoint = new Point2D(
                 vertex.X + (radius * Math.Cos(start)), vertex.Y + (radius * Math.Sin(start)));

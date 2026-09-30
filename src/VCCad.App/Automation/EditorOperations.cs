@@ -2121,6 +2121,36 @@ public static class EditorOperations
                     byCentres = overlapped,
                 };
             });
+        Add("path.roundCorner",
+            "Round one corner of the selected path: the point where two segments meet becomes an arc. " +
+            "The radius is the distance from the corner, which is what a drag sets; if it is larger than " +
+            "the neighbouring segments allow, the largest arc that fits is used and the result says so.",
+            "itemId?:guid, subPath?:number, node:number, radius:number",
+            (ctx, p) =>
+            {
+                PathItem path = FindSelectedPath(ctx, p)
+                    ?? throw new EditorOperationException("Select a path, or pass itemId.");
+
+                int subPath = (int)Math.Round(p.GetDouble("subPath", 0));
+                int node = (int)Math.Round(p.GetDouble("node", 0));
+                if (!p.TryGetProperty("radius", out JsonElement rv) || rv.ValueKind != JsonValueKind.Number)
+                {
+                    throw new EditorOperationException("Parameter 'radius' is required.");
+                }
+
+                CornerRoundResult result = ctx.Session.RoundCorner(path, subPath, node, rv.GetDouble());
+                ctx.ViewModel.NotifyDocumentChanged();
+
+                return new
+                {
+                    rounded = result.Rounded,
+                    radius = result.Radius,
+                    requested = result.Requested,
+                    clamped = result.Clamped,
+                    reason = result.Reason,
+                    itemId = path.Id,
+                };
+            });
         Add("path.join", "Join two selected open paths at a shared endpoint.", "", (ctx, _) =>
         {
             ctx.Session.JoinSelection();

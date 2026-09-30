@@ -654,6 +654,61 @@ public sealed class DocumentSession : INotifyPropertyChanged
 
         return edits.Count;
     }
+    /// <summary>
+    /// Rounds one corner of a path - one undo step. The radius is used unless it is larger than the two
+    /// segments meeting at the corner allow, in which case the largest that fits is used and the result
+    /// says it was clamped.
+    /// </summary>
+    public CornerRoundResult RoundCorner(PathItem path, int subPath, int node, double radius)
+    {
+        PathItem before = path.GeometrySnapshot();
+        CornerRoundResult result = CornerRounder.Round(path, subPath, node, radius);
+
+        if (!result.Rounded)
+        {
+            SetStatus(result.Reason ?? "That corner cannot be rounded");
+            return result;
+        }
+
+        Execute(new GeometryReplaceCommand(path, before, path.GeometrySnapshot(), "Round corner"));
+        SetStatus($"Corner rounded: radius {result.Radius:0.###}" + (result.Clamped ? " (clamped to fit)" : string.Empty));
+        return result;
+    }
+
+    /// <summary>The corner of the selected path nearest a point, for a drag that starts anywhere near it.</summary>
+    public (PathItem Path, int SubPath, int Node, double Distance)? NearestCorner(Point2D point, double within)
+    {
+        (PathItem Path, int SubPath, int Node, double Distance)? best = null;
+
+        foreach (PathItem path in SelectedPaths())
+        {
+            for (int s = 0; s < path.SubPaths.Count; s++)
+            {
+                SubPath sub = path.SubPaths[s];
+                int count = sub.Nodes.Count;
+
+                for (int n = 0; n < count; n++)
+                {
+                    // The ends of an open path are not corners.
+                    if (!sub.IsClosed && (n == 0 || n == count - 1))
+                    {
+                        continue;
+                    }
+
+                    Point2D anchor = sub.Nodes[n].Anchor;
+                    double distance = Math.Sqrt(
+                        Math.Pow(anchor.X - point.X, 2) + Math.Pow(anchor.Y - point.Y, 2));
+
+                    if (distance <= within && (best is null || distance < best.Value.Distance))
+                    {
+                        best = (path, s, n, distance);
+                    }
+                }
+            }
+        }
+
+        return best;
+    }
     /// <summary>Joins two selected paths that share an endpoint (closing the result
     /// if its ends meet).</summary>
     public void JoinSelection()
