@@ -54,25 +54,29 @@ public static class PageRenderer
 
         try
         {
-            // Size the control to the page at this resolution, so the whole sheet lands
-            // in the bitmap; then point the view at the page's centre at the matching zoom.
-            workspace.Width = Math.Max(1, artboard.Width * zoom);
-            workspace.Height = Math.Max(1, artboard.Height * zoom);
+            var pixelSize = new PixelSize(
+                Math.Max(1, (int)Math.Round(artboard.Width * zoom)),
+                Math.Max(1, (int)Math.Round(artboard.Height * zoom)));
+
+            // Size the control to the page at this resolution, so the whole sheet lands in the
+            // bitmap.
+            workspace.Width = pixelSize.Width;
+            workspace.Height = pixelSize.Height;
             workspace.Measure(new Size(workspace.Width, workspace.Height));
             workspace.Arrange(new Rect(0, 0, workspace.Width, workspace.Height));
 
             workspace.SetZoomForExport(zoom);
-            workspace.CenterOn(PageCentre(artboard));
 
-            // Lay out again after the zoom and scroll: the scroll must be computed
-            // against the final viewport, or the page lands off-centre in the bitmap.
+            // Position the view against the SIZE OF THE PAGE, not against the control's bounds.
+            // A layout pass that has not run yet - or one a parent has re-run after we arranged -
+            // leaves Bounds reporting something else, and centring against it displaces the whole
+            // page and leaves the canvas background along one edge (issue #40).
+            workspace.PointAtForExport(PageCentre(artboard), new Size2D(pixelSize.Width, pixelSize.Height));
+
+            // And lay out once more, because that is what paints: the offset above is in screen
+            // pixels, so it only has to be set once.
             workspace.Measure(new Size(workspace.Width, workspace.Height));
             workspace.Arrange(new Rect(0, 0, workspace.Width, workspace.Height));
-            workspace.CenterOn(PageCentre(artboard));
-
-            var pixelSize = new PixelSize(
-                Math.Max(1, (int)Math.Round(artboard.Width * zoom)),
-                Math.Max(1, (int)Math.Round(artboard.Height * zoom)));
 
             // 96 dpi keeps one bitmap pixel per logical pixel, so the sheet fills it exactly.
             using var bitmap = new RenderTargetBitmap(pixelSize, new Vector(96, 96));

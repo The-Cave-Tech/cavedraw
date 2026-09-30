@@ -405,6 +405,26 @@ public sealed class CanvasWorkspace : Control
     public void SetZoomForExport(double factor) => SetZoom(factor);
 
     /// <summary>
+    /// Points the view at a page for an off-screen render that is exactly <paramref name="pixelSize"/>.
+    ///
+    /// Unlike <see cref="CenterOn"/>, this does not ask the control how big it is. A render is sized by
+    /// the page, so taking the size from <c>Bounds</c> means a layout pass that has not run yet - or
+    /// one a parent has re-run after we arranged - silently changes where the page lands: the page is
+    /// centred in whatever the control happens to be, and the difference shows up as the artwork
+    /// displaced and a strip of canvas background down one edge. That is what made
+    /// <c>document.renderPage</c> draw a 3350-point sheet 168 px high with 168 px of background below
+    /// it - half the difference between the page and the bounds the control reported at that moment.
+    /// </summary>
+    public void PointAtForExport(Point2D pageCentre, Size2D pixelSize)
+    {
+        _offset = new Vector2D(
+            (pixelSize.Width / 2) - ((pageCentre.X - _layout.Extent.Left) * _layout.Zoom),
+            (pixelSize.Height / 2) - ((pageCentre.Y - _layout.Extent.Top) * _layout.Zoom));
+        InvalidateVisual();
+        ViewChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
     /// A model point in *window* coordinates, which is what a pointer event and
     /// <c>input.pointer</c> use. <see cref="ModelToScreen"/> is relative to this control,
     /// so the control's own offset in the window has to be added or every aim lands a
