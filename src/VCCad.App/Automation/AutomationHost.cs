@@ -776,6 +776,15 @@ public sealed class DesktopStartupOptions
     /// </summary>
     public bool NoRecovery { get; set; }
 
+    /// <summary>
+    /// Offer recovery even in a development build, where it is off by default.
+    ///
+    /// The default changed because a developer's scratch documents are not worth recovering and the prompt
+    /// gets in the way - see <see cref="DevelopmentMode.ShouldOfferRecovery"/>. This is how someone who is
+    /// actually testing the recovery path asks for it back.
+    /// </summary>
+    public bool ForceRecovery { get; set; }
+
     /// <summary>Where the diary is stored; defaults to the per-user application data.</summary>
     public string? HistoryDirectory { get; set; }
 
@@ -811,6 +820,11 @@ public sealed class DesktopStartupOptions
                     options.NoDiagnostics = true;
                     options.ShowDiagnostics = false;
                     break;
+                // Recovery is off by default in a development build; --recover asks for it back.
+                case "--recover":
+                    options.ForceRecovery = true;
+                    break;
+
                 // --no-recover is the documented spelling; --no-recovery is kept because it
                 // was in use for a day and a flag that stops working is worse than two names.
                 case "--no-recover":

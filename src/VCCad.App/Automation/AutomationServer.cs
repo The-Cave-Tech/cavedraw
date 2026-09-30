@@ -210,6 +210,11 @@ public sealed class AutomationServer : IDisposable
                         port = Port,
                         pid = Environment.ProcessId,
                         instance = InstanceName,
+
+                        // Why nothing was recovered, answerable from the reply. A development build does
+                        // not offer recovery, and a driver that expects its documents back needs to be able
+                        // to tell "the feature is off for this build" from "there was nothing to recover".
+                        development = DevelopmentMode.IsOn,
                         document = _context.Document.Name,
                         operations = EditorOperations.All.Count,
                     }));

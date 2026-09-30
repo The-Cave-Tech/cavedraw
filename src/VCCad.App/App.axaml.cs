@@ -267,9 +267,16 @@ public partial class App : Application
         // If the last run ended badly, the journal is still there: offer the work back,
         // with the command queue that produced it.
         //
-        // Skipped when a driver asked for it: the prompt covers the whole editing area and eats
+        // Not in a development build. A developer's scratch documents are expected to be thrown
+        // away, and the prompt costs more than it saves: it decides which documents are open
+        // underneath whatever is being tested, and its overlay covers the editing area and eats
         // pointer events, so a headless run that does not dismiss it never reaches the canvas.
-        if (SessionJournal.HasRecoverableSession && !options.NoRecovery)
+        // A released build still recovers - that is the case the feature is for - and
+        // `--recover` asks for it back here.
+        bool offerRecovery = DevelopmentMode.ShouldOfferRecovery(
+            options.NoRecovery, options.ForceRecovery, DevelopmentMode.IsOn);
+
+        if (SessionJournal.HasRecoverableSession && offerRecovery)
         {
             CadDocument? recovered = SessionJournal.TryRecover();
             if (recovered is not null)
