@@ -857,36 +857,43 @@ public static class SelectionEngine
     /// <summary>
     /// Whether a point is on a path, for the purpose of being clicked.
     ///
-    /// **A path is only where it is painted**: inside its fill when it has one, along its stroke when it has
-    /// that, and nowhere at all when it has neither. Its bounding box is not the object, and treating it as
-    /// one is not a near miss - page 1 of the LILLIE sample has an unfilled, stroked, page-sized frame
-    /// (540x720) as the topmost object in the pattern group, and a box-based test made it swallow every
-    /// click on the page. The report was "it registers as though I'm clicking the bounding rectangle", and
-    /// that is exactly what the code did.
+    /// The rule is written around the one case that was actually broken. Page 1 of the LILLIE sample has an
+    /// **unfilled, stroked, page-sized frame** (540x720) as the topmost object in the pattern group, and a
+    /// box-based test made it swallow every click on the page - the report was "it registers as though I'm
+    /// clicking the bounding rectangle", and that is exactly what the code did.
     ///
-    /// The fill is judged by the flattened outline, so holes and winding are honoured: a click through the
-    /// middle of a filled ring is not a click on the ring.
+    /// So: a path that is **stroked and not filled** exists only along its stroke - that is the frame, and
+    /// it is why this function exists. Everything else keeps the box-based answer it always had, because
+    /// tightening that too was a mistake worth recording: judging a filled path by its real outline makes
+    /// the inside of a hollow piece unclickable, and a person clicking the middle of a pattern piece means
+    /// the piece. A refinement that costs selectability is not a refinement.
     /// </summary>
     private static bool PathHits(PathItem path, Point2D point, double tolerance)
     {
-        if (path.Fill.IsVisible &&
-            PathFlattener.IsFilled(PathFlattener.Flatten(path), path.Fill.Rule, point))
+        bool inBox = path.SubPaths.Any(sub =>
+            !sub.BoundingBox().IsEmpty && sub.BoundingBox().Inflated(tolerance).Contains(point));
+
+        if (path.Fill.IsVisible)
         {
-            return true;
+            return inBox;
         }
 
-        if (path.Stroke.HasVisibleOutline)
+        if (!path.Stroke.HasVisibleOutline)
         {
-            // Half the stroke's width, because that is how far the paint reaches from the centreline.
-            // Walked from the subpaths rather than from the fill flattener, which only reports closed
-            // outlines - a stroked line has two points and would otherwise be unclickable.
-            double reach = tolerance + (path.Stroke.Width / 2.0);
-            foreach (SubPath sub in path.SubPaths)
+            // Nothing is painted, so nothing is there to click. An invisible object that still swallowed
+            // clicks would be the same defect as the frame, one step quieter.
+            return false;
+        }
+
+        // Stroked and unfilled: the stroke is the object. Half the stroke's width, because that is how far
+        // the paint reaches from the centreline. Walked from the subpaths rather than the fill flattener,
+        // which only reports closed outlines - a stroked line has two points and would be unclickable.
+        double reach = tolerance + (path.Stroke.Width / 2.0);
+        foreach (SubPath sub in path.SubPaths)
+        {
+            if (NearSubPath(sub, point, reach))
             {
-                if (NearSubPath(sub, point, reach))
-                {
-                    return true;
-                }
+                return true;
             }
         }
 

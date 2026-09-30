@@ -75,11 +75,18 @@ public class PathHitTestTests
     }
 
     /// <summary>
-    /// A hole is not part of the shape. The pattern pieces are filled rings, so a click in the middle of
-    /// one must not select it - and a click on the ring itself must.
+    /// A filled shape is hit anywhere inside its box, **including the inside of a hole**, and that is a
+    /// deliberate retreat from a stricter rule.
+    ///
+    /// Judging a filled path by its real outline sounds right and cost selectability: the inside of a
+    /// hollow piece stops being clickable, and a person clicking the middle of a pattern piece means the
+    /// piece. The complaint that prompted this - "I can't select anything on the page" - arrived with that
+    /// stricter rule in place. Precision here is worth less than being able to click the artwork, and the
+    /// one case that genuinely had to change (an unfilled, stroked frame swallowing the page) is covered by
+    /// the stroke rule instead.
     /// </summary>
     [Fact]
-    public void AHoleIsNotPartOfTheShape()
+    public void AFilledShapeIsStillHitAcrossItsWholeBox()
     {
         var ring = new PathItem { Name = "ring" };
         ring.SubPaths.Add(ClosedRect(100, 100, 200, 200));
@@ -87,8 +94,9 @@ public class PathHitTestTests
         ring.Fill = FillSpec.Solid(ColorRgb.Black, FillRule.EvenOdd);
         ring.Stroke = StrokeSpec.None;
 
-        Assert.False(SelectionEngine.Hits(ring, new Point2D(200, 200), Tolerance), "inside the hole");
+        Assert.True(SelectionEngine.Hits(ring, new Point2D(200, 200), Tolerance), "inside the hole");
         Assert.True(SelectionEngine.Hits(ring, new Point2D(120, 200), Tolerance), "on the ring");
+        Assert.False(SelectionEngine.Hits(ring, new Point2D(400, 400), Tolerance), "outside the box");
     }
 
     /// <summary>
