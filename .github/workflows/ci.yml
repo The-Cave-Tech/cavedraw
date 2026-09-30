@@ -79,8 +79,15 @@ jobs:
 
       - name: Verify wasm artifacts
         run: |
-          test -f artifacts/wasm/wwwroot/_framework/dotnet.js
-          test -f artifacts/wasm/wwwroot/index.html
+          # What the publish actually produced, printed **before** the assertions: a path change should
+          # take one reading of this log to fix, rather than a round trip through a failing run to find out.
+          ls -R artifacts/wasm | head -40
+
+          # The site entry point and the runtime. Either layout is accepted, because the publish puts
+          # wwwroot where the project says and that has moved between SDK versions; what matters is that a
+          # browser can load the thing, not which directory it came out in.
+          test -f artifacts/wasm/wwwroot/index.html || test -f artifacts/wasm/index.html
+          find artifacts/wasm -name 'dotnet*.js' -print -quit | grep .
           test -f artifacts/wasm/VCCad.App.Browser.dll
           echo "wasm bundle OK"
 
