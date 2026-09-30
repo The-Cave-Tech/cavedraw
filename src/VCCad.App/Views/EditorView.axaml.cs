@@ -436,23 +436,40 @@ public partial class EditorView : UserControl
     {
         _toolButtons.Clear();
         var bar = new StackPanel { Orientation = Orientation.Vertical, Spacing = 2 };
-        bar.Children.Add(ToolButton(EditorTool.Select, "select", "Selection (V)"));
-        bar.Children.Add(ToolButton(EditorTool.Node, "node", "Nodes / direct selection (A)"));
-        bar.Children.Add(ToolButton(EditorTool.Corner, "node", "Round a corner (C): drag it out", GlyphMark(EditorTool.Corner)));
-        bar.Children.Add(ToolButton(EditorTool.Pencil, "pen", "Pencil (N): draw freehand", GlyphMark(EditorTool.Pencil)));
-        bar.Children.Add(ToolButton(EditorTool.Lasso, "lasso", "Freehand selection (Q)", GlyphMark(EditorTool.Lasso)));
-        bar.Children.Add(ToolButton(EditorTool.Pen, "pen", "Pen (P)"));
-        bar.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)), Margin = new Thickness(4, 6) });
-        // The shape tools are one compound button: nine shapes behind it, and the button draws the armed
-        // one so the toolbar always says what a drag will make.
-        var shapes = new ShapeFlyoutButton();
-        shapes.Attach(_viewModel);
-        _toolButtons[EditorTool.Shape] = shapes.Face;
-        bar.Children.Add(shapes);
-        bar.Children.Add(ToolButton(EditorTool.Rectangle, "rectangle", "Rectangle (M)"));
-        bar.Children.Add(ToolButton(EditorTool.Ellipse, "ellipse", "Ellipse (L)"));
-        bar.Children.Add(ToolButton(EditorTool.Artboard, "artboard", "Artboard (O)"));
-        bar.Children.Add(ToolButton(EditorTool.Text, "text", "Text (T)"));
+
+        // Built from the table, so "every tool is on the toolbar" is a claim a test can check rather than
+        // something that has to be remembered every time the enum grows.
+        foreach (ToolbarEntry entry in ToolbarLayout.All)
+        {
+            if (entry.IsSeparator)
+            {
+                bar.Children.Add(new Border
+                {
+                    Height = 1,
+                    Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)),
+                    Margin = new Thickness(4, 6),
+                });
+                continue;
+            }
+
+            if (entry.IsShapeFlyout)
+            {
+                // Nine shapes behind one button, drawing the armed one so the toolbar always says what a
+                // drag will make.
+                var shapes = new ShapeFlyoutButton();
+                shapes.Attach(_viewModel);
+                _toolButtons[EditorTool.Shape] = shapes.Face;
+                bar.Children.Add(shapes);
+                continue;
+            }
+
+            bar.Children.Add(ToolButton(
+                entry.Tool!.Value,
+                entry.Icon ?? string.Empty,
+                entry.Tip!,
+                GlyphMark(entry.Tool.Value)));
+        }
+
         HighlightActiveTool();
         return bar;
     }
