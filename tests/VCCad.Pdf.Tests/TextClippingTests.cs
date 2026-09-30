@@ -7,10 +7,16 @@ namespace VCCad.Pdf.Tests;
 /// <summary>
 /// Text that a content stream clips.
 ///
-/// A tiled pattern draws each label once per sheet it touches, translated, and lets
-/// the clip show only the part belonging to that sheet. Keeping the run whole makes
-/// the label spill past the artboard edge — which is what "TEMI BOW BUSTIER" did on
-/// the A4 pattern — so the run keeps only the characters visible on this sheet.
+/// A tiled pattern draws each label once per sheet it touches, translated, and lets the page edge
+/// show only the part belonging to that sheet. The importer keeps the run **whole** and stores the
+/// clip with it; the canvas clips to the artboard when it draws.
+///
+/// This class used to assert the other approach - trim the run to the visible characters, and drop
+/// it entirely when the clip missed it. That was tried and it butchered the labels: removing
+/// characters invalidates the embedded-font glyph mapping (a glyph id per character no longer lines
+/// up with the string), and a per-character advance estimate cuts in the wrong place. AGENTS.md §9
+/// records the decision and `SamplePatternTests` pins the invariant; these tests now pin it too,
+/// rather than failing against behaviour that was deliberately removed.
 /// </summary>
 public class TextClippingTests
 {
@@ -63,52 +69,55 @@ public class TextClippingTests
     }
 
     [Fact]
-    public void TextRunningPastTheClipKeepsOnlyTheVisibleCharacters()
+    public void TextRunningPastTheClipKeepsItsWholeStringAndItsPlace()
     {
-        // 20pt Helvetica: the model advances 12pt per character (0.6 x size), so ten
-        // characters starting at x=150 reach x=270. The clip ends at x=200, which
-        // covers characters 0..3 (150-198); character 4 starts at 198 and is only 2pt
-        // visible, so it belongs to the neighbouring sheet.
+        // Ten characters at 20pt reach x=270; the clip stops at 200. The run is kept as authored -
+        // all ten characters, still starting at 150 - and the clip goes with it.
         TextItem? text = ImportSingleText(BuildClippedTextPdf("ABCDEFGHIJ", 150, 200));
 
         Assert.NotNull(text);
-        Assert.Equal("ABCD", text!.PlainText);
-
-        // The surviving characters did not move: the first one was already visible.
+        Assert.Equal("ABCDEFGHIJ", text!.PlainText);
         Assert.Equal(150.0, text.Origin.X, 1);
+        Assert.True(text.IsClipped, "the clip must be carried on the item");
     }
 
     [Fact]
-    public void TextOverlappingTheClipEdgeIsShiftedOntoItsFirstVisibleCharacter()
+    public void TextOverlappingTheClipEdgeKeepsItsWholeStringAndOrigin()
     {
-        // Starting at x=-50, characters 0..3 are off the left edge. Character 4 begins
-        // at -50 + 4*12 = -2 with only 10pt of its 12pt inside, so digit 4 is the first
-        // substantially visible one and the origin moves onto it.
+        // Starting at x=-50, the first characters are off the left edge. Nothing is shifted onto
+        // the first "visible" character: the run stays where the file put it and the page clips it.
         TextItem? text = ImportSingleText(BuildClippedTextPdf("ABCDEFGHIJ", -50, 300));
 
         Assert.NotNull(text);
-        Assert.DoesNotContain("ABCD", text!.PlainText);
-        Assert.True(text.Origin.X > -12, $"origin should have advanced, was {text.Origin.X}");
-        Assert.True(text.Origin.X <= 10, $"origin should still start at the edge, was {text.Origin.X}");
+        Assert.Equal("ABCDEFGHIJ", text!.PlainText);
+        Assert.Equal(-50.0, text.Origin.X, 1);
+        Assert.True(text.IsClipped);
     }
 
     [Fact]
-    public void TextEntirelyOutsideTheClipIsRemoved()
+    public void TextEntirelyOutsideTheClipIsStillImported()
     {
+        // The clip misses it here, but the clip is a rendering concern: the other sheet of a tiled
+        // pattern is exactly this run translated, and dropping it loses the label from the document.
         TextItem? text = ImportSingleText(BuildClippedTextPdf("ABCDEFGHIJ", 900, 300));
 
-        Assert.Null(text);
+        Assert.NotNull(text);
+        Assert.Equal("ABCDEFGHIJ", text!.PlainText);
+        Assert.Equal(900.0, text.Origin.X, 1);
+        Assert.True(text.IsClipped);
     }
 
     [Fact]
-    public void TrimmedRunKeepsItsAdvanceInProportion()
+    public void AClippedRunStaysOneRunWithItsWholeString()
     {
-        // A trimmed run must not stretch: the advance follows the kept characters.
+        // The rejected approach rewrote the run: characters trimmed, or the run split into one
+        // piece per visible span. Either leaves the string and its per-character codes out of step,
+        // which is what breaks the exporter's pass-through of an embedded programme. This is the
+        // shape that keeps them lined up.
         TextItem? text = ImportSingleText(BuildClippedTextPdf("ABCDEFGHIJ", 150, 200));
 
         Assert.NotNull(text);
         TextRun run = Assert.Single(text!.Runs);
-        Assert.NotNull(run.AdvanceWidth);
-        Assert.Equal(12.0 * run.Text.Length, run.AdvanceWidth!.Value, 1);
+        Assert.Equal("ABCDEFGHIJ", run.Text);
     }
 }
