@@ -3070,8 +3070,13 @@ public static class EditorOperations
             });
 
         // ---- tools and the shell -----------------------------------------
-        Add("tool.list", "The editor tools (select, node, pen, rectangle, ellipse, artboard, text).", "",
-            (_, _) => Enum.GetNames<EditorTool>().Select(t => t.ToLowerInvariant()).ToArray());
+        Add("tool.list",
+            "Every tool that can be set, including the nine shapes the compound shape button holds - they " +
+            "are tools a person picks, so they are names a driver can set.", "",
+            (_, _) => Enum.GetNames<EditorTool>()
+                .Select(t => t.ToLowerInvariant())
+                .Concat(ShapeLibrary.All.Select(ShapeLibrary.Name))
+                .ToArray());
 
         AddAsync("fonts.installStandard",
             "Download and install the URW base-35 fonts into this user's font directory. They supply " +
@@ -3241,10 +3246,21 @@ public static class EditorOperations
             (ctx, p) =>
             {
                 string name = p.GetString("tool") ?? "node";
-                if (!Enum.TryParse(name, ignoreCase: true, out EditorTool tool))
+
+                // A shape name is a tool: the compound button's nine shapes are what a person picks, so
+                // `tool.set star` and clicking Star in the flyout leave the same state - and `tool.get`
+                // reports "star" rather than "shape", because that is what was chosen.
+                if (!EditorToolNames.TryResolve(name, out EditorTool tool, out ShapeKind? chosen))
                 {
                     throw new EditorOperationException(
-                        $"Unknown tool '{name}'. Use one of: {string.Join(", ", Enum.GetNames<EditorTool>())}.");
+                        $"Unknown tool '{name}'. Use one of: {string.Join(", ", EditorToolNames.AllNames)}.");
+                }
+
+                if (chosen is not null)
+                {
+                    ctx.ViewModel.CurrentShape = chosen.Value;
+                    ctx.ViewModel.Tool = EditorTool.Shape;
+                    return new { tool = "shape", shape = ShapeLibrary.Name(chosen.Value) };
                 }
 
                 EditorTool was = ctx.ViewModel.Tool;
@@ -3256,11 +3272,16 @@ public static class EditorOperations
                 };
             });
 
-        Add("tool.get", "The active tool, and the one it would toggle back to.", "",
+        Add("tool.get", "The active tool, and the one it would toggle back to. When the shape tool is " +
+            "active this also reports which of the nine shapes is armed, because that is the tool a " +
+            "person actually chose.", "",
             (ctx, _) => new
             {
                 tool = ctx.ViewModel.Tool.ToString().ToLowerInvariant(),
                 previous = ctx.ViewModel.PreviousTool.ToString().ToLowerInvariant(),
+                shape = ctx.ViewModel.Tool == EditorTool.Shape
+                    ? ShapeLibrary.Name(ctx.ViewModel.CurrentShape)
+                    : null,
             });
 
         Add("pane.list",
