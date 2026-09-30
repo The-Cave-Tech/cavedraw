@@ -206,6 +206,20 @@ public static class SelectionEngine
     /// </summary>
     public static LayerItem? Within(Artboard artboard, Point2D point)
     {
+        IReadOnlyList<LayerItem> chain = Chain(artboard, point);
+        return chain.Count == 0 ? null : chain[^1];
+    }
+
+    /// <summary>
+    /// Every object under a point, outermost first, ending at the deepest.
+    ///
+    /// This is what a click drills through. The first entry is what a single click selects, and each
+    /// double-click moves one further along - so "one level down" means the child under the pointer rather
+    /// than whichever sibling happens to be nearest, which is the difference between drilling into a
+    /// hierarchy and wandering around it.
+    /// </summary>
+    public static IReadOnlyList<LayerItem> Chain(Artboard artboard, Point2D point)
+    {
         Point2D local = point - new Vector2D(artboard.X, artboard.Y);
         LayerItem? topmost = null;
 
@@ -225,18 +239,22 @@ public static class SelectionEngine
             }
         }
 
-        return topmost is null ? null : Deepest(topmost, local);
+        if (topmost is null)
+        {
+            return Array.Empty<LayerItem>();
+        }
+
+        var chain = new List<LayerItem> { topmost };
+        Descend(topmost, local, chain);
+        return chain;
     }
 
-    /// <summary>
-    /// The innermost object under a point, searching front to back, or the group itself when none of its
-    /// children is under the pointer.
-    /// </summary>
-    private static LayerItem Deepest(LayerItem item, Point2D point)
+    /// <summary>Walks into the group under the point, front to back, appending what it finds.</summary>
+    private static void Descend(LayerItem item, Point2D point, List<LayerItem> chain)
     {
         if (item is not ArtGroup group)
         {
-            return item;
+            return;
         }
 
         for (int i = group.Children.Count - 1; i >= 0; i--)
@@ -244,12 +262,46 @@ public static class SelectionEngine
             LayerItem child = group.Children[i];
             if (Hits(child, point, PickTolerance))
             {
-                return Deepest(child, point);
+                chain.Add(child);
+                Descend(child, point, chain);
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// What a click selects from a chain: the outermost object, or - on a double-click - one level further
+    /// down than whatever in the chain is already selected.
+    ///
+    /// A double-click with nothing from this chain selected starts at the top, which is what a double-click
+    /// on a fresh object means. At the bottom it stays there: the drill ends at the object rather than
+    /// wrapping round or clearing the selection.
+    /// </summary>
+    public static LayerItem? Drill(
+        IReadOnlyList<LayerItem> chain, IReadOnlyList<LayerItem> selected, int clickCount)
+    {
+        if (chain.Count == 0)
+        {
+            return null;
+        }
+
+        if (clickCount < 2)
+        {
+            return chain[0];
+        }
+
+        int at = -1;
+        for (int i = 0; i < chain.Count; i++)
+        {
+            if (selected.Contains(chain[i]))
+            {
+                at = i;
             }
         }
 
-        return group;
+        return chain[Math.Min(at + 1, chain.Count - 1)];
     }
+
 
     /// <summary>
     /// The object of an artboard nearest the point, within the pick tolerance.
