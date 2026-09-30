@@ -9,6 +9,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using VCCad.App.Ai;
 using VCCad.App.Automation;
+using VCCad.Core.Input;
 
 namespace VCCad.App.Views;
 
@@ -483,13 +484,50 @@ public sealed class DiagnosticsOverlay : UserControl
             }
         };
 
-        var searchRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto,Auto") };
+        // The other half of the parity rule: replaying a session is not an API-only trick. A person
+        // watches a task succeed and exports it as a gesture here.
+        var exportBatch = new Button { Content = "Export as batch", Margin = new Thickness(2, 2, 6, 2) };
+        exportBatch.Click += (_, _) =>
+        {
+            if (_host.History is not { } log)
+            {
+                _historySummary.Text = "No diary in this host.";
+                return;
+            }
+
+            try
+            {
+                InputBatch batch = DiaryBatchExport.From(log, log.SessionId);
+                if (batch.Events.Count == 0)
+                {
+                    _historySummary.Text = "Nothing to export yet: no pointer or key events recorded.";
+                    return;
+                }
+
+                string path = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "VCCad", "batches", $"session-{log.SessionId}.json");
+
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                batch.Save(path);
+
+                _historySummary.Text =
+                    $"Exported {batch.Events.Count} event(s) to {path} — replay it with input.batchFile.";
+            }
+            catch (Exception ex)
+            {
+                _historySummary.Text = $"Could not export the batch: {ex.Message}";
+            }
+        };
+
+        var searchRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,*,Auto,Auto") };
         Grid.SetColumn(_historyFilter, 0);
         Grid.SetColumn(search, 1);
         Grid.SetColumn(live, 2);
         Grid.SetColumn(_skillTitle, 3);
         Grid.SetColumn(learn, 4);
-        foreach (Control child in new Control[] { _historyFilter, search, live, _skillTitle, learn })
+        Grid.SetColumn(exportBatch, 5);
+        foreach (Control child in new Control[] { _historyFilter, search, live, _skillTitle, learn, exportBatch })
         {
             searchRow.Children.Add(child);
         }

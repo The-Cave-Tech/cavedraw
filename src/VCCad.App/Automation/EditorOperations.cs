@@ -3010,6 +3010,44 @@ public static class EditorOperations
                 return new { exported = path, entries = RequireHistory(ctx).Export(path) };
             });
 
+        Add("history.exportBatch",
+            "Write a session's own input - the pointer, wheel and key events the diary recorded - as " +
+            "an input batch that input.batchFile replays. This is what turns a session a person " +
+            "performed into a repeatable gesture.",
+            "path:string, sessionId?:string (default: one session), max?:number (default 20000)",
+            (ctx, p) =>
+            {
+                string path = p.GetString("path")
+                    ?? throw new EditorOperationException("Parameter 'path' is required.");
+
+                InteractionLog diary = RequireHistory(ctx);
+                InputBatch batch = DiaryBatchExport.From(
+                    diary, p.GetString("sessionId"), (int)p.GetLong("max", 20000));
+
+                if (batch.Events.Count == 0)
+                {
+                    throw new EditorOperationException(
+                        "That session holds no input events to export. Record some pointer or key " +
+                        "activity first, or pass a sessionId that has some.");
+                }
+
+                string full = Path.GetFullPath(path);
+                string? directory = Path.GetDirectoryName(full);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                batch.Save(full);
+                return new
+                {
+                    saved = full,
+                    events = batch.Events.Count,
+                    session = p.GetString("sessionId") ?? diary.SessionId,
+                    replay = $"input.batchFile {{ \"path\": \"{full}\" }}",
+                };
+            });
+
         // ---- what is on screen (no vision required) ----------------------
         Add("ui.dump",
             "Massive text dump of what is on screen: the whole Avalonia visual tree with each " +
