@@ -404,6 +404,15 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public void FlipSelection(bool horizontal, bool vertical) => _active.FlipSelection(horizontal, vertical);
     public void CloseSelectedPaths() => _active.CloseSelectedPaths();
 
+    // ---- arranging, for the Align panel --------------------------------
+    // Delegated to the session, which the operations also call: a person's button and the assistant's
+    // operation must be one implementation.
+
+    public int AlignSelection(ArrangeAxis axis, ArrangeEdge edge) => _active.AlignSelection(axis, edge);
+
+    public int DistributeSelection(ArrangeAxis axis, ArrangeAnchor anchor)
+        => _active.DistributeSelection(axis, anchor);
+
     // ---- path booleans, for the Pathfinder panel ------------------------
     // Delegated to the session, which the operations also call: a person's button and the assistant's
     // operation must be one implementation, not two that agree today.

@@ -321,6 +321,8 @@ public partial class EditorView : UserControl
         fonts.Attach(_viewModel);
         var pathfinder = new PathfinderPane();
         pathfinder.Attach(_viewModel);
+        var arrange = new ArrangePane();
+        arrange.Attach(_viewModel);
 
         var appearance = new DockPanelModel { Id = "appearance", Title = "Appearance", Side = DockSide.Right };
         appearance.Tabs.Add(new DockTab { Id = "colors", Title = "Color", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => colors, IsOpen = true });
@@ -362,7 +364,15 @@ public partial class EditorView : UserControl
         pathfinderPanel.IsStretchable = false;
         pathfinderPanel.Height = 118;
 
-        foreach (DockPanelModel panel in new[] { appearance, objectsPanel, transformPanel, pathfinderPanel })
+        // Align sits under the Pathfinder: both are selection-wide arrangement, and the two together are
+        // the row of buttons a person reaches for while laying something out.
+        var arrangePanel = new DockPanelModel { Id = "arrange", Title = "Align", Side = DockSide.Right };
+        arrangePanel.Tabs.Add(new DockTab { Id = "arrange", Title = "Align", PanelId = "arrange", DefaultSide = DockSide.Right, ContentFactory = () => arrange, IsOpen = true });
+        arrangePanel.ActiveTabId = "arrange";
+        arrangePanel.IsStretchable = false;
+        arrangePanel.Height = 190;
+
+        foreach (DockPanelModel panel in new[] { appearance, objectsPanel, transformPanel, pathfinderPanel, arrangePanel })
         {
             _manager.RegisterPanel(panel);
             foreach (DockTab tab in panel.Tabs)
