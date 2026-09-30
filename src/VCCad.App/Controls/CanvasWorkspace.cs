@@ -864,7 +864,7 @@ public sealed class CanvasWorkspace : Control
         {
             case EditorTool.Select:
             case EditorTool.Lasso:
-                SelectPress(model);
+                SelectPress(model, e.ClickCount);
                 break;
 
             case EditorTool.Node: NodePress(model); break;
@@ -1313,7 +1313,7 @@ public sealed class CanvasWorkspace : Control
         return model.DistanceTo(RotationHandlePoint(bounds)) <= PickTolerance * 2.5;
     }
 
-    private void SelectPress(Point2D model)
+    private void SelectPress(Point2D model, int clickCount = 1)
     {
         if (_vm is null)
         {
@@ -1365,7 +1365,17 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        LayerItem? hit = HitTestTopItem(model);
+        // **What a click selects.** The outermost object under the pointer, and one level further down for
+        // each double-click after that. Reaching the group first is what makes a container selectable with
+        // the pointer - otherwise it can only be reached by its name in the layers panel - and drilling is
+        // how a person then gets at what is inside it.
+        IReadOnlyList<LayerItem> chain = _document is not null &&
+            SelectionEngine.ArtboardAt(_document.Artboards, model) is { } under
+            ? SelectionEngine.Chain(under, model)
+            : Array.Empty<LayerItem>();
+
+        IReadOnlyList<LayerItem> alreadySelected = _vm?.SelectedObjects.ToList() ?? new List<LayerItem>();
+        LayerItem? hit = SelectionEngine.Drill(chain, alreadySelected, clickCount) ?? HitTestTopItem(model);
 
         // Whatever the click found, it also decides which artboard is focused - and that is
         // what the next marquee is measured against. The engine owns the rule so the canvas
