@@ -854,16 +854,102 @@ public static class SelectionEngine
         return true;
     }
 
+    /// <summary>
+    /// Whether a point is on a path, for the purpose of being clicked.
+    ///
+    /// **A path is only where it is painted**: inside its fill when it has one, along its stroke when it has
+    /// that, and nowhere at all when it has neither. Its bounding box is not the object, and treating it as
+    /// one is not a near miss - page 1 of the LILLIE sample has an unfilled, stroked, page-sized frame
+    /// (540x720) as the topmost object in the pattern group, and a box-based test made it swallow every
+    /// click on the page. The report was "it registers as though I'm clicking the bounding rectangle", and
+    /// that is exactly what the code did.
+    ///
+    /// The fill is judged by the flattened outline, so holes and winding are honoured: a click through the
+    /// middle of a filled ring is not a click on the ring.
+    /// </summary>
     private static bool PathHits(PathItem path, Point2D point, double tolerance)
     {
-        foreach (SubPath sub in path.SubPaths)
+        if (path.Fill.IsVisible &&
+            PathFlattener.IsFilled(PathFlattener.Flatten(path), path.Fill.Rule, point))
         {
-            if (sub.BoundingBox().Inflated(tolerance).Contains(point))
+            return true;
+        }
+
+        if (path.Stroke.HasVisibleOutline)
+        {
+            // Half the stroke's width, because that is how far the paint reaches from the centreline.
+            // Walked from the subpaths rather than from the fill flattener, which only reports closed
+            // outlines - a stroked line has two points and would otherwise be unclickable.
+            double reach = tolerance + (path.Stroke.Width / 2.0);
+            foreach (SubPath sub in path.SubPaths)
             {
-                return true;
+                if (NearSubPath(sub, point, reach))
+                {
+                    return true;
+                }
             }
         }
 
         return false;
+    }
+
+    /// <summary>Whether a point is within <paramref name="reach"/> of a subpath's own drawn line.</summary>
+    private static bool NearSubPath(SubPath sub, Point2D point, double reach)
+    {
+        int segments = sub.SegmentCount;
+        if (segments == 0)
+        {
+            return sub.Nodes.Count == 1 && Distance(point, sub.Nodes[0].Anchor) <= reach;
+        }
+
+        for (int i = 0; i < segments; i++)
+        {
+            CubicBezier curve = sub.GetSegment(i);
+
+            // Sampled with enough steps that no step is longer than the reach, so a segment cannot be
+            // stepped over: a straight segment needs one step, a long curve gets as many as it needs.
+            double length = curve.EstimateLength();
+            int steps = Math.Clamp((int)Math.Ceiling(length / Math.Max(reach, 0.5)), 1, 256);
+
+            Point2D previous = curve.PointAt(0);
+            for (int step = 1; step <= steps; step++)
+            {
+                Point2D next = curve.PointAt((double)step / steps);
+                if (DistanceToSegment(point, previous, next) <= reach)
+                {
+                    return true;
+                }
+
+                previous = next;
+            }
+
+            foreach (PathNode node in sub.Nodes)
+            {
+                if (Distance(point, node.Anchor) <= reach)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static double Distance(Point2D a, Point2D b)
+        => Math.Sqrt(((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y)));
+
+    private static double DistanceToSegment(Point2D point, Point2D a, Point2D b)
+    {
+        double dx = b.X - a.X;
+        double dy = b.Y - a.Y;
+        double lengthSquared = (dx * dx) + (dy * dy);
+        if (lengthSquared <= 1e-12)
+        {
+            return Distance(point, a);
+        }
+
+        double t = (((point.X - a.X) * dx) + ((point.Y - a.Y) * dy)) / lengthSquared;
+        t = Math.Clamp(t, 0.0, 1.0);
+        return Distance(point, new Point2D(a.X + (t * dx), a.Y + (t * dy)));
     }
 }

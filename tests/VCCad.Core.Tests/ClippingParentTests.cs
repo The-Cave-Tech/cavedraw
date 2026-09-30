@@ -27,6 +27,10 @@ public class ClippingParentTests
         sub.Nodes.Add(new PathNode(new Point2D(x + size, y)));
         sub.Nodes.Add(new PathNode(new Point2D(x + size, y + size)));
         sub.Nodes.Add(new PathNode(new Point2D(x, y + size)));
+
+        // A visible object, because that is what these fixtures model. An unfilled, unstroked path is
+        // invisible and, since the hit test stopped using bounding boxes, correctly unclickable.
+        path.Fill = FillSpec.Solid(ColorRgb.Black);
         return path;
     }
 
