@@ -37,6 +37,30 @@ assertion, not deleted.
 Every corpus theory **must emit a skip sentinel when its data source is absent**;
 a theory that yields no data is a CI error.
 
+**Green locally is not green.** Every failure left in the CI issue was something that only
+exists on a clean machine, and none of them could have been caught here:
+
+- an SDK resolving to a different band than the one the workload was installed into;
+- standard fonts present on a development box and absent on a runner;
+- a directory that exists here because the editor has run here, and does not exist there;
+- an assembly published as `.webcil` under a different SDK default while a test demanded
+  `.dll`.
+
+So when a test touches the filesystem, the clock, an installed tool or a published layout,
+**reproduce the clean condition locally before trusting the fix**. Renaming a directory out
+of the way and re-running the suite took one command and turned a guess into a fact.
+
+**Timing assertions belong on the work, not on the scheduler.** A test that wrapped a
+synchronous, sub-millisecond parse in `Task.Run(...).Wait(TimeSpan.FromSeconds(1))` failed
+on CI with "still parsing after 1001 ms" - which was the work item waiting for a
+thread-pool worker while the rest of the suite saturated the pool. Run the work on the
+test's own thread and give a budget generous enough that only the defect can exceed it.
+
+**Headless Avalonia: a `DispatcherTimer` is driven by the render tick.** Sleeping to let
+the clock pass and draining jobs with `Dispatcher.UIThread.RunJobs()` is **not** enough;
+`AvaloniaHeadlessPlatform.ForceRenderTimerTick()` has to be pumped as well. Without it a
+timer never fires and it looks as though the trigger under test cannot be driven at all.
+
 ### Every reported issue is filed on GitHub before it is fixed
 
 When the person says **"another issue"** — or reports a defect, a gap, or a piece of work
@@ -64,11 +88,66 @@ tidy the list; a wrongly-closed issue is worse than an open one.
 A fix with no issue is invisible history: it cannot be found, re-opened, prioritised or
 read by anyone who was not in the conversation. This is not bookkeeping for its own sake.
 
+**`Closes #NN` is a parsed trigger, not prose.** GitHub reads the words out of the commit
+message and closes the issue on push, so:
+
+- **Never write "does not close #NN" or "will not fix #NN".** The negation is invisible to
+  the parser and it closes the issue anyway. This has happened: a commit written to say a
+  rule was *still unverified* closed the issue for it.
+- **Add the trigger only after the evidence exists**, never in anticipation of it. A commit
+  claiming to close a CI issue was pushed before the run that would have proved it, and
+  GitHub closed it on a run that then failed. Write "Part of #NN" until the run is green.
+- If an issue closes wrongly, **reopen it** and say why on the issue. Two reopenings in one
+  session is a smaller cost than a wrong `git log`.
+
+**Never delete a test to get a green suite.** A test that pins broken behaviour has to be
+written as a deliberate sentinel, or turned into a positive assertion when the gap is fixed —
+`AGENTS.md` §1.1 above says this about corpus tests and it applies to every test. When a
+test cannot be made to pass, the honest options are to fix the code, or to leave the test
+out and say on the issue what is unverified and why. Deleting it and moving on is how a
+real defect stays hidden: a long-press test dropped in one round was restored the next and
+immediately found that the flyout's gesture handlers had never run at all.
+
 ### CI/CD is the gate, not an afterthought
 
 `.github/workflows/` builds, tests and publishes on every push; tags publish the
 Docker image and the desktop bundles. Tests run inside the Docker build too. If
 your change only works on your machine, it is not done.
+
+**Push, don't just commit.** A commit that is not pushed is not built, not tested and not
+visible; `git status` showing `ahead N` means the evidence does not exist yet.
+
+Facts about the runner that cost real time to learn, all now handled in `ci.yml`:
+
+- **The SDK is pinned by `global.json`** (8.0.x) with a guard step that prints the
+  toolchain. Without it `dotnet` resolved to whatever the image's newest SDK was, the
+  `wasm-tools` workload was installed into *that* band, and the build failed with
+  `NETSDK1147` complaining about a workload nobody had asked for.
+- **The URW base-35 fonts are installed on the runner.** Sixteen `VCCad.Pdf.Tests`
+  text-export tests embed `Nimbus Sans`; the faces are located on the machine and never
+  shipped, so a runner without them fails on a missing font key rather than on anything to
+  do with the code. `VCCAD_URW_FONTS` points at the same path `scripts/test-all.ps1` probes.
+- **A Blazor WebAssembly publish puts the app assembly in `wwwroot/_framework`, and .NET 8
+  publishes it as `.webcil`.** An artifact check demanding `VCCad.App.Browser.dll` at the
+  publish root cannot match anything. Match by **name**, not by extension and not by a path
+  guessed from a different SDK version.
+- `gh run view <id> --log-failed` refuses to open a log until the whole run finishes, but
+  `gh run view <id>` shows **per-job** status while it is still going - which is how to
+  learn the answer from `build-test` without waiting for `desktop-publish`.
+
+### Reflect the file; never invent
+
+The importer's job is to reproduce the file's structure, not to build a plausible one.
+
+- **No names the file does not have.** The tree used to contain a layer called `Imported`
+  that appeared in no file; content the file does not tag now gets an **unnamed** layer.
+- **No objects the file does not draw.** A clip path is a clip, not a rectangle standing in
+  for one; a form's `/BBox` bounds its content, it is not artwork.
+- **The grouping is the document.** Form XObjects and transparency groups are the file's own
+  structure; an optional-content group is a **tag on content**, not a container. Flattening
+  either one to make the model fit is how a document's meaning is lost - and it shows up as
+  several unrelated-looking bugs (a click selecting the wrong thing, a drag moving half of
+  it) because they are all downstream of the same wrong parent.
 
 ### The person and the assistant have exactly the same powers — both ways
 
@@ -171,7 +250,7 @@ describe when a visual judgement is needed.
    with a conventional message (`feat:`, `fix:`, `test:`, `docs:`, `build:`,
    `chore:`). Commit *before* starting the next item, not at the end of a session: an
    uncommitted tree is invisible history, and a change that is not in `git log` cannot
-   be reviewed, bisected or reverted. Keep the tree clean when handing off.
+   be reviewed, bisected or reverted. **Push it too**: a commit that is not pushed is not built, not tested and not visible to anyone, and git status reporting head N means the evidence does not exist yet. Keep the tree clean when handing off.
 2. **Never add comments to code unless asked** — but this repo *does* want
    explanatory comments on math/formulas and public APIs; match surrounding style.
 3. **Deployment archives `HEAD`** (`git archive HEAD`). Uncommitted work is *not*
@@ -442,7 +521,9 @@ VCCad.App.Desktop.exe --name transform-panel
 A name is **exclusive**: a second instance with the same name exits 2 naming the holder.
 A file whose pid is dead is stale and reclaimable; a clean exit removes it. `--port 0` and
 `--port-any` also accept any port, and are the only ways to do so. `GET /api/v1/health`
-reports the receiver's own port, so a caller can confirm whom it is talking to.
+reports its own port, pid and instance. That last part matters more than it looks: a driver that launches an instance and then reaches a **different** one gets a well-formed, plausible reply from older code, and nothing about it says so. Comparing the pid it was handed with the pid that answered turns that into a one-line check.
+
+A record is written when the name is **claimed**, before the endpoint exists, so state is claiming at that point and listening only once it is bound. An instance that cannot bind exits 2 and leaves **no** record behind - verified by launching a second instance on a taken port and checking the directory afterwards, not by reading the code.
 
 The view **auto-fits** the artboard on every resize until the person zooms manually,
 on every new/imported/activated document, and the fit reserves the diagnostics
@@ -501,7 +582,10 @@ docker/Dockerfile      multi-stage: restore → build → test → publish api +
 scripts/               dev.sh, deploy-remote.sh, bootstrap-dev.sh, fetch-corpora.sh,
                        publish-desktop.sh, publish-desktop.ps1 (Windows-native),
                        test-all.ps1 (Windows-native), stage-apply.sh, replace-text.py
-samples/               A0-Temi-Bow-Bustier-sewing-pattern.pdf (real-world fixture)
+samples/               real-world fixtures, tracked: A0-Temi-Bow-Bustier, A4 Temi Bow Bustier,
+                       3464_LILLIE_View_A_Sides_color (12 pages, the import-structure case),
+                       A0_V_SCULPT_LEGGINGS, PRIYANKA SKIRT/TOP. Several tests import these
+                       and skip cleanly when a checkout does not have them.
 ```
 
 Assembly dependency rule: **`Geometry ← Core ← {Pdf, Api, App}`**. Geometry never
