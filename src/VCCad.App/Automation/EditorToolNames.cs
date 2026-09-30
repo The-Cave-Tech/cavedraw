@@ -14,11 +14,23 @@ namespace VCCad.App.Automation;
 public static class EditorToolNames
 {
     /// <summary>
-    /// The tool a name refers to. A shape name means the shape tool with that shape; anything else must be
-    /// an <see cref="EditorTool"/> name.
+    /// The tool a name refers to. A tool name wins over a shape name, and a shape name means the shape tool
+    /// with that shape.
+    ///
+    /// **The precedence is not arbitrary.** `rectangle` is both a tool and one of the nine shapes, and if
+    /// the shape won then the plain rectangle tool would be unreachable by name - which breaks the promise
+    /// this file exists to keep: every tool can be set and read back. So the tool name wins, and the
+    /// rectangle *shape* is reached the long way round, by arming the shape tool and setting its kind.
     /// </summary>
     public static bool TryResolve(string name, out EditorTool tool, out ShapeKind? shape)
     {
+        if (Enum.TryParse(name, ignoreCase: true, out EditorTool parsed))
+        {
+            tool = parsed;
+            shape = null;
+            return true;
+        }
+
         shape = ShapeLibrary.All
             .Cast<ShapeKind?>()
             .FirstOrDefault(k => string.Equals(ShapeLibrary.Name(k!.Value), name, StringComparison.OrdinalIgnoreCase));
@@ -26,12 +38,6 @@ public static class EditorToolNames
         if (shape is not null)
         {
             tool = EditorTool.Shape;
-            return true;
-        }
-
-        if (Enum.TryParse(name, ignoreCase: true, out EditorTool parsed))
-        {
-            tool = parsed;
             return true;
         }
 

@@ -90,7 +90,7 @@ public sealed class ShapeFlyoutButton : UserControl
 
         _button = new Button
         {
-            Name = "ShapeToolButtonFace",
+
             Content = _glyph,
             MinWidth = 30,
             Padding = new Thickness(6, 2),
@@ -100,6 +100,7 @@ public sealed class ShapeFlyoutButton : UserControl
         };
 
         ToolTip.SetTip(_button, "Shapes (S): click to draw, hold for the rest");
+        _button.Name = ToolbarLayout.NameFor(EditorTool.Shape);
 
         // handledEventsToo: true is not optional here. A Button's own class handler marks the press as
         // handled on the way through - that is how it tracks a click - and a plain += subscription is

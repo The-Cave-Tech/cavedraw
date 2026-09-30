@@ -512,6 +512,11 @@ public partial class EditorView : UserControl
             : MarkButton(mark, tip, (_, _) => _viewModel.Tool = tool);
 
         _toolButtons[tool] = button;
+
+        // Named for a driver. `ui.find` can match a tooltip, but a name is the thing a caller can rely on:
+        // it does not change when the wording of a tip does, and it is what makes "every tool is reachable
+        // by a named control" a claim a test can make about the whole enum at once.
+        button.Name = ToolbarLayout.NameFor(tool);
         return button;
     }
 

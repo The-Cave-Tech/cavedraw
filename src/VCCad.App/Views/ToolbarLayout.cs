@@ -45,6 +45,15 @@ public static class ToolbarLayout
         new ToolbarEntry(EditorTool.Text, "text", "Text (T)"),
     };
 
+    /// <summary>
+    /// The name a tool's button carries in the visual tree.
+    ///
+    /// A driver needs one stable handle per tool, and `ui.find` can use either a name or a tooltip. The name
+    /// is the one to rely on: it does not move when a tip is reworded, and it is how a test can enumerate
+    /// `EditorTool` and require every value to be reachable by a named control.
+    /// </summary>
+    public static string NameFor(EditorTool tool) => $"Tool{tool}";
+
     /// <summary>The tools on the toolbar, separators dropped.</summary>
     public static IEnumerable<EditorTool> Tools
         => All.Where(e => e.Tool is not null).Select(e => e.Tool!.Value);

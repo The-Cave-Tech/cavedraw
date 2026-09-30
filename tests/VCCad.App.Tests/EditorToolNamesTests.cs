@@ -15,7 +15,14 @@ namespace VCCad.App.Tests;
 /// </summary>
 public class EditorToolNamesTests
 {
-    /// <summary>Every shape name resolves to the shape tool with that shape.</summary>
+    /// <summary>
+    /// Every shape name resolves to the shape tool with that shape - except `rectangle`, which is also a
+    /// tool, and where the **tool name wins**.
+    ///
+    /// That precedence is deliberate and load-bearing: if the shape won, the plain rectangle tool would be
+    /// unreachable by name, and "every tool can be set and read back" is the promise this file keeps. The
+    /// rectangle shape is reached by arming the shape tool and setting its kind, which is checked below.
+    /// </summary>
     [Fact]
     public void EveryShapeNameResolvesToTheShapeTool()
     {
@@ -25,11 +32,34 @@ public class EditorToolNamesTests
 
             Assert.True(EditorToolNames.TryResolve(name, out EditorTool tool, out ShapeKind? shape),
                 $"'{name}' should resolve");
+
+            if (name == "rectangle")
+            {
+                Assert.Equal(EditorTool.Rectangle, tool);
+                Assert.Null(shape);
+                continue;
+            }
+
             Assert.Equal(EditorTool.Shape, tool);
             Assert.Equal(kind, shape);
         }
 
         Assert.Equal(9, ShapeLibrary.All.Count);
+    }
+
+    /// <summary>
+    /// The rectangle **shape** is still reachable, by the route the collision leaves open: arm the shape
+    /// tool, then set its kind. Documented as a test so it cannot quietly become a gap.
+    /// </summary>
+    [Fact]
+    public void TheRectangleShapeIsReachableByArmingTheShapeTool()
+    {
+        Assert.True(EditorToolNames.TryResolve("shape", out EditorTool tool, out ShapeKind? shape));
+        Assert.Equal(EditorTool.Shape, tool);
+        Assert.Null(shape);
+
+        ShapeKind armed = ShapeKind.Rectangle;
+        Assert.Equal("rectangle", EditorToolNames.NameOf(EditorTool.Shape, armed));
     }
 
     /// <summary>A shape name is matched however it is written - a driver should not have to guess case.</summary>
