@@ -50,6 +50,12 @@ public enum EditorTool
     /// <summary>Drag out a closed rectangle between two corner points.</summary>
     Rectangle,
 
+    /// <summary>
+    /// Draw one of the nine paint shapes - rectangle, rounded rectangle, star, polygon, trapezoid, cloud,
+    /// callout, heart, arrow. Which one is the view's <c>CurrentShape</c>, and the toolbar button shows
+    /// it, so the armed shape is never a thing a person has to remember.
+    /// </summary>
+    Shape,
     /// <summary>Drag out a closed ellipse between two bounding-box corners.</summary>
     Ellipse,
 

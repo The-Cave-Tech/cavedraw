@@ -851,6 +851,7 @@ public sealed class CanvasWorkspace : Control
             case EditorTool.Pen: PenPress(model); break;
             case EditorTool.Rectangle:
             case EditorTool.Ellipse:
+            case EditorTool.Shape:
                 _shapeStart = model;
                 _shapeCurrent = model;
                 _vm!.ClearSelection();
@@ -1077,6 +1078,9 @@ public sealed class CanvasWorkspace : Control
             case EditorTool.Pen: PenRelease(model); break;
             case EditorTool.Rectangle: CreateShape(rect: true); break;
             case EditorTool.Ellipse: CreateShape(rect: false); break;
+
+            // Which shape this is comes from the view model, so `rect` is not consulted on this branch.
+            case EditorTool.Shape: CreateShape(rect: true); break;
             case EditorTool.Artboard: SelectRelease(model); break;
         }
     }
@@ -3338,12 +3342,19 @@ public sealed class CanvasWorkspace : Control
         Point2D la = a - offset;
         Point2D lb = b - offset;
         Rect2D box = Rect2D.FromPoints(la, lb);
-        PathItem shape = rect
-            ? PathFactory.CreateRectangle("Rectangle", box)
-            : PathFactory.CreateEllipse("Ellipse",
-                new Point2D((la.X + lb.X) / 2, (la.Y + lb.Y) / 2),
-                Math.Abs(box.Width) / 2,
-                Math.Abs(box.Height) / 2);
+        PathItem shape = _vm.Tool == EditorTool.Shape
+            ? ShapeLibrary.Create(_vm.CurrentShape, new ShapeParameters
+            {
+                Centre = new Point2D(box.X + (box.Width / 2), box.Y + (box.Height / 2)),
+                Width = box.Width,
+                Height = box.Height,
+            })
+            : rect
+                ? PathFactory.CreateRectangle("Rectangle", box)
+                : PathFactory.CreateEllipse("Ellipse",
+                    new Point2D((la.X + lb.X) / 2, (la.Y + lb.Y) / 2),
+                    Math.Abs(box.Width) / 2,
+                    Math.Abs(box.Height) / 2);
         shape.Fill = _vm!.CurrentFill;
         shape.Stroke = _vm.CurrentStroke;
         if (!shape.Fill.IsVisible && !shape.Stroke.HasVisibleOutline)
@@ -3353,7 +3364,9 @@ public sealed class CanvasWorkspace : Control
 
         _vm.Execute(new AddItemCommand(shapeLayer, shape));
         _vm.SelectObject(shape);
-        _vm.Status = rect ? "Rectangle created" : "Ellipse created";
+        _vm.Status = _vm.Tool == EditorTool.Shape
+            ? $"{ShapeLibrary.Name(_vm.CurrentShape)} created"
+            : rect ? "Rectangle created" : "Ellipse created";
     }
 
     // ------------------------------------------------------------------

@@ -93,6 +93,11 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// ordinary switch, so the tool gone back to becomes the one a third press returns from.
     /// </summary>
     public void ToggleTool(EditorTool tool) => Tool = Tool == tool ? PreviousTool : tool;
+    /// <summary>
+    /// Which of the nine shapes the shape tool draws. Changing it changes what a drag produces, and the
+    /// toolbar button draws the shape itself, so the armed shape is visible rather than remembered.
+    /// </summary>
+    public ShapeKind CurrentShape { get; set; } = ShapeKind.Rectangle;
 
     public string Status
     {
