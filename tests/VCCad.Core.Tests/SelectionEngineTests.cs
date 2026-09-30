@@ -65,7 +65,7 @@ public class SelectionEngineTests
         for (int i = 0; i < 6; i++)
         {
             Artboard page = document.Artboards[i];
-            Point2D point = new(page.X + 120, 120);
+            Point2D point = new(page.X + 102, 125);
 
             SelectionResult result = SelectionEngine.Click(document, point);
 
@@ -82,7 +82,7 @@ public class SelectionEngineTests
         CadDocument document = Pages(6, (board, i) =>
             board.Layers[0].AddItem(Box($"on-page-{i + 1}", 100, 100)));
 
-        Point2D insidePageOne = new(120, 120);
+        Point2D insidePageOne = new(102, 125);
         SelectionResult result = SelectionEngine.Click(document, insidePageOne);
 
         Assert.DoesNotContain(result.Items, i => i.Name == "on-page-6");
@@ -173,10 +173,12 @@ public class SelectionEngineTests
         CadDocument document = Pages(1, (board, _) =>
         {
             board.Layers[0].AddItem(Box("under", 100, 100, 80));
-            board.Layers[0].AddItem(Box("over", 110, 110, 40));
+            // Sharing an edge with the one below, so a point on that edge is on both outlines
+            // and the tie is what decides it.
+            board.Layers[0].AddItem(Box("over", 100, 100, 40));
         });
 
-        SelectionResult result = SelectionEngine.Click(document, new Point2D(120, 120));
+        SelectionResult result = SelectionEngine.Click(document, new Point2D(100, 120));
 
         // Later in the layer paints above, which is what the pointer should find.
         Assert.Equal("over", Assert.Single(result.Items).Name);

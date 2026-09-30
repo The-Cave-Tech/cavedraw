@@ -102,7 +102,10 @@ public class SelectionGestureTests
             double aBefore = a.WorldBounds().X;
             double bBefore = b.WorldBounds().X;
 
-            Point2D grab = new(a.WorldBounds().Left + 25, a.WorldBounds().Top + 25);
+            // Grab a point on the box's own outline: a click picks the path, not the area its fill
+            // covers. Along the top edge, clear of the selection handles at the corners and edge
+            // midpoints, which would resize rather than move.
+            Point2D grab = new(a.WorldBounds().Left + 25, a.WorldBounds().Top);
             Drag(window, workspace, grab, new Point2D(grab.X + 120, grab.Y));
 
             double aMoved = a.WorldBounds().X - aBefore;
@@ -133,7 +136,7 @@ public class SelectionGestureTests
         {
             (PathItem a, _) = TwoSelected(window, workspace, viewModel);
 
-            Click(window, workspace, new Point2D(a.WorldBounds().Left + 25, a.WorldBounds().Top + 25));
+            Click(window, workspace, new Point2D(a.WorldBounds().Left + 25, a.WorldBounds().Top));
 
             Assert.Same(a, Assert.Single(viewModel.SelectedObjects));
         }

@@ -1,5 +1,6 @@
 using VCCad.Geometry;
 using VCCad.Core.Model;
+using VCCad.Core.Picking;
 
 namespace VCCad.Core.Selection;
 
@@ -264,18 +265,37 @@ public static class SelectionEngine
     }
 
     /// <summary>
-    /// How far a point is from an object's visible shape, or infinity when it has none.
+    /// How far a point is from an object's visible geometry, or infinity when it has none.
     ///
-    /// The shape after clipping, so a click beside an object that a parent has cut away is
-    /// measured to where it actually is rather than to where it used to be.
+    /// A PATH is measured to its outline. Measuring to the filled region instead made a large panel
+    /// swallow every click over the lines and labels drawn on top of it: the panel contains the
+    /// point, so its distance was zero and it beat whatever the pointer was actually on. What a
+    /// person aims at is the artwork - the paths - not the area a fill happens to cover.
     ///
-    /// Note there is no "is it empty" guard here. An open path is two points and cannot
-    /// contain anything, so it reads as empty - but it is still a line, and a line is exactly
-    /// the thing a person expects to be able to click. Guarding on emptiness made every open
-    /// path unpickable.
+    /// Text and images have no outline to aim at, so their box is their geometry.
+    ///
+    /// Clipping is still respected: a path a parent has cut away where the point is has no geometry
+    /// there, whatever its own outline does, so a click beside where it used to be picks nothing.
+    ///
+    /// Note there is no "is it empty" guard for an open path. A line is two points and cannot
+    /// contain anything, so it reads as empty - but it is still a line, and a line is exactly the
+    /// thing a person expects to be able to click. Guarding on emptiness made every open path
+    /// unpickable.
     /// </summary>
     public static double DistanceTo(LayerItem item, Point2D point)
-        => VisibleRegion(item, default).DistanceTo(point);
+    {
+        if (item is PathItem path)
+        {
+            if (ClipsOn(path).Count > 0 && !Survives(path, point))
+            {
+                return double.MaxValue;
+            }
+
+            return PathPicking.OutlineDistance(path, point);
+        }
+
+        return VisibleRegion(item, default).DistanceTo(point);
+    }
 
     /// <summary>
     /// The region of an object that is actually there, after every clip on it.

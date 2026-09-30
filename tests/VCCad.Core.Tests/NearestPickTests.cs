@@ -94,12 +94,16 @@ public class NearestPickTests
     }
 
     [Fact]
-    public void AClickInsideAObjectPicksIt()
+    public void AClickInsideAShapesAreaDoesNotPickItButItsOutlineDoes()
     {
         CadDocument document = Page(Box("box", 100, 100, 200));
 
+        // The middle of a big filled shape: the fill covers the point, the path does not.
+        Assert.Empty(SelectionEngine.Click(document, new Point2D(200, 200)).Items);
+
+        // Its outline is the geometry a click aims at.
         Assert.Equal("box", Assert.Single(
-            SelectionEngine.Click(document, new Point2D(200, 200)).Items).Name);
+            SelectionEngine.Click(document, new Point2D(100, 200)).Items).Name);
     }
 
     [Fact]
@@ -110,7 +114,7 @@ public class NearestPickTests
         CadDocument document = Page(Box("under", 100, 100), Box("over", 100, 100));
 
         Assert.Equal("over", Assert.Single(
-            SelectionEngine.Click(document, new Point2D(125, 125)).Items).Name);
+            SelectionEngine.Click(document, new Point2D(100, 125)).Items).Name);
     }
 
     [Fact]
@@ -126,8 +130,9 @@ public class NearestPickTests
         wide.Clips.Add(RectClip(0, 0, 100, 500));
         layer.AddItem(wide);
 
+        // On its left edge, which the clip keeps.
         Assert.Equal("clipped", Assert.Single(
-            SelectionEngine.Click(document, new Point2D(50, 250)).Items).Name);
+            SelectionEngine.Click(document, new Point2D(0, 250)).Items).Name);
 
         Assert.Empty(SelectionEngine.Click(document, new Point2D(400, 250)).Items);
     }
@@ -146,18 +151,19 @@ public class NearestPickTests
 
         // In document coordinates the box spans 752..802.
         Assert.Equal("on-right", Assert.Single(
-            SelectionEngine.Click(document, new Point2D(777, 125)).Items).Name);
+            SelectionEngine.Click(document, new Point2D(754, 125)).Items).Name);
 
         // The same local point on the left page holds nothing.
         Assert.Empty(SelectionEngine.Click(document, new Point2D(125, 125)).Items);
     }
 
     [Fact]
-    public void TheDistanceToAPointInsideIsZero()
+    public void TheDistanceInsideAShapeIsTheDistanceToItsOutline()
     {
         CadDocument document = Page(Box("box", 100, 100, 100));
 
-        Assert.Equal(0, SelectionEngine.DistanceTo(
+        // The middle of the box is 50 from every edge, and the fill's area is not its geometry.
+        Assert.Equal(50, SelectionEngine.DistanceTo(
             document.Artboards[0].Layers[0].Children[0], new Point2D(150, 150)), 6);
     }
 

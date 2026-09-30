@@ -150,7 +150,10 @@ public class DiaryBatchExportTests
             viewModel.SelectObject(rect);
             Settle();
 
-            Point from = workspace.ModelToWindow(new Point2D(160, 160));
+            // Grabbed on the rectangle's own top edge: a click picks the path, not the area its
+            // fill covers. Placed 30 in from the corner, clear of the selection handles at the
+            // corners and edge midpoints, which would resize rather than move.
+            Point from = workspace.ModelToWindow(new Point2D(130, 100));
             Point to = workspace.ModelToWindow(new Point2D(300, 260));
 
             // Recorded through the real recorder, so the exported batch is built from the text a

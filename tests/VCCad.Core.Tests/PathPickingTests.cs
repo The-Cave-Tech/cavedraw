@@ -8,14 +8,20 @@ namespace VCCad.Core.Tests;
 public class PathPickingTests
 {
     [Fact]
-    public void FillInsideRectangleIsHitInsideOutlineIsNotOutside()
+    public void ARectangleIsHitOnItsOutlineAndNotInsideItsFill()
     {
         var rect = PathFactory.CreateRectangle("r", new Rect2D(0, 0, 100, 50));
         rect.Fill = FillSpec.Solid(ColorRgb.Red);
         rect.Stroke = StrokeSpec.None;
 
-        Assert.Equal(PickKind.Fill, PathPicking.HitTest(rect, new Point2D(50, 25), 2.0));
+        // The middle of the fill is not the path; its edge is.
+        Assert.Equal(PickKind.None, PathPicking.HitTest(rect, new Point2D(50, 25), 2.0));
+        Assert.Equal(PickKind.Outline, PathPicking.HitTest(rect, new Point2D(50, 0), 2.0));
         Assert.Equal(PickKind.None, PathPicking.HitTest(rect, new Point2D(200, 200), 2.0));
+
+        // A caller that wants "which shape contains this point" can still ask for the fill.
+        Assert.Equal(PickKind.Fill,
+            PathPicking.HitTest(rect, new Point2D(50, 25), 2.0, pickInsideFill: true));
     }
 
     [Fact]

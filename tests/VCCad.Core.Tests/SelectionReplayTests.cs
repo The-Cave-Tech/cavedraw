@@ -65,7 +65,8 @@ public class SelectionReplayTests
     {
         CadDocument document = Page(Box("target", 100, 100));
 
-        SelectionResult result = SelectionEngine.Play(document, Click(120, 120));
+        // On the box's left edge: a click aims at the path, not at the area its fill covers.
+        SelectionResult result = SelectionEngine.Play(document, Click(102, 125));
 
         Assert.Equal("target", Assert.Single(result.Items).Name);
         Assert.Same(document.Artboards[0], result.Focused);
@@ -248,7 +249,7 @@ public class SelectionReplayTests
             page.AddLayer("Artwork").AddItem(Box($"on-page-{i + 1}", 100, 100));
         }
 
-        SelectionResult result = SelectionEngine.Play(document, Click(120, 120));
+        SelectionResult result = SelectionEngine.Play(document, Click(102, 125));
 
         Assert.Equal("on-page-1", Assert.Single(result.Items).Name);
     }

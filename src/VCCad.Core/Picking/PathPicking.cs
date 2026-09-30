@@ -87,33 +87,32 @@ public static class PathPicking
     }
 
     /// <summary>
-    /// The full pick test used by the selection tool: returns <see cref="PickKind.Fill"/>
-    /// for points inside the fill region, else <see cref="PickKind.Outline"/> when the
-    /// point is within <paramref name="outlineTolerance"/> of the stroked geometry,
-    /// else <see cref="PickKind.None"/>.
+    /// The pick test used by the selection tool.
+    ///
+    /// A path is picked by its OUTLINE - its own geometry. Picking by the filled region instead
+    /// made a large panel swallow every click over the lines and labels drawn on top of it: the
+    /// panel contains the point, so it was "at distance zero" and beat whatever the pointer was
+    /// actually on. A click aims at the artwork, and the artwork is the paths.
+    ///
+    /// <paramref name="pickInsideFill"/> puts the filled region back in front, for a caller that
+    /// genuinely wants "select the shape containing this point" - a colour sampler, say.
+    ///
+    /// An unstroked fill is pickable by its outline too: the edge of a shape is visible whatever
+    /// its stroke says, and it is now the only thing a click can aim at.
     /// </summary>
-    public static PickKind HitTest(PathItem path, Point2D query, double outlineTolerance)
+    public static PickKind HitTest(
+        PathItem path, Point2D query, double outlineTolerance, bool pickInsideFill = false)
     {
-        bool fillVisible = path.Fill.IsVisible && path.SubPaths.Any(sp => sp.IsClosed);
-        if (fillVisible && FillContains(path, query))
+        if (pickInsideFill)
         {
-            return PickKind.Fill;
+            bool fillVisible = path.Fill.IsVisible && path.SubPaths.Any(sp => sp.IsClosed);
+            if (fillVisible && FillContains(path, query))
+            {
+                return PickKind.Fill;
+            }
         }
 
-        bool strokeVisible = path.Stroke.HasVisibleOutline;
-        if (strokeVisible && OutlineDistance(path, query) <= outlineTolerance)
-        {
-            return PickKind.Outline;
-        }
-
-        // Illustrator also lets you grab a path with no paint by clicking its
-        // outline — useful for freshly created pen paths that have no style yet.
-        if (!fillVisible && OutlineDistance(path, query) <= outlineTolerance)
-        {
-            return PickKind.Outline;
-        }
-
-        return PickKind.None;
+        return OutlineDistance(path, query) <= outlineTolerance ? PickKind.Outline : PickKind.None;
     }
 
     /// <summary>

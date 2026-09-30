@@ -386,8 +386,8 @@ public class InputReplayTests
                 FocusedArtboard = "Page 1",
                 Events = new[]
                 {
-                    new InputEvent(InputKinds.Down, 120, 120, 0),
-                    new InputEvent(InputKinds.Up, 120, 120, 16),
+                    new InputEvent(InputKinds.Down, 102, 125, 0),
+                    new InputEvent(InputKinds.Up, 102, 125, 16),
                 },
             };
 
@@ -435,8 +435,8 @@ public class InputReplayTests
             Document = document,
             Events = new[]
             {
-                new InputEvent(InputKinds.Down, 120, 120, 0),
-                new InputEvent(InputKinds.Up, 120, 120, 20),
+                new InputEvent(InputKinds.Down, 102, 125, 0),
+                new InputEvent(InputKinds.Up, 102, 125, 20),
             },
         };
 
