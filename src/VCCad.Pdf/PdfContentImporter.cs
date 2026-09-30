@@ -1247,25 +1247,49 @@ internal sealed class PdfContentImporter
 
         // A group of one is noise: it adds a level to every page whose content is a single
         // form, and says nothing a person needs.
-        //
-        // And a form whose contents span optional-content layers is not one group either. The
-        // layer an item belongs to is carried on the item and a group can only sit in one
-        // layer, so grouping across a boundary moves every content-layer object into whichever
-        // layer came first - which silently lost a layer per page of the sample on the first
-        // attempt. Where the form draws into one layer, the group is that layer's.
-        string? only = drawn[0].Layer;
-
-        if (drawn.Count == 1 ||
-            drawn.Any(d => !string.Equals(d.Layer, only, StringComparison.Ordinal)))
+        if (drawn.Count == 1)
         {
             items.AddRange(drawn);
             return;
         }
 
+        // Everything else keeps the file's grouping.
+        //
+        // This used to be skipped whenever a form's contents spanned optional-content layers, because a
+        // group can only sit in one layer - and that flattened the whole page for any file whose content is
+        // a single form, which is most of them. The LILLIE sample is exactly that case.
+        //
+        // The resolution is that an optional-content group is a **tag on content**, not a container: the
+        // file says "these marks belong to this layer", not "these marks are inside this layer". So inside
+        // a form the tag becomes a group named from the file - which is how a partner application shows it -
+        // and content the file does not tag stays where it was drawn.
+        //
+        // Runs, not a re-grouping: painting order is the document's z-order, and collecting all the tags
+        // together would move content in front of or behind things it was drawn between.
         var group = new ArtGroup { Name = "Group" };
+        ArtGroup? tagged = null;
+        string? taggedLayer = null;
+        bool started = false;
+
         foreach (PdfImportedItem item in drawn)
         {
-            group.AddItem(item.Item);
+            if (!started || !string.Equals(item.Layer, taggedLayer, StringComparison.Ordinal))
+            {
+                started = true;
+                taggedLayer = item.Layer;
+
+                if (taggedLayer is null)
+                {
+                    tagged = null;
+                }
+                else
+                {
+                    tagged = new ArtGroup { Name = taggedLayer };
+                    group.AddItem(tagged);
+                }
+            }
+
+            (tagged ?? group).AddItem(item.Item);
         }
 
         // The box goes on the group when there is a group, because that is what it is: the
@@ -1282,7 +1306,9 @@ internal sealed class PdfContentImporter
             group.Clips.Add(bounds);
         }
 
-        items.Add(new PdfImportedItem(only, group));
+        // The group is in no layer itself: a group cannot sit in one, and the page-level code puts it in
+        // the layer for content the file does not tag.
+        items.Add(new PdfImportedItem(null, group));
     }
 
     /// <summary>Whether a clip removes any of what the group draws.</summary>

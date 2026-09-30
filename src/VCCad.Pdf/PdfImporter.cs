@@ -297,10 +297,13 @@ public static class PdfImporter
             var layers = new Dictionary<string, Layer>(StringComparer.Ordinal);
             Layer LayerFor(string? name)
             {
-                string key = string.IsNullOrWhiteSpace(name) ? "Imported" : name;
+                // No invented name. Content the file does not put in an optional-content layer belongs to
+                // the page, and an unnamed layer says exactly that - "Imported" was a name no file
+                // contains, and it appeared in the tree as though the document said it.
+                string key = string.IsNullOrWhiteSpace(name) ? string.Empty : name;
                 if (!layers.TryGetValue(key, out Layer? layer))
                 {
-                    layer = artboard.AddLayer(key);
+                    layer = artboard.AddLayer(key.Length == 0 ? null : key);
                     layers[key] = layer;
                 }
 
@@ -315,7 +318,8 @@ public static class PdfImporter
 
             if (layers.Count == 0)
             {
-                artboard.AddLayer("Imported");
+                // A page whose content asked for no layer at all still needs one to hold it.
+                artboard.AddLayer();
             }
         }
 

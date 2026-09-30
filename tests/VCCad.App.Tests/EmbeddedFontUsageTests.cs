@@ -40,7 +40,7 @@ public class EmbeddedFontUsageTests
         CadDocument document = PdfImporter.Import(File.ReadAllBytes(path));
         List<TextRun> runs = document.Artboards
             .SelectMany(a => a.Layers)
-            .SelectMany(l => l.Children)
+            .SelectMany(l => Walk(l.Children))
             .OfType<TextItem>()
             .SelectMany(t => t.Runs)
             .Where(r => r.EmbeddedFont is not null && r.GlyphIds is { Length: > 0 })
@@ -89,7 +89,7 @@ public class EmbeddedFontUsageTests
         CadDocument document = PdfImporter.Import(File.ReadAllBytes(path));
         List<TextRun> runs = document.Artboards
             .SelectMany(a => a.Layers)
-            .SelectMany(l => l.Children)
+            .SelectMany(l => Walk(l.Children))
             .OfType<TextItem>()
             .SelectMany(t => t.Runs)
             .ToList();
@@ -97,5 +97,26 @@ public class EmbeddedFontUsageTests
         Assert.All(runs, r => Assert.False(string.IsNullOrWhiteSpace(r.SourceFont), "a run lost its source font"));
         Assert.Contains(runs, r => r.SourceFont == "Helvetica-Bold");
         Assert.Contains(runs, r => r.SourceFont!.Contains("CenturyGothic", StringComparison.Ordinal));
+    }
+    /// <summary>
+    /// Every item under these, groups included.
+    ///
+    /// The imported tree is nested - a page's content is a group from the file's own form XObjects, with
+    /// optional-content groups inside it - so a walk that looks only at a layer's direct children no longer
+    /// finds the artwork. These tests are about fonts and images, not structure, so they walk.
+    /// </summary>
+    private static IEnumerable<LayerItem> Walk(IEnumerable<LayerItem> items)
+    {
+        foreach (LayerItem item in items)
+        {
+            yield return item;
+            if (item is ArtGroup group)
+            {
+                foreach (LayerItem nested in Walk(group.Children))
+                {
+                    yield return nested;
+                }
+            }
+        }
     }
 }
