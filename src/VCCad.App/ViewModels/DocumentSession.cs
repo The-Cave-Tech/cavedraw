@@ -362,6 +362,180 @@ public sealed class DocumentSession : INotifyPropertyChanged
         return results;
     }
 
+    /// <summary>
+    /// The selected paths in z-order, bottom first, with the layer each is on. The order is load-bearing
+    /// for subtract, which keeps the back-most path - Illustrator's Minus Front - so both the operation
+    /// and the panel must ask for the selection the same way.
+    /// </summary>
+    public List<(Layer Layer, PathItem Path)> SelectedPathsInZOrder()
+    {
+        var selected = SelectedPaths().ToHashSet();
+        var ordered = new List<(Layer, PathItem)>();
+
+        foreach (Artboard artboard in Document.Artboards)
+        {
+            foreach (Layer layer in artboard.Layers)
+            {
+                foreach (LayerItem item in layer.Children)
+                {
+                    if (item is PathItem path && selected.Contains(path))
+                    {
+                        ordered.Add((layer, path));
+                    }
+                }
+            }
+        }
+
+        return ordered;
+    }
+
+    /// <summary>Applies a boolean to the selection. One undo step, however many objects it consumes.</summary>
+    public PathBooleanResult BooleanSelection(BooleanOp op)
+    {
+        List<(Layer Layer, PathItem Path)> targets = SelectedPathsInZOrder();
+        if (targets.Count < 2)
+        {
+            throw new InvalidOperationException(
+                $"{op} needs at least two paths selected; {targets.Count} selected.");
+        }
+
+        PathItem? result = PathBoolean.Combine(targets.Select(t => t.Path).ToList(), op);
+        return ReplaceSelection(
+            targets,
+            result is null ? Array.Empty<PathItem>() : new[] { result },
+            op.ToString());
+    }
+
+    /// <summary>Cuts the selection into its separate regions: one object each, not one merged object.</summary>
+    public PathBooleanResult DivideSelection()
+    {
+        List<(Layer Layer, PathItem Path)> targets = SelectedPathsInZOrder();
+        if (targets.Count < 2)
+        {
+            throw new InvalidOperationException(
+                $"Divide needs at least two paths selected; {targets.Count} selected.");
+        }
+
+        IReadOnlyList<PathItem> pieces = PathBoolean.Divide(targets.Select(t => t.Path).ToList());
+        return ReplaceSelection(targets, pieces, "Divide");
+    }
+
+    /// <summary>Fills the selection as one object with holes where they overlap, without cutting.</summary>
+    public PathBooleanResult MakeCompoundSelection()
+    {
+        List<(Layer Layer, PathItem Path)> targets = SelectedPathsInZOrder();
+        if (targets.Count < 2)
+        {
+            throw new InvalidOperationException(
+                $"Making a compound path needs at least two paths selected; {targets.Count} selected.");
+        }
+
+        PathItem source = targets[0].Path;
+        var compound = new PathItem
+        {
+            Name = source.Name,
+            Fill = source.Fill,
+            Stroke = source.Stroke,
+            Opacity = source.Opacity,
+        };
+
+        foreach ((Layer _, PathItem path) in targets)
+        {
+            foreach (SubPath sub in path.SubPaths)
+            {
+                SubPath target = compound.AddSubPath(sub.IsClosed);
+                foreach (PathNode node in sub.Nodes)
+                {
+                    target.Nodes.Add(new PathNode(node.Anchor, node.InHandle, node.OutHandle));
+                }
+            }
+        }
+
+        // The windings are put into the form the nonzero rule needs, so the inner outlines are holes.
+        CompoundPaths.Normalise(compound);
+        compound.GeometryChanged();
+
+        return ReplaceSelection(targets, new[] { compound }, "Make compound path");
+    }
+
+    /// <summary>Takes the selected compound paths apart: one object per outline.</summary>
+    public PathBooleanResult ReleaseCompoundSelection()
+    {
+        List<(Layer Layer, PathItem Path)> targets = SelectedPathsInZOrder();
+        if (targets.Count == 0)
+        {
+            throw new InvalidOperationException("Select a path to release.");
+        }
+
+        var pieces = new List<PathItem>();
+        foreach ((Layer _, PathItem path) in targets)
+        {
+            pieces.AddRange(CompoundPaths.Release(path));
+        }
+
+        return ReplaceSelection(targets, pieces, "Release compound path");
+    }
+
+    /// <summary>Turns one outline of the selection inside out: a hole becomes an island.</summary>
+    public bool ReverseSubpathOfSelection(int index)
+    {
+        PathItem? path = SelectedPaths().FirstOrDefault();
+        if (path is null)
+        {
+            throw new InvalidOperationException("Select a path, or pass itemId.");
+        }
+
+        PathItem before = path.GeometrySnapshot();
+        if (!CompoundPaths.Reverse(path, index))
+        {
+            throw new InvalidOperationException(
+                $"'{path.Name}' has {path.SubPaths.Count} outlines, so there is no outline {index}.");
+        }
+
+        Execute(new GeometryReplaceCommand(path, before, path.GeometrySnapshot(), "Reverse outline"));
+        SetStatus("Outline reversed");
+        return true;
+    }
+
+    /// <summary>
+    /// Swaps the selected paths for their result, in one undo step, and reports what went in and what
+    /// came out so a driver can tell an empty result from a failed one.
+    /// </summary>
+    private PathBooleanResult ReplaceSelection(
+        List<(Layer Layer, PathItem Path)> targets,
+        IReadOnlyList<PathItem> results,
+        string description)
+    {
+        Layer layer = targets[0].Layer;
+        var edits = new List<IUndoableCommand>();
+
+        foreach ((Layer _, PathItem path) in targets)
+        {
+            edits.Add(new RemoveItemCommand(path));
+        }
+
+        foreach (PathItem result in results)
+        {
+            edits.Add(new AddItemCommand(layer, result));
+        }
+
+        if (edits.Count > 0)
+        {
+            // One action, however many objects were consumed and produced: a divide of six shapes is one
+            // thing a person did, and undoing it takes one keystroke.
+            Execute(new CompositeCommand(description, edits));
+        }
+
+        SelectRange(results.Cast<LayerItem>(), additive: false);
+
+        SetStatus(results.Count == 0
+            ? $"{description}: nothing was left"
+            : $"{description}: {targets.Count} in, {results.Count} out, " +
+              $"{results.Sum(r => r.SubPaths.Count)} outline(s)");
+
+        return new PathBooleanResult(
+            description, targets.Count, results.Count, results.Sum(r => r.SubPaths.Count));
+    }
     /// <summary>Joins two selected paths that share an endpoint (closing the result
     /// if its ends meet).</summary>
     public void JoinSelection()

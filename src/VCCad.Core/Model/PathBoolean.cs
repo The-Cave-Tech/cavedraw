@@ -2,6 +2,13 @@ using VCCad.Geometry;
 
 namespace VCCad.Core.Model;
 
+/// <summary>What a boolean operation did, so a person and a driver can see what happened.</summary>
+public sealed record PathBooleanResult(string Operation, int Inputs, int Objects, int Contours)
+{
+    /// <summary>Whether the result was empty - a shape subtracted from itself covers nothing.</summary>
+    public bool IsEmpty => Objects == 0;
+}
+
 /// <summary>Which of the boolean combinations to compute.</summary>
 public enum BooleanOp
 {

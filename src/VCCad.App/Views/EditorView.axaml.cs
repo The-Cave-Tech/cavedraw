@@ -319,6 +319,8 @@ public partial class EditorView : UserControl
         text.Attach(_viewModel);
         var fonts = new FontsPane();
         fonts.Attach(_viewModel);
+        var pathfinder = new PathfinderPane();
+        pathfinder.Attach(_viewModel);
 
         var appearance = new DockPanelModel { Id = "appearance", Title = "Appearance", Side = DockSide.Right };
         appearance.Tabs.Add(new DockTab { Id = "colors", Title = "Color", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => colors, IsOpen = true });
@@ -352,7 +354,15 @@ public partial class EditorView : UserControl
         transformPanel.IsStretchable = false;
         transformPanel.Height = 142;
 
-        foreach (DockPanelModel panel in new[] { appearance, objectsPanel, transformPanel })
+        // The Pathfinder is a handful of buttons, so it takes only what it needs - like Transform - and
+        // leaves the rest of the column to the list of objects a person actually scrolls.
+        var pathfinderPanel = new DockPanelModel { Id = "pathfinder", Title = "Pathfinder", Side = DockSide.Right };
+        pathfinderPanel.Tabs.Add(new DockTab { Id = "pathfinder", Title = "Pathfinder", PanelId = "pathfinder", DefaultSide = DockSide.Right, ContentFactory = () => pathfinder, IsOpen = true });
+        pathfinderPanel.ActiveTabId = "pathfinder";
+        pathfinderPanel.IsStretchable = false;
+        pathfinderPanel.Height = 118;
+
+        foreach (DockPanelModel panel in new[] { appearance, objectsPanel, transformPanel, pathfinderPanel })
         {
             _manager.RegisterPanel(panel);
             foreach (DockTab tab in panel.Tabs)

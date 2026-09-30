@@ -4425,126 +4425,43 @@ public static class EditorOperations
     }
 
     // ---- path booleans and compound paths -------------------------------
+    // The work is in the session, because the Pathfinder panel is a second caller: the person's button
+    // and the assistant's operation must be the same code, not two implementations that agree today.
 
-    /// <summary>
-    /// The selected paths in z-order, bottom first, with the layer each is on. The order is the whole
-    /// point for subtract, which keeps the back-most path.
-    /// </summary>
-    private static List<(Layer Layer, PathItem Path)> SelectionInZOrder(AutomationContext ctx)
+    private static object RunBoolean(AutomationContext ctx, BooleanOp op, Func<PathBooleanResult> work)
     {
-        var selected = ctx.Session.SelectedPaths().ToHashSet();
-        var ordered = new List<(Layer, PathItem)>();
-
-        foreach (Artboard artboard in ctx.Document.Artboards)
-        {
-            foreach (Layer layer in artboard.Layers)
-            {
-                foreach (LayerItem item in layer.Children)
-                {
-                    if (item is PathItem path && selected.Contains(path))
-                    {
-                        ordered.Add((layer, path));
-                    }
-                }
-            }
-        }
-
-        return ordered;
-    }
-
-    private static object BooleanPaths(AutomationContext ctx, BooleanOp op)
-    {
-        List<(Layer Layer, PathItem Path)> targets = SelectionInZOrder(ctx);
-        if (targets.Count < 2)
-        {
-            throw new EditorOperationException(
-                $"{op} needs at least two paths selected; {targets.Count} selected.");
-        }
-
-        PathItem? result = PathBoolean.Combine(targets.Select(t => t.Path).ToList(), op);
-        return ReplaceWith(
-            ctx,
-            targets,
-            result is null ? Array.Empty<PathItem>() : new[] { result },
-            op.ToString());
-    }
-
-    private static object DividePaths(AutomationContext ctx)
-    {
-        List<(Layer Layer, PathItem Path)> targets = SelectionInZOrder(ctx);
-        if (targets.Count < 2)
-        {
-            throw new EditorOperationException(
-                $"Divide needs at least two paths selected; {targets.Count} selected.");
-        }
-
-        IReadOnlyList<PathItem> pieces;
         try
         {
-            pieces = PathBoolean.Divide(targets.Select(t => t.Path).ToList());
+            PathBooleanResult result = work();
+            ctx.ViewModel.NotifyDocumentChanged();
+            return Summarise(result);
         }
         catch (InvalidOperationException error)
         {
             throw new EditorOperationException(error.Message);
         }
-
-        return ReplaceWith(ctx, targets, pieces, "Divide");
     }
+
+    private static object Summarise(PathBooleanResult result) => new
+    {
+        operation = result.Operation,
+        inputs = result.Inputs,
+        objects = result.Objects,
+        contours = result.Contours,
+        empty = result.IsEmpty,
+    };
+
+    private static object BooleanPaths(AutomationContext ctx, BooleanOp op)
+        => RunBoolean(ctx, op, () => ctx.Session.BooleanSelection(op));
+
+    private static object DividePaths(AutomationContext ctx)
+        => RunBoolean(ctx, BooleanOp.Union, ctx.Session.DivideSelection);
 
     private static object MakeCompound(AutomationContext ctx)
-    {
-        List<(Layer Layer, PathItem Path)> targets = SelectionInZOrder(ctx);
-        if (targets.Count < 2)
-        {
-            throw new EditorOperationException(
-                $"Making a compound path needs at least two paths selected; {targets.Count} selected.");
-        }
-
-        PathItem source = targets[0].Path;
-        var compound = new PathItem
-        {
-            Name = source.Name,
-            Fill = source.Fill,
-            Stroke = source.Stroke,
-            Opacity = source.Opacity,
-        };
-
-        foreach ((Layer _, PathItem path) in targets)
-        {
-            foreach (SubPath sub in path.SubPaths)
-            {
-                SubPath target = compound.AddSubPath(sub.IsClosed);
-                foreach (PathNode node in sub.Nodes)
-                {
-                    target.Nodes.Add(new PathNode(node.Anchor, node.InHandle, node.OutHandle));
-                }
-            }
-        }
-
-        // The windings are put in the form the nonzero rule needs, so the inner outlines are holes
-        // rather than more ink.
-        CompoundPaths.Normalise(compound);
-        compound.GeometryChanged();
-
-        return ReplaceWith(ctx, targets, new[] { compound }, "Make compound path");
-    }
+        => RunBoolean(ctx, BooleanOp.Union, ctx.Session.MakeCompoundSelection);
 
     private static object ReleaseCompound(AutomationContext ctx)
-    {
-        List<(Layer Layer, PathItem Path)> targets = SelectionInZOrder(ctx);
-        if (targets.Count == 0)
-        {
-            throw new EditorOperationException("Select a path to release.");
-        }
-
-        var pieces = new List<PathItem>();
-        foreach ((Layer _, PathItem path) in targets)
-        {
-            pieces.AddRange(CompoundPaths.Release(path));
-        }
-
-        return ReplaceWith(ctx, targets, pieces, "Release compound path");
-    }
+        => RunBoolean(ctx, BooleanOp.Union, ctx.Session.ReleaseCompoundSelection);
 
     private static object ReverseSubpath(AutomationContext ctx, JsonElement p)
     {
@@ -4552,61 +4469,17 @@ public static class EditorOperations
             ?? throw new EditorOperationException("Select a path, or pass itemId.");
 
         int index = (int)Math.Round(p.GetDouble("index", 0));
-        var before = path.GeometrySnapshot();
-
-        if (!CompoundPaths.Reverse(path, index))
+        try
         {
-            throw new EditorOperationException(
-                $"'{path.Name}' has {path.SubPaths.Count} outlines, so there is no outline {index}.");
+            ctx.Session.ReverseSubpathOfSelection(index);
+        }
+        catch (InvalidOperationException error)
+        {
+            throw new EditorOperationException(error.Message);
         }
 
-        ctx.Session.Execute(new GeometryReplaceCommand(path, before, path.GeometrySnapshot(), "Reverse outline"));
         ctx.ViewModel.NotifyDocumentChanged();
-
         return new { itemId = path.Id, index, outlines = path.SubPaths.Count };
-    }
-
-    /// <summary>
-    /// Swaps the selected paths for their result, in one undo step. What goes in and what comes out are
-    /// reported, so a driver can tell an empty result from a failed one.
-    /// </summary>
-    private static object ReplaceWith(
-        AutomationContext ctx,
-        List<(Layer Layer, PathItem Path)> targets,
-        IReadOnlyList<PathItem> results,
-        string description)
-    {
-        Layer layer = targets[0].Layer;
-        var edits = new List<IUndoableCommand>();
-
-        foreach ((Layer _, PathItem path) in targets)
-        {
-            edits.Add(new RemoveItemCommand(path));
-        }
-
-        foreach (PathItem result in results)
-        {
-            edits.Add(new AddItemCommand(layer, result));
-        }
-
-        if (edits.Count > 0)
-        {
-            // One action, however many objects were consumed and produced: a divide of six shapes is
-            // one thing a person did, and undoing it should take one keystroke.
-            ctx.Session.Execute(new CompositeCommand(description, edits));
-        }
-
-        ctx.Session.SelectRange(results.Cast<LayerItem>(), additive: false);
-        ctx.ViewModel.NotifyDocumentChanged();
-
-        return new
-        {
-            operation = description,
-            inputs = targets.Count,
-            objects = results.Count,
-            contours = results.Sum(r => r.SubPaths.Count),
-            empty = results.Count == 0,
-        };
     }
     private static List<Point2D> ReadPoints(JsonElement p, Vector2D offset)
     {

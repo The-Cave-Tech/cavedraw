@@ -403,6 +403,23 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// </summary>
     public void FlipSelection(bool horizontal, bool vertical) => _active.FlipSelection(horizontal, vertical);
     public void CloseSelectedPaths() => _active.CloseSelectedPaths();
+
+    // ---- path booleans, for the Pathfinder panel ------------------------
+    // Delegated to the session, which the operations also call: a person's button and the assistant's
+    // operation must be one implementation, not two that agree today.
+
+    public PathBooleanResult BooleanSelection(BooleanOp op) => _active.BooleanSelection(op);
+
+    public PathBooleanResult DivideSelection() => _active.DivideSelection();
+
+    public PathBooleanResult MakeCompoundSelection() => _active.MakeCompoundSelection();
+
+    public PathBooleanResult ReleaseCompoundSelection() => _active.ReleaseCompoundSelection();
+
+    public bool ReverseSubpath(int index) => _active.ReverseSubpathOfSelection(index);
+
+    /// <summary>Puts a message in the status bar - how a panel reports something it could not do.</summary>
+    public void ReportStatus(string message) => Status = message;
     public void JoinSelection() => _active.JoinSelection();
 
     public void ApplyFill(ColorRgb color, FillRule rule) => _active.ApplyFill(color, rule);
