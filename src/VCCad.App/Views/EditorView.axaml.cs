@@ -438,9 +438,9 @@ public partial class EditorView : UserControl
         var bar = new StackPanel { Orientation = Orientation.Vertical, Spacing = 2 };
         bar.Children.Add(ToolButton(EditorTool.Select, "select", "Selection (V)"));
         bar.Children.Add(ToolButton(EditorTool.Node, "node", "Nodes / direct selection (A)"));
-        bar.Children.Add(ToolButton(EditorTool.Corner, "node", "Round a corner: drag it out"));
-        bar.Children.Add(ToolButton(EditorTool.Pencil, "pen", "Pencil: draw freehand"));
-        bar.Children.Add(ToolButton(EditorTool.Lasso, "lasso", "Freehand selection (Q)", LassoMark()));
+        bar.Children.Add(ToolButton(EditorTool.Corner, "node", "Round a corner: drag it out", GlyphMark(EditorTool.Corner)));
+        bar.Children.Add(ToolButton(EditorTool.Pencil, "pen", "Pencil: draw freehand", GlyphMark(EditorTool.Pencil)));
+        bar.Children.Add(ToolButton(EditorTool.Lasso, "lasso", "Freehand selection (Q)", GlyphMark(EditorTool.Lasso)));
         bar.Children.Add(ToolButton(EditorTool.Pen, "pen", "Pen (P)"));
         bar.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)), Margin = new Thickness(4, 6) });
         // The shape tools are one compound button: nine shapes behind it, and the button draws the armed
@@ -528,6 +528,25 @@ public partial class EditorView : UserControl
     /// tell the person it does something it does not. A dashed loop with a tail is what the
     /// tool is, so the mark is the shape.
     /// </summary>
+    /// <summary>
+    /// A tool's drawn glyph as a control, or null when the tool has its own icon asset - in which case the
+    /// caller passes null and gets the icon.
+    /// </summary>
+    private static Control? GlyphMark(EditorTool tool)
+    {
+        string? glyph = ToolMarks.Glyph(tool);
+        if (glyph is null)
+        {
+            return null;
+        }
+
+        return new Mark
+        {
+            Stroke = new SolidColorBrush(Color.Parse(ToolMarks.Stroke)),
+            StrokeThickness = 1.6,
+            Data = MarkGeometry.Parse(glyph),
+        };
+    }
     private static Control LassoMark()
     {
         var stroke = new SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xEC));
