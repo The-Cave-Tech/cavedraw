@@ -1,5 +1,7 @@
 using Avalonia;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using SkiaSharp;
 using VCCad.Core.Model;
 using VCCad.Geometry;
@@ -207,6 +209,79 @@ public static class GradientPaint
     /// <summary>The brush for a gradient over a given object box, or null if it cannot be painted.</summary>
     public static IBrush? CreateBrush(GradientSpec spec, Rect box, double opacity)
         => CreateBrush(spec, GradientGeometry.For(spec, box), opacity);
+
+    /// <summary>
+    /// A freeform gradient sampled over the object's box, as a bitmap ready to draw into that box.
+    ///
+    /// Freeform is not a ramp: the colour depends on WHERE a point is, not on how far along a line,
+    /// so no shader can express it and the field is sampled into a small bitmap that is stretched
+    /// over the object instead. That is honest about what freeform is - a smooth field, which a
+    /// coarse grid reproduces well because there is nothing sharp in it to lose - and it means the
+    /// canvas, the panel's legend and any future export all paint the one field the model defines.
+    ///
+    /// <paramref name="origin"/> is the artboard the object sits on: freeform colour points are
+    /// stored artboard-relative, the one piece of gradient geometry that is, so the box (which is in
+    /// world space) has to come back out of artboard space before the field is sampled.
+    /// </summary>
+    public static WriteableBitmap? CreateFreeformBitmap(GradientSpec spec, Rect box, Vector2D origin, double opacity)
+    {
+        const int Grid = 128;
+
+        if (box.Width <= 1e-6 || box.Height <= 1e-6)
+        {
+            return null;
+        }
+
+        var pixels = new byte[Grid * Grid * 4];
+
+        for (int y = 0; y < Grid; y++)
+        {
+            double worldY = box.Y + (((y + 0.5) / Grid) * box.Height);
+
+            for (int x = 0; x < Grid; x++)
+            {
+                double worldX = box.X + (((x + 0.5) / Grid) * box.Width);
+
+                if (spec.SampleAt(new Point2D(worldX - origin.X, worldY - origin.Y)) is not { } sample)
+                {
+                    return null;
+                }
+
+                int at = ((y * Grid) + x) * 4;
+                pixels[at] = ToByte(sample.Color.B);
+                pixels[at + 1] = ToByte(sample.Color.G);
+                pixels[at + 2] = ToByte(sample.Color.R);
+                pixels[at + 3] = ToByte(sample.Opacity * sample.Color.A * opacity);
+            }
+        }
+
+        var bitmap = new WriteableBitmap(
+            new PixelSize(Grid, Grid),
+            new Vector(96, 96),
+            PixelFormat.Bgra8888,
+            AlphaFormat.Unpremul);
+
+        using (ILockedFramebuffer buffer = bitmap.Lock())
+        {
+            int stride = Grid * 4;
+            if (buffer.RowBytes == stride)
+            {
+                System.Runtime.InteropServices.Marshal.Copy(pixels, 0, buffer.Address, pixels.Length);
+            }
+            else
+            {
+                for (int y = 0; y < Grid; y++)
+                {
+                    System.Runtime.InteropServices.Marshal.Copy(
+                        pixels, y * stride, buffer.Address + (y * buffer.RowBytes), stride);
+                }
+            }
+        }
+
+        return bitmap;
+    }
+
+    private static byte ToByte(double value) => (byte)Math.Clamp(Math.Round(value * 255), 0, 255);
 
     private static SKShader Radial(
         GradientSpec spec,

@@ -205,6 +205,138 @@ public sealed record GradientSpec
     }
 
     /// <summary>
+    /// The colour at a point of the artboard, for a freeform gradient, or null when there is
+    /// nothing to blend.
+    ///
+    /// **Points** mode is a smooth field: every colour point pulls on the answer with a weight that
+    /// falls off with the square of the distance, so each one dominates near itself and the space
+    /// between them is a blend. A point sitting exactly on a colour point takes that colour
+    /// outright - without that, two points close together would divide by a distance near zero and
+    /// average into a colour that is neither of them.
+    ///
+    /// **Lines** mode is a set of ramps: the point is projected onto each drawn line, the ramp
+    /// between that line's two endpoint colours is sampled at the projection, and those results are
+    /// blended the same way. A line whose ends coincide contributes nothing rather than dividing by
+    /// zero.
+    ///
+    /// The point is in the same artboard space as <see cref="FreeformPoint.Position"/>, which is the
+    /// one piece of gradient geometry that is not relative to the object.
+    /// </summary>
+    public (ColorRgb Color, double Opacity)? SampleAt(Point2D point)
+    {
+        if (Kind != GradientKind.Freeform || Points.Count == 0)
+        {
+            return null;
+        }
+
+        if (FreeformMode == FreeformMode.Lines && Lines.Count > 0)
+        {
+            return SampleLines(point);
+        }
+
+        double weightSum = 0;
+        double r = 0;
+        double g = 0;
+        double b = 0;
+        double a = 0;
+        double opacity = 0;
+
+        foreach (FreeformPoint colourPoint in Points)
+        {
+            double dx = point.X - colourPoint.Position.X;
+            double dy = point.Y - colourPoint.Position.Y;
+            double squared = (dx * dx) + (dy * dy);
+
+            if (squared <= 1e-12)
+            {
+                return (colourPoint.Color, colourPoint.Opacity);
+            }
+
+            double weight = 1.0 / squared;
+            weightSum += weight;
+            r += colourPoint.Color.R * weight;
+            g += colourPoint.Color.G * weight;
+            b += colourPoint.Color.B * weight;
+            a += colourPoint.Color.A * weight;
+            opacity += colourPoint.Opacity * weight;
+        }
+
+        if (weightSum <= 0)
+        {
+            return null;
+        }
+
+        return (new ColorRgb(r / weightSum, g / weightSum, b / weightSum, a / weightSum), opacity / weightSum);
+    }
+
+    /// <summary>
+    /// The Lines mode field: each drawn line is a ramp between the colours of the two points it
+    /// joins, and a point takes a blend of the nearest part of each ramp.
+    /// </summary>
+    private (ColorRgb Color, double Opacity)? SampleLines(Point2D point)
+    {
+        double weightSum = 0;
+        double r = 0;
+        double g = 0;
+        double b = 0;
+        double a = 0;
+        double opacity = 0;
+
+        foreach ((int from, int to) in Lines)
+        {
+            if (from < 0 || from >= Points.Count || to < 0 || to >= Points.Count)
+            {
+                continue;
+            }
+
+            FreeformPoint start = Points[from];
+            FreeformPoint end = Points[to];
+            double ax = end.Position.X - start.Position.X;
+            double ay = end.Position.Y - start.Position.Y;
+            double lengthSquared = (ax * ax) + (ay * ay);
+            if (lengthSquared <= 1e-12)
+            {
+                continue;
+            }
+
+            // Where the point falls along the line, clamped to it: past either end the line's own
+            // end colour is what it means, which is the same clamping a ramp's spread does.
+            double t = Math.Clamp(
+                (((point.X - start.Position.X) * ax) + ((point.Y - start.Position.Y) * ay)) / lengthSquared,
+                0.0,
+                1.0);
+
+            double projectedX = start.Position.X + (ax * t);
+            double projectedY = start.Position.Y + (ay * t);
+            double dx = point.X - projectedX;
+            double dy = point.Y - projectedY;
+            double squared = (dx * dx) + (dy * dy);
+
+            // A point ON a line takes that line outright rather than dividing by zero.
+            if (squared <= 1e-12)
+            {
+                return (Blend(start.Color, end.Color, t), start.Opacity + ((end.Opacity - start.Opacity) * t));
+            }
+
+            double weight = 1.0 / squared;
+            ColorRgb colour = Blend(start.Color, end.Color, t);
+            weightSum += weight;
+            r += colour.R * weight;
+            g += colour.G * weight;
+            b += colour.B * weight;
+            a += colour.A * weight;
+            opacity += (start.Opacity + ((end.Opacity - start.Opacity) * t)) * weight;
+        }
+
+        if (weightSum <= 0)
+        {
+            return null;
+        }
+
+        return (new ColorRgb(r / weightSum, g / weightSum, b / weightSum, a / weightSum), opacity / weightSum);
+    }
+
+    /// <summary>
     /// The colour and opacity at a ramp position, interpolated between the surrounding stops.
     ///
     /// A midpoint other than 0.5 biases the blend, which is Illustrator's diamond control, so the

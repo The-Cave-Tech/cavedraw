@@ -3478,17 +3478,33 @@ public sealed class CanvasWorkspace : Control
     /// Fills a path, preferring its gradient when it has one.
     ///
     /// The gradient geometry is normalised to the object's bounding box, so it is mapped onto the
-    /// world-space bounds of the very geometry being filled. A gradient that cannot be expressed
-    /// as a shader - freeform today - falls back to <see cref="FillSpec.Color"/>, which the model
-    /// keeps meaningful for exactly this reason, so a gradient fill is never a hole.
+    /// world-space bounds of the very geometry being filled. A freeform gradient has no ramp to
+    /// express, so it is sampled into a brush over the same box; anything that still cannot be
+    /// painted falls back to <see cref="FillSpec.Color"/>, which the model keeps meaningful for
+    /// exactly this reason, so a gradient fill is never a hole.
     /// </summary>
     private void PaintFill(DrawingContext context, PathItem path, StreamGeometry geometry, double opacity)
     {
         FillSpec fill = path.Fill;
         if (fill.Gradient is { } gradient)
         {
-            IBrush? brush = GradientPaint.CreateBrush(gradient, geometry.Bounds, opacity);
-            if (brush is not null)
+            if (gradient.Kind == GradientKind.Freeform)
+            {
+                // Drawn into the object's own outline rather than through a brush: the field is a
+                // bitmap, and clipping it to the geometry is what makes it a fill of THIS shape.
+                // The opacity is already in the bitmap's alpha.
+                if (GradientPaint.CreateFreeformBitmap(
+                        gradient, geometry.Bounds, path.ArtboardOffset(), opacity) is { } field)
+                {
+                    using (context.PushGeometryClip(geometry))
+                    {
+                        context.DrawImage(field, geometry.Bounds);
+                    }
+
+                    return;
+                }
+            }
+            else if (GradientPaint.CreateBrush(gradient, geometry.Bounds, opacity) is { } brush)
             {
                 context.DrawGeometry(brush, null, geometry);
                 return;
