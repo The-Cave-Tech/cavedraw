@@ -170,6 +170,11 @@ public partial class App : Application
         };
         root.Children.Add(assistantBusy);
 
+        // Ctrl+Z belongs to the document wherever focus happens to be. The canvas used to be the
+        // only control that handled it, so a panel field or a list could swallow it and the
+        // shortcut appeared dead until the person clicked back on the artwork.
+        UndoShortcuts.Install(window, view.ViewModel);
+
         // Reserve the overlay's height when fitting, so a fitted artboard is never
         // hidden behind the panel; `--diagnostics` therefore opens already fitted.
         void SyncOverlayInset()
