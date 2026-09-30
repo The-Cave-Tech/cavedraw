@@ -149,4 +149,36 @@ public class ShapeFlyoutTests
             window.Close();
         }
     }
+
+    /// <summary>
+    /// **The button follows the choice, however the choice was made.**
+    ///
+    /// `tool.set star` and picking Star from the flyout must leave the same state - both the reported tool
+    /// and what the button shows - because a tool that can be set but not seen is a state a person cannot
+    /// see, which is worse than not being able to set it at all.
+    /// </summary>
+    [AvaloniaFact]
+    public void TheButtonShowsWhateverChoosesAShape()
+    {
+        (Window window, ShapeFlyoutButton button, EditorViewModel viewModel) = Host();
+        try
+        {
+            // What `tool.set star` does.
+            viewModel.CurrentShape = ShapeKind.Star;
+            Settle();
+
+            Assert.Contains("star", ToolTip.GetTip(button.Face) as string ?? string.Empty);
+
+            // And what picking from the flyout does.
+            button.OpenFlyout();
+            button.Choose(ShapeKind.Cloud);
+            Settle();
+
+            Assert.Contains("cloud", ToolTip.GetTip(button.Face) as string ?? string.Empty);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
 }

@@ -96,8 +96,26 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// <summary>
     /// Which of the nine shapes the shape tool draws. Changing it changes what a drag produces, and the
     /// toolbar button draws the shape itself, so the armed shape is visible rather than remembered.
+    ///
+    /// The notification is not decoration. `tool.set star` sets this property alone, and the compound button
+    /// learns what to draw by listening for the change - so as a plain auto-property it kept drawing a
+    /// rectangle while a driver had armed a star. A tool that can be set but not shown is a state the person
+    /// cannot see.
     /// </summary>
-    public ShapeKind CurrentShape { get; set; } = ShapeKind.Rectangle;
+    public ShapeKind CurrentShape
+    {
+        get => _currentShape;
+        set
+        {
+            if (_currentShape != value)
+            {
+                _currentShape = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    private ShapeKind _currentShape = ShapeKind.Rectangle;
 
     public string Status
     {
