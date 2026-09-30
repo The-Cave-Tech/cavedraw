@@ -48,14 +48,28 @@ public class ShapeFlyoutGestureTests
         }
     }
 
-    /// <summary>Waits past the (shortened) long-press interval with the dispatcher running.</summary>
-    private static void Hold()
+    /// <summary>
+    /// Pumps the dispatcher until a condition holds or the budget runs out.
+    ///
+    /// The long press is a real `DispatcherTimer`, and a timer only expires if its clock is allowed to
+    /// advance and the dispatcher is then given a chance to run what it posted. Sleeping without pumping
+    /// leaves the callback queued forever; pumping without sleeping never reaches the due time. Both have to
+    /// happen, which is why this is not a `RunJobs()` call.
+    /// </summary>
+    private static void PumpUntil(Func<bool> condition, int budgetMs = 3000)
     {
-        for (int i = 0; i < 8; i++)
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (!condition() && clock.ElapsedMilliseconds < budgetMs)
         {
-            Thread.Sleep(10);
+            // All three, because a dispatcher timer in the headless platform is driven by the render tick
+            // rather than by the job queue: advancing the clock and draining jobs is not enough on its own.
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
             Dispatcher.UIThread.RunJobs();
+            Thread.Sleep(5);
         }
+
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        Dispatcher.UIThread.RunJobs();
     }
 
     /// <summary>The face's centre, in window coordinates - where a person would aim.</summary>
@@ -88,6 +102,47 @@ public class ShapeFlyoutGestureTests
     }
 
     /// <summary>
+    /// **A long press opens the flyout.** This is the rule the whole flyout exists for, and the one that was
+    /// dead code until the handlers were attached with `handledEventsToo`.
+    ///
+    /// The interval is shortened so the test is not slow, but it is a real `DispatcherTimer` on its own
+    /// path: nothing here calls `OpenFlyout`, because a test that calls it proves only that `OpenFlyout`
+    /// works.
+    /// </summary>
+    [AvaloniaFact]
+    public void ALongPressOpensTheFlyout()
+    {
+        (Window window, ShapeFlyoutButton button, EditorViewModel viewModel) = Host();
+        try
+        {
+            button.PressMilliseconds = 20;
+            Point at = FaceCentre(window, button);
+
+            InputInjection.Press(window, at.X, at.Y, shift: false);
+
+            Assert.Equal(1, button.PressCount);
+            Assert.False(button.IsFlyoutOpen, "the flyout should not be open the instant the button goes down");
+
+            PumpUntil(() => button.IsFlyoutOpen);
+
+            Assert.True(button.IsFlyoutOpen, "holding the button should open the flyout");
+
+            // Opening is not choosing. The tool is not armed and the shape is not changed, because a person
+            // who opens the flyout and then dismisses it must end up exactly where they started - which is
+            // the rule `ClosingWithoutChoosingChangesNothing` pins from the other side.
+            Assert.Equal(EditorTool.Select, viewModel.Tool);
+            Assert.Equal(ShapeKind.Rectangle, viewModel.CurrentShape);
+
+            InputInjection.Release(window, at.X, at.Y);
+            Settle();
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
     /// Releasing on the button after a long press leaves the flyout open. The press that opened it was not a
     /// choice, and reading its release as one would open and dismiss the flyout in a single gesture.
     /// </summary>
@@ -97,10 +152,11 @@ public class ShapeFlyoutGestureTests
         (Window window, ShapeFlyoutButton button, EditorViewModel viewModel) = Host();
         try
         {
+            button.PressMilliseconds = 20;
             Point at = FaceCentre(window, button);
 
             InputInjection.Press(window, at.X, at.Y, shift: false);
-            Hold();
+            PumpUntil(() => button.IsFlyoutOpen);
             Assert.True(button.IsFlyoutOpen);
 
             InputInjection.Release(window, at.X, at.Y);
