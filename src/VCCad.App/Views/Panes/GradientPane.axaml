@@ -25,8 +25,8 @@
     <controls:GradientRamp x:Name="Ramp" Height="44"/>
 
     <!-- The selected stop: its own colour through the existing ring-and-triangle picker,
-         plus its position, opacity and blend midpoint (Illustrator's diamond). -->
-    <Grid ColumnDefinitions="Auto,4,*,4,Auto,4,*,4,Auto,4,*">
+         plus its position and opacity. -->
+    <Grid ColumnDefinitions="Auto,6,*,6,Auto,6,*">
       <TextBlock Grid.Column="0" Text="Pos" VerticalAlignment="Center"
                  FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
       <TextBox x:Name="PositionBox" Grid.Column="2" Height="22" Padding="4,0"
@@ -35,10 +35,15 @@
                  FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
       <TextBox x:Name="StopOpacityBox" Grid.Column="6" Height="22" Padding="4,0"
                VerticalContentAlignment="Center" TextAlignment="Right"/>
-      <TextBlock Grid.Column="8" Text="Mid" VerticalAlignment="Center"
+    </Grid>
+
+    <!-- The blend midpoint, Illustrator's diamond. On its own row: the panel is narrow, and three
+         label-and-field pairs side by side clip the labels. -->
+    <Grid ColumnDefinitions="Auto,6,*">
+      <TextBlock Grid.Column="0" Text="Mid" VerticalAlignment="Center"
                  FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"
                  ToolTip.Tip="Blend midpoint toward the next stop"/>
-      <TextBox x:Name="MidBox" Grid.Column="10" Height="22" Padding="4,0"
+      <TextBox x:Name="MidBox" Grid.Column="2" Height="22" Padding="4,0"
                VerticalContentAlignment="Center" TextAlignment="Right"/>
     </Grid>
 
