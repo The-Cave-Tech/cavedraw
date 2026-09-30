@@ -885,11 +885,11 @@ public sealed class CanvasWorkspace : Control
         _hoverModel = model;
         _shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
 
-        // An I-beam over text is the only thing that tells a person the text can be
-        // typed into; without it a text block looks like any other object.
-        Cursor = _editingText is not null || HitTestTopItem(model) is TextItem
-            ? new Cursor(StandardCursorType.Ibeam)
-            : Cursor.Default;
+        // An I-beam over text is the only thing that tells a person the text can be typed into; and a
+        // handle over a handle is the only thing that tells them the box can be dragged - including
+        // while the block is open for editing, which is when the fit is being recalculated underneath
+        // them and a box that needs widening is most obvious.
+        Cursor = CursorFor(model);
 
         if (_frameResizeHandle >= 0 && _editingText is not null)
         {
@@ -5010,11 +5010,15 @@ public sealed class CanvasWorkspace : Control
     }
 
     /// <summary>
-    /// The grab handles on the edit box, in the block's own coordinates.
+    /// The grab handles on the edit box, in the block's own coordinates: the right edge at three
+    /// heights, the left edge's middle, and a rotation handle above the origin.
     ///
-    /// Only the width is settable: the height is whatever the lines need, so a vertical
-    /// handle would be a lie. The handles resize the frame the text wraps in — the box
-    /// grows downwards on its own as lines are added and never widens with the text.
+    /// There is deliberately no vertical handle. The block's height is whatever its lines need, so a
+    /// handle that pretended to set it would be a lie; the width is what the text wraps in and the
+    /// rotation is what turns the block. Those are the two things about the box a person can change
+    /// while the words stay where they are - and both are reachable while editing, because the text
+    /// shrinks to fit the box as it is typed, so the moment the box needs fixing is the moment the
+    /// person is in it.
     /// </summary>
     private static Point2D[] EditBoxHandles(TextItem text, TextMetrics metrics)
     {
@@ -5022,10 +5026,11 @@ public sealed class CanvasWorkspace : Control
         double h = Math.Max(metrics.TotalHeight, text.MaxFontSize * text.LineSpacing);
         double mid = h / 2;
 
-        // Right edge (three), then the left edge's middle.
+        // Right edge (three), the left edge's middle, then rotation above the origin.
         return new[]
         {
             new Point2D(w, 0), new Point2D(w, mid), new Point2D(w, h), new Point2D(0, mid),
+            new Point2D(0, -RotateHandleOffset),
         };
     }
 
@@ -5048,11 +5053,29 @@ public sealed class CanvasWorkspace : Control
         return -1;
     }
 
-    /// <summary>Applies a handle drag: only the frame width changes.</summary>
+    /// <summary>Applies a handle drag: the frame width, or the block's rotation.</summary>
     private void DragEditBoxHandle(Point2D world)
     {
         if (_editingText is not { } text)
         {
+            return;
+        }
+
+        if (_frameResizeHandle == EditRotateHandle)
+        {
+            // Turn the block so its rotation handle points at the pointer. The handle sits directly
+            // above the origin, so the rotation is the pointer's bearing from the origin, less the
+            // quarter turn that "above" is from "right".
+            Point2D origin = TextLocalToWorld(text, new Point2D(0, 0));
+            var bearing = new Vector2D(world.X - origin.X, world.Y - origin.Y);
+            if (Math.Sqrt((bearing.X * bearing.X) + (bearing.Y * bearing.Y)) < 1e-6)
+            {
+                return;
+            }
+
+            text.RotationRadians = Math.Atan2(bearing.Y, bearing.X) + (Math.PI / 2);
+            AfterTextEdit();
+            InvalidateVisual();
             return;
         }
 
@@ -5068,6 +5091,77 @@ public sealed class CanvasWorkspace : Control
         AfterTextEdit();
         InvalidateVisual();
     }
+
+    /// <summary>
+    /// The cursor the point should show.
+    ///
+    /// A handle wins over "this is text": the whole complaint this answers is that hovering a handle
+    /// while editing kept showing the text caret, so nothing said the handle could be grabbed - and a
+    /// control nobody knows is there is not a control.
+    /// </summary>
+    private Cursor CursorFor(Point2D model) => new(CursorKindFor(model));
+
+    /// <summary>
+    /// What the pointer should look like at a model point.
+    ///
+    /// Exposed so it can be asserted: Avalonia's <see cref="Cursor"/> does not say which kind it is, so
+    /// a test that could only inspect the cursor object would be able to say "something changed" and
+    /// nothing else.
+    /// </summary>
+    internal StandardCursorType CursorKindFor(Point2D model)
+    {
+        if (_editingText is { } editing)
+        {
+            int handle = HandleAt(editing, model);
+            return handle >= 0
+                ? HandleCursorKind(editing, handle)
+                : StandardCursorType.Ibeam;
+        }
+
+        return HitTestTopItem(model) is TextItem
+            ? StandardCursorType.Ibeam
+            : StandardCursorType.Arrow;
+    }
+
+    /// <summary>
+    /// The cursor a handle should show. The resize direction follows the block rather than the screen,
+    /// so a box turned a quarter turn resizes up-and-down on screen when a width handle is pulled, and
+    /// the cursor says so instead of pointing the wrong way.
+    /// </summary>
+    private static StandardCursorType HandleCursorKind(TextItem text, int handle)
+    {
+        if (handle == EditRotateHandle)
+        {
+            return StandardCursorType.Hand;
+        }
+
+        double degrees = text.RotationRadians * 180.0 / Math.PI;
+        double folded = ((degrees % 180) + 180) % 180;
+        bool alongTheBlock = folded < 45 || folded > 135;
+
+        return alongTheBlock
+            ? StandardCursorType.SizeWestEast
+            : StandardCursorType.SizeNorthSouth;
+    }
+
+    /// <summary>
+    /// The caret's index in the text being edited. Exposed for tests: "the box moved and the caret
+    /// stayed with the character it was in" is the thing a box edit must not break, and it cannot be
+    /// asserted by looking at a screenshot.
+    /// </summary>
+    internal int CaretIndexForTests => _caret;
+    /// <summary>Where the edit box's handles are, in model space - for tests and for hit-testing.</summary>
+    internal IReadOnlyList<Point2D> EditBoxHandlesWorld(TextItem text)
+    {
+        Point2D[] local = EditBoxHandles(text, MeasureText(text));
+        return local.Select(handle => TextLocalToWorld(text, handle)).ToArray();
+    }
+
+    /// <summary>Index of the rotation handle in <see cref="EditBoxHandles"/>.</summary>
+    private const int EditRotateHandle = 4;
+
+    /// <summary>How far above the origin the rotation handle sits, in the block's own units.</summary>
+    private const double RotateHandleOffset = 22;
 
     /// <summary>
     /// The two ends of the caret, in screen coordinates, or null when no block is being edited.
