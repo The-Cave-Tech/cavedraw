@@ -5362,7 +5362,8 @@ public sealed class CanvasWorkspace : Control
                 break;
 
             case Key.A:
-                _vm.Tool = EditorTool.Node;
+                // A toggle, not a jump: the same key that leaves the pen brings it back.
+                _vm.ToggleTool(EditorTool.Node);
                 FinalizePen(select: false);
                 e.Handled = true;
                 break;

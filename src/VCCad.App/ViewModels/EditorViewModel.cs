@@ -68,11 +68,31 @@ public sealed class EditorViewModel : INotifyPropertyChanged
                 return;
             }
 
+            // Every switch remembers where it came from, so a toggle key can go back. Stepping
+            // aside to the node tool to nudge a node and returning to the pen is one keystroke
+            // rather than a trip to the toolbar.
+            PreviousTool = _tool;
             _tool = value;
             OnPropertyChanged();
             RaiseDocumentChanged();
         }
     }
+
+    /// <summary>
+    /// The tool that was active before this one, for <see cref="ToggleTool"/>.
+    ///
+    /// Starts as Select so the first toggle has somewhere to return to.
+    /// </summary>
+    public EditorTool PreviousTool { get; private set; } = EditorTool.Select;
+
+    /// <summary>
+    /// Switch to <paramref name="tool"/>, or back to the tool before it when it is already active.
+    ///
+    /// This is the keyboard toggle: from the pen, A gives the node tool, and A again gives the pen
+    /// back - the middle of a drawing is no place to be sent to the toolbar. Coming back is an
+    /// ordinary switch, so the tool gone back to becomes the one a third press returns from.
+    /// </summary>
+    public void ToggleTool(EditorTool tool) => Tool = Tool == tool ? PreviousTool : tool;
 
     public string Status
     {

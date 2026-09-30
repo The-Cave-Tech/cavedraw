@@ -2794,8 +2794,35 @@ public static class EditorOperations
                 return new { tool = tool.ToString().ToLowerInvariant() };
             });
 
-        Add("tool.get", "The active tool.", "",
-            (ctx, _) => new { tool = ctx.ViewModel.Tool.ToString().ToLowerInvariant() });
+        Add("tool.toggle",
+            "Toggle to a tool, or back to the one before it when it is already active - what the A " +
+            "key does between the pen and the node tools. Coming back is an ordinary switch, so the " +
+            "tool gone back to is the one a further toggle returns from.",
+            "tool?:string (default node)",
+            (ctx, p) =>
+            {
+                string name = p.GetString("tool") ?? "node";
+                if (!Enum.TryParse(name, ignoreCase: true, out EditorTool tool))
+                {
+                    throw new EditorOperationException(
+                        $"Unknown tool '{name}'. Use one of: {string.Join(", ", Enum.GetNames<EditorTool>())}.");
+                }
+
+                EditorTool was = ctx.ViewModel.Tool;
+                ctx.ViewModel.ToggleTool(tool);
+                return new
+                {
+                    tool = ctx.ViewModel.Tool.ToString().ToLowerInvariant(),
+                    from = was.ToString().ToLowerInvariant(),
+                };
+            });
+
+        Add("tool.get", "The active tool, and the one it would toggle back to.", "",
+            (ctx, _) => new
+            {
+                tool = ctx.ViewModel.Tool.ToString().ToLowerInvariant(),
+                previous = ctx.ViewModel.PreviousTool.ToString().ToLowerInvariant(),
+            });
 
         Add("pane.list",
             "Dockable panes: whether each is open, and how the stacked ones are sized. A " +
