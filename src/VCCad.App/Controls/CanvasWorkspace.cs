@@ -791,9 +791,11 @@ public sealed class CanvasWorkspace : Control
             ExitTextEdit();
         }
 
-        if (e.ClickCount >= 2 && HitTestTopItem(model) is TextItem dblText)
+        // A double-click means "let me work on this one": text opens with the caret where the click
+        // landed, a path hands its geometry to the node tool. The rule lives in EditAt so a driver
+        // can do the same thing rather than having to reconstruct it from two calls.
+        if (e.ClickCount >= 2 && EditAt(model) != EditTarget.None)
         {
-            EnterTextEdit(dblText);
             e.Handled = true;
             return;
         }
@@ -4464,11 +4466,46 @@ public sealed class CanvasWorkspace : Control
     // On-canvas rich-text editing
     // ------------------------------------------------------------------
 
-    private void EnterTextEdit(TextItem text)
+    /// <summary>
+    /// What a double-click at a point opens: a text block for typing, or a path for node editing.
+    ///
+    /// Public because a person can do it and the assistant must be able to as well, and because the
+    /// pointer handler should not own a rule the registry cannot reach.
+    /// </summary>
+    public EditTarget EditAt(Point2D model)
+    {
+        if (_vm is null)
+        {
+            return EditTarget.None;
+        }
+
+        switch (HitTestTopItem(model))
+        {
+            case TextItem text:
+                // Opening at the point is the whole of "double-click the word you mean": the caret
+                // goes where the click landed rather than to the end of the block.
+                EnterTextEdit(text, model);
+                return EditTarget.Text;
+
+            // Only from the select tool. In the node tool a double-click is already a node
+            // gesture, and in the pen tool it is how a path is finished.
+            case PathItem path when _vm.Tool == EditorTool.Select:
+                _vm.SelectObject(path);
+                _vm.Tool = EditorTool.Node;
+                return EditTarget.Path;
+
+            default:
+                return EditTarget.None;
+        }
+    }
+
+    private void EnterTextEdit(TextItem text, Point2D? caretAt = null)
     {
         _editingText = text;
         _editBefore = (TextItem)text.Clone();
-        _caret = TextEditing.Length(text);
+        _caret = caretAt is { } point && TextContains(text, point)
+            ? IndexAtLocal(text, ToTextLocal(text, point))
+            : TextEditing.Length(text);
         _editAnchor = _caret;
         _vm!.SelectObject(text);
         _vm.IsEditingText = true;

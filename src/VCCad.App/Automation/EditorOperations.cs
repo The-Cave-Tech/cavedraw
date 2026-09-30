@@ -1506,6 +1506,34 @@ public static class EditorOperations
                 return Summary(ctx);
             });
 
+        Add("object.editAt",
+            "Do what a double-click at a point does: open the text block there for editing with the " +
+            "caret where the click landed, or select the path there and arm the node tool. This is " +
+            "the gesture a person uses to get into editing, reachable without a double-click.",
+            "x:number, y:number",
+            (ctx, p) =>
+            {
+                VCCad.App.Controls.CanvasWorkspace? canvas = Workspace(ctx);
+                if (canvas is null)
+                {
+                    throw new EditorOperationException("No canvas is attached.");
+                }
+
+                var point = new VCCad.Geometry.Point2D(p.GetDouble("x"), p.GetDouble("y"));
+                VCCad.App.Controls.EditTarget opened = canvas.EditAt(point);
+                ctx.ViewModel.NotifyDocumentChanged();
+
+                return new
+                {
+                    opened = opened.ToString().ToLowerInvariant(),
+                    tool = ctx.ViewModel.Tool.ToString().ToLowerInvariant(),
+                    editing = ctx.ViewModel.IsEditingText,
+                    selectionStart = ctx.ViewModel.TextSelectionStart,
+                    selectionEnd = ctx.ViewModel.TextSelectionEnd,
+                    selected = ctx.ViewModel.SelectedObjects.Count,
+                };
+            });
+
         Add("text.edit",
             "Open a text block for editing, as double-clicking into it does. Needed before " +
             "text.select, and therefore before styling part of a selection: the range is " +
