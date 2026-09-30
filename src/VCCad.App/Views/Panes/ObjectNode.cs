@@ -34,6 +34,12 @@ public sealed class ObjectNode : INotifyPropertyChanged
     public object? Tag { get; }
 
     /// <summary>
+    /// The row above this one. An item is revealed in the tree by opening its ancestors, and a node that
+    /// does not know its parent cannot be revealed.
+    /// </summary>
+    public ObjectNode? Parent { get; internal set; }
+
+    /// <summary>
     /// How deep the row sits, which is what the vertical rules at its left are drawn from.
     /// The other rows are fixed at startup so the guides are a plain list to bind.
     /// </summary>

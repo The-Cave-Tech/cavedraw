@@ -172,6 +172,7 @@ public partial class ObjectsPane : UserControl
         var node = new ObjectNode(DescribeItem(item), item, item.IsVisible, expanded.Contains(item),
             v => SetVisible(item, v));
         node.SetDepth(depth);
+        node.Parent = parent;
         node.Thumbnail = ObjectThumbnail.For(item, ThumbnailSize);
         _map[item] = node;
 
@@ -342,6 +343,9 @@ public partial class ObjectsPane : UserControl
     internal static bool IntersectsArtboard(Rect2D bounds, Vector2D offset, Artboard artboard)
         => LayerTree.IntersectsArtboard(bounds, offset, artboard);
 
+    /// <summary>The row showing an object, for tests that check what the tree is revealing.</summary>
+    internal ObjectNode? NodeFor(object tag) => _map.TryGetValue(tag, out ObjectNode? found) ? found : null;
+
     private void SyncToSelection()
     {
         if (_vm is null || _syncing)
@@ -352,9 +356,19 @@ public partial class ObjectsPane : UserControl
         _syncing = true;
         try
         {
-            if (_vm.SelectedObjects.Count > 0 && _map.TryGetValue(_vm.SelectedObjects[0], out ObjectNode? node))
+            // A **single** item means a fresh selection, and the tree opens to it: seeing the selection in
+            // the tree is how a person learns what they just picked, which matters most when the artwork
+            // sits several levels down. More than one item means they are building a selection, and
+            // re-opening the panel on every additive click would move it around underneath them and lose
+            // whatever they had expanded deliberately.
+            if (_vm.SelectedObjects.Count == 1 && _map.TryGetValue(_vm.SelectedObjects[0], out ObjectNode? node))
             {
                 ObjectTree.SelectedItem = node;
+
+                for (ObjectNode? above = node.Parent; above is not null; above = above.Parent)
+                {
+                    above.IsExpanded = true;
+                }
             }
         }
         finally
