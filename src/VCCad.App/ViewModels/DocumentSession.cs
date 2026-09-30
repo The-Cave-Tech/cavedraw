@@ -310,28 +310,33 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// and the numeric rotation field).</summary>
     internal void SetSelectionRotationRadians(double radians) => _selectionRotationRadians = radians;
 
-    /// <summary>Closes every selected open path (adds the closing segment; merges
-    /// coincident endpoints). One undo step.</summary>
-    public void CloseSelectedPaths()
+    /// <summary>
+    /// Closes every selected open path: the ends snap together when they nearly meet, and a closing
+    /// segment is added when they do not. One undo step.
+    ///
+    /// Returns what each close did, so a caller can say which case it was rather than reporting "path
+    /// closed" whether the path gained an edge or lost a stray end.
+    /// </summary>
+    public IReadOnlyList<PathCloseResult> CloseSelectedPaths()
     {
         var edits = new List<IUndoableCommand>();
+        var results = new List<PathCloseResult>();
+
         foreach (PathItem path in SelectedPaths())
         {
             PathItem before = path.GeometrySnapshot();
             bool changed = false;
-            foreach (SubPath sub in path.SubPaths)
+
+            for (int index = 0; index < path.SubPaths.Count; index++)
             {
-                if (sub.IsClosed)
+                if (path.SubPaths[index].IsClosed)
                 {
                     continue;
                 }
 
-                if (!sub.CloseAndMergeEndpoints())
-                {
-                    sub.IsClosed = true;
-                }
-
-                changed = true;
+                PathCloseResult result = PathCloser.Close(path, index);
+                results.Add(result);
+                changed |= result.Changed;
             }
 
             if (changed)
@@ -343,11 +348,18 @@ public sealed class DocumentSession : INotifyPropertyChanged
         if (edits.Count == 0)
         {
             SetStatus("No open paths to close");
-            return;
+            return results;
         }
 
         Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Close path", edits));
-        SetStatus("Path closed");
+
+        SetStatus(results.Any(r => r.Mode == PathCloseMode.SegmentAdded)
+            ? "Path closed with a new segment"
+            : results.Any(r => r.Mode == PathCloseMode.Snapped)
+                ? "Path closed: the ends were snapped together"
+                : "Path closed");
+
+        return results;
     }
 
     /// <summary>Joins two selected paths that share an endpoint (closing the result

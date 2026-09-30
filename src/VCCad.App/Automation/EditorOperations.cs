@@ -2011,11 +2011,28 @@ public static class EditorOperations
             });
 
         // ---- paths -------------------------------------------------------
-        Add("path.close", "Close the selected paths.", "", (ctx, _) =>
-        {
-            ctx.Session.CloseSelectedPaths();
-            return Summary(ctx);
-        });
+        Add("path.close",
+            "Close the selected paths. Ends within 0.05 mm are snapped together - moving the point that " +
+            "is not on a whole millimetre onto the one that is - and ends further apart gain a closing " +
+            "segment whose handles continue the neighbouring ones in proportion to their length.",
+            "",
+            (ctx, _) =>
+            {
+                IReadOnlyList<PathCloseResult> closes = ctx.Session.CloseSelectedPaths();
+                return new
+                {
+                    closed = closes.Count(r => r.Changed),
+                    snapped = closes.Count(r => r.Mode == PathCloseMode.Snapped),
+                    segmentsAdded = closes.Count(r => r.Mode == PathCloseMode.SegmentAdded),
+                    detail = closes.Select(r => new
+                    {
+                        mode = r.Mode.ToString(),
+                        movedTo = r.MovedTo is { } to ? new { x = to.X, y = to.Y } : null,
+                        movedFrom = r.MovedFrom is { } from ? new { x = from.X, y = from.Y } : null,
+                        gapMm = Math.Round(r.Gap, 4),
+                    }),
+                };
+            });
 
         Add("path.join", "Join two selected open paths at a shared endpoint.", "", (ctx, _) =>
         {
