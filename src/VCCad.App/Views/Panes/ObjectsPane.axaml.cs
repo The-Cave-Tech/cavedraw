@@ -25,6 +25,16 @@ public partial class ObjectsPane : UserControl
     private EditorViewModel? _vm;
     private bool _syncing;
 
+    /// <summary>
+    /// What the tree should be open to, kept across a rebuild.
+    ///
+    /// Every edit rebuilds the nodes, and a rebuilt row starts collapsed - the expansion set on the old node
+    /// survives only where the old map was read first, so a selection made while a rebuild was in flight
+    /// ends up inside a collapsed page again. Remembering the target and re-applying it after each rebuild
+    /// makes the reveal stick rather than depending on when the rebuild happened.
+    /// </summary>
+    private object? _reveal;
+
     private Point _pressPoint;
     private ObjectNode? _pressNode;
     private bool _dragArmed;
@@ -84,6 +94,7 @@ public partial class ObjectsPane : UserControl
                 var layerNode = new ObjectNode(FormatLayer(layer), layer, layer.IsVisible, expanded.Contains(layer),
                     v => SetVisible(layer, v));
                 layerNode.SetDepth(1);
+                layerNode.Parent = board;
                 _map[layer] = layerNode;
 
                 HashSet<LayerItem> mine = byLayer.TryGetValue(layer, out List<LayerItem>? items)
@@ -120,6 +131,14 @@ public partial class ObjectsPane : UserControl
             }
 
             _roots.Add(paste);
+        }
+
+        // A rebuilt row starts collapsed, so the row the selection is in has to be opened again -
+        // otherwise an edit while something was selected hides the selection inside a collapsed page.
+        if (_reveal is not null && _map.TryGetValue(_reveal, out ObjectNode? revealed))
+        {
+            OpenAncestors(revealed);
+            revealed.IsExpanded = true;
         }
 
         SyncToSelection();
@@ -343,8 +362,49 @@ public partial class ObjectsPane : UserControl
     internal static bool IntersectsArtboard(Rect2D bounds, Vector2D offset, Artboard artboard)
         => LayerTree.IntersectsArtboard(bounds, offset, artboard);
 
+    /// <summary>The tree itself, for tests that check what the panel is showing.</summary>
+    internal TreeView Tree => ObjectTree;
+
     /// <summary>The row showing an object, for tests that check what the tree is revealing.</summary>
     internal ObjectNode? NodeFor(object tag) => _map.TryGetValue(tag, out ObjectNode? found) ? found : null;
+
+    /// <summary>
+    /// Opens every row above a node, so the node itself is on screen.
+    ///
+    /// Found by walking **down** from the roots rather than up through parent links. The two must agree, and
+    /// when they do not the failure is silent: an unlinked row ends the walk early, the selected item stays
+    /// hidden inside a collapsed page, and the panel shows no selection at all. Searching down depends only
+    /// on the tree the panel is actually drawing.
+    /// </summary>
+    private void OpenAncestors(ObjectNode node)
+    {
+        foreach (ObjectNode root in _roots)
+        {
+            if (OpenPath(root, node))
+            {
+                return;
+            }
+        }
+    }
+
+    private static bool OpenPath(ObjectNode current, ObjectNode target)
+    {
+        if (ReferenceEquals(current, target))
+        {
+            return true;
+        }
+
+        foreach (ObjectNode child in current.Children)
+        {
+            if (OpenPath(child, target))
+            {
+                current.IsExpanded = true;
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private void SyncToSelection()
     {
@@ -361,15 +421,37 @@ public partial class ObjectsPane : UserControl
             // sits several levels down. More than one item means they are building a selection, and
             // re-opening the panel on every additive click would move it around underneath them and lose
             // whatever they had expanded deliberately.
-            if (_vm.SelectedObjects.Count == 1 && _map.TryGetValue(_vm.SelectedObjects[0], out ObjectNode? node))
+            if (_vm.SelectedObjects.Count != 1)
             {
-                ObjectTree.SelectedItem = node;
-
-                for (ObjectNode? above = node.Parent; above is not null; above = above.Parent)
-                {
-                    above.IsExpanded = true;
-                }
+                return;
             }
+
+            // If the row is not there, the tree is showing something else - a document that has since been
+            // closed, or one whose rebuild never ran. Rebuild rather than silently doing nothing: a panel
+            // that is looking at the wrong document cannot reveal anything, and it fails quietly.
+            if (!_map.ContainsKey(_vm.SelectedObjects[0]))
+            {
+                Rebuild();
+            }
+
+            if (!_map.TryGetValue(_vm.SelectedObjects[0], out ObjectNode? node))
+            {
+                return;
+            }
+
+            // Open the ancestors, set the selection, then open them again.
+            //
+            // Once is not enough, and the order alone does not fix it. Selecting a row makes the control
+            // realise containers of its own, and a row that was not realised yet does not carry the
+            // expansion that was set before it existed - so the page and layer above the selection could
+            // end up collapsed again with the selected row hidden inside them, which is the state the
+            // panel showed no selection for. Setting it on both sides of the selection costs one pass over
+            // a handful of nodes and cannot be undone by the control's own bookkeeping.
+            _reveal = node.Tag;
+            OpenAncestors(node);
+            ObjectTree.SelectedItem = node;
+            OpenAncestors(node);
+            ObjectTree.ScrollIntoView(node);
         }
         finally
         {
