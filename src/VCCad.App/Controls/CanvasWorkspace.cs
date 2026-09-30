@@ -151,6 +151,9 @@ public sealed class CanvasWorkspace : Control
     // Edit-box handle drag: which handle, and where the drag began.
     private int _frameResizeHandle = -1;
 
+    // The pencil's stroke, in document space, exactly as captured.
+    private readonly List<Point2D> _pencilPoints = new();
+
     // The corner tool's drag state.
     private PathItem? _roundPath;
     private PathItem? _roundBefore;
@@ -844,6 +847,7 @@ public sealed class CanvasWorkspace : Control
 
             case EditorTool.Node: NodePress(model); break;
                 case EditorTool.Corner: CornerPress(model); break;
+                case EditorTool.Pencil: PencilPress(model); break;
             case EditorTool.Pen: PenPress(model); break;
             case EditorTool.Rectangle:
             case EditorTool.Ellipse:
@@ -947,6 +951,7 @@ public sealed class CanvasWorkspace : Control
                     break;
                 case EditorTool.Node: NodeDrag(model); break;
                 case EditorTool.Corner: CornerDrag(model); break;
+                case EditorTool.Pencil: PencilDrag(model); break;
 
                 // The lasso's path grows here. Without this case the tool recorded where the
                 // drag began and nothing after it, so every lasso enclosed a zero-area region
@@ -1063,6 +1068,7 @@ public sealed class CanvasWorkspace : Control
                 break;
             case EditorTool.Node: NodeRelease(); break;
                 case EditorTool.Corner: CornerRelease(); break;
+                case EditorTool.Pencil: PencilRelease(); break;
 
             // The press set the marquee going and the moves grew its path; without this the
             // release never resolved it, so the whole gesture was thrown away at the end.
@@ -2292,6 +2298,56 @@ public sealed class CanvasWorkspace : Control
     // from. The geometry is previewed live by restoring the pre-drag snapshot and rounding again, so the
     // whole drag is one undo step rather than one per mouse move.
 
+    // ---- the pencil ----------------------------------------------------
+    // The captured points, joined, drawn as they are - no fitting, no smoothing, no correction. That is
+    // the request and it is also the right behaviour: a curve re-fitted under the pointer wanders as the
+    // fit wobbles, so the line would not follow the hand but argue with it.
+
+    private void PencilPress(Point2D model)
+    {
+        _pencilPoints.Clear();
+        _pencilPoints.Add(model);
+        _gestureMoved = false;
+        InvalidateVisual();
+    }
+
+    private void PencilDrag(Point2D model)
+    {
+        // Points a pointer repeats are dropped as they arrive, because fitting to them would put a
+        // segment on every one.
+        if (!FreehandFitter.ShouldKeep(_pencilPoints, model))
+        {
+            return;
+        }
+
+        _pencilPoints.Add(model);
+        _gestureMoved = true;
+        InvalidateVisual();
+    }
+
+    /// <summary>Fits the stroke **once**, on release, and adds it as a path.</summary>
+    private void PencilRelease()
+    {
+        if (_pencilPoints.Count >= 2)
+        {
+            _vm.DrawFreehand(_pencilPoints.ToList());
+        }
+
+        _pencilPoints.Clear();
+        _gestureMoved = false;
+        InvalidateVisual();
+    }
+
+    /// <summary>Draws the stroke being drawn: the captured points, joined, unfitted.</summary>
+    private void PaintPencilPreview(DrawingContext context)
+    {
+        var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x22, 0x22, 0x22)), 1.5);
+
+        for (int i = 1; i < _pencilPoints.Count; i++)
+        {
+            context.DrawLine(pen, ModelToScreen(_pencilPoints[i - 1]), ModelToScreen(_pencilPoints[i]));
+        }
+    }
     /// <summary>Begins rounding a corner, if the press landed on one.</summary>
     private void CornerPress(Point2D model)
     {
@@ -4211,6 +4267,12 @@ public sealed class CanvasWorkspace : Control
         if (_vm.HasSegmentSelection)
         {
             PaintSegmentHighlights(context);
+        }
+
+        // The stroke being drawn, exactly as captured - no fitting while the pointer is down.
+        if (_pencilPoints.Count > 1)
+        {
+            PaintPencilPreview(context);
         }
 
         if (_marqueeActive)

@@ -2151,6 +2151,45 @@ public static class EditorOperations
                     itemId = path.Id,
                 };
             });
+        Add("path.drawFreehand",
+            "Draw a freehand stroke: the points are fitted **once** to cubic Bezier segments and become " +
+            "an open path. The tolerance is how far the curve may sit from the points drawn - tight by " +
+            "default, because this follows a hand rather than smoothing it.",
+            "points:[x,y][], tolerance?:number",
+            (ctx, p) =>
+            {
+                if (!p.TryGetProperty("points", out JsonElement list) || list.ValueKind != JsonValueKind.Array)
+                {
+                    throw new EditorOperationException("Parameter 'points' is required: [[x,y],...].");
+                }
+
+                var points = new List<Point2D>();
+                foreach (JsonElement entry in list.EnumerateArray())
+                {
+                    if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 2)
+                    {
+                        throw new EditorOperationException("Each point must be [x, y].");
+                    }
+
+                    points.Add(new Point2D(entry[0].GetDouble(), entry[1].GetDouble()));
+                }
+
+                double? tolerance = p.TryGetProperty("tolerance", out JsonElement tv) &&
+                                    tv.ValueKind == JsonValueKind.Number
+                    ? tv.GetDouble()
+                    : null;
+
+                PathItem? path = ctx.Session.DrawFreehand(points, tolerance);
+                ctx.ViewModel.NotifyDocumentChanged();
+
+                return new
+                {
+                    drawn = path is not null,
+                    itemId = path?.Id,
+                    points = points.Count,
+                    nodes = path?.SubPaths[0].Nodes.Count ?? 0,
+                };
+            });
         Add("path.join", "Join two selected open paths at a shared endpoint.", "", (ctx, _) =>
         {
             ctx.Session.JoinSelection();

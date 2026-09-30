@@ -438,6 +438,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public void RoundCornerByDrag(PathItem path, int subPath, int node, double radius)
         => _active.RoundCorner(path, subPath, node, radius);
 
+    /// <summary>Draws a freehand stroke from the points the pointer visited, in document space.</summary>
+    public PathItem? DrawFreehand(IReadOnlyList<Point2D> points) => _active.DrawFreehand(points);
     /// <summary>The corner of the selection nearest a point, or null when none is within reach.</summary>
     public (PathItem Path, int SubPath, int Node, double Distance)? NearestCorner(Point2D point, double within)
         => _active.NearestCorner(point, within);

@@ -41,6 +41,12 @@ public enum EditorTool
     /// from - so pulling out from the corner a person is looking at grows the round predictably.
     /// </summary>
     Corner,
+    /// <summary>
+    /// Pencil: draw freehand. Press, move, release, and what was drawn becomes an open path of cubic
+    /// segments. The stroke is shown exactly as it was captured while drawing and fitted **once** on
+    /// release, because re-fitting under the pointer makes the line wander.
+    /// </summary>
+    Pencil,
     /// <summary>Drag out a closed rectangle between two corner points.</summary>
     Rectangle,
 
@@ -729,6 +735,46 @@ public sealed class DocumentSession : INotifyPropertyChanged
     {
         Execute(new GeometryReplaceCommand(path, before, path.GeometrySnapshot(), description));
         SetStatus(description);
+    }
+    /// <summary>
+    /// Draws a freehand stroke: the points the pointer visited, fitted once to cubic segments.
+    ///
+    /// The points arrive in **document** space, because that is where a pointer lives, and the path's
+    /// geometry is artboard-local - so they are moved into the artboard's space by subtracting its offset
+    /// before anything is fitted. Fitting in the wrong space gives a stroke of the right shape in the
+    /// wrong place, which looks like a drawing bug and is an arithmetic one.
+    ///
+    /// One undo step. Nothing is drawn for a stroke too short to be one - a click is not a line.
+    /// </summary>
+    public PathItem? DrawFreehand(IReadOnlyList<Point2D> points, double? tolerance = null)
+    {
+        FreehandFit fit = FreehandFitter.Fit(points, tolerance);
+        if (fit.Nodes.Count < 2)
+        {
+            SetStatus("Nothing drawn: a stroke needs movement");
+            return null;
+        }
+
+        (Layer layer, Vector2D offset) = TargetFor(fit.Nodes[0].Anchor);
+
+        var path = new PathItem { Name = "stroke" };
+        SubPath sub = path.AddSubPath(closed: false);
+        foreach (PathNode node in fit.Nodes)
+        {
+            sub.Nodes.Add(new PathNode(
+                new Point2D(node.Anchor.X - offset.X, node.Anchor.Y - offset.Y),
+                new Point2D(node.InHandle.X - offset.X, node.InHandle.Y - offset.Y),
+                new Point2D(node.OutHandle.X - offset.X, node.OutHandle.Y - offset.Y)));
+        }
+
+        path.Fill = FillSpec.None;
+        path.Stroke = new StrokeSpec(true, ColorRgb.Black, 1, StrokeCap.Round, StrokeJoin.Round, 4);
+        path.GeometryChanged();
+
+        Execute(new AddItemCommand(layer, path));
+        SelectObject(path);
+        SetStatus($"Drew a stroke: {fit.Segments} segment(s), within {fit.WorstError:0.###} of the drawn line");
+        return path;
     }
     /// <summary>Joins two selected paths that share an endpoint (closing the result
     /// if its ends meet).</summary>
