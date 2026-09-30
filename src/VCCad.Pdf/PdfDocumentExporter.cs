@@ -143,7 +143,7 @@ public static class PdfDocumentExporter
         // the colour space the document stores — a CMYK scan stays a CMYK scan. The
         // resource dictionary is shared across pages, so an image is written once however
         // many pages place it; unused entries in a resource dictionary are legal.
-        var imageObjects = new PdfImageObjects(assembler, AllImages(document));
+        var imageObjects = new PdfImageObjects(assembler, AllImages(document), notes ?? new List<string>());
 
         // Gradient shadings are allocated while an artboard's content stream is built
         // (each usage carries its own geometry), so the content is written first and the
@@ -472,7 +472,7 @@ public static class PdfDocumentExporter
         switch (item)
         {
             case PathItem path:
-                PaintPath(ops, path, toDoc, opacity, alphaStates, shadings);
+                PaintPath(ops, path, toDoc, opacity, alphaStates, shadings, images);
                 break;
 
             case ImageItem image:
@@ -542,7 +542,7 @@ public static class PdfDocumentExporter
     /// closed (fillable) and open (stroke-only), so the renderer never fills an
     /// open path as PDF would implicitly do.
     /// </summary>
-    private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfShadingObjects? shadings = null)
+    private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfShadingObjects? shadings = null, PdfImageObjects? images = null)
     {
         // Bake geometry into artboard space: anchors and both handles per node.
         var contours = new List<Contour>();
@@ -629,9 +629,37 @@ public static class PdfDocumentExporter
         // PDF cannot represent falls back to the fill's flat colour (reported by
         // PdfShadingObjects).
         ShadingPaint? shading = null;
-        if (fillVisible && path.Fill.Gradient is { } gradient && shadings is not null)
+        string? fieldName = null;
+        string? fieldMatrix = null;
+
+        if (fillVisible && path.Fill.Gradient is { } fillGradient)
         {
-            shading = shadings.NameFor(gradient, path.BoundingBox(), toDoc);
+            Rect2D localBox = path.BoundingBox();
+
+            if (GradientField.NeedsSampling(fillGradient))
+            {
+                // No shading can express these - see GradientField - so the field is sampled and the
+                // picture is drawn through the object's own placement, clipped to its outline: that
+                // is what makes it a fill of THIS shape rather than a rectangle behind it. The
+                // parallelogram comes from the placement matrix, so a rotated object is sampled in
+                // the frame it is drawn in.
+                if (images is not null)
+                {
+                    Point2D origin = toDoc.Transform(new Point2D(localBox.X, localBox.Y));
+                    Point2D alongU = toDoc.Transform(new Point2D(localBox.Right, localBox.Y));
+                    Point2D alongV = toDoc.Transform(new Point2D(localBox.X, localBox.Bottom));
+                    Vector2D u = new(alongU.X - origin.X, alongU.Y - origin.Y);
+                    Vector2D v = new(alongV.X - origin.X, alongV.Y - origin.Y);
+
+                    fieldName = images.AddSampledGradient(fillGradient, origin, u, v);
+                    fieldMatrix = $"{Num(u.X)} {Num(u.Y)} {Num(v.X)} {Num(v.Y)} " +
+                                  $"{Num(origin.X)} {Num(origin.Y)}";
+                }
+            }
+            else if (shadings is not null)
+            {
+                shading = shadings.NameFor(fillGradient, localBox, toDoc);
+            }
         }
 
         if (fillVisible && contours.Count > 0)
@@ -652,6 +680,20 @@ public static class PdfDocumentExporter
                 }
 
                 ops.Add($"/{paint.ResourceName} sh");
+                ops.Add("Q");
+            }
+            else if (fieldName is { } field)
+            {
+                ops.Add("q");
+                if (alphaStates.HasTransparency)
+                {
+                    ops.Add($"{alphaStates.NameFor(path.Fill.Color.A * opacity)} gs");
+                }
+
+                WriteContours(ops, contours);
+                ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "W* n" : "W n");
+                ops.Add($"{fieldMatrix} cm");
+                ops.Add($"/{field} Do");
                 ops.Add("Q");
             }
             else

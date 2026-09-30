@@ -319,6 +319,79 @@ public class GradientPdfTests
     // Helpers
     // ------------------------------------------------------------------
 
+    /// <summary>
+    /// Freeform and conical have no shading to be written as - a sweep has no /ShadingType at all,
+    /// and free-form shadings are meshes - so the field is sampled and the picture is drawn through
+    /// the path's own outline. What this pins is that the page carries the picture, clipped to the
+    /// shape, rather than silently painting the flat fill colour as it used to.
+    /// </summary>
+    [Theory]
+    [InlineData(GradientKind.Freeform)]
+    [InlineData(GradientKind.Conical)]
+    public void ASampledGradientIsExportedAsAClippedImage(GradientKind kind)
+    {
+        GradientSpec gradient = kind == GradientKind.Freeform
+            ? new GradientSpec
+            {
+                Kind = GradientKind.Freeform,
+                FreeformMode = FreeformMode.Points,
+                Points = new[]
+                {
+                    new FreeformPoint(new Point2D(30, 40), new ColorRgb(1, 0, 0)),
+                    new FreeformPoint(new Point2D(210, 120), new ColorRgb(0, 0, 1)),
+                },
+            }
+            : new GradientSpec
+            {
+                Kind = GradientKind.Conical,
+                Stops = new[]
+                {
+                    new GradientStop(0.0, new ColorRgb(1, 0, 0)),
+                    new GradientStop(1.0, new ColorRgb(0, 0, 1)),
+                },
+            };
+
+        byte[] pdf = PdfDocumentExporter.Export(DocumentWithSquare(gradient));
+        string latin = Encoding.Latin1.GetString(pdf);
+
+        // The picture: an RGB image whose grid follows the longer edge of the 200x100 box.
+        Assert.Contains("/Subtype /Image", latin, StringComparison.Ordinal);
+        Assert.Contains("/ColorSpace /DeviceRGB", latin, StringComparison.Ordinal);
+        Assert.Contains("/Width 128", latin, StringComparison.Ordinal);
+        Assert.Contains("/Height 64", latin, StringComparison.Ordinal);
+
+        // And it is DRAWN rather than shaded: no shading object exists, and the vector importer finds
+        // an image on the page, which it can only do by reading the operator that drew it.
+        Assert.DoesNotContain("/ShadingType", latin, StringComparison.Ordinal);
+        Assert.True(PdfImporter.TryImportVector(pdf, out CadDocument? round));
+        Assert.Contains(
+            round!.Artboards[0].Layers.SelectMany(l => l.Children),
+            item => item is ImageItem);
+    }
+
+    /// <summary>
+    /// The export says what it did: a foreign reader is handed a picture, so anyone opening the file
+    /// in another tool should be able to find out why the gradient is not a gradient.
+    /// </summary>
+    [Fact]
+    public void ExportingASampledGradientSaysSo()
+    {
+        GradientSpec gradient = new()
+        {
+            Kind = GradientKind.Conical,
+            Stops = new[]
+            {
+                new GradientStop(0.0, new ColorRgb(1, 0, 0)),
+                new GradientStop(1.0, new ColorRgb(0, 0, 1)),
+            },
+        };
+
+        PdfDocumentExporter.Export(DocumentWithSquare(gradient), out IReadOnlyList<string> notes);
+
+        Assert.Contains(notes, n => n.Contains("conical", StringComparison.OrdinalIgnoreCase)
+                                    && n.Contains("sampled image", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static CadDocument DocumentWithSquare(GradientSpec gradient)
     {
         CadDocument document = CadDocument.CreateDefault("gradient");

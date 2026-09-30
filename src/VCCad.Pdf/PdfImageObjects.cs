@@ -1,5 +1,6 @@
 using System.Text;
 using VCCad.Core.Model;
+using VCCad.Geometry;
 
 namespace VCCad.Pdf;
 
@@ -13,11 +14,16 @@ namespace VCCad.Pdf;
 /// </summary>
 internal sealed class PdfImageObjects
 {
+    private readonly PdfAssembler _assembler;
+    private readonly List<string> _notes;
     private readonly Dictionary<ImageItem, string> _names = new();
     private readonly List<(string Name, int Object)> _entries = new();
+    private int _sampled;
 
-    public PdfImageObjects(PdfAssembler assembler, IEnumerable<ImageItem> images)
+    public PdfImageObjects(PdfAssembler assembler, IEnumerable<ImageItem> images, List<string>? notes = null)
     {
+        _assembler = assembler;
+        _notes = notes ?? new List<string>();
         int index = 0;
 
         foreach (ImageItem image in images)
@@ -133,6 +139,44 @@ internal sealed class PdfImageObjects
     }
 
     public bool TryName(ImageItem image, out string name) => _names.TryGetValue(image, out name!);
+
+    /// <summary>
+    /// Writes a sampled gradient as an image XObject and returns the resource name to draw it with,
+    /// or null when the gradient cannot be sampled.
+    ///
+    /// It lives here because it is the same kind of thing - a picture in the resource dictionary -
+    /// and because a page may carry only ONE <c>/XObject</c> entry: a second one would replace the
+    /// first, and every embedded image with it. <paramref name="origin"/>, <paramref name="u"/> and
+    /// <paramref name="v"/> are the parallelogram the picture is drawn through, in artboard space.
+    /// </summary>
+    public string? AddSampledGradient(GradientSpec gradient, Point2D origin, Vector2D u, Vector2D v)
+    {
+        // firstRowAtOrigin: false - a PDF image's first row is drawn along its own +v edge, not at the
+        // origin, so the field has to be sampled the other way up or the page comes out flipped.
+        if (GradientField.Rgb(gradient, origin, u, v, firstRowAtOrigin: false) is not { } raster)
+        {
+            return null;
+        }
+
+        string name = $"Gx{++_sampled}";
+        int objectNumber = _assembler.Allocate();
+
+        _notes.Add(
+            $"the {gradient.Kind.ToString().ToLowerInvariant()} gradient is exported as a sampled " +
+            "image: the page looks the same, but a foreign reader is given a picture rather than a " +
+            "gradient, so it does not stay smooth when scaled up.");
+
+        // The field is sampled here rather than described as a shading, so the bytes are the picture
+        // and DeviceRGB is what they are: three components per pixel, Flate-compressed like every
+        // other sample stream this exporter writes.
+        _assembler.SetBody(objectNumber, PdfDocumentExporter.MakeStreamObject(
+            PdfDocumentExporter.CompressBytes(raster.Rgb),
+            $" /Type /XObject /Subtype /Image /Width {raster.Width}" +
+            $" /Height {raster.Height} /BitsPerComponent 8 /ColorSpace /DeviceRGB"));
+
+        _entries.Add((name, objectNumber));
+        return name;
+    }
 
     /// <summary>
     /// The image's colour space as the PDF name it was imported as.
