@@ -88,15 +88,18 @@ public class EncryptedPdfTests
     /// AES-256 (/V 5, /R 6) does <b>not</b> open yet, and the reason is recorded here rather than left
     /// as a red test - see issue #36.
     ///
-    /// The revision 6 hash IS implemented and is provably right: an independent implementation
-    /// (python + openssl, <c>Fixtures/Encrypted/r6check.py</c>) reproduces **qpdf's own /O** from the
-    /// owner password with /U as the extra input, using the same algorithm this code uses. What does
-    /// not reproduce is qpdf's **/U** from the empty user password, by any variant tried: empty extra,
-    /// /U as extra, /O as extra. So either qpdf wrote a user slot that is not the empty password's
-    /// hash, or the user slot differs from the owner's in a way not yet found. Until that is settled
-    /// the AES-256 path is unverified, and the theory above deliberately does not claim it.
+    /// Where it stands: the revision 6 **validation** hash reproduces qpdf's /U exactly for the empty
+    /// password, and the owner slot reproduces for another fixture, so algorithm 2.B is right. What
+    /// does not follow is the **file key**: nothing built from the key salt - in CBC or ECB, with the
+    /// user or the owner password, with an empty extra or /U as the extra - decrypts a single stream.
+    /// Validation agreeing while the key does not is the contradiction to resolve, and
+    /// <c>Fixtures/Encrypted/r6-probe.py</c> is committed to make that quick to re-check.
+    ///
+    /// The assertion here is deliberately **not** "it did not throw": a protected file imports to an
+    /// empty page rather than failing, so that would pass without anything being decrypted - which is
+    /// exactly how a gap like this hides.
     /// </summary>
-    [Fact(Skip = "AES-256 unverified: the revision 6 hash reproduces qpdf's owner slot but not its user slot for an empty password - see issue #36 and Fixtures/Encrypted/r6check.py")]
+    [Fact(Skip = "AES-256 still does not open: the revision 6 validation hash reproduces qpdf's /U but no file key built from it decrypts a stream - see issue #36 and Fixtures/Encrypted/r6-probe.py")]
     public void Aes256OpensToTheSameDrawing()
     {
         byte[] pdf = File.ReadAllBytes(Path.Combine(FixtureDirectory, "aes-256.pdf"));
