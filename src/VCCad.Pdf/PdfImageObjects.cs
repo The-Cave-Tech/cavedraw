@@ -184,13 +184,35 @@ internal sealed class PdfImageObjects
     /// An indexed image carries its palette inline as a hex string, because the palette
     /// is part of the colour space rather than of the pixel data.
     /// </summary>
+    /// <summary>
+    /// An indexed colour space, with its palette inline - the palette is part of the colour space,
+    /// not of the pixel data - and its BASE carried through. An Indexed space over DeviceCMYK holds
+    /// four bytes per entry, and writing it back out as RGB would change the picture's colours on
+    /// every save, which is the bug this exists to prevent.
+    /// </summary>
+    private static string IndexedColorSpace(ImageItem image)
+    {
+        int size = image.PaletteEntryBytes;
+        if (image.Palette.Length < size)
+        {
+            return "/DeviceGray";
+        }
+
+        string baseSpace = image.PaletteBase switch
+        {
+            ImageColorSpace.Gray => "/DeviceGray",
+            ImageColorSpace.Cmyk => "/DeviceCMYK",
+            _ => "/DeviceRGB",
+        };
+
+        return $"[/Indexed {baseSpace} {(image.Palette.Length / size) - 1} <{Convert.ToHexString(image.Palette)}>]";
+    }
+
     private static string ColorSpaceOf(ImageItem image) => image.ColorSpace switch
     {
         ImageColorSpace.Gray => "/DeviceGray",
         ImageColorSpace.Cmyk => "/DeviceCMYK",
-        ImageColorSpace.Indexed when image.Palette.Length >= 3 =>
-            $"[/Indexed /DeviceRGB {(image.Palette.Length / 3) - 1} <{Convert.ToHexString(image.Palette)}>]",
-        ImageColorSpace.Indexed => "/DeviceGray",
+        ImageColorSpace.Indexed => IndexedColorSpace(image),
         _ => "/DeviceRGB",
     };
 }

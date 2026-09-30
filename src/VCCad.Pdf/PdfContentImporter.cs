@@ -1458,7 +1458,7 @@ internal sealed class PdfContentImporter
             ? (int)Math.Round(ToDouble(_file.Resolve(bpc)))
             : 8;
 
-        (ImageColorSpace space, byte[] palette) = ResolveImageColorSpace(dict);
+        (ImageColorSpace space, byte[] palette) = ResolveImageColorSpace(dict, out ImageColorSpace paletteBase);
         byte[] samples = _file.GetStreamData(stream);
 
         // A JPEG cannot be decoded here, so what came back is the compressed stream itself.
@@ -1492,6 +1492,7 @@ internal sealed class PdfContentImporter
             BitsPerComponent = bits is 1 or 2 or 4 or 8 or 16 ? bits : 8,
             ColorSpace = space,
             Palette = palette,
+            PaletteBase = paletteBase,
             Samples = samples,
             Filter = compressor,
 
@@ -1567,8 +1568,11 @@ internal sealed class PdfContentImporter
     }
 
     /// <summary>The image's colour space and palette, normalised to what the model stores.</summary>
-    private (ImageColorSpace Space, byte[] Palette) ResolveImageColorSpace(Dictionary<string, object?> dict)
+    private (ImageColorSpace Space, byte[] Palette) ResolveImageColorSpace(
+        Dictionary<string, object?> dict, out ImageColorSpace paletteBase)
     {
+        // Rgb unless an indexed palette says otherwise, so every early return leaves the default.
+        paletteBase = ImageColorSpace.Rgb;
         object? raw = _file.Resolve(dict.GetValueOrDefault("ColorSpace"));
 
         if (raw is PdfName { Value: var name })
@@ -1593,6 +1597,10 @@ internal sealed class PdfContentImporter
                 _ => Array.Empty<byte>(),
             };
 
+            // The base decides the ENTRY SIZE: an Indexed space over DeviceCMYK holds four bytes
+            // per entry, and reading those as RGB takes every index three bytes out of place.
+            paletteBase = BaseColorSpace(parts[1]);
+
             return (ImageColorSpace.Indexed, palette);
         }
 
@@ -1615,6 +1623,14 @@ internal sealed class PdfContentImporter
 
         return (ImageColorSpace.Rgb, Array.Empty<byte>());
     }
+
+    /// <summary>The colour space an indexed palette indexes into, by its PDF name.</summary>
+    private ImageColorSpace BaseColorSpace(object? value) => _file.Resolve(value) switch
+    {
+        PdfName { Value: "DeviceGray" or "G" } => ImageColorSpace.Gray,
+        PdfName { Value: "DeviceCMYK" or "CMYK" } => ImageColorSpace.Cmyk,
+        _ => ImageColorSpace.Rgb,
+    };
 
     private void ShowText(string text, Dictionary<string, object?> resources, string fontName,
         double fontSize, AffineTransform ctm, AffineTransform textMatrix, ColorRgb color,

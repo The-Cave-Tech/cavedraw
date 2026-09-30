@@ -69,10 +69,32 @@ public sealed class ImageItem : LayerItem
     public string? MaskFilter { get; set; }
 
     /// <summary>
-    /// Palette for <see cref="ImageColorSpace.Indexed"/>, three bytes per entry, or
-    /// empty. Kept so an indexed image round-trips without being expanded.
+    /// Palette for <see cref="ImageColorSpace.Indexed"/>, or empty. Kept so an indexed image
+    /// round-trips without being expanded.
+    ///
+    /// The entry size is <see cref="PaletteEntryBytes"/>, which follows
+    /// <see cref="PaletteBase"/>: an indexed colour space is only half a colour space, and its
+    /// palette means nothing without the space it indexes into.
     /// </summary>
     public byte[] Palette { get; set; } = Array.Empty<byte>();
+
+    /// <summary>
+    /// The colour space an <see cref="ImageColorSpace.Indexed"/> palette indexes into.
+    ///
+    /// This is not a detail: `[/Indexed /DeviceCMYK ...]` holds **four** bytes per entry, and
+    /// reading those as RGB takes every index three bytes into the wrong place, which paints a
+    /// photograph in arbitrary saturated colours rather than in its own. The base is part of the
+    /// palette, so it is stored with it.
+    /// </summary>
+    public ImageColorSpace PaletteBase { get; set; } = ImageColorSpace.Rgb;
+
+    /// <summary>Bytes per palette entry, from the space the palette indexes into.</summary>
+    public int PaletteEntryBytes => PaletteBase switch
+    {
+        ImageColorSpace.Gray => 1,
+        ImageColorSpace.Cmyk => 4,
+        _ => 3,
+    };
 
     /// <summary>
     /// Optional single-channel soft mask, same pixel dimensions, 8 bits per sample.
@@ -129,6 +151,7 @@ public sealed class ImageItem : LayerItem
             Filter = Filter,
             MaskFilter = MaskFilter,
             Palette = (byte[])Palette.Clone(),
+            PaletteBase = PaletteBase,
             Mask = (byte[])Mask.Clone(),
             Placement = Placement,
             MirrorX = MirrorX,
@@ -168,30 +191,49 @@ public sealed class ImageItem : LayerItem
         switch (ColorSpace)
         {
             case ImageColorSpace.Gray:
-                double g = SampleAt(x, y, 0);
-                return new ColorRgb(g, g, g);
+                return Grey(SampleAt(x, y, 0));
 
             case ImageColorSpace.Cmyk:
-                double c = SampleAt(x, y, 0);
-                double m = SampleAt(x, y, 1);
-                double yl = SampleAt(x, y, 2);
-                double k = SampleAt(x, y, 3);
-                return new ColorRgb((1 - c) * (1 - k), (1 - m) * (1 - k), (1 - yl) * (1 - k));
+                return CmykToRgb(SampleAt(x, y, 0), SampleAt(x, y, 1), SampleAt(x, y, 2), SampleAt(x, y, 3));
 
             case ImageColorSpace.Indexed:
-                // The sample is a palette index, not an intensity, so it is the raw value
-                // that is wanted rather than the scaled one.
-                int entry = RawSampleAt(x, y, 0) * 3;
-                return entry + 2 < Palette.Length
-                    ? new ColorRgb(Palette[entry] / 255.0, Palette[entry + 1] / 255.0,
-                        Palette[entry + 2] / 255.0)
-                    : ColorRgb.Black;
+            {
+                // The sample is a palette index, not an intensity, so it is the raw value that is
+                // wanted rather than the scaled one - and the entry is as wide as the base space
+                // says, which for a CMYK palette is four bytes and not three.
+                int size = PaletteEntryBytes;
+                int entry = RawSampleAt(x, y, 0) * size;
+                if (entry < 0 || entry + size > Palette.Length)
+                {
+                    return ColorRgb.Black;
+                }
+
+                return PaletteBase switch
+                {
+                    ImageColorSpace.Gray => Grey(Palette[entry] / 255.0),
+                    ImageColorSpace.Cmyk => CmykToRgb(
+                        Palette[entry] / 255.0, Palette[entry + 1] / 255.0,
+                        Palette[entry + 2] / 255.0, Palette[entry + 3] / 255.0),
+                    _ => new ColorRgb(
+                        Palette[entry] / 255.0, Palette[entry + 1] / 255.0, Palette[entry + 2] / 255.0),
+                };
+            }
 
             default:
                 return new ColorRgb(
                     SampleAt(x, y, 0), SampleAt(x, y, 1), SampleAt(x, y, 2));
         }
     }
+
+    /// <summary>
+    /// A CMYK quadruple as RGB. The naive conversion, and the one the pre-press world expects of a
+    /// viewer that has no ICC profile to do better with: no black generation, no dot gain. Reading
+    /// CMYK samples as RGB - or as three of the four - turns a pale tint black.
+    /// </summary>
+    private static ColorRgb CmykToRgb(double c, double m, double y, double k)
+        => new((1 - c) * (1 - k), (1 - m) * (1 - k), (1 - y) * (1 - k));
+
+    private static ColorRgb Grey(double level) => new(level, level, level);
 
     /// <summary>
     /// One component of one pixel, normalised to 0..1.
