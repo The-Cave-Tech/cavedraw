@@ -268,16 +268,6 @@ public sealed class CanvasWorkspace : Control
             _brushCache.Clear();
             InvalidateVisual();
         };
-        viewModel.PropertyChanged += (_, args) =>
-        {
-            // Leaving the pen tool (toolbar/menu path) must finalise the active
-            // pen path even though the tool was changed outside the canvas.
-            if (args.PropertyName == nameof(EditorViewModel.Tool)
-                && _penPath is not null && viewModel.Tool != EditorTool.Pen)
-            {
-                FinalizePen();
-            }
-        };
         viewModel.SelectionChanged += (_, _) =>
         {
             // A new selection starts with an axis-aligned chrome box.
@@ -2810,6 +2800,18 @@ public sealed class CanvasWorkspace : Control
         if (_vm is null)
         {
             return;
+        }
+
+        // The pen keeps its state across a tool switch, so that stepping to the node tool and
+        // coming back carries on from the last point. What ends a path is closing it or Escape.
+        // A path that was deleted or undone away while another tool was active has nothing left
+        // to continue from, so the state goes with it rather than pointing at a detached item.
+        if (_penPath is not null && _penPath.Container is null)
+        {
+            _penPath = null;
+            _penNode = null;
+            _penBefore = null;
+            _penClosePending = false;
         }
 
         _vm.ClearPointSelection();
@@ -5353,18 +5355,19 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        // Tool keys switch the tool and nothing else. Leaving the pen no longer ends the path it
+        // was drawing: that is what closing it or Escape is for, so a look at the node tool and a
+        // return carries on from the last point.
         switch (e.Key)
         {
             case Key.V:
                 _vm.Tool = EditorTool.Select;
-                FinalizePen(select: false);
                 e.Handled = true;
                 break;
 
             case Key.A:
                 // A toggle, not a jump: the same key that leaves the pen brings it back.
                 _vm.ToggleTool(EditorTool.Node);
-                FinalizePen(select: false);
                 e.Handled = true;
                 break;
 
@@ -5375,25 +5378,21 @@ public sealed class CanvasWorkspace : Control
 
             case Key.T:
                 _vm.Tool = EditorTool.Text;
-                FinalizePen();
                 e.Handled = true;
                 break;
 
             case Key.O:
                 _vm.Tool = EditorTool.Artboard;
-                FinalizePen();
                 e.Handled = true;
                 break;
 
             case Key.M:
                 _vm.Tool = EditorTool.Rectangle;
-                FinalizePen();
                 e.Handled = true;
                 break;
 
             case Key.L:
                 _vm.Tool = EditorTool.Ellipse;
-                FinalizePen();
                 e.Handled = true;
                 break;
 
