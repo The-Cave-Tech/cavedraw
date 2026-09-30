@@ -263,7 +263,20 @@ public sealed class ImageItem : LayerItem
         if (Decode is { Length: >= 2 } decode)
         {
             int at = Math.Min(component * 2, decode.Length - 2);
-            value = decode[at] + (value * (decode[at + 1] - decode[at]));
+            double dmin = decode[at];
+            double dmax = decode[at + 1];
+
+            // A decode whose ends ARE the sample range - [0 255] over 8-bit samples - is not a remap.
+            // It is a writer saying "these bytes are the raw values", and reading it the way the
+            // specification defines turns every non-zero sample into 1: the picture comes out white.
+            // That reading is visibly wrong, so the array is taken for the identity it means. The
+            // case is narrow on purpose - [0 1] on 8-bit samples still remaps, and so does an
+            // inversion - so nothing that actually decodes is affected.
+            bool spansTheSamples = Math.Abs(dmin) < 1e-9 && Math.Abs(dmax - max) < 1e-9;
+            if (!spansTheSamples)
+            {
+                value = dmin + (value * (dmax - dmin));
+            }
         }
 
         return value;
