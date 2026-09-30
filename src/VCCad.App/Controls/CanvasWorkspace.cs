@@ -678,10 +678,17 @@ public sealed class CanvasWorkspace : Control
 
         if (board is not null)
         {
-            // Nearest, not merely near enough: two objects can both fall within the pick
-            // tolerance of one click, and the one the person meant is the one they are
-            // closest to. The engine owns that rule so the canvas and the tests agree.
-            topmost = SelectionEngine.Nearest(board, model, tolerance) ?? topmost;
+            // **What is under the pointer, before what is near it.** A click inside a filled shape means
+            // that shape, and the deepest object under the pointer is the one the person meant.
+            //
+            // Distance-to-outline alone was the whole reason "I can't select anything on the page except
+            // the red text" was true: a path was measured to its outline, so the middle of a filled pattern
+            // piece - the most natural place to click - was empty space, while text, which is measured by
+            // its box, answered. Nearest is still the fallback, because a thin line is a thing a person
+            // aims at and nothing contains it.
+            topmost = SelectionEngine.Within(board, model)
+                      ?? SelectionEngine.Nearest(board, model, tolerance)
+                      ?? topmost;
         }
 
         // Pasteboard/orphan objects live in world coordinates.
