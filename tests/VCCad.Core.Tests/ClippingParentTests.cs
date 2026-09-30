@@ -65,11 +65,12 @@ public class ClippingParentTests
         CadDocument document = OnePage();
         var group = new ArtGroup { Name = "mask" };
         group.Clips.Add(Rect(0, 0, 100, 100));
-        group.AddItem(Box("inside", 0, 0, 500));
+        PathItem child = Box("inside", 0, 0, 500);
+        group.AddItem(child);
         Artwork(document).AddItem(group);
 
         // Within the mask: a point on the child survives and selects the group.
-        Assert.Same(group, SelectionEngine.Within(document.Artboards[0], new Point2D(50, 50)));
+        Assert.Same(child, SelectionEngine.Within(document.Artboards[0], new Point2D(50, 50)));
 
         // Beyond it: nothing, even though the child's own geometry is there.
         Assert.Null(SelectionEngine.Within(document.Artboards[0], new Point2D(300, 300)));
@@ -158,11 +159,12 @@ public class ClippingParentTests
 
         var group = new ArtGroup { Name = "mask" };
         group.Clips.Add(Rect(0, 0, 100, 100));
-        group.AddItem(Box("child", 0, 0, 600));
+        PathItem child = Box("child", 0, 0, 600);
+        group.AddItem(child);
         Artwork(document).AddItem(group);
 
         // Inside the mask the child is there, so the group is what is selected.
-        Assert.Same(group, SelectionEngine.Within(document.Artboards[0], new Point2D(50, 50)));
+        Assert.Same(child, SelectionEngine.Within(document.Artboards[0], new Point2D(50, 50)));
 
         // Outside it, the child is not there at all.
         Assert.Null(SelectionEngine.Within(document.Artboards[0], new Point2D(300, 300)));

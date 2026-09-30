@@ -192,7 +192,18 @@ public static class SelectionEngine
             : new SelectionResult(new[] { hit }, Array.Empty<Artboard>(), board);
     }
 
-    /// <summary>The topmost object of an artboard under a point, or null.</summary>
+    /// <summary>
+    /// The object of an artboard under a point, or null.
+    ///
+    /// **The deepest object wins, not the outermost.** A group is a container, not a thing you click: a
+    /// person clicking a pattern piece means the piece, and answering with the group that holds two hundred
+    /// of them makes every piece unselectable. That is not hypothetical - it is what happened the moment
+    /// the importer started reproducing the file's grouping, and it read as "I can't select anything on the
+    /// page except the red text", because the text happened to sit outside the group.
+    ///
+    /// A group is still reachable: by its name in the layers panel, and by clicking where the group itself
+    /// is painted - its own mask, or the area its children do not cover.
+    /// </summary>
     public static LayerItem? Within(Artboard artboard, Point2D point)
     {
         Point2D local = point - new Vector2D(artboard.X, artboard.Y);
@@ -214,7 +225,30 @@ public static class SelectionEngine
             }
         }
 
-        return topmost;
+        return topmost is null ? null : Deepest(topmost, local);
+    }
+
+    /// <summary>
+    /// The innermost object under a point, searching front to back, or the group itself when none of its
+    /// children is under the pointer.
+    /// </summary>
+    private static LayerItem Deepest(LayerItem item, Point2D point)
+    {
+        if (item is not ArtGroup group)
+        {
+            return item;
+        }
+
+        for (int i = group.Children.Count - 1; i >= 0; i--)
+        {
+            LayerItem child = group.Children[i];
+            if (Hits(child, point, PickTolerance))
+            {
+                return Deepest(child, point);
+            }
+        }
+
+        return group;
     }
 
     /// <summary>
