@@ -304,6 +304,28 @@ public class GradientPaintTests
         return buffer;
     }
 
+    /// <summary>
+    /// Conical is a sweep, and it is the one kind a brush expresses exactly: a conic brush with the
+    /// ramp's own stops, so the canvas paints it without falling back to the flat colour.
+    /// </summary>
+    [Fact]
+    public void AConicalGradientBuildsASweepBrushAndShader()
+    {
+        var spec = new GradientSpec
+        {
+            Kind = GradientKind.Conical,
+            Angle = 45,
+            Stops = new[]
+            {
+                new GradientStop(0.0, ColorRgb.Red),
+                new GradientStop(1.0, ColorRgb.Blue),
+            },
+        };
+
+        Assert.IsType<ConicGradientBrush>(GradientPaint.CreateBrush(spec, Box, 1.0));
+        Assert.NotNull(GradientPaint.CreateShader(spec, Box, 1.0));
+    }
+
     private static void AssertNear(byte[] bgra, int x, byte r, byte g, byte b, string because)
     {
         int offset = (x * 4) + (1 * (Width * 4));

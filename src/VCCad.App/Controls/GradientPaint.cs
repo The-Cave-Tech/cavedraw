@@ -129,6 +129,18 @@ public static class GradientPaint
                     ToSkia(geometry.Start), ToSkia(geometry.End), colours, positions, tile),
             GradientKind.Radial when geometry.IsRadial =>
                 Radial(spec, geometry, colours, positions, tile),
+
+            // A sweep, turned to the ramp's start angle. The angle is a rotation of the shader's own
+            // space, so it goes on as a local matrix about the centre rather than into the geometry.
+            GradientKind.Conical =>
+                SKShader.CreateSweepGradient(
+                    ToSkia(geometry.Centre),
+                    colours,
+                    positions,
+                    SKMatrix.CreateRotationDegrees(
+                        (float)spec.Angle, (float)geometry.Centre.X, (float)geometry.Centre.Y))
+                    .WithLocalMatrix(SKMatrix.CreateRotationDegrees(
+                        (float)spec.Angle, (float)geometry.Centre.X, (float)geometry.Centre.Y)),
             _ => null,
         };
     }
@@ -173,6 +185,19 @@ public static class GradientPaint
             {
                 StartPoint = new RelativePoint(geometry.Start, RelativeUnit.Absolute),
                 EndPoint = new RelativePoint(geometry.End, RelativeUnit.Absolute),
+                SpreadMethod = spread,
+                GradientStops = stops,
+            };
+        }
+
+        if (spec.Kind == GradientKind.Conical)
+        {
+            // A sweep around the centre, starting at the ramp's angle. This is the one gradient kind
+            // a conic brush expresses exactly, so there is nothing to approximate.
+            return new ConicGradientBrush
+            {
+                Center = new RelativePoint(geometry.Centre, RelativeUnit.Absolute),
+                Angle = spec.Angle,
                 SpreadMethod = spread,
                 GradientStops = stops,
             };
