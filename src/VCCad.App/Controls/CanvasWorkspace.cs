@@ -151,6 +151,12 @@ public sealed class CanvasWorkspace : Control
     // Edit-box handle drag: which handle, and where the drag began.
     private int _frameResizeHandle = -1;
 
+    // The shape control point being dragged.
+    private PathItem? _shapeHandlePath;
+    private PathItem? _shapeHandleBefore;
+    private ShapeDefinition? _shapeHandleDefinition;
+    private ShapeHandle _shapeHandle;
+
     // The pencil's stroke, in document space, exactly as captured.
     private readonly List<Point2D> _pencilPoints = new();
 
@@ -2405,8 +2411,107 @@ public sealed class CanvasWorkspace : Control
         _roundBefore = null;
         _gestureMoved = false;
     }
+    // ---- a shape's control points --------------------------------------
+    // Drawn only for the shape they belong to, and only for the parameters that shape actually has, so a
+    // handle on screen is always a handle that does something. They take priority over the node tool's
+    // segments because they sit on the shape's own box, which is exactly where a segment drag would
+    // otherwise reach.
+
+    /// <summary>Starts dragging a control point, if the press landed on one. True when it did.</summary>
+    private bool ShapeHandlePress(Point2D model)
+    {
+        foreach (PathItem path in _vm.SelectedPaths())
+        {
+            if (path.Shape is not { } shape)
+            {
+                continue;
+            }
+
+            ShapeHandlePoint? hit = ShapeHandles.Nearest(shape, model, Math.Max(PickTolerance, 7));
+            if (hit is null)
+            {
+                continue;
+            }
+
+            _shapeHandlePath = path;
+            _shapeHandleDefinition = shape;
+            _shapeHandle = hit.Handle;
+            _shapeHandleBefore = path.GeometrySnapshot();
+            _gestureMoved = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Previews the parameter change: the geometry is rebuilt from the shape, live.</summary>
+    private void ShapeHandleDrag(Point2D model)
+    {
+        if (_shapeHandlePath is null || _shapeHandleBefore is null || _shapeHandleDefinition is null)
+        {
+            return;
+        }
+
+        ShapeParameters moved = ShapeHandles.Move(_shapeHandleDefinition, _shapeHandle, model);
+
+        // From the pre-drag snapshot every time, so the drag is always built from the shape as it was
+        // rather than compounding its own results.
+        _shapeHandlePath.RestoreGeometryFrom(_shapeHandleBefore);
+        new ShapeDefinition(_shapeHandleDefinition.Kind, moved).ApplyTo(_shapeHandlePath);
+
+        // The definition travels with the path, or the next drag would start from stale parameters.
+        _shapeHandleDefinition = _shapeHandlePath.Shape;
+
+        _gestureMoved = true;
+        InvalidateVisual();
+    }
+
+    /// <summary>Ends the drag: one undo step for the whole gesture.</summary>
+    private void ShapeHandleRelease()
+    {
+        if (_shapeHandlePath is not null && _shapeHandleBefore is not null && _gestureMoved)
+        {
+            _vm.CommitGeometry(_shapeHandlePath, _shapeHandleBefore, $"Drag shape {_shapeHandle}");
+        }
+
+        _shapeHandlePath = null;
+        _shapeHandleBefore = null;
+        _shapeHandleDefinition = null;
+        _gestureMoved = false;
+    }
+
+    /// <summary>Draws the control points of every selected shape.</summary>
+    private void PaintShapeHandles(DrawingContext context)
+    {
+        var fill = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
+        var rotate = new SolidColorBrush(Color.FromRgb(0xFF, 0xC4, 0x4C));
+
+        foreach (PathItem path in _vm.SelectedPaths())
+        {
+            if (path.Shape is not { } shape)
+            {
+                continue;
+            }
+
+            foreach (ShapeHandlePoint handle in ShapeHandles.For(shape))
+            {
+                // The shape's parameters are artboard-local; the handles are drawn in model space.
+                Point screen = ModelToScreen(handle.Position + path.ArtboardOffset());
+                context.FillRectangle(
+                    handle.Handle == ShapeHandle.Rotation ? rotate : fill,
+                    new Rect(screen.X - 3.5, screen.Y - 3.5, 7, 7));
+            }
+        }
+    }
     private void NodePress(Point2D model)
     {
+        // A control point takes priority: it sits on the shape's own box, exactly where a segment drag would
+        // otherwise reach.
+        if (ShapeHandlePress(model))
+        {
+            return;
+        }
+
         if (_vm is null)
         {
             return;
@@ -2592,6 +2697,12 @@ public sealed class CanvasWorkspace : Control
 
     private void NodeDrag(Point2D model)
     {
+        if (_shapeHandlePath is not null)
+        {
+            ShapeHandleDrag(model);
+            return;
+        }
+
         if (_nodePath is not null && _nodeSub is not null)
         {
             // Mutate the grabbed node directly, recomputing from the stored
@@ -2909,6 +3020,12 @@ public sealed class CanvasWorkspace : Control
 
     private void NodeRelease()
     {
+        if (_shapeHandlePath is not null)
+        {
+            ShapeHandleRelease();
+            return;
+        }
+
         ApplyNodeSnap();
         ApplyOrthogonalSnap();
 
@@ -4281,6 +4398,9 @@ public sealed class CanvasWorkspace : Control
         {
             PaintSegmentHighlights(context);
         }
+
+        // A selected shape's control points, drawn where their parameters live.
+        PaintShapeHandles(context);
 
         // The stroke being drawn, exactly as captured - no fitting while the pointer is down.
         if (_pencilPoints.Count > 1)
