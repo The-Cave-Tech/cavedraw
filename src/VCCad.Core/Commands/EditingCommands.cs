@@ -611,6 +611,42 @@ public sealed class ImagePlacementCommand : IUndoableCommand
     public void Undo() => _image.Placement = _before;
 }
 
+/// <summary>
+/// Mirrors an image without touching its samples: the flip is state the renderer maps through, so
+/// the file's own bytes stay the file's own bytes and the flip is undoable on its own.
+/// </summary>
+public sealed class ImageFlipCommand : IUndoableCommand
+{
+    private readonly ImageItem _image;
+    private readonly bool _beforeX;
+    private readonly bool _beforeY;
+    private readonly bool _afterX;
+    private readonly bool _afterY;
+
+    public string Description => "Flip image";
+
+    public ImageFlipCommand(ImageItem image, bool afterX, bool afterY)
+    {
+        _image = image;
+        _beforeX = image.MirrorX;
+        _beforeY = image.MirrorY;
+        _afterX = afterX;
+        _afterY = afterY;
+    }
+
+    public void Do()
+    {
+        _image.MirrorX = _afterX;
+        _image.MirrorY = _afterY;
+    }
+
+    public void Undo()
+    {
+        _image.MirrorX = _beforeX;
+        _image.MirrorY = _beforeY;
+    }
+}
+
 /// <summary>Moves a text item's origin as one undo step.</summary>
 public sealed class SetTextOriginCommand : IUndoableCommand
 {

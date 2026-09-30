@@ -396,6 +396,11 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public void MoveItems(IReadOnlyList<LayerItem> items, IItemContainer target, int index)
         => _active.MoveItems(items, target, index);
     public void UngroupSelection() => _active.UngroupSelection();
+
+    /// <summary>
+    /// Mirrors the selection across its own centre; see <see cref="DocumentSession.FlipSelection"/>.
+    /// </summary>
+    public void FlipSelection(bool horizontal, bool vertical) => _active.FlipSelection(horizontal, vertical);
     public void CloseSelectedPaths() => _active.CloseSelectedPaths();
     public void JoinSelection() => _active.JoinSelection();
 

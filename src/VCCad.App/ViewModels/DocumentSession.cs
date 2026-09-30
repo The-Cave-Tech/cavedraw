@@ -1297,6 +1297,83 @@ public sealed class DocumentSession : INotifyPropertyChanged
             : new CompositeCommand("Transform objects", edits));
     }
 
+    /// <summary>
+    /// Mirrors the selection across its own centre: horizontal swaps left and right, vertical swaps
+    /// top and bottom. Flipping twice is the identity, in either order.
+    ///
+    /// Paths are mirrored as geometry, which is what they are. Text and images cannot be: a run has
+    /// to keep its string and its glyph ids, and an image has to keep the file's own samples
+    /// (AGENTS.md §9), so both record the mirror as state and the renderer maps through it. That is
+    /// also what keeps a flipped block editable - the text editor works in the block's own space,
+    /// where nothing has moved.
+    /// </summary>
+    public void FlipSelection(bool horizontal, bool vertical)
+    {
+        if ((!horizontal && !vertical) || !HasTransformableSelection)
+        {
+            return;
+        }
+
+        Rect2D box = SelectionBounds();
+        if (box.IsEmpty)
+        {
+            return;
+        }
+
+        Point2D centre = new(box.X + (box.Width / 2), box.Y + (box.Height / 2));
+        double sx = horizontal ? -1 : 1;
+        double sy = vertical ? -1 : 1;
+
+        var edits = new List<IUndoableCommand>();
+
+        foreach (PathItem path in SelectedPaths())
+        {
+            PathItem before = path.GeometrySnapshot();
+            path.ScaleGeometryAbout(centre - path.ArtboardOffset(), sx, sy);
+            edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot()));
+        }
+
+        foreach (ImageItem image in _selectedObjects.OfType<ImageItem>())
+        {
+            edits.Add(new ImageFlipCommand(
+                image,
+                horizontal ? !image.MirrorX : image.MirrorX,
+                vertical ? !image.MirrorY : image.MirrorY));
+        }
+
+        foreach (TextItem text in SelectedTextItems())
+        {
+            TextItem before = (TextItem)text.Clone();
+            Point2D local = centre - text.ArtboardOffset();
+
+            // Mirroring about the same centre would leave the origin where it was, so the block
+            // would not move: the origin goes to the other side of the centre, and the mirror
+            // state says which way the block then runs.
+            if (horizontal)
+            {
+                text.MirrorX = !text.MirrorX;
+                text.Origin = new Point2D((2 * local.X) - text.Origin.X, text.Origin.Y);
+            }
+
+            if (vertical)
+            {
+                text.MirrorY = !text.MirrorY;
+                text.Origin = new Point2D(text.Origin.X, (2 * local.Y) - text.Origin.Y);
+            }
+
+            edits.Add(new ReplaceTextCommand(text, before, (TextItem)text.Clone(), "Flip text"));
+        }
+
+        if (edits.Count == 0)
+        {
+            return;
+        }
+
+        Execute(edits.Count == 1
+            ? edits[0]
+            : new CompositeCommand(horizontal && vertical ? "Flip both" : horizontal ? "Flip horizontal" : "Flip vertical", edits));
+    }
+
 
     // ------------------------------------------------------------------
     // Commands / undo / actions

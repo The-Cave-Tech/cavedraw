@@ -90,6 +90,18 @@ public sealed class ImageItem : LayerItem
     /// </summary>
     public Rect2D Placement { get; set; }
 
+    /// <summary>
+    /// Whether the image is mirrored across its placement's vertical axis - a horizontal flip.
+    ///
+    /// State rather than resampled pixels: flipping in place must not re-encode the samples (which
+    /// would be lossy and would break the "the file's bytes are what we keep" rule), and the
+    /// renderer can mirror the draw without touching them.
+    /// </summary>
+    public bool MirrorX { get; set; }
+
+    /// <summary>Whether the image is mirrored across its placement's horizontal axis.</summary>
+    public bool MirrorY { get; set; }
+
     /// <summary>Components per pixel for the current colour space.</summary>
     public int Components => ColorSpace switch
     {
@@ -119,6 +131,8 @@ public sealed class ImageItem : LayerItem
             Palette = (byte[])Palette.Clone(),
             Mask = (byte[])Mask.Clone(),
             Placement = Placement,
+            MirrorX = MirrorX,
+            MirrorY = MirrorY,
             Decode = Decode is null ? null : (double[])Decode.Clone(),
             ColourKey = ColourKey is null ? null : (double[])ColourKey.Clone(),
         };

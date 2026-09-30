@@ -129,6 +129,25 @@ public sealed class TextItem : LayerItem
     public double RotationRadians { get; set; }
 
     /// <summary>
+    /// Whether the block is mirrored across its own vertical axis - a horizontal flip.
+    ///
+    /// The mirror is STATE, not baked geometry, for the reason §9 of AGENTS.md gives: a run has to
+    /// keep its full string and one glyph id per character, and rewriting the text into reversed
+    /// outlines would destroy both. It is applied in the block's own space, before the rotation, so
+    /// a mirrored block that is turned still reads correctly.
+    /// </summary>
+    public bool MirrorX { get; set; }
+
+    /// <summary>Whether the block is mirrored across its own horizontal axis - a vertical flip.</summary>
+    public bool MirrorY { get; set; }
+
+    /// <summary>The sign the block's own x axis runs in: -1 when mirrored horizontally.</summary>
+    public double XSign => MirrorX ? -1.0 : 1.0;
+
+    /// <summary>The sign the block's own y axis runs in.</summary>
+    public double YSign => MirrorY ? -1.0 : 1.0;
+
+    /// <summary>
     /// Width of the text frame, in model units. Zero means the block grows to fit its
     /// content; a positive value wraps the text inside it, which is what makes a drawn
     /// text box behave like a text box rather than a single endless line.
@@ -199,6 +218,21 @@ public sealed class TextItem : LayerItem
     public Rect2D BoundingBox()
     {
         Rect2D local = LocalBounds();
+
+        // A mirrored block sits on the other side of its origin: the layout is unchanged, the page
+        // box is not. `LocalBounds` stays in the block's own space because that is where the
+        // layout, the caret and the hit tests are worked out; this is the one that answers "where
+        // is it on the page".
+        if (MirrorX)
+        {
+            local = new Rect2D(Origin.X - local.Width, local.Y, local.Width, local.Height);
+        }
+
+        if (MirrorY)
+        {
+            local = new Rect2D(local.X, Origin.Y - local.Height, local.Width, local.Height);
+        }
+
         if (Math.Abs(RotationRadians) < 1e-9)
         {
             return local;
@@ -254,6 +288,8 @@ public sealed class TextItem : LayerItem
         Origin = other.Origin;
         Color = other.Color;
         RotationRadians = other.RotationRadians;
+        MirrorX = other.MirrorX;
+        MirrorY = other.MirrorY;
         FrameWidth = other.FrameWidth;
         LineSpacing = other.LineSpacing;
         ParagraphSpacing = other.ParagraphSpacing;
@@ -281,6 +317,8 @@ public sealed class TextItem : LayerItem
             Origin = Origin,
             Color = Color,
             RotationRadians = RotationRadians,
+            MirrorX = MirrorX,
+            MirrorY = MirrorY,
             FrameWidth = FrameWidth,
             LineSpacing = LineSpacing,
             ParagraphSpacing = ParagraphSpacing,

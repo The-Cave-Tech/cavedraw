@@ -1000,6 +1000,27 @@ public static class EditorOperations
                 return Summary(ctx);
             });
 
+        Add("object.flip",
+            "Mirror the selection across its own centre: horizontal swaps left and right, vertical " +
+            "swaps top and bottom. A path is mirrored as geometry; text and images record the mirror " +
+            "instead, so a run keeps its string and its glyph ids and an image keeps the file's own " +
+            "samples - and a flipped text block stays editable. Flipping twice is the identity.",
+            "axis?:horizontal|vertical|both (default horizontal)",
+            (ctx, p) =>
+            {
+                string axis = (p.GetString("axis") ?? "horizontal").Trim().ToLowerInvariant();
+                bool horizontal = axis is "horizontal" or "both" or "h";
+                bool vertical = axis is "vertical" or "both" or "v";
+                if (!horizontal && !vertical)
+                {
+                    throw new EditorOperationException(
+                        "axis must be horizontal, vertical or both.");
+                }
+
+                ctx.Session.FlipSelection(horizontal, vertical);
+                return Summary(ctx);
+            });
+
         Add("object.group", "Group the selected objects.", "", (ctx, _) =>
         {
             ctx.Session.GroupSelection();

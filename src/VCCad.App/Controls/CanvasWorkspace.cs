@@ -3533,7 +3533,24 @@ public sealed class CanvasWorkspace : Control
 
         using (context.PushOpacity(Math.Clamp(opacity, 0, 1)))
         {
-            context.DrawImage(ImageRenderer.BitmapFor(image), destination);
+            if (image.MirrorX || image.MirrorY)
+            {
+                // Mirrored about the placement's own centre. The samples are not touched, which is
+                // what keeps the flip lossless and undoable, and what makes flipping twice exactly
+                // the identity.
+                Point2D centre = new(bounds.X + (bounds.Width / 2), bounds.Y + (bounds.Height / 2));
+                Avalonia.Matrix mirror = Avalonia.Matrix.CreateTranslation(-centre.X, -centre.Y)
+                    * Avalonia.Matrix.CreateScale(image.MirrorX ? -1 : 1, image.MirrorY ? -1 : 1)
+                    * Avalonia.Matrix.CreateTranslation(centre.X, centre.Y);
+                using (context.PushTransform(mirror))
+                {
+                    context.DrawImage(ImageRenderer.BitmapFor(image), destination);
+                }
+            }
+            else
+            {
+                context.DrawImage(ImageRenderer.BitmapFor(image), destination);
+            }
         }
     }
 
@@ -3543,16 +3560,30 @@ public sealed class CanvasWorkspace : Control
         IBrush brush = ToBrush(text.Color, opacity);
         TextMetrics metrics = MeasureText(text);
 
-        Avalonia.Matrix? rotation = null;
-        if (Math.Abs(text.RotationRadians) > 1e-9)
+        // The block's own space, mapped to the page: mirror first, then turn. The mirror is on the
+        // context rather than baked into the glyphs, so the runs keep their text and their glyph
+        // ids and a flipped block is still re-editable.
+        bool mirrored = text.MirrorX || text.MirrorY;
+        bool turned = Math.Abs(text.RotationRadians) > 1e-9;
+        Avalonia.Matrix? blockSpace = null;
+        if (mirrored || turned)
         {
             Point2D o = text.Origin + offset;
-            rotation = Avalonia.Matrix.CreateTranslation(-o.X, -o.Y)
-                * Avalonia.Matrix.CreateRotation(text.RotationRadians)
-                * Avalonia.Matrix.CreateTranslation(o.X, o.Y);
+            Avalonia.Matrix m = Avalonia.Matrix.CreateTranslation(-o.X, -o.Y);
+            if (mirrored)
+            {
+                m *= Avalonia.Matrix.CreateScale(text.XSign, text.YSign);
+            }
+
+            if (turned)
+            {
+                m *= Avalonia.Matrix.CreateRotation(text.RotationRadians);
+            }
+
+            blockSpace = m * Avalonia.Matrix.CreateTranslation(o.X, o.Y);
         }
 
-        using IDisposable? pushed = rotation is { } m ? context.PushTransform(m) : null;
+        using IDisposable? pushed = blockSpace is { } block ? context.PushTransform(block) : null;
 
         if (ReferenceEquals(text, _editingText))
         {
@@ -5029,10 +5060,14 @@ public sealed class CanvasWorkspace : Control
         {
             double cos = Math.Cos(-text.RotationRadians);
             double sin = Math.Sin(-text.RotationRadians);
-            return new Point2D(dx * cos - dy * sin, dx * sin + dy * cos);
+            return new Point2D((dx * cos - dy * sin) * text.XSign, (dx * sin + dy * cos) * text.YSign);
         }
 
-        return new Point2D(dx, dy);
+        // Back into the block's own space, mirror undone: the layout, the caret and the hit tests
+        // all work in the space the text is set in, so a mirrored block needs no special cases
+        // beyond this mapping. Without it a click on a flipped block lands on the mirrored
+        // character and the caret jumps to the wrong end.
+        return new Point2D(dx * text.XSign, dy * text.YSign);
     }
 
     /// <summary>Whether a world point falls inside a text block, rotation included.</summary>
@@ -5051,8 +5086,10 @@ public sealed class CanvasWorkspace : Control
     /// <summary>A world point to a screen point, through a text block's own space.</summary>
     private Point2D TextLocalToWorld(TextItem text, Point2D local)
     {
-        double x = text.Origin.X + local.X;
-        double y = text.Origin.Y + local.Y;
+        // Mirrored in the block's own space, before the rotation: a flipped block that is also
+        // turned is the flip of the upright block, turned.
+        double x = text.Origin.X + (local.X * text.XSign);
+        double y = text.Origin.Y + (local.Y * text.YSign);
 
         if (Math.Abs(text.RotationRadians) > 1e-9)
         {

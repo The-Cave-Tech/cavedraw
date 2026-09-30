@@ -40,6 +40,9 @@
         <MenuItem Header="_Group" Click="OnGroup"/>
         <MenuItem Header="_Ungroup" Click="OnUngroup"/>
         <Separator/>
+        <MenuItem Header="Flip _Horizontal" Click="OnFlipHorizontal"/>
+        <MenuItem Header="Flip _Vertical" Click="OnFlipVertical"/>
+        <Separator/>
         <MenuItem Header="Close _Path" Click="OnClosePath"/>
         <MenuItem Header="_Join Paths" Click="OnJoinPaths"/>
       </MenuItem>
