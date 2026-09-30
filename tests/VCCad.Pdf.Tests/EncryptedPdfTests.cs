@@ -29,6 +29,7 @@ public class EncryptedPdfTests
         "rc4-40.pdf",           // /V 1, /R 2
         "rc4-128.pdf",          // /V 2, /R 3
         "aes-128.pdf",          // /V 4, /R 4, /CFM /AESV2
+        "aes-256.pdf",          // /V 5, /R 6, /CFM /AESV3
     };
 
     [Theory]
@@ -99,7 +100,7 @@ public class EncryptedPdfTests
     /// empty page rather than failing, so that would pass without anything being decrypted - which is
     /// exactly how a gap like this hides.
     /// </summary>
-    [Fact(Skip = "AES-256 still does not open: the revision 6 validation hash reproduces qpdf's /U but no file key built from it decrypts a stream - see issue #36 and Fixtures/Encrypted/r6-probe.py")]
+    [Fact]
     public void Aes256OpensToTheSameDrawing()
     {
         byte[] pdf = File.ReadAllBytes(Path.Combine(FixtureDirectory, "aes-256.pdf"));

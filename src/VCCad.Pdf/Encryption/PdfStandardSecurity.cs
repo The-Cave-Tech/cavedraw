@@ -217,8 +217,11 @@ internal sealed class PdfStandardSecurity
     /// </summary>
     private static byte[]? Hash(int revision, string password, byte[] salt, byte[] extra)
     {
-        byte[] given = new byte[password.Length];
-        for (int i = 0; i < password.Length; i++)
+        // Truncated to 127 bytes, as qpdf does (password.substr(0, 127)) and as the specification
+        // says: a longer password is not an error, it is simply cut.
+        int take = Math.Min(password.Length, 127);
+        var given = new byte[take];
+        for (int i = 0; i < take; i++)
         {
             given[i] = (byte)(password[i] & 0xFF);
         }
@@ -230,12 +233,22 @@ internal sealed class PdfStandardSecurity
 
         byte[] k = PdfCrypto.Sha256(Join(given, salt, extra));
 
-        for (int round = 0; round < 64; round++)
+        // Algorithm 2.B: at least 64 rounds, and then as many more as it takes. The loop ends when the
+        // last byte of E is no greater than (rounds - 32), so how many rounds a given password needs
+        // is a property of the password, not a constant.
+        //
+        // Stopping at exactly 64 - which is what this did - gets the right answer only when the 64th
+        // round happens to satisfy the test, about one password in eight. That is why one fixture
+        // reproduced its /U exactly while others reproduced nothing at all: it was never the hash, the
+        // password or the file key, it was the loop ending one round too early on most inputs.
+        int round = 0;
+        while (true)
         {
+            round++;
+
             // (password || K || udata) repeated 64 times, and the length follows K - which is 32, 48
             // or 64 bytes depending on the previous round's hash. Padding the block out with zeros to
-            // some fixed size would encrypt those zeros too and hash them into the result, which is
-            // what made every revision 6 file refuse to open.
+            // some fixed size would encrypt those zeros too and hash them into the result.
             int stride = given.Length + k.Length + extra.Length;
             var block = new byte[stride * 64];
 
@@ -262,6 +275,19 @@ internal sealed class PdfStandardSecurity
                 1 => PdfCrypto.Sha384(encrypted),
                 _ => PdfCrypto.Sha512(encrypted),
             };
+
+            // The last byte of E, against the round number (qpdf: `ch <= round_number - 32`). The
+            // termination is reached with probability 1/8 a round, so this is bounded in practice;
+            // the cap is only so a corrupt or hostile file cannot spin forever.
+            if (round >= 64 && encrypted[^1] <= round - 32)
+            {
+                break;
+            }
+
+            if (round >= 1000)
+            {
+                break;
+            }
         }
 
         return k[..32];

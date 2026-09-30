@@ -60,19 +60,22 @@ public class DocumentSecurityTests
     }
 
     /// <summary>
-    /// The case that matters for a print shop: a file we cannot open still says what it permits.
+    /// AES-256 (/V 5, /R 6) used to be reported here as protected-but-not-opened, because it did not
+    /// open: the assertion that pinned that is now the wrong way round, so it is a positive one.
+    ///
+    /// The property it was really guarding - a file we cannot open still says what it permits - is
+    /// still exercised, by <see cref="PasswordEntryTests.AWrongPasswordDoesNotOpenIt"/> on a file
+    /// whose password we do not have.
     /// </summary>
     [Fact]
-    public void AFileThatCouldNotBeOpenedStillReportsItsPermissions()
+    public void Aes256OpensAndReportsItsPermissions()
     {
         CadDocument document = PdfImporter.Import(
             File.ReadAllBytes(Path.Combine(FixtureDirectory, "aes-256.pdf")));
 
-        // Documented gap: AES-256 does not open yet (issue #36). What must hold either way is that
-        // the file is reported as protected, and by what, rather than looking like a plain document.
         Assert.NotNull(document.Security);
-        Assert.False(document.Security!.Opened);
-        Assert.Contains("not opened", document.Security.Cipher, StringComparison.OrdinalIgnoreCase);
+        Assert.True(document.Security!.Opened);
+        Assert.Equal("AES-256", document.Security.Cipher);
         Assert.True(document.Security.CanPrint);
     }
 }

@@ -42,6 +42,27 @@ def aes_cbc(key, iv, data, decrypt=True):
                    "-K", key.hex(), "-iv", iv.hex(), "-nopad", data=data)
 
 
+def hash_r6(password: bytes, salt: bytes, udata: bytes) -> bytes:
+    """Algorithm 2.B, with qpdf's loop termination.
+
+    qpdf (`libqpdf/QPDF_encryption.cc`, hash_V5) runs AT LEAST 64 rounds and then keeps going until
+    the last byte of E is <= (rounds - 32). Stopping at exactly 64 gets the right answer only when
+    that 64th round happens to satisfy the test - roughly one password in eight - which is why one
+    fixture reproduced its /U exactly and the others reproduced nothing.
+    """
+    k = hashlib.sha256(password + salt + udata).digest()
+    rounds = 0
+    while True:
+        rounds += 1
+        e = aes_cbc(k[0:16], k[16:32], (password + k + udata) * 64, decrypt=False)
+        k = [hashlib.sha256, hashlib.sha384, hashlib.sha512][sum(e[0:16]) % 3](e).digest()
+        if rounds >= 64 and e[-1] <= rounds - 32:
+            break
+        if rounds >= 1000:
+            break
+    return k[0:32]
+
+
 def rc4(key, data):
     s = list(range(256))
     j = 0

@@ -40,13 +40,7 @@ def cbc(key, iv, data, decrypt=True):
         input=data, capture_output=True, check=True).stdout
 
 
-def hardened(password: bytes, salt: bytes, extra: bytes) -> bytes:
-    """Algorithm 2.B: SHA-256, then 64 rounds of AES-128-CBC and a SHA-2 chosen by the output."""
-    k = hashlib.sha256(password + salt + extra).digest()
-    for _ in range(64):
-        e = cbc(k[0:16], k[16:32], (password + k + extra) * 64, decrypt=False)
-        k = [hashlib.sha256, hashlib.sha384, hashlib.sha512][sum(e[0:16]) % 3](e).digest()
-    return k[0:32]
+from control import hash_r6 as hardened  # one implementation, and it has qpdf's loop termination
 
 
 def value(handler: bytes, name: str) -> bytes | None:
