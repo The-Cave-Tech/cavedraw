@@ -1289,6 +1289,34 @@ public static class EditorOperations
             return Summary(ctx);
         });
 
+        Add("style.setFillRule",
+            "Set how the selected paths' fills decide what is inside their outline, leaving each " +
+            "path's colour and gradient alone. style.setFill can do this too, but only by also " +
+            "setting a solid colour, which would drop a gradient.",
+            "rule:nonzero|evenodd",
+            (ctx, p) =>
+            {
+                FillRule rule = string.Equals(p.GetString("rule"), "evenodd", StringComparison.OrdinalIgnoreCase)
+                    ? FillRule.EvenOdd
+                    : FillRule.NonZero;
+
+                var edits = new List<IUndoableCommand>();
+                foreach (PathItem path in ctx.Session.SelectedPaths())
+                {
+                    if (path.Fill.Rule != rule)
+                    {
+                        edits.Add(new SetFillCommand(path, path.Fill with { Rule = rule }, path.Fill));
+                    }
+                }
+
+                if (edits.Count > 0)
+                {
+                    ctx.Session.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Fill rule", edits));
+                }
+
+                return Summary(ctx);
+            });
+
         Add("style.setStroke", "Stroke the selected paths.",
             "color:[r,g,b], width:number, cap?:butt|round|square, join?:miter|round|bevel, miterLimit?, alignment?:center|inside|outside, dash?:number[]",
             (ctx, p) =>

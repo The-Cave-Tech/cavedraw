@@ -67,5 +67,14 @@
                  FontSize="{DynamicResource VcFontSize}"
                  Foreground="{DynamicResource VcTextDim}"/>
     </Grid>
+
+    <!-- Fill rule: what a self-crossing or holed outline means as a filled region. It belongs
+         beside the fill's colour, and it applies to the selection the colour does. -->
+    <Grid ColumnDefinitions="Auto,6,*">
+      <TextBlock Grid.Column="0" Text="Rule" VerticalAlignment="Center"
+                 FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+      <ComboBox x:Name="FillRuleBox" Grid.Column="2" HorizontalAlignment="Stretch"
+                ToolTip.Tip="How the fill decides what is inside the outline"/>
+    </Grid>
   </StackPanel>
 </UserControl>

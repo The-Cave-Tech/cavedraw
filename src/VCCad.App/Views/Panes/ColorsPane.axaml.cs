@@ -77,6 +77,11 @@ public partial class ColorsPane : UserControl
             SyncFromCurrent();
         };
         TargetSelector.SwapRequested += (_, _) => SwapFillStroke();
+
+        // The fill rule sits beside the fill's colour, and applies to the selection the same way.
+        // It was removed when the pane was tidied, which left it reachable only from the registry.
+        FillRuleBox.ItemsSource = new[] { "Non-zero", "Even-odd" };
+        FillRuleBox.SelectionChanged += (_, _) => ApplyFillRule();
         TargetSelector.ClearRequested += (_, stroke) =>
         {
             if (stroke)
@@ -199,8 +204,45 @@ public partial class ColorsPane : UserControl
         Wheel.Refresh();
         OpacityBar.Color = Wheel.Color;
         OpacityBar.SetValue(Colors.Alpha);
+
+        // The rule follows the fill, which is the target this row belongs to whatever the diagram
+        // is pointed at: a stroke has no fill rule.
+        FillRuleBox.SelectedIndex = fill.Rule == ModelFillRule.EvenOdd ? 1 : 0;
         _syncing = false;
         UpdateReadouts();
+    }
+
+    /// <summary>
+    /// Applies the chosen fill rule to every selected path as one undo step, leaving each path's
+    /// colour and gradient alone - a rule says what the outline means as a region, not what colour
+    /// it is. With nothing selected it only sets the style the next shape is drawn in, which is
+    /// what the colour does too.
+    /// </summary>
+    private void ApplyFillRule()
+    {
+        if (_vm is null || _syncing)
+        {
+            return;
+        }
+
+        ModelFillRule rule = FillRuleBox.SelectedIndex == 1 ? ModelFillRule.EvenOdd : ModelFillRule.NonZero;
+        _vm.CurrentFill = _vm.CurrentFill with { Rule = rule };
+
+        var edits = new List<IUndoableCommand>();
+        foreach (PathItem path in _vm.SelectedPaths())
+        {
+            if (path.Fill.Rule != rule)
+            {
+                edits.Add(new SetFillCommand(path, path.Fill with { Rule = rule }, path.Fill));
+            }
+        }
+
+        if (edits.Count > 0)
+        {
+            _vm.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Fill rule", edits));
+        }
+
+        _vm.RaiseTransformChanged();
     }
 
     /// <summary>Rebuilds the two-column recent-colour pad.</summary>
