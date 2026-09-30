@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using ShapePath = Avalonia.Controls.Shapes.Path;
@@ -100,9 +101,13 @@ public sealed class ShapeFlyoutButton : UserControl
 
         ToolTip.SetTip(_button, "Shapes (S): click to draw, hold for the rest");
 
-        _button.PointerPressed += OnPressed;
-        _button.PointerMoved += OnMoved;
-        _button.PointerReleased += OnReleased;
+        // handledEventsToo: true is not optional here. A Button's own class handler marks the press as
+        // handled on the way through - that is how it tracks a click - and a plain += subscription is
+        // skipped once an event is handled. The gesture rules below therefore never ran at all: the
+        // flyout could not be opened by a long press in the application, not merely in a test.
+        _button.AddHandler(InputElement.PointerPressedEvent, OnPressed, RoutingStrategies.Bubble, handledEventsToo: true);
+        _button.AddHandler(InputElement.PointerMovedEvent, OnMoved, RoutingStrategies.Bubble, handledEventsToo: true);
+        _button.AddHandler(InputElement.PointerReleasedEvent, OnReleased, RoutingStrategies.Bubble, handledEventsToo: true);
 
         _entries = new StackPanel
         {
