@@ -40,6 +40,17 @@ jobs:
       - name: Install wasm-tools workload
         run: dotnet workload install wasm-tools
 
+      # The text-export tests embed a URW base-35 face - "Nimbus Sans" and friends. Those faces are
+      # located on the machine rather than shipped with this project, because their licence is not ours to
+      # redistribute. The runner does not have them, so exporting text threw
+      # KeyNotFoundException looking up the font it had been told to use. Installing them here is the
+      # difference between a build that tests the exporter and one that tests the runner's font list.
+      - name: Install the standard fonts the export tests embed
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-urw-base35
+          test -d /usr/share/fonts/opentype/urw-base35
+          echo "VCCAD_URW_FONTS=/usr/share/fonts/opentype/urw-base35" >> "$GITHUB_ENV"
       - name: Cache NuGet
         uses: actions/cache@v4
         with:
@@ -95,6 +106,17 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      # The text-export tests embed a URW base-35 face - "Nimbus Sans" and friends. Those faces are
+      # located on the machine rather than shipped with this project, because their licence is not ours to
+      # redistribute. The runner does not have them, so exporting text threw
+      # KeyNotFoundException looking up the font it had been told to use. Installing them here is the
+      # difference between a build that tests the exporter and one that tests the runner's font list.
+      - name: Install the standard fonts the export tests embed
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-urw-base35
+          test -d /usr/share/fonts/opentype/urw-base35
+          echo "VCCAD_URW_FONTS=/usr/share/fonts/opentype/urw-base35" >> "$GITHUB_ENV"
       - name: Cache NuGet
         uses: actions/cache@v4
         with:
