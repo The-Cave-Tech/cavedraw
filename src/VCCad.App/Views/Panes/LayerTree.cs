@@ -104,15 +104,11 @@ public static class LayerTree
         return (byLayer, pasteboard);
     }
 
-    /// <summary>The bounds an item occupies, before its artboard offset is applied.</summary>
-    public static Rect2D BoundsOf(LayerItem item) => item switch
-    {
-        PathItem path => path.BoundingBox(),
-        TextItem text => text.BoundingBox(),
-        ArtGroup group => group.Transform.Transform(group.BoundingBox()),
-        ImageItem image => image.Placement,
-        _ => Rect2D.Empty,
-    };
+    /// <summary>
+    /// The bounds an item occupies, before its artboard offset is applied. Delegated so the panel, the
+    /// canvas and the arranging code cannot disagree about where a group is.
+    /// </summary>
+    public static Rect2D BoundsOf(LayerItem item) => ItemBounds.Of(item);
 
     /// <summary>
     /// Every row the panel shows, in the order it shows them.

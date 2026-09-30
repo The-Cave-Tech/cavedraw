@@ -2080,6 +2080,47 @@ public static class EditorOperations
                 ctx.ViewModel.NotifyDocumentChanged();
                 return new { expanded = count };
             });
+        Add("arrange.align",
+            "Align the selected objects on one axis: axis is horizontal|vertical and edge is " +
+            "start|centre|end (left|middle|right, or top|middle|bottom). The line is the selection's own " +
+            "extent. One undo step.",
+            "axis:string, edge:string",
+            (ctx, p) =>
+            {
+                (ArrangeAxis axis, ArrangeEdge edge) = ReadAlign(p);
+                int moved = ctx.Session.AlignSelection(axis, edge);
+                ctx.ViewModel.NotifyDocumentChanged();
+                return new { axis = axis.ToString(), edge = edge.ToString(), moved };
+            });
+
+        Add("arrange.distribute",
+            "Spread the selected objects out evenly along an axis, in stack order. Gaps are equalised " +
+            "when there is room; when the objects overlap there is none - their widths exceed the span " +
+            "they occupy - so their centres are spread evenly instead, leaving sizes, order and the " +
+            "overlap alone. from is start (the first object is placed first) or end (the last is).",
+            "axis:string, from?:string",
+            (ctx, p) =>
+            {
+                ArrangeAxis axis = ReadAxis(p.GetString("axis"));
+                string? from = p.GetString("from");
+                ArrangeAnchor anchor = string.Equals(from, "end", StringComparison.OrdinalIgnoreCase)
+                    ? ArrangeAnchor.End
+                    : ArrangeAnchor.Start;
+
+                bool overlapped = VCCad.Core.Model.Arrange.OverlapsTooMuchForGaps(
+                    ctx.Session.SelectedObjects.ToList(), axis);
+
+                int moved = ctx.Session.DistributeSelection(axis, anchor);
+                ctx.ViewModel.NotifyDocumentChanged();
+
+                return new
+                {
+                    axis = axis.ToString(),
+                    from = anchor.ToString(),
+                    moved,
+                    byCentres = overlapped,
+                };
+            });
         Add("path.join", "Join two selected open paths at a shared endpoint.", "", (ctx, _) =>
         {
             ctx.Session.JoinSelection();
@@ -4492,6 +4533,25 @@ public static class EditorOperations
 
         ctx.ViewModel.NotifyDocumentChanged();
         return new { itemId = path.Id, index, outlines = path.SubPaths.Count };
+    }
+    private static ArrangeAxis ReadAxis(string? axis) =>
+        string.Equals(axis, "vertical", StringComparison.OrdinalIgnoreCase)
+            ? ArrangeAxis.Vertical
+            : ArrangeAxis.Horizontal;
+
+    private static (ArrangeAxis Axis, ArrangeEdge Edge) ReadAlign(JsonElement p)
+    {
+        ArrangeAxis axis = ReadAxis(p.GetString("axis"));
+
+        string edge = p.GetString("edge") ?? throw new EditorOperationException("Parameter 'edge' is required.");
+        return (axis, edge.ToLowerInvariant() switch
+        {
+            "start" or "left" or "top" => ArrangeEdge.Start,
+            "centre" or "center" or "middle" => ArrangeEdge.Centre,
+            "end" or "right" or "bottom" => ArrangeEdge.End,
+            _ => throw new EditorOperationException(
+                $"Unknown edge '{edge}'. Use start|centre|end."),
+        });
     }
     private static List<Point2D> ReadPoints(JsonElement p, Vector2D offset)
     {

@@ -597,6 +597,63 @@ public sealed class DocumentSession : INotifyPropertyChanged
 
         return null;
     }
+    /// <summary>
+    /// Aligns the selection on the chosen axis. One undo step, and it reports how many objects moved so a
+    /// no-op is distinguishable from a failure.
+    /// </summary>
+    public int AlignSelection(ArrangeAxis axis, ArrangeEdge edge)
+        => MoveByDeltas(Arrange.Align(SelectedObjects.ToList(), axis, edge), $"Align {edge}");
+
+    /// <summary>Distributes the selection evenly, in stack order. One undo step.</summary>
+    public int DistributeSelection(ArrangeAxis axis, ArrangeAnchor anchor)
+        => MoveByDeltas(
+            Arrange.Distribute(SelectedObjects.ToList(), axis, anchor),
+            anchor == ArrangeAnchor.Start ? "Distribute" : "Distribute from the end");
+
+    /// <summary>
+    /// Applies a set of arranged deltas as one undo step.
+    ///
+    /// Paths have their geometry translated and text has its origin moved, which is how each kind says
+    /// where it is. Other kinds - a group, a placed image - are **counted and reported** rather than
+    /// silently left behind: arranging half a selection and saying nothing is worse than saying so.
+    /// </summary>
+    private int MoveByDeltas(IReadOnlyList<(LayerItem Item, Vector2D Delta)> moves, string description)
+    {
+        var edits = new List<IUndoableCommand>();
+        int skipped = 0;
+
+        foreach ((LayerItem item, Vector2D delta) in moves)
+        {
+            switch (item)
+            {
+                case PathItem path:
+                    PathItem before = path.GeometrySnapshot();
+                    path.TranslateGeometryBy(delta);
+                    edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot(), description));
+                    break;
+
+                case TextItem text:
+                    Point2D origin = text.Origin;
+                    edits.Add(new SetTextOriginCommand(text, origin, origin + delta));
+                    break;
+
+                default:
+                    skipped++;
+                    break;
+            }
+        }
+
+        if (edits.Count > 0)
+        {
+            Execute(new CompositeCommand(description, edits));
+        }
+
+        SetStatus(skipped > 0
+            ? $"{description}: {edits.Count} moved, {skipped} left alone (not movable yet)"
+            : $"{description}: {edits.Count} moved");
+
+        return edits.Count;
+    }
     /// <summary>Joins two selected paths that share an endpoint (closing the result
     /// if its ends meet).</summary>
     public void JoinSelection()
