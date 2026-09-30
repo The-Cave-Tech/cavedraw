@@ -443,6 +443,12 @@ public partial class EditorView : UserControl
         bar.Children.Add(ToolButton(EditorTool.Lasso, "lasso", "Freehand selection (Q)", LassoMark()));
         bar.Children.Add(ToolButton(EditorTool.Pen, "pen", "Pen (P)"));
         bar.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)), Margin = new Thickness(4, 6) });
+        // The shape tools are one compound button: nine shapes behind it, and the button draws the armed
+        // one so the toolbar always says what a drag will make.
+        var shapes = new ShapeFlyoutButton();
+        shapes.Attach(_viewModel);
+        _toolButtons[EditorTool.Shape] = shapes.Face;
+        bar.Children.Add(shapes);
         bar.Children.Add(ToolButton(EditorTool.Rectangle, "rectangle", "Rectangle (M)"));
         bar.Children.Add(ToolButton(EditorTool.Ellipse, "ellipse", "Ellipse (L)"));
         bar.Children.Add(ToolButton(EditorTool.Artboard, "artboard", "Artboard (O)"));
