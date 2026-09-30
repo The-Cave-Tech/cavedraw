@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.VisualTree;
+using VCCad.App.Controls;
 
 namespace VCCad.App.Automation;
 
@@ -65,8 +66,62 @@ public static class InputInjection
         }
 
         return $"{(clickCount >= 2 ? "double-" : string.Empty)}clicked {control.GetType().Name} " +
-               $"at ({x:F0},{y:F0})";
+               $"at ({x:F0},{y:F0})" + Describe(control);
     }
+
+    /// <summary>
+    /// Where the control sits in the visual tree, so a click that lands somewhere unexpected says where.
+    ///
+    /// A gesture that reaches the wrong control is the worst kind of automation failure: the operation
+    /// succeeds, the client sees no error, and the only evidence is a selection that did not change. The
+    /// caller is told which control took the click *and* what it is inside, which is the difference between
+    /// "clicked Grid" and knowing the canvas never saw it.
+    /// </summary>
+    private static string Describe(Control control)
+    {
+        var names = new List<string> { Label(control) };
+        bool insideCanvas = false;
+        CanvasWorkspace? canvas = null;
+
+        for (Visual? v = control.GetVisualParent(); v is not null && names.Count < 8; v = v.GetVisualParent())
+        {
+            names.Add(Label(v));
+            if (v is CanvasWorkspace found)
+            {
+                insideCanvas = true;
+                canvas = found;
+            }
+        }
+
+        string where = $" in {string.Join(" < ", names)}";
+
+        // A gesture that lands outside the canvas selects nothing and reports no error, which is the
+        // hardest kind of miss to see. Say so, and say where the canvas actually is, so the next click can
+        // be aimed rather than guessed at.
+        if (!insideCanvas)
+        {
+            CanvasWorkspace? nearest = canvas ?? control.GetVisualDescendants().OfType<CanvasWorkspace>().FirstOrDefault();
+            if (nearest is null && TopLevel.GetTopLevel(control) is { } top)
+            {
+                nearest = top.GetVisualDescendants().OfType<CanvasWorkspace>().FirstOrDefault();
+            }
+
+            if (nearest is not null && TopLevel.GetTopLevel(nearest) is { } window)
+            {
+                Point at = nearest.TranslatePoint(new Point(0, 0), window) ?? new Point(0, 0);
+                where += $" - the canvas is not under this point; it starts at window " +
+                         $"({at.X:F0},{at.Y:F0}) and is {nearest.Bounds.Width:F0}x{nearest.Bounds.Height:F0}";
+            }
+        }
+
+        return where;
+    }
+
+    /// <summary>A control's type and name - "Grid#LeftPanelHost" answers a question that "Grid" cannot.</summary>
+    private static string Label(Visual visual)
+        => visual is Control { Name: { Length: > 0 } name }
+            ? $"{visual.GetType().Name}#{name}"
+            : visual.GetType().Name;
 
     /// <summary>
     /// Sends typed text to the focused control, as the keyboard would.

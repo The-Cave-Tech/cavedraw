@@ -1676,11 +1676,27 @@ public static class EditorOperations
 
                 if (direction == "screenToModel")
                 {
-                    var model = canvas.WindowToModel(new Avalonia.Point(x, y));
+                    // Window pixels in, canvas-relative point out: WindowToModel is measured from the
+                    // canvas, and a caller aims with window coordinates. The translation starts at the
+                    // window, not at the canvas - translating a control to itself is the identity, which
+                    // is how the first attempt at this kept the bug it was meant to fix.
+                    Avalonia.Point local = Avalonia.Controls.TopLevel.GetTopLevel(canvas) is { } fromWindow
+                        ? fromWindow.TranslatePoint(new Avalonia.Point(x, y), canvas) ?? new Avalonia.Point(x, y)
+                        : new Avalonia.Point(x, y);
+                    var model = canvas.WindowToModel(local);
                     return new { x = model.X, y = model.Y };
                 }
 
+                // ...and the other way about. ModelToWindow is measured from the canvas too, so a point
+                // handed straight to `input.pointer` was off by wherever the canvas sits in the window -
+                // which is into a neighbouring panel, where the click lands on something else and quietly
+                // selects nothing. The operation promises window pixels, so it has to deliver them.
                 Avalonia.Point screen = canvas.ModelToWindow(new VCCad.Geometry.Point2D(x, y));
+                if (Avalonia.Controls.TopLevel.GetTopLevel(canvas) is { } top)
+                {
+                    screen = canvas.TranslatePoint(screen, top) ?? screen;
+                }
+
                 return new { x = screen.X, y = screen.Y };
             });
 
