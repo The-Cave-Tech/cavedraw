@@ -736,8 +736,43 @@ public partial class EditorView : UserControl
         }
 
         StatusText.Text = status;
+
+        ShowSecurity(_viewModel.Document.Security);
+
         var origin = _viewModel.Document.ContentOrigin();
         ZoomLabel.Text = $"origin {origin.X:0.#}, {origin.Y:0.#}   ·   {Workspace.Zoom * 100:0.##}%";
+    }
+
+    /// <summary>
+    /// Shows the padlock for a protected file, with the permissions the file claims in its tooltip.
+    ///
+    /// The wording is the view's because it is chrome, but every fact in it comes from
+    /// <see cref="DocumentSecurity"/> - so the tooltip, the <c>document.security</c> operation and
+    /// anything later that has to report this say the same thing rather than three things.
+    /// </summary>
+    private void ShowSecurity(DocumentSecurity? security)
+    {
+        if (security is null)
+        {
+            SecurityLock.IsVisible = false;
+            ToolTip.SetTip(SecurityLock, null);
+            return;
+        }
+
+        var lines = new List<string>
+        {
+            security.Opened
+                ? $"Protected: {security.Cipher}"
+                : $"Protected: {security.Cipher} - this file has not been opened",
+            security.OpenedWithOwnerPassword ? "Opened with the owner password." : string.Empty,
+            string.Empty,
+            "The file claims these permissions:",
+        };
+
+        lines.AddRange(security.Listed().Select(p => $"    {p.Name}: {(p.Allowed ? "yes" : "no")}"));
+
+        SecurityLock.IsVisible = true;
+        ToolTip.SetTip(SecurityLock, string.Join(Environment.NewLine, lines));
     }
 
     private void OnNew(object? sender, RoutedEventArgs e) => _viewModel.NewDocument();

@@ -2600,6 +2600,28 @@ public static class EditorOperations
                 File.WriteAllBytes(path, pdf);
                 return new { saved = path, bytes = pdf.Length };
             });
+        // The status bar shows a padlock for a protected file; this is the same facts without the
+        // chrome, because the assistant has to be able to read what the person can see (§1.1).
+        Add("document.security", "What the open document's file was protected with, and what it permits.", "",
+            (ctx, _) =>
+            {
+                VCCad.Core.Model.DocumentSecurity? security = ctx.Document.Security;
+                if (security is null)
+                {
+                    return new { encrypted = false };
+                }
+
+                return new
+                {
+                    encrypted = true,
+                    cipher = security.Cipher,
+                    opened = security.Opened,
+                    openedWithOwnerPassword = security.OpenedWithOwnerPassword,
+                    permissions = security.Listed()
+                        .Select(p => new { name = p.Name, allowed = p.Allowed })
+                        .ToList(),
+                };
+            });
 
         // ---- viewport ----------------------------------------------------
         Add("view.fit", "Fit the artboard(s) into the visible workspace.", "",

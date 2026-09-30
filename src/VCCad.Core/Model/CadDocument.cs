@@ -57,6 +57,16 @@ public sealed class CadDocument
     /// </summary>
     public AiPrivateData? AiPrivateData { get; set; }
 
+    /// <summary>
+    /// What the file this document was read from was protected with, or null when it was not
+    /// protected at all.
+    ///
+    /// Deliberately **not** in the lossless sidecar. It describes the *file that was opened*, not the
+    /// document: a document saved again is a new file, and carrying the old file's permissions into
+    /// it would be a claim a person could act on and that nothing supports.
+    /// </summary>
+    public DocumentSecurity? Security { get; set; }
+
     /// <summary>Raised whenever the artboard list changes.</summary>
     public event EventHandler? StructureChanged;
 

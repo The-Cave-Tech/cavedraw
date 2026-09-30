@@ -52,7 +52,70 @@ public static class PdfImporter
             document.AiPrivateData = Ai.AiPrivateDataExtractor.ExtractPrivateData(pdfBytes);
         }
 
+        // What the file was protected with travels with the document, read from the /Encrypt
+        // dictionary - which is not itself encrypted, so the permissions are readable even when the
+        // file could not be opened, which is exactly when a person most needs telling.
+        document.Security ??= ReadSecurity(pdfBytes);
+
         return document;
+    }
+
+    /// <summary>
+    /// What the file was protected with, or null when it was not protected.
+    ///
+    /// Guarded by a byte scan for <c>/Encrypt</c> because this runs on every import and a second
+    /// parse of a corpus-sized file is not free; an unprotected file costs one scan and no parse.
+    /// </summary>
+    private static DocumentSecurity? ReadSecurity(byte[] pdfBytes)
+    {
+        if (!Contains(pdfBytes, "/Encrypt"))
+        {
+            return null;
+        }
+
+        try
+        {
+            var file = new Parsing.PdfFile(pdfBytes);
+            if (!file.IsEncrypted)
+            {
+                return null;
+            }
+
+            Encryption.PdfStandardSecurity? security = file.Security;
+
+            return new DocumentSecurity(
+                security?.Cipher ?? "not opened",
+                file.Permissions,
+                security is not null,
+                security?.OpenedWithOwnerPassword ?? false);
+        }
+        catch (Exception)
+        {
+            // A file we cannot parse is a file we cannot describe; the import itself has already
+            // reported why.
+            return null;
+        }
+    }
+
+    private static bool Contains(byte[] data, string token)
+    {
+        int[] wanted = token.Select(c => (int)c).ToArray();
+
+        for (int i = 0; i + wanted.Length <= data.Length; i++)
+        {
+            int j = 0;
+            while (j < wanted.Length && data[i + j] == wanted[j])
+            {
+                j++;
+            }
+
+            if (j == wanted.Length)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -254,6 +254,11 @@
       <DockPanel>
         <TextBlock DockPanel.Dock="Right" x:Name="ZoomLabel" Text="100%"
                    Foreground="{DynamicResource VcTextDim}" Margin="10,0"/>
+        <!-- A reminder that the file was protected, and what it says it permits. Deliberately not a
+             warning and not a modal: a shop opening a pattern with an owner password has work to do,
+             and the facts are what it needs, not an obstacle. -->
+        <TextBlock DockPanel.Dock="Right" x:Name="SecurityLock" Text="&#x1F512;" IsVisible="False"
+                   Foreground="{DynamicResource VcTextDim}" Margin="10,0" VerticalAlignment="Center"/>
         <TextBlock x:Name="StatusText" Text="Ready" Foreground="{DynamicResource VcText}"
                    TextTrimming="CharacterEllipsis"/>
       </DockPanel>

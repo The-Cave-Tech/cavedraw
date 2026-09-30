@@ -78,6 +78,16 @@ internal sealed class PdfFile
     public bool IsEncrypted => EncryptDictionary() is not null;
 
     /// <summary>
+    /// The /P permission bits, as the file wrote them.
+    ///
+    /// Read straight from the /Encrypt dictionary, which is **not itself encrypted** - so the
+    /// permissions a file claims can be reported even when it cannot be opened, which is exactly when
+    /// a person most needs telling.
+    /// </summary>
+    public int Permissions
+        => (int)(ResolveNumber(EncryptDictionary()?.GetValueOrDefault("P")) ?? 0);
+
+    /// <summary>
     /// Unlocks the file with a password, or returns null when it does not open it. An unprotected
     /// file returns null as well: there is nothing to unlock and nothing to decrypt.
     /// </summary>
