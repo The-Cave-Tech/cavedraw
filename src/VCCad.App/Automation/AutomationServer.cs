@@ -202,7 +202,14 @@ public sealed class AutomationServer : IDisposable
                     {
                         ok = true,
                         app = "VCCad",
+
+                        // Who is answering, not just that something is. A caller that launched an instance
+                        // and then reached a *different* one had no way to tell - the reply looked right
+                        // and came from older code. Port plus pid plus name is what makes "am I talking to
+                        // the instance I started" answerable from the reply itself.
                         port = Port,
+                        pid = Environment.ProcessId,
+                        instance = InstanceName,
                         document = _context.Document.Name,
                         operations = EditorOperations.All.Count,
                     }));
