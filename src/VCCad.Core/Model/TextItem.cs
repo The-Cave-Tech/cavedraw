@@ -172,6 +172,11 @@ public sealed class TextItem : LayerItem
     /// <summary>
     /// Tight bounds of the block: its wrap width and the height its lines need.
     ///
+    /// The line heights come from the layout engine, which measures each line from the faces
+    /// actually on it. This used to size every line as the block's largest font times the line
+    /// spacing, so a block whose second line was set smaller reported that line at the first line's
+    /// height - and the box, the caret and the selection all drifted from the text.
+    ///
     /// Widths come from the installed <see cref="ITextMetrics"/> — the shaper's own
     /// advances, kerning included — so the box reported here is the box drawn round the
     /// text. Falling back to a per-character estimate is only correct when no host has
@@ -180,47 +185,8 @@ public sealed class TextItem : LayerItem
     /// </summary>
     public Rect2D LocalBounds()
     {
-        var lines = TextWrapping.Lines(this);
-
-        // The block is as wide as its widest line, unless a frame fixes the width — a
-        // drawn box keeps its shape while it fills.
-        double maxLine = 0;
-        foreach (TextWrapping.LineRange line in lines)
-        {
-            double lineWidth = 0;
-            for (int i = line.Start; i < line.Start + line.Length; i++)
-            {
-                lineWidth += WidthAt(i);
-            }
-
-            maxLine = Math.Max(maxLine, lineWidth);
-        }
-
-        // Every explicit break carries the extra paragraph leading — including a trailing
-        // one, which leaves an empty final line with the space above it.
-        int paragraphs = CountNewlines();
-
-        double lineHeight = MaxFontSize * LineSpacing;
-        double height = (lines.Count * lineHeight) + (paragraphs * ParagraphSpacing);
-        double width = FrameWidth > 0 ? FrameWidth : maxLine;
-
-        double WidthAt(int index)
-        {
-            int remaining = index;
-            foreach (TextRun run in Runs)
-            {
-                if (remaining < run.Text.Length)
-                {
-                    return TextMeasurement.AdvanceOf(run, remaining);
-                }
-
-                remaining -= run.Text.Length;
-            }
-
-            return TextMeasurement.AdvanceAtEnd(Runs.Count > 0 ? Runs[^1] : new TextRun());
-        }
-
-        return new Rect2D(Origin.X, Origin.Y, width, height);
+        TextLayout layout = TextLayoutEngine.Compute(this);
+        return new Rect2D(Origin.X, Origin.Y, layout.Width, layout.Height);
     }
 
     /// <summary>

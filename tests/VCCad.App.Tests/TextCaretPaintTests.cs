@@ -165,7 +165,10 @@ public class TextCaretPaintTests
             Assert.InRange(localTop.X, -2, box.Width + 2);
             Assert.InRange(localTop.Y, -2, box.Height + 2);
             Assert.InRange(localTop.X - localBottom.X, -0.5, 0.5); // down the block, not across it
-            Assert.InRange(localBottom.Y - localTop.Y, 24 * 0.9, 24 * 1.2);
+
+            // And it marks the line box: at least the face's own size, and the leading the block
+            // asks for on top of it.
+            Assert.InRange(localBottom.Y - localTop.Y, 24 * 0.95, 24 * 1.8);
         }
         finally
         {

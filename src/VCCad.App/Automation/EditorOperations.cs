@@ -1534,6 +1534,44 @@ public static class EditorOperations
                 };
             });
 
+        Add("text.styleSelection",
+            "Style the selected range of the open text block - the face, size, weight and slant - as " +
+            "the Text pane and Ctrl+B do. text.update restyles the whole object; this changes part " +
+            "of one, which is what rich text is.",
+            "family?:string, fontSize?:number, bold?:bool, italic?:bool",
+            (ctx, p) =>
+            {
+                VCCad.App.Controls.CanvasWorkspace? canvas = Workspace(ctx);
+                if (canvas is null)
+                {
+                    throw new EditorOperationException("No canvas is attached.");
+                }
+
+                string? family = p.GetString("family");
+                double? size = p.TryGetProperty("fontSize", out JsonElement sv) ? sv.GetDouble() : null;
+                bool? bold = p.TryGetProperty("bold", out JsonElement bv) ? bv.GetBoolean() : null;
+                bool? italic = p.TryGetProperty("italic", out JsonElement iv) ? iv.GetBoolean() : null;
+
+                if (!canvas.StyleSelection(run =>
+                    {
+                        if (family is not null) run.FontFamily = family;
+                        if (size is { } s) run.FontSize = s;
+                        if (bold is { } b) run.Bold = b;
+                        if (italic is { } i) run.Italic = i;
+                    }))
+                {
+                    throw new EditorOperationException(
+                        "No text is selected in an open block; call text.edit and text.select first.");
+                }
+
+                ctx.ViewModel.NotifyDocumentChanged();
+                return new
+                {
+                    selectionStart = ctx.ViewModel.TextSelectionStart,
+                    selectionEnd = ctx.ViewModel.TextSelectionEnd,
+                };
+            });
+
         Add("text.edit",
             "Open a text block for editing, as double-clicking into it does. Needed before " +
             "text.select, and therefore before styling part of a selection: the range is " +

@@ -3573,7 +3573,10 @@ public sealed class CanvasWorkspace : Control
                 double w = metrics.Y[i + 1] == metrics.Y[i]
                     ? metrics.X[i + 1] - metrics.X[i]
                     : metrics.Size[i] * 0.3;
-                double h = metrics.Size[i] * 1.05;
+
+                // The line's own height, so the highlight covers the whole line box - which is what
+                // a caret the height of the line is marking.
+                double h = metrics.Ascent[i] + metrics.Descent[i];
 
                 // One rectangle, in the block's own upright space. The rotation is already on the
                 // context (pushed above), so turning the quad here as well - and then converting it
@@ -3583,76 +3586,56 @@ public sealed class CanvasWorkspace : Control
             }
         }
 
-        // Measure each run's natural width first: the wrapping constraint must
-        // never be narrower than the text, or every line wraps.
-        var laidOut = new List<(TextRun Run, FormattedText Formatted, double Natural, double LineHeight, int Lines)>();
-        double blockWidth = 0;
-        foreach (TextRun run in text.Runs)
+        // Every run is drawn where the layout says, on its line's baseline. The layout is the same
+        // one the caret, the highlight and the model's bounds are computed from, so a line of mixed
+        // faces is drawn on the one baseline it was measured against.
+        //
+        // Runs used to be placed by stacking their boxes under the line's top edge, each carrying
+        // its own ascent, which is what left a line of mixed faces stair-stepping: the taller face
+        // sat lower, and neither sat on a shared baseline.
+        var runOffset = new int[text.Runs.Count];
+        int flat = 0;
+        for (int i = 0; i < text.Runs.Count; i++)
         {
-            FormattedText formatted = CreateFormattedText(run, brush);
-            if (text.FrameWidth > 0)
-            {
-                // A drawn frame wraps: the text flows to the box width instead of running
-                // off the page in one endless line.
-                formatted.MaxTextWidth = text.FrameWidth;
-            }
+            runOffset[i] = flat;
+            flat += text.Runs[i].Text.Length;
+        }
 
+        foreach (TextRunBox box in metrics.Layout.Runs)
+        {
+            TextRun run = text.Runs[box.Run];
+            TextLine line = metrics.Layout.Lines[box.Line];
+            int pieceStart = box.Start - runOffset[box.Run];
+
+            // A run broken across lines - by a newline in its own text, or by wrapping in a frame -
+            // is drawn once per line, each piece on its own line's baseline. Drawing it whole
+            // stacked the pieces or ran them past the line they belong to.
+            var segment = (TextRun)run.Clone();
+            segment.Text = run.Text.Substring(pieceStart, box.Length);
+            segment.AdvanceWidth = null;
+
+            FormattedText formatted = CreateFormattedText(segment, brush);
             double natural = formatted.Width;
-            double target = run.AdvanceWidth is > 0 ? run.AdvanceWidth.Value : natural;
-            blockWidth = Math.Max(blockWidth, target);
-            laidOut.Add((run, formatted, natural, run.FontSize * text.LineSpacing, run.Text.Count(ch => ch == '\n') + 1));
-        }
+            double scaleX = natural > 0 ? box.Width / natural : 1.0;
 
-        // Runs are pieces of a line, not lines. A PDF lays a heading out as separate pieces -
-        // "Jalie", "3464", "-", "LILLIE" - and the importer keeps them as runs of one text
-        // object. Advancing a line per run stacked them at the same x one line below each
-        // other, which printed every heading on the page on top of itself. Placement lives in
-        // the model so it can be tested without a canvas.
-        var measured = new List<VCCad.Core.Text.RunMetrics>(laidOut.Count);
-        foreach ((TextRun run, FormattedText formatted, double natural, double lineHeight, int lines) in laidOut)
-        {
-            double width = run.AdvanceWidth is > 0 ? run.AdvanceWidth.Value : natural;
-            measured.Add(new VCCad.Core.Text.RunMetrics(run.Text, width, lines * lineHeight));
-        }
-
-        IReadOnlyList<VCCad.Core.Text.RunPlacement> placed = VCCad.Core.Text.RunLayout.Place(measured);
-
-        // Alignment is a property of a line, so each line's width is needed before any of its
-        // runs can be shifted by it.
-        var lineWidth = new Dictionary<double, double>();
-        foreach (VCCad.Core.Text.RunPlacement p in placed)
-        {
-            double end = p.X + p.Width;
-            lineWidth[p.Y] = Math.Max(lineWidth.TryGetValue(p.Y, out double w) ? w : 0, end);
-        }
-
-        for (int i = 0; i < laidOut.Count; i++)
-        {
-            (TextRun run, FormattedText formatted, double natural, _, _) = laidOut[i];
-
-            double target = measured[i].Width;
-            double scaleX = run.AdvanceWidth is > 0 && natural > 0 ? target / natural : 1.0;
-            double alignX = text.Alignment switch
-            {
-                ModelTextAlignment.Center => (blockWidth - lineWidth[placed[i].Y]) / 2,
-                ModelTextAlignment.Right => blockWidth - lineWidth[placed[i].Y],
-                _ => 0,
-            };
-
+            // Placed by its baseline, never by the line's top edge.
             Point2D origin = text.Origin + offset
-                + new Vector2D(alignX + placed[i].X, placed[i].Y);
+                + new Vector2D(box.X, TextLayoutEngine.RunTop(run, line));
 
-            // The glyph-by-id path needs the run's place in the line as much as the drawn-text
-            // path does, so it is resolved before either is taken.
             if (run.EmbeddedFont is { } embedded && run.GlyphIds is { Length: > 0 } glyphIds &&
-                TryDrawEmbeddedGlyphs(context, brush, text, run, embedded, glyphIds, origin))
+                pieceStart >= 0 && pieceStart + box.Length <= glyphIds.Length)
             {
-                continue;
+                var slice = new ushort[box.Length];
+                Array.Copy(glyphIds, pieceStart, slice, 0, box.Length);
+                if (TryDrawEmbeddedGlyphs(context, brush, text, segment, embedded, slice, origin))
+                {
+                    continue;
+                }
             }
 
             if (Math.Abs(scaleX - 1.0) > 1e-9)
             {
-                // Squeeze/stretch to the original PDF advance width so a wider
+                // Squeeze/stretch to the advance the layout placed this piece at, so a wider
                 // fallback font does not reflow or overprint the layout.
                 Avalonia.Matrix scale = Avalonia.Matrix.CreateTranslation(-origin.X, -origin.Y)
                     * Avalonia.Matrix.CreateScale(scaleX, 1.0)
@@ -3772,149 +3755,88 @@ public sealed class CanvasWorkspace : Control
     private static FontFamily ResolveFontFamily(TextRun run)
         => new(StandardFontResolver.FamilyFor(run));
 
-    /// <summary>Measured layout of a text block: per-character boundary positions
-    /// (global indices) with alignment applied, plus the block size.</summary>
+    /// <summary>
+    /// The block's layout, indexed the way the editing code wants it.
+    ///
+    /// It holds no arithmetic of its own: the caret, the highlight, the edit box and the drawing
+    /// all read the one <see cref="TextLayout"/> the model computes. They used to be three separate
+    /// measurements of the same block - the model measured lines one way, the canvas drew them
+    /// another and the caret came out of a third - which is how a line of mixed faces came to be
+    /// drawn on three different baselines.
+    /// </summary>
     private sealed class TextMetrics
     {
+        public TextLayout Layout { get; init; } = TextLayout.Empty;
+
+        /// <summary>The caret's x, per flattened character index.</summary>
         public double[] X = Array.Empty<double>();
+
+        /// <summary>The top of the line that character sits on.</summary>
         public double[] Y = Array.Empty<double>();
+
+        /// <summary>The baseline the character's line draws to.</summary>
+        public double[] Baseline = Array.Empty<double>();
+
+        /// <summary>The line's ascent above that baseline, leading included.</summary>
+        public double[] Ascent = Array.Empty<double>();
+
+        /// <summary>The line's descent below it.</summary>
+        public double[] Descent = Array.Empty<double>();
+
+        /// <summary>The face size of the character, for the caret's own width.</summary>
         public double[] Size = Array.Empty<double>();
+
         public double MaxWidth;
         public double TotalHeight;
     }
 
     private static TextMetrics MeasureText(TextItem text)
     {
-        // Flatten to characters first: wrapping has to look ahead to the previous break,
-        // which a straight run-by-run walk cannot do.
-        var chars = new List<(int Index, char Ch, double Size)>();
-        int total = 0;
-        foreach (TextRun run in text.Runs)
-        {
-            foreach (char ch in run.Text)
-            {
-                chars.Add((total, ch, run.FontSize));
-                total++;
-            }
-        }
-
-        double frame = text.FrameWidth;
-        var lines = new List<(int Start, int Count, double Width, double Height)>();
-
-        double WidthOf(int from, int count)
-        {
-            double sum = 0;
-            for (int i = from; i < from + count && i < chars.Count; i++)
-            {
-                sum += CharWidth(text, chars[i].Index);
-            }
-
-            return sum;
-        }
-
-        void AddLine(int from, int count)
-        {
-            double maxSize = 0;
-            for (int i = from; i < from + count && i < chars.Count; i++)
-            {
-                maxSize = Math.Max(maxSize, chars[i].Size);
-            }
-
-            lines.Add((chars.Count == 0 ? 0 : chars[Math.Min(from, chars.Count - 1)].Index,
-                count, WidthOf(from, count), Math.Max(maxSize, text.MaxFontSize) * text.LineSpacing));
-        }
-
-        int lineStartChar = 0;
-        int lastBreak = -1;
-        for (int i = 0; i < chars.Count; i++)
-        {
-            char ch = chars[i].Ch;
-
-            if (ch == '\n')
-            {
-                AddLine(lineStartChar, i - lineStartChar);
-                lines.Add((-1, -1, 0, text.ParagraphSpacing));
-                lineStartChar = i + 1;
-                lastBreak = -1;
-                continue;
-            }
-
-            if (ch == ' ')
-            {
-                lastBreak = i;
-            }
-
-            if (frame <= 0 || i <= lineStartChar)
-            {
-                continue;
-            }
-
-            // Break at the last space; if a single word is wider than the frame, break it
-            // rather than let it run out of the box. A space at the end of a line is
-            // collapsed when the line is drawn, so it must not count towards the wrap
-            // width — counting it wraps a line early and the box ends up a line too tall.
-            int measured = i;
-            while (measured > lineStartChar && chars[measured].Ch == ' ')
-            {
-                measured--;
-            }
-
-            if (WidthOf(lineStartChar, measured - lineStartChar + 1) > frame)
-            {
-                int breakAt = lastBreak > lineStartChar ? lastBreak : i;
-                AddLine(lineStartChar, breakAt - lineStartChar);
-                lineStartChar = breakAt == lastBreak ? breakAt + 1 : breakAt;
-                lastBreak = -1;
-            }
-        }
-
-        if (lineStartChar <= chars.Count)
-        {
-            AddLine(lineStartChar, chars.Count - lineStartChar);
-        }
-
-        double blockWidth = frame > 0 ? frame : lines.Count == 0 ? 0 : lines.Max(l => l.Width);
+        TextLayout layout = TextLayoutEngine.Compute(text);
+        int n = layout.CaretX.Count;
 
         var m = new TextMetrics
         {
-            X = new double[total + 1],
-            Y = new double[total + 1],
-            Size = new double[total + 1],
-            MaxWidth = blockWidth,
+            Layout = layout,
+            MaxWidth = layout.Width,
+            TotalHeight = layout.Height,
+            X = new double[n],
+            Y = new double[n],
+            Baseline = new double[n],
+            Ascent = new double[n],
+            Descent = new double[n],
+            Size = new double[n],
         };
 
-        double y = 0;
-        foreach ((int lineStartIndex, int count, double width, double height) in lines)
+        for (int i = 0; i < n; i++)
         {
-            double offset = text.Alignment switch
-            {
-                ModelTextAlignment.Center => (blockWidth - width) / 2,
-                ModelTextAlignment.Right => blockWidth - width,
-                _ => 0,
-            };
-
-            double x = offset;
-            for (int k = 0; k <= count; k++)
-            {
-                int index = lineStartIndex + k;
-                if (index <= total)
-                {
-                    m.X[index] = x;
-                    m.Y[index] = y;
-                    m.Size[index] = height / 1.2;
-                }
-
-                if (k < count)
-                {
-                    x += CharWidth(text, index);
-                }
-            }
-
-            y += height;
+            TextLine line = layout.Lines[layout.LineOf(i)];
+            m.X[i] = layout.XOf(i);
+            m.Y[i] = line.Top;
+            m.Baseline[i] = line.Baseline;
+            m.Ascent[i] = line.Ascent;
+            m.Descent[i] = line.Descent;
+            m.Size[i] = SizeAt(text, i);
         }
 
-        m.TotalHeight = y;
         return m;
+    }
+
+    /// <summary>The face size of a flattened character.</summary>
+    private static double SizeAt(TextItem text, int index)
+    {
+        int remaining = index;
+        foreach (TextRun run in text.Runs)
+        {
+            if (remaining < run.Text.Length)
+            {
+                return run.FontSize;
+            }
+
+            remaining -= run.Text.Length;
+        }
+
+        return text.MaxFontSize;
     }
 
     /// <summary>
@@ -4718,6 +4640,24 @@ public sealed class CanvasWorkspace : Control
         AfterTextEdit();
     }
 
+    /// <summary>
+    /// Styles the selected range of the block being edited, as the Text pane and Ctrl+B do.
+    ///
+    /// Public because a person can do it and the assistant must be able to as well: without it a
+    /// driver can read a block's runs and restyle the whole object, but cannot change part of one -
+    /// and changing part of one is the case that tests the layout.
+    /// </summary>
+    public bool StyleSelection(Action<TextRun> style)
+    {
+        if (_editingText is null || Selection() is var (start2, end2) && start2 == end2)
+        {
+            return false;
+        }
+
+        ApplyStyleToSelection(style);
+        return true;
+    }
+
     private void HandleTextEditKey(KeyEventArgs e)
     {
         if (_editingText is null)
@@ -5045,17 +4985,21 @@ public sealed class CanvasWorkspace : Control
 
         TextMetrics metrics = MeasureText(_editingText);
         int index = Math.Clamp(_caret, 0, metrics.X.Length - 1);
-        double size = metrics.Size[index];
 
         // `metrics.Y[i]` is the TOP of the line, which is where the glyphs start. It used to have
         // the ascent subtracted from it as well, which drew the caret three quarters of an em clear
         // of the text - and, because the line was also nailed to the screen's vertical, at right
         // angles to a turned block.
+        //
+        // The caret marks the whole LINE box, so it brackets whatever face the line carries: a 12pt
+        // word beside a 36pt one gets a caret the height of the line, not of either word.
         Point2D local = new(metrics.X[index], metrics.Y[index]);
+        double height = metrics.Ascent[index] + metrics.Descent[index];
+
         return (
             ModelToScreen(TextLocalToWorld(_editingText, local)),
             ModelToScreen(TextLocalToWorld(
-                _editingText, new Point2D(local.X, local.Y + (size * 1.05)))));
+                _editingText, new Point2D(local.X, local.Y + height))));
     }
 
     private void PaintTextCaret(DrawingContext context)

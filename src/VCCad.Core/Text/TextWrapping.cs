@@ -97,9 +97,22 @@ public static class TextWrapping
             builder.Append(run.Text);
             IReadOnlyList<double> advances = TextMeasurement.Advances(run);
 
+            double natural = 0;
+            for (int i = 0; i < advances.Count; i++)
+            {
+                natural += advances[i];
+            }
+
+            // A run the importer captured an advance for keeps that width, however the face we draw
+            // it with is proportioned: a substitute font must not reflow the page. Spreading the
+            // recorded advance over the run's characters proportionally keeps every position -
+            // caret, wrap point, run boundary - on one set of advances.
+            double scale = run.AdvanceWidth is > 0 && natural > 0 ? run.AdvanceWidth.Value / natural : 1.0;
+
             for (int i = 0; i < run.Text.Length; i++)
             {
-                widths.Add(TextMeasurement.AdvanceOf(run, i));
+                double advance = i < advances.Count ? advances[i] : TextMeasurement.AdvanceAtEnd(run);
+                widths.Add(advance * scale);
             }
         }
 
