@@ -124,6 +124,10 @@ public static partial class SvgReader
 
         SvgGradients gradients = SvgGradients.Collect(root, sheet);
 
+        // The live path effects the file defines. Collected up front rather than where `defs` is met, because the
+        // reference and the definition can be in either order and a path read before its `defs` would find nothing.
+        IReadOnlyDictionary<string, PathEffectDefinition> pathEffects = CollectPathEffects(root);
+
         // Filters are document assets: an element refers to one by id, so they are collected once and held on the
         // document rather than copied into every element that uses them.
         foreach (FilterSpec filter in SvgFilters.Collect(root, warning => warnings.Add(warning)).All.Values)
@@ -159,6 +163,7 @@ public static partial class SvgReader
             Missing = new List<string>(),
             Sheet = sheet,
             Gradients = gradients,
+            PathEffects = pathEffects,
             Warnings = warnings,
             Viewport = viewport,
             BaseDirectory = baseDirectory,
@@ -292,6 +297,135 @@ public static partial class SvgReader
 
     private static readonly XNamespace Inkscape = "http://www.inkscape.org/namespaces/inkscape";
     private static readonly XNamespace Sodipodi = "http://sodipodi.sourceforge.net/DTD/sodipodi-0.0.dtd";
+
+    /// <summary>
+    /// One live path effect the file wrote, with the element itself kept exactly as it was written.
+    ///
+    /// The <see cref="Spec"/> is what the effect <em>means</em> - the name and the parameters, read out by attribute
+    /// so they can be translated into a stroke. The <see cref="Xml"/> is what the effect <em>is</em>: the element,
+    /// verbatim, so an export can put it back with Inkscape's own attribute spellings rather than reconstructing
+    /// them from the spec and getting one of the many `<c>lpeversion</c>` meanings wrong.
+    /// </summary>
+    private sealed record PathEffectDefinition(PathEffectSpec Spec, string Xml);
+
+    /// <summary>
+    /// Every live path effect the document defines, by the id a path refers to it by.
+    ///
+    /// **A definition is found by its id, not by where it sits.** Inkscape writes these into `defs`, but `defs` is
+    /// not the point - the reference is - and the reader meets a path's effect while it is inside a `use`, a nested
+    /// `svg` or a symbol, all of which are walked from their own context. Collecting them once, before anything is
+    /// drawn, is what lets a path that appears before its `defs` still find its effect.
+    ///
+    /// **Only foreign-namespace elements.** An effect this reader has no meaning for is still kept, because a
+    /// document that comes back without it has lost the reason its stroke looks the way it does - but an SVG
+    /// element inside `defs` is not an effect and is handled (or deliberately not handled) as the SVG element it is.
+    ///
+    /// **A definition nothing refers to is not kept**, and that is a boundary rather than an oversight: the model
+    /// has no document-level place for a verbatim foreign element, and an effect with no reference on it says
+    /// nothing about how anything in the document is drawn. What the file's own paths point at is preserved
+    /// verbatim on those paths, so the reference leads somewhere on both sides of the round trip.
+    /// </summary>
+    private static IReadOnlyDictionary<string, PathEffectDefinition> CollectPathEffects(XElement root)
+    {
+        var effects = new Dictionary<string, PathEffectDefinition>(StringComparer.Ordinal);
+
+        foreach (XElement element in root.Descendants())
+        {
+            if (element.Name.LocalName != "path-effect" ||
+                string.IsNullOrEmpty(element.Name.NamespaceName) ||
+                element.Name.Namespace == Svg)
+            {
+                continue;
+            }
+
+            string? id = element.Attribute("id")?.Value;
+            if (string.IsNullOrEmpty(id) || effects.ContainsKey(id))
+            {
+                continue;
+            }
+
+            // Everything the element carries except the three attributes read out by name, in the order the file
+            // wrote them - which is what makes an export put them back in the order they were found.
+            var parameters = new List<KeyValuePair<string, string>>();
+            foreach (XAttribute attribute in element.Attributes())
+            {
+                if (attribute.IsNamespaceDeclaration || attribute.Name.Namespace != XNamespace.None)
+                {
+                    continue;
+                }
+
+                if (attribute.Name.LocalName is "effect" or "id" or "lpeversion")
+                {
+                    continue;
+                }
+
+                parameters.Add(new KeyValuePair<string, string>(attribute.Name.LocalName, attribute.Value));
+            }
+
+            effects[id] = new PathEffectDefinition(
+                new PathEffectSpec(
+                    element.Attribute("effect")?.Value ?? string.Empty,
+                    id,
+                    element.Attribute("lpeversion")?.Value ?? string.Empty,
+                    parameters),
+                element.ToString());
+        }
+
+        return effects;
+    }
+
+    /// <summary>
+    /// Resolves and applies the live path effect a shape refers to, and says what happened when it cannot.
+    ///
+    /// **The effect is kept either way.** The element travels on the shape that points at it, so an export can
+    /// write it back into `defs` and a second import finds it again - a translation that threw the description away
+    /// would draw the right picture once and hand back a file with no effect on it. It is hung here rather than on
+    /// the document because the reference is on the path: this is the item that can find it, and the one an export
+    /// has to reach it from.
+    ///
+    /// **An effect this build does not implement is reported by name and the geometry is left alone.** The path
+    /// already holds the effect's own output, because that is what `d` is; drawing it without the effect is the
+    /// right picture, and redrawing it as an ordinary stroke would be a plausible picture of something the file
+    /// never drew. The same goes for a reference that points at nothing: the geometry stands, and the dangling id
+    /// is reported beside the missing `use` and image targets rather than only being discoverable by comparing the
+    /// file with the drawing.
+    /// </summary>
+    private static void ApplyPathEffect(PathItem path, Context context)
+    {
+        if (PathEffects.ReferenceOn(path) is not { } id)
+        {
+            return;
+        }
+
+        if (!context.PathEffects.TryGetValue(id, out PathEffectDefinition? definition))
+        {
+            context.Missing.Add(
+                $"path-effect '{id}' (a path refers to it and the document defines no such effect)");
+            return;
+        }
+
+        if (!path.ForeignElements.Contains(definition.Xml, StringComparer.Ordinal))
+        {
+            path.ForeignElements.Add(definition.Xml);
+        }
+
+        PathEffectTranslation translation = PathEffects.Translate(definition.Spec, path, path.Stroke);
+
+        // Named by the id the file used *and* by the effect's own name, because the two are what a person has to
+        // match against the file and a driver has to match against what this build implements.
+        foreach (string note in translation.Notes)
+        {
+            context.Warnings.Add($"path-effect '{id}': {note}");
+        }
+
+        if (!translation.IsSupported)
+        {
+            context.Warnings.Add($"path-effect '{id}': {translation.Refusal}");
+            return;
+        }
+
+        path.Stroke = translation.Stroke!;
+    }
 
     /// <summary>`filter="url(#id)"` resolves to the id, or null when the element is not filtered.</summary>
     private static string? FilterReference(XElement element)
@@ -524,6 +658,16 @@ public static partial class SvgReader
         public required SvgGradients Gradients { get; init; }
 
         /// <summary>
+        /// The document's live path effects, by the id a path refers to them by.
+        ///
+        /// Collected once from the whole tree and carried on every context, like the paint servers, because an
+        /// effect is a **document asset**: the path that uses one refers to it by id, and the definition is not
+        /// inside the path any more than a gradient is.
+        /// </summary>
+        public IReadOnlyDictionary<string, PathEffectDefinition> PathEffects { get; init; } =
+            new Dictionary<string, PathEffectDefinition>(StringComparer.Ordinal);
+
+        /// <summary>
         /// The font and line properties in force here, which a text element inherits the way it inherits paint.
         ///
         /// Kept beside the paint rather than inside it because the two are read by different code and answered by
@@ -664,6 +808,12 @@ public static partial class SvgReader
             case "script":
                 // Not drawn here. A symbol is drawn where it is **used**, not where it is defined, and defs
                 // holds definitions for the issues that instance them.
+                //
+                // Skipping `defs` is right for the SVG children - a gradient is resolved by id and a symbol is
+                // drawn at its `use` - but it is **not** a reason to walk past a foreign-namespace definition: a
+                // live path effect is resolved from the whole tree up front, by CollectPathEffects, and hung on the
+                // path that refers to it. Reading the element here would only reach the shapes a defs happens to
+                // contain, which is not where an effect is used from.
                 return;
 
             case "use":
@@ -747,6 +897,11 @@ public static partial class SvgReader
                 {
                     ApplyTransform(shape, own);
                 }
+
+                // Last, so the stroke the effect replaces its own width, cap and join with is the one the file's
+                // own paint and cascade already decided - and so the profile is read on the path as it will be
+                // drawn, after its own transform is baked into the points.
+                ApplyPathEffect(shape, context);
             }
 
             context.Add(item);
@@ -792,6 +947,7 @@ public static partial class SvgReader
             Missing = context.Missing,
             Sheet = context.Sheet,
             Gradients = context.Gradients,
+            PathEffects = context.PathEffects,
             Warnings = context.Warnings,
             Viewport = context.Viewport,
             BaseDirectory = context.BaseDirectory,
@@ -895,6 +1051,7 @@ public static partial class SvgReader
             Missing = context.Missing,
             Sheet = context.Sheet,
             Gradients = context.Gradients,
+            PathEffects = context.PathEffects,
             Warnings = context.Warnings,
             Viewport = viewport,
             BaseDirectory = context.BaseDirectory,
@@ -1240,6 +1397,7 @@ public static partial class SvgReader
             Missing = context.Missing,
             Sheet = context.Sheet,
             Gradients = context.Gradients,
+            PathEffects = context.PathEffects,
             Warnings = context.Warnings,
             Viewport = context.Viewport,
             BaseDirectory = context.BaseDirectory,

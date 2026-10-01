@@ -109,6 +109,7 @@ public static class SvgWriter
         // Gradients first, because a path refers to them by id and a definition may come after its use.
         writer.WriteGradients(document);
         writer.WriteFilters(document);
+        writer.WritePathEffects(document);
 
         // **One artboard at the origin is written without a wrapper group.** A group would be structure the document
         // does not have, and the reader would faithfully turn it back into one - so the model would gain a level on
@@ -258,14 +259,20 @@ public static class SvgWriter
             // the written form keeps the file's own ordering.
             foreach (string foreign in item.ForeignElements)
             {
-                try
+                if (ForeignChild(foreign) is not { } child)
                 {
-                    element.Add(XElement.Parse(foreign));
+                    continue;
                 }
-                catch (System.Xml.XmlException)
+
+                // A live path effect is a **definition** rather than a property of the element it was found on.
+                // It is written into `defs` instead - see WritePathEffects - so that the file that comes back has
+                // it where Inkscape wrote it rather than nested inside the path that refers to it by id.
+                if (IsPathEffect(child))
                 {
-                    // Unreadable XML is not worth failing an export over.
+                    continue;
                 }
+
+                element.Add(child);
             }
 
             // The blend mode goes out as the CSS property the file uses, and only when it is not the default -
@@ -301,6 +308,88 @@ public static class SvgWriter
             }
 
             if (defs.HasElements)
+            {
+                _root.Add(defs);
+            }
+        }
+
+        /// <summary>
+        /// A stored foreign child as an element, or null when it is not readable XML.
+        ///
+        /// Unreadable XML is not worth failing an export over - the artwork is the part that has to survive - and
+        /// both callers here need to look at the element before deciding where it goes.
+        /// </summary>
+        private static XElement? ForeignChild(string xml)
+        {
+            try
+            {
+                return XElement.Parse(xml);
+            }
+            catch (System.Xml.XmlException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Whether a foreign child is a live path effect, which is a definition and so belongs in `defs`.
+        ///
+        /// Matched on the **name**, not on the namespace, because Inkscape has written this element under more than
+        /// one inkscape namespace over the years and a definition that stopped being recognised would silently
+        /// come back as a child of the path instead.
+        /// </summary>
+        private static bool IsPathEffect(XElement child)
+            => child.Name.LocalName == "path-effect" && child.Name.Namespace != XNamespace.None;
+
+        /// <summary>
+        /// Every live path effect the document carries, written back into `defs`.
+        ///
+        /// **Put back where Inkscape wrote it.** The element was found in `defs` and is written into `defs` again,
+        /// rather than under the path that refers to it: the reference is an id, and the id has to lead somewhere
+        /// the next reader will look.
+        ///
+        /// **Written verbatim.** Every attribute, spelled and ordered as the file spelled it. Inkscape decides what
+        /// an effect means from its own `lpeversion` and a parameter set this build does not model, so rebuilding
+        /// the element from the translated stroke would drop exactly the half that says how to shape it.
+        ///
+        /// Written **once per id**: two paths may share one effect, and a file with the same id twice is one that
+        /// Inkscape resolves in whichever order it happens to walk the tree.
+        /// </summary>
+        public void WritePathEffects(CadDocument document)
+        {
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            var elements = new List<XElement>();
+
+            foreach (LayerItem item in document.AllItems())
+            {
+                foreach (string foreign in item.ForeignElements)
+                {
+                    if (ForeignChild(foreign) is not { } child || !IsPathEffect(child))
+                    {
+                        continue;
+                    }
+
+                    if (child.Attribute("id")?.Value is { Length: > 0 } id && !ids.Add(id))
+                    {
+                        continue;
+                    }
+
+                    elements.Add(child);
+                }
+            }
+
+            if (elements.Count == 0)
+            {
+                return;
+            }
+
+            XElement defs = _root.Element(Svg + "defs") ?? new XElement(Svg + "defs");
+            foreach (XElement element in elements)
+            {
+                defs.Add(element);
+            }
+
+            if (defs.Parent is null)
             {
                 _root.Add(defs);
             }
