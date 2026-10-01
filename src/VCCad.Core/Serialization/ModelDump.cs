@@ -148,6 +148,14 @@ public static class ModelDump
                         .Append(" advance=").Append(run.AdvanceWidth is { } a ? Num(a) : "-")
                         .Append(" gap=").Append(Num(run.GapAfter))
                         .Append(" placedAscent=").Append(Num(run.PlacedAscentEm))
+                        .Append(" letterSpacing=").Append(Num(run.LetterSpacing))
+                        .Append(" wordSpacing=").Append(Num(run.WordSpacing))
+
+                        // A run whose colour is the block's says "-", because that is what it holds: a run with no
+                        // colour of its own, not a second copy of the block's.
+                        .Append(" colour=").Append(run.Color is { } own ? Colour(own) : "-")
+                        .Append(" stretch=").Append(Escape(run.FontStretch ?? string.Empty))
+                        .Append(" variant=").Append(Escape(run.FontVariant ?? string.Empty))
                         .Append(" embedded=").Append(run.EmbeddedFont?.FamilyName ?? "-")
                         .Append(" rawCodes=").Append(run.RawCodes?.Length.ToString(CultureInfo.InvariantCulture) ?? "-")
                         .AppendLine();

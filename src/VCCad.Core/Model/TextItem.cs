@@ -45,6 +45,89 @@ public sealed class TextRun
     public double GapAfter { get; set; }
 
     /// <summary>
+    /// Extra room after **every** glyph of this run, in model units - SVG's and CSS's
+    /// <c>letter-spacing</c>. Zero means the face's own advances, unchanged.
+    ///
+    /// This is deliberately not folded into <see cref="AdvanceWidth"/>. That member is the whole
+    /// distance to the next run, and a renderer that cannot add room between glyphs meets it by
+    /// setting the run wider - so widening it to express tracking stretches the letters instead of
+    /// spacing them, which is a different picture and the reason the field exists. Stored per run
+    /// because a `<tspan>` states it for its own characters.
+    ///
+    /// A percentage resolves against the run's own font size on the way in, so what is kept here is
+    /// always a length.
+    /// </summary>
+    public double LetterSpacing { get; set; }
+
+    /// <summary>
+    /// Extra room after each space of this run, in model units - CSS's <c>word-spacing</c>. Zero
+    /// means the space's own advance, unchanged.
+    ///
+    /// Separate from <see cref="LetterSpacing"/> because the two are added to different characters:
+    /// tracking widens every gap between letters, word spacing only the gaps between words, and a
+    /// file that asks for one must not get the other. A percentage resolves against the run's own
+    /// size on the way in, so what is kept here is always a length.
+    /// </summary>
+    public double WordSpacing { get; set; }
+
+    /// <summary>
+    /// The room this run's characters take including the tracking it asks for, one entry per
+    /// character.
+    ///
+    /// The face's own advances come from the installed measurer; the tracking is added here because it is
+    /// stored per run and belongs to the run, not to the face. Everything that moves a pen - the layout, the
+    /// caret, the wrap point, the bounds, export - goes through this, so tracking cannot be applied in one
+    /// place and forgotten in another.
+    /// </summary>
+    public IReadOnlyList<double> Advances()
+    {
+        IReadOnlyList<double> advances = TextMeasurement.Advances(this);
+        if (LetterSpacing == 0 && WordSpacing == 0)
+        {
+            return advances;
+        }
+
+        var spaced = new double[advances.Count];
+        for (int i = 0; i < advances.Count; i++)
+        {
+            spaced[i] = advances[i] + LetterSpacing + (IsSpace(i) ? WordSpacing : 0.0);
+        }
+
+        return spaced;
+    }
+
+    /// <summary>Whether the character at <paramref name="index"/> is one `word-spacing` widens.</summary>
+    private bool IsSpace(int index)
+        => index >= 0 && index < Text.Length && Text[index] == ' ';
+
+    /// <summary>
+    /// The colour this run is drawn in, or <c>null</c> to draw it in the block's
+    /// <see cref="TextItem.Color"/>.
+    ///
+    /// A block may hold several colours, which is what SVG states with a `<tspan fill=...>` and what a
+    /// PDF content stream states by setting a colour partway through a text object. The block's own colour
+    /// stays the default so a document that has one colour per block is unchanged; a run that differs
+    /// carries its own.
+    /// </summary>
+    public ColorRgb? Color { get; set; }
+
+    /// <summary>
+    /// The width axis the file asked the face for, as CSS spells it - <c>condensed</c>, <c>semi-expanded</c>,
+    /// <c>110%</c> - or <c>null</c> when nothing said one.
+    ///
+    /// Kept as the file wrote it because that is the whole fact: the model names one family per run and does not
+    /// choose a face by width, so nothing downstream can turn a normalised number back into the word the author
+    /// used, and inventing one would be data the file has not got.
+    /// </summary>
+    public string? FontStretch { get; set; }
+
+    /// <summary>
+    /// The variant the file asked the face for, as CSS spells it - <c>small-caps</c> - or <c>null</c> when
+    /// nothing said one. Kept for the same reason as <see cref="FontStretch"/>.
+    /// </summary>
+    public string? FontVariant { get; set; }
+
+    /// <summary>
     /// The ascent the block's top-left was placed with, as a fraction of the em, when it was
     /// imported. Zero means "not recorded — work it out from the face".
     ///
@@ -87,6 +170,11 @@ public sealed class TextRun
         Italic = Italic,
         AdvanceWidth = AdvanceWidth,
         GapAfter = GapAfter,
+        LetterSpacing = LetterSpacing,
+        WordSpacing = WordSpacing,
+        Color = Color,
+        FontStretch = FontStretch,
+        FontVariant = FontVariant,
         PlacedAscentEm = PlacedAscentEm,
         SourceFont = SourceFont,
         EmbeddedFont = EmbeddedFont,
@@ -184,6 +272,13 @@ public sealed class TextItem : LayerItem
             }
         }
     }
+
+    /// <summary>
+    /// The colour a run is drawn in: its own when it states one, otherwise the block's.
+    ///
+    /// One place answers this, so a run cannot be drawn in one colour and reported in another.
+    /// </summary>
+    public ColorRgb ColourOf(TextRun run) => run.Color ?? Color;
 
     /// <summary>The largest font size among the runs (line height driver).</summary>
     public double MaxFontSize => Runs.Count == 0 ? 12.0 : Runs.Max(r => r.FontSize);

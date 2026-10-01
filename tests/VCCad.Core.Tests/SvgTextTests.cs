@@ -459,6 +459,11 @@ public class SvgTextTests
     /// **Every property with real layout behind it that the model has no field for is reported, with its value.**
     /// Each is named here rather than checked as "a warning appeared", because the point of the report is that a
     /// person can act on the one that matters to them.
+    ///
+    /// Four of these used to be in the list and are not any more: `letter-spacing`, `word-spacing`, `font-stretch`
+    /// and `font-variant` have fields on the run as of #147 and are resolved onto it instead. Their half of this
+    /// test lives in `SvgTextModelExtensionTests`, where the value that arrives on the model is asserted rather
+    /// than the warning that is no longer there.
     /// </summary>
     [Fact]
     public void PropertiesTheModelCannotHoldAreReported()
@@ -470,14 +475,16 @@ public class SvgTextTests
             "font-weight=\"600\" font-style=\"oblique\" textLength=\"50\" lengthAdjust=\"spacing\" rotate=\"15\">hi</text>");
 
         // The run is still imported: the text is the file's, and what is missing is said rather than dropped.
-        Assert.Single(Block(result).Runs);
+        TextRun run = Assert.Single(Block(result).Runs);
+
+        // The four the model now holds arrived instead of being reported.
+        Assert.Equal(2.0, run.LetterSpacing, 9);
+        Assert.Equal(3.0, run.WordSpacing, 9);
+        Assert.Equal("condensed", run.FontStretch);
+        Assert.Equal("small-caps", run.FontVariant);
 
         string[] expected =
         {
-            "letter-spacing=\"2\"",
-            "word-spacing=\"3\"",
-            "font-stretch=\"condensed\"",
-            "font-variant=\"small-caps\"",
             "text-decoration=\"underline\"",
             "baseline-shift=\"super\"",
             "dominant-baseline=\"middle\"",
@@ -495,6 +502,12 @@ public class SvgTextTests
             Assert.True(
                 result.Warnings.Any(w => w.Contains(wanted, StringComparison.Ordinal)),
                 $"expected a warning naming {wanted}; got: {string.Join(" | ", result.Warnings)}");
+        }
+
+        // And the four that are kept are not reported as losses.
+        foreach (string gone in new[] { "letter-spacing", "word-spacing", "font-stretch", "font-variant" })
+        {
+            Assert.DoesNotContain(result.Warnings, w => w.Contains(gone, StringComparison.Ordinal));
         }
     }
 

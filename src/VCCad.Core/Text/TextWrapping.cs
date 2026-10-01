@@ -95,7 +95,11 @@ public static class TextWrapping
         foreach (TextRun run in text.Runs)
         {
             builder.Append(run.Text);
-            IReadOnlyList<double> advances = TextMeasurement.Advances(run);
+
+            // The run's own advances, tracking included: `TextRun.Advances` is the one place the
+            // letter and word spacing a file states is added to the face's widths, so the wrap point,
+            // the caret, the bounds and export all move the pen by the same numbers.
+            IReadOnlyList<double> advances = run.Advances();
 
             double natural = 0;
             for (int i = 0; i < advances.Count; i++)

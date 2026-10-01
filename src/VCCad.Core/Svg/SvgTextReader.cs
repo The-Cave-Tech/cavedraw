@@ -11,15 +11,18 @@ namespace VCCad.Core.Svg;
 /// SVG `text` and the runs inside it.
 ///
 /// **A run is what the file says and a block is what the model can hold.** SVG places every character itself; the
-/// model places a block at one origin, lays its runs out in sequence and carries one colour for the whole block. So
-/// a piece of the file becomes a run in the block it continues, and starts a new block when it cannot:
+/// model places a block at one origin and lays its runs out in sequence. So a piece of the file becomes a run in the
+/// block it continues, and starts a new block when it cannot:
 ///
 /// <list type="bullet">
 /// <item>A piece on the same baseline, in the same colour, starting where the model's own layout would have put it -
 /// or positioned, in which case the room the file left is kept as the advance of the run before it - joins the
 /// block as another run.</item>
-/// <item>A piece on another baseline, in another colour, or anchored differently starts a block of its own, because
-/// the model has one origin and one colour per block. This is the same split the PDF importer makes.</item>
+/// <item>A piece on another baseline, in another colour, or anchored differently starts a block of its own. The
+/// baseline and the anchor are the model's shape. The colour is not - a run holds its own colour - but the split is
+/// kept because the painter and the PDF exporter still paint a block with the block's colour, and splitting keeps
+/// each visual line exactly the colour the file gave it until they read the run's own. This is the same split the
+/// PDF importer makes.</item>
 /// </list>
 ///
 /// **Nothing is measured into the document that the file did not say, except the advance the model needs.** A gap
@@ -27,9 +30,11 @@ namespace VCCad.Core.Svg;
 /// the run - the same measurer the layout, the caret and the bounds use - so the gap is the gap whatever face the
 /// machine ends up drawing it with.
 ///
-/// **A value the model cannot hold is reported.** `textLength`, per-character positions, `letter-spacing`, a stroked
-/// run, a gradient fill: each is named in the import's warnings rather than quietly flattened, because a heading that
-/// lost its tracking and a line that lost its stroke both look deliberate on the page.
+/// **A value the model cannot hold is reported.** `textLength`, per-character positions, `text-decoration`, a stroked
+/// run, a gradient fill: each is named in the import's warnings rather than quietly flattened, because a line that
+/// lost its stroke and a string placed a character at a time both look deliberate on the page. The properties #147
+/// gave the model - the two spacings, the face's requested width and variant - are no longer in that list; they are
+/// resolved onto the run.
 /// </summary>
 public static partial class SvgReader
 {
@@ -55,7 +60,9 @@ public static partial class SvgReader
         /// Whether this piece carries on from the one before it rather than starting somewhere of its own.
         ///
         /// Same face, same paint, same baseline, and starting exactly where that piece ended - which is what makes
-        /// two pieces either side of a `<tspan>` one run rather than two halves of one.
+        /// two pieces either side of a `<tspan>` one run rather than two halves of one. The style comparison is the
+        /// whole of what a run states, so a `tspan` that changes the tracking, the width or the variant is a
+        /// different run and not a continuation of the one before it.
         /// </summary>
         public bool Continues(TextChunk previous) =>
             Equals(previous.Style, Style) &&
@@ -144,7 +151,7 @@ public static partial class SvgReader
             }
 
             current.Chunks.Add(chunk);
-            current.Item.Runs.Add(new TextRun
+            var run = new TextRun
             {
                 Text = chunk.Text.ToString(),
                 FontFamily = chunk.Style.FontFamily,
@@ -152,11 +159,30 @@ public static partial class SvgReader
                 Bold = chunk.Style.Bold,
                 Italic = chunk.Style.Italic,
 
+                // The tracking the file asked for, as the length the model keeps. It goes on the run rather than
+                // into `AdvanceWidth`, which is the whole distance to the next run: widening that to express
+                // tracking stretches every glyph in the run instead of leaving room between them.
+                LetterSpacing = chunk.Style.LetterSpacing,
+                WordSpacing = chunk.Style.WordSpacing,
+
+                // The face the file asked for in the words it used. Nothing selects a face by width or variant
+                // yet, and the words are kept anyway, because rounding "semi-condensed" to a number and back is
+                // how the width stops being the one the author chose.
+                FontStretch = chunk.Style.FontStretch,
+                FontVariant = chunk.Style.FontVariant,
+
                 // The fraction of *this run's own* em that the block's top-left sits above its baseline. A line of
                 // mixed sizes shares one baseline, and export puts each run's baseline back from this number - so
                 // a 10pt word beside a 24pt one lands on the line rather than below it.
                 PlacedAscentEm = (chunk.Y - current.Item.Origin.Y) / chunk.Style.FontSize,
-            });
+
+                // The colour of a run that states one of its own. Written only when it differs from the block's,
+                // which the split above makes the usual case of "it does not": the file's own paint is kept either
+                // way, and a block of one colour grows no member it does not need.
+                Color = chunk.Paint.Fill.Color == current.Item.Color ? null : chunk.Paint.Fill.Color,
+            };
+
+            current.Item.Runs.Add(run);
         }
 
         foreach (TextBlock block in blocks)
@@ -167,7 +193,13 @@ public static partial class SvgReader
         return blocks;
     }
 
-    /// <summary>Whether a piece belongs in the block in hand: one origin and one colour serve a whole block.</summary>
+    /// <summary>
+    /// Whether a piece belongs in the block in hand: one origin and one colour serve a whole block.
+    ///
+    /// The colour is kept as a reason to start a block even though a run may hold its own, because the painter and
+    /// the PDF exporter still paint a block in the block's colour. Splitting is exact and costs nothing; keeping
+    /// the file's one line as one object would cost the colour until those two read the run's own.
+    /// </summary>
     private static bool Holds(TextBlock block, TextChunk chunk)
         => Math.Abs(chunk.Y - block.First.Y) < 1e-9 &&
            block.Item.Alignment == chunk.Style.Anchor &&
@@ -549,11 +581,13 @@ public static partial class SvgReader
         }
 
         /// <summary>
-        /// How wide the face the file names sets a piece.
+        /// How wide the face the file names sets a piece, tracking included.
         ///
         /// The model's own measurer answers, which is the one the layout, the caret and the bounds use - so a gap
-        /// measured here is the gap the model will leave. The family and size are the file's, so what is measured is
-        /// the file's layout and not this machine's idea of it.
+        /// measured here is the gap the model will leave. The family, size, tracking and word spacing are the
+        /// file's, so what is measured is the file's layout and not this machine's idea of it, and measuring
+        /// through the run's own advances is what keeps a letter-spaced piece's width the width the model will
+        /// give it.
         /// </summary>
         private static double Natural(TextChunk chunk)
         {
@@ -564,10 +598,12 @@ public static partial class SvgReader
                 FontSize = chunk.Style.FontSize,
                 Bold = chunk.Style.Bold,
                 Italic = chunk.Style.Italic,
+                LetterSpacing = chunk.Style.LetterSpacing,
+                WordSpacing = chunk.Style.WordSpacing,
             };
 
             double width = 0;
-            foreach (double advance in TextMeasurement.Advances(run))
+            foreach (double advance in run.Advances())
             {
                 width += advance;
             }

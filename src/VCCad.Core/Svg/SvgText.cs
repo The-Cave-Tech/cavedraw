@@ -7,10 +7,12 @@ namespace VCCad.Core.Svg;
 /// <summary>
 /// The font and line properties a text element carries, inherited down the tree the way SVG says.
 ///
-/// **Only what the model can hold is resolved to a value here.** A property the model has no field for - `font-stretch`,
-/// `font-variant`, `letter-spacing`, `word-spacing` - is **reported** with the value the file wrote, because the rule
-/// this repository enforces is that a value the reader cannot keep is said out loud, never quietly dropped. Reporting
-/// it is the difference between a gap somebody can act on and a heading that quietly lost its tracking.
+/// **Every property here has somewhere in the model to live**, and each is resolved to the value the model stores:
+/// `font-stretch` and `font-variant` keep the file's own spelling because the model names one face per run and
+/// cannot put a word back together from a number, and the two spacings become lengths so nothing downstream has to
+/// know what percentage they were written as. A property the model genuinely has no field for - `text-decoration`,
+/// `baseline-shift`, `writing-mode` - is still **reported** with the value the file wrote, because the rule this
+/// repository enforces is that a value the reader cannot keep is said out loud, never quietly dropped.
 ///
 /// What maps where:
 /// <list type="bullet">
@@ -18,6 +20,8 @@ namespace VCCad.Core.Svg;
 /// <item>`font-size` to the run's size, with `em`, `ex` and `%` resolved against the size in force - the context a
 /// bare length elsewhere in the file does not have.</item>
 /// <item>`font-weight` and `font-style` to the model's bold and italic flags.</item>
+/// <item>`font-stretch` and `font-variant` to the run's own record of the face the file asked for.</item>
+/// <item>`letter-spacing` and `word-spacing` to the run's tracking, resolved against its own size.</item>
 /// <item>`text-anchor` to the block's alignment.</item>
 /// <item>`line-height` to the block's line spacing.</item>
 /// <item>`white-space` and `xml:space` to whether white space is collapsed or kept.</item>
@@ -30,17 +34,23 @@ internal sealed record SvgTextStyle(
     bool Italic,
     TextAlignment Anchor,
     bool PreserveSpace,
-    double LineSpacing)
+    double LineSpacing,
+    double LetterSpacing,
+    double WordSpacing,
+    string? FontStretch,
+    string? FontVariant)
 {
     /// <summary>
-    /// SVG's initial values: a medium (16px) upright face, anchored at the start, collapsing white space.
+    /// SVG's initial values: a medium (16px) upright face, anchored at the start, collapsing white space, with no
+    /// tracking and no width or variant asked for.
     ///
     /// 16 is CSS's initial font size and so SVG's `medium`, and the family is the model's own default because the
     /// initial `font-family` is the user agent's choice - the file does not name one, so there is nothing of the
     /// file's to lose.
     /// </summary>
     public static SvgTextStyle Default { get; } = new(
-        TextItem.DefaultFontFamily, 16.0, false, false, TextAlignment.Left, PreserveSpace: false, LineSpacing: 1.2);
+        TextItem.DefaultFontFamily, 16.0, false, false, TextAlignment.Left, PreserveSpace: false, LineSpacing: 1.2,
+        LetterSpacing: 0.0, WordSpacing: 0.0, FontStretch: null, FontVariant: null);
 
     /// <summary>Resolves the element's own text properties over the ones it inherits.</summary>
     public static SvgTextStyle From(
@@ -116,11 +126,16 @@ internal sealed record SvgTextStyle(
             italic = ReadSlant(styleValue, warn) ?? italic;
         }
 
+        // The width the specification's own words asked for, when it named a width at all - "Nimbus Sans,
+        // Semi-Condensed". A narrower face than the family's regular one is a design decision the author made, and
+        // the run now has somewhere to keep it; the style words are the only place it is written.
+        string? specWidth = null;
         if (StyleWords is { Length: > 0 })
         {
-            (double specWeight, bool specItalic) = ReadFaceWords(StyleWords, weight, warn);
+            (double specWeight, bool specItalic, string? specStretch) = ReadFaceWords(StyleWords, weight, warn);
             weight = specWeight;
             italic |= specItalic;
+            specWidth = specStretch;
         }
 
         TextAlignment anchor = inherited.Anchor;
@@ -159,16 +174,157 @@ internal sealed record SvgTextStyle(
             }
         }
 
+        // Both spacings are lengths the model keeps, so a relative one is resolved here, against the size in
+        // force: `em` is the element's own em, `ex` half of it, and a percentage its own font size. What the run
+        // stores is a length, so nothing after this has to know what the file wrote - which is also why a
+        // percentage must not reach the model as "5%".
+        double letterSpacing = ReadSpacing(Value("letter-spacing"), size, inherited.LetterSpacing, "letter-spacing", warn);
+        double wordSpacing = ReadSpacing(Value("word-spacing"), size, inherited.WordSpacing, "word-spacing", warn);
+
+        // Both are inherited CSS properties, so an element that states neither keeps what it inherited - which is
+        // what makes a width written on a `text` element hold for every `tspan` inside it. The width a
+        // specification's style words named stands in when the property itself says nothing, which is what makes
+        // `-inkscape-font-specification:'Nimbus Sans, Semi-Condensed'` keep its width rather than only its slant.
+        string? stretch = specWidth ?? inherited.FontStretch;
+        if (ReadFaceRequest(Value("font-stretch"), "font-stretch", IsFontStretch, warn) is { } writtenStretch)
+        {
+            stretch = writtenStretch;
+        }
+
+        string? variant = inherited.FontVariant;
+        if (ReadFaceRequest(Value("font-variant"), "font-variant", IsFontVariant, warn) is { } writtenVariant)
+        {
+            variant = writtenVariant;
+        }
+
         ReportUnkeptProperties(Value, warn);
 
-        return new SvgTextStyle(family, size, weight >= 600, italic, anchor, preserve, lineSpacing);
+        return new SvgTextStyle(
+            family, size, weight >= 600, italic, anchor, preserve, lineSpacing,
+            letterSpacing, wordSpacing, stretch, variant);
     }
+
+    /// <summary>
+    /// One of the two spacings, as the length the model stores.
+    ///
+    /// `normal` is the initial value and adds nothing. `em`, `ex` and `%` are relative to the size in force - the
+    /// run's own size, which is the context text has and a bare length elsewhere in the file does not. Anything
+    /// that is not a length is reported, and the inherited value stands.
+    /// </summary>
+    private static double ReadSpacing(
+        string? value, double size, double inherited, string property, Action<string>? warn)
+    {
+        if (value is null || IsCssWideKeyword(value))
+        {
+            return inherited;
+        }
+
+        string trimmed = value.Trim();
+        if (trimmed.Equals("normal", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0.0;
+        }
+
+        int end = trimmed.Length;
+        while (end > 0 && (char.IsLetter(trimmed[end - 1]) || trimmed[end - 1] == '%'))
+        {
+            end--;
+        }
+
+        string unit = trimmed[end..].ToLowerInvariant();
+        string number = trimmed[..end].Trim();
+        if (double.TryParse(number, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed))
+        {
+            switch (unit)
+            {
+                case "" or "px":
+                    return parsed;
+                case "em":
+                    return parsed * size;
+                case "ex":
+                    return parsed * size / 2.0;
+                case "%":
+                    return parsed / 100.0 * size;
+            }
+        }
+
+        warn?.Invoke($"{property}=\"{value}\" is not a spacing this reader can resolve");
+        return inherited;
+    }
+
+    /// <summary>
+    /// One of the two face requests, as the file wrote it, or null when it says nothing.
+    ///
+    /// The value is kept in the file's own words because the model names one family per run and does not choose a
+    /// face by width or variant: a normalised number could not be turned back into the word the author used, and
+    /// inventing one would be data the file has not got. `normal` is the initial value, so it is stored as absence
+    /// - a document written by Inkscape states `font-stretch:normal` on every text element it makes, and keeping
+    /// it would add a member to every file in the world without changing a drawing.
+    /// </summary>
+    private static string? ReadFaceRequest(
+        string? value, string property, Func<string, bool> isValid, Action<string>? warn)
+    {
+        if (value is null || IsCssWideKeyword(value))
+        {
+            return null;
+        }
+
+        string trimmed = value.Trim();
+        if (trimmed.Equals("normal", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (!isValid(trimmed))
+        {
+            warn?.Invoke($"{property}=\"{value}\" is not a {property} this reader can resolve");
+            return null;
+        }
+
+        return trimmed;
+    }
+
+    /// <summary>A `font-stretch`: one of CSS's width keywords, or a percentage of the face's own width.</summary>
+    private static bool IsFontStretch(string value)
+    {
+        string key = value.Trim().ToLowerInvariant();
+        if (key is
+            "ultra-condensed" or "extra-condensed" or "condensed" or "semi-condensed" or "semi-expanded" or
+            "expanded" or "extra-expanded" or "ultra-expanded")
+        {
+            return true;
+        }
+
+        // CSS 4's percentages, which Inkscape writes as `font-stretch:90%`.
+        return key.EndsWith('%') &&
+               double.TryParse(key[..^1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double pct) &&
+               pct > 0;
+    }
+
+    /// <summary>
+    /// A `font-variant`: the caps keywords, and the numeric and ligature ones CSS 2.1 and CSS Fonts define.
+    ///
+    /// Recognising the whole set is what makes "not reported" mean "the model holds this word", rather than "the
+    /// reader did not look".
+    /// </summary>
+    private static bool IsFontVariant(string value)
+        => value
+            .Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries)
+            .All(word => word.ToLowerInvariant() is
+                "small-caps" or "all-small-caps" or "petite-caps" or "all-petite-caps" or "unicase" or
+                "titling-caps" or "lining-nums" or "oldstyle-nums" or "proportional-nums" or "tabular-nums" or
+                "diagonal-fractions" or "stacked-fractions" or "ordinal" or "slashed-zero" or
+                "common-ligatures" or "no-common-ligatures" or "discretionary-ligatures" or
+                "no-discretionary-ligatures" or "historical-ligatures" or "no-historical-ligatures" or
+                "contextual" or "no-contextual");
 
     /// <summary>
     /// The properties that carry real layout and that the model has no field for.
     ///
-    /// Each is reported **only when it says something** - `font-stretch:normal` and `letter-spacing:0` are the
-    /// initial values and change nothing, and warning about them would bury the one file that really is condensed.
+    /// Each is reported **only when it says something** - `text-decoration:none` and `baseline-shift:baseline`
+    /// are the initial values and change nothing, and warning about them would bury the one file that really is
+    /// underlined. `font-stretch`, `font-variant`, `letter-spacing` and `word-spacing` used to be here and no
+    /// longer are: the model holds all four. See #147.
     /// </summary>
     private static void ReportUnkeptProperties(Func<string, string?> value, Action<string>? warn)
     {
@@ -179,17 +335,12 @@ internal sealed record SvgTextStyle(
 
         void Report(string property, string message)
         {
-            if (value(property) is { Length: > 0 } written && !IsInitial(property, written))
+            if (value(property) is { Length: > 0 } written && !IsInitial(written))
             {
                 warn(message.Replace("{value}", written, StringComparison.Ordinal));
             }
         }
 
-        Report("font-stretch", "font-stretch=\"{value}\" needs a width axis, and a run holds a face and not a width");
-        Report("font-variant", "font-variant=\"{value}\" is not kept: a run holds no variant");
-        Report("font-variant-caps", "font-variant-caps=\"{value}\" is not kept: a run holds no variant");
-        Report("letter-spacing", "letter-spacing=\"{value}\" is not kept: a run holds no letter spacing");
-        Report("word-spacing", "word-spacing=\"{value}\" is not kept: a run holds no word spacing");
         Report("text-decoration", "text-decoration=\"{value}\" is not kept: a run holds no decoration");
         Report("baseline-shift", "baseline-shift=\"{value}\" is a baseline the model does not hold");
         Report("dominant-baseline", "dominant-baseline=\"{value}\" is a baseline the model does not hold");
@@ -198,20 +349,16 @@ internal sealed record SvgTextStyle(
     }
 
     /// <summary>Whether a written value is the property's own initial value, which says nothing.</summary>
-    private static bool IsInitial(string property, string written)
+    private static bool IsInitial(string written)
     {
         string value = written.Trim();
-        return property switch
-        {
-            "letter-spacing" or "word-spacing" => value is "normal" or "0" or "0px" or "0em" or "0%",
-            _ => value.Equals("normal", StringComparison.OrdinalIgnoreCase) ||
-                 value.Equals("none", StringComparison.OrdinalIgnoreCase) ||
-                 value.Equals("baseline", StringComparison.OrdinalIgnoreCase) ||
-                 value.Equals("auto", StringComparison.OrdinalIgnoreCase) ||
-                 value.Equals("horizontal-tb", StringComparison.OrdinalIgnoreCase) ||
-                 value.Equals("ltr", StringComparison.OrdinalIgnoreCase) ||
-                 value.Equals("0", StringComparison.Ordinal),
-        };
+        return value.Equals("normal", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("none", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("baseline", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("auto", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("horizontal-tb", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("ltr", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("0", StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -259,14 +406,17 @@ internal sealed record SvgTextStyle(
     /// <summary>
     /// The style words of a font specification: "Bold", "Oblique", "Book", "Semi-Condensed".
     ///
-    /// This is where a file records that it wanted the semi-bold cut of a family, and a word this reader does not
-    /// know is reported rather than ignored - the whole point of reading the specification is that the face it
-    /// names is the one the author saw.
+    /// This is where a file records that it wanted the semi-bold cut of a family, or a narrower one, and a word
+    /// this reader does not know is reported rather than ignored - the whole point of reading the specification is
+    /// that the face it names is the one the author saw. A width word is handed back rather than reported,
+    /// because the run now has a <see cref="TextRun.FontStretch"/> to keep it in.
     /// </summary>
-    private static (double Weight, bool Italic) ReadFaceWords(string words, double inheritedWeight, Action<string>? warn)
+    private static (double Weight, bool Italic, string? Stretch) ReadFaceWords(
+        string words, double inheritedWeight, Action<string>? warn)
     {
         double weight = inheritedWeight;
         bool italic = false;
+        string? stretch = null;
 
         foreach (string word in words.Split(new[] { ' ', ',', '\t' }, StringSplitOptions.RemoveEmptyEntries))
         {
@@ -279,10 +429,9 @@ internal sealed record SvgTextStyle(
             {
                 italic = true;
             }
-            else if (StretchOf(key))
+            else if (Stretch(key) is { } width)
             {
-                warn?.Invoke(
-                    $"-inkscape-font-specification style word \"{word}\" is a width, and a run holds no width axis");
+                stretch = width;
             }
             else
             {
@@ -297,7 +446,7 @@ internal sealed record SvgTextStyle(
                 "and a run holds a regular or a bold face");
         }
 
-        return (weight, italic);
+        return (weight, italic, stretch);
     }
 
     /// <summary>A CSS weight name as the number it stands for, or null when the word is not a weight.</summary>
@@ -315,11 +464,30 @@ internal sealed record SvgTextStyle(
         _ => null,
     };
 
-    /// <summary>Whether a style word names a width rather than a weight or a slant.</summary>
-    private static bool StretchOf(string word) => word is
-        "condensed" or "semicondensed" or "extracondensed" or "ultracondensed" or
-        "expanded" or "semiexpanded" or "extraexpanded" or "ultraexpanded" or
-        "narrow" or "wide" or "extended";
+    /// <summary>
+    /// A style word that names a width, as CSS's own keyword - "Semi-Condensed" is `semi-condensed` - or null when
+    /// the word is not a width.
+    ///
+    /// The spellings a face name uses and the spellings CSS uses are not the same: a family is called
+    /// "Nimbus Sans Narrow" and the property is called `condensed`. Translating is not inventing, because both
+    /// name the same width axis; "narrow" and "wide" have no CSS keyword that means them exactly, so they keep
+    /// their own word rather than being rounded to one that does not.
+    /// </summary>
+    private static string? Stretch(string word) => word switch
+    {
+        "ultracondensed" => "ultra-condensed",
+        "extracondensed" => "extra-condensed",
+        "semicondensed" => "semi-condensed",
+        "condensed" => "condensed",
+        "narrow" => "narrow",
+        "semiexpanded" => "semi-expanded",
+        "extraexpanded" => "extra-expanded",
+        "ultraexpanded" => "ultra-expanded",
+        "expanded" => "expanded",
+        "wide" => "wide",
+        "extended" => "expanded",
+        _ => null,
+    };
 
     /// <summary>
     /// A font size, with the three units that are relative to the size in force resolved against it.

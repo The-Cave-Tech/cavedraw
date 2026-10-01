@@ -272,7 +272,23 @@ internal sealed record TextRunDto(
     ushort[]? GlyphIds = null,
     EmbeddedFontDto? Embedded = null,
     double GapAfter = 0,
-    double PlacedAscentEm = 0);
+    double PlacedAscentEm = 0,
+
+    // The tracking a run asks for, as lengths. Optional, and absent when they hold their default, so a document
+    // whose text has no tracking does not grow members it never had - the rule the stroke stack, the gradients and
+    // the outline effects follow. Written as the number zero rather than omitted when a file states one, because a
+    // run whose tracking is exactly nothing and a run whose tracking was never recorded draw the same and the
+    // absent-means-default rule keeps the file small.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] double LetterSpacing = 0,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] double WordSpacing = 0,
+
+    // The colour of a run that has one of its own. Absent for a run drawn in the block's colour, which is the
+    // usual case and the reason the member is nullable rather than a second copy of the block's colour.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ColorDto? Color = null,
+
+    // The width axis and the variant the file asked the face for, in its own words. Absent when nothing said one.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? FontStretch = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? FontVariant = null);
 
 internal sealed record PathDto(
     Guid Id,
@@ -490,7 +506,12 @@ internal abstract record ItemDto
         r.GlyphIds,
         r.EmbeddedFont is { } font ? ToEmbedded(font) : null,
         r.GapAfter,
-        r.PlacedAscentEm);
+        r.PlacedAscentEm,
+        r.LetterSpacing,
+        r.WordSpacing,
+        r.Color is { } color ? new ColorDto(color.R, color.G, color.B, color.A) : null,
+        r.FontStretch,
+        r.FontVariant);
 
     private static EmbeddedFontDto ToEmbedded(EmbeddedFont f) => new(
         f.Format,
@@ -694,6 +715,11 @@ internal static class ItemDtoExtensions
             EmbeddedFont = dto.Embedded is { } e ? ToModel(e) : null,
             GapAfter = dto.GapAfter,
             PlacedAscentEm = dto.PlacedAscentEm,
+            LetterSpacing = dto.LetterSpacing,
+            WordSpacing = dto.WordSpacing,
+            Color = dto.Color is { } color ? new ColorRgb(color.R, color.G, color.B, color.A) : null,
+            FontStretch = dto.FontStretch,
+            FontVariant = dto.FontVariant,
         };
 
         return run;
