@@ -781,7 +781,18 @@ public static class SvgWriter
                 {
                     case ArtGroup group:
                     {
-                        var element = new XElement(Svg + "g");
+                        // **A viewport is written as the nested `svg` it was read from.** The reader records a
+                        // nested viewport's port as a clip on the element's own group, and a nested `svg` is the
+                        // one spelling it turns back into one - so writing the group as a plain `g` with a
+                        // `clip-path` would draw the same picture in a viewer and still lose the crop the second
+                        // time this editor opened the file. NestedViewport refuses anything whose port is not the
+                        // axis-aligned rectangle a nested `svg` can state, and those fall through to the
+                        // `clip-path` below, which is the general spelling.
+                        XElement element = group.Clips.Count == 1 &&
+                            NestedViewport(group, group.Clips[0]) is { } viewport
+                                ? ViewportElement(viewport)
+                                : new XElement(Svg + "g");
+
                         ApplyForeign(element, group);
                         if (!string.IsNullOrEmpty(group.Name))
                         {
@@ -818,8 +829,16 @@ public static class SvgWriter
                             element.Add(new XAttribute("data-source", source));
                         }
 
+                        // A port written as a nested `svg` is already the clip; anything else is a `clip-path`,
+                        // stated in the space the group's own transform maps its children into.
+                        if (element.Name.LocalName != "svg" &&
+                            WriteClips(group, group.Transform) is { } clipId)
+                        {
+                            element.SetAttributeValue("clip-path", $"url(#{clipId})");
+                        }
+
                         WriteItems(group.Children, element);
-                        Wrote("g");
+                        Wrote(element.Name.LocalName);
                         parent.Add(element);
                         break;
                     }
@@ -869,6 +888,10 @@ public static class SvgWriter
             string? fill = FillAttribute(path);
             string fillRule = path.Fill.Rule == FillRule.EvenOdd ? "evenodd" : "nonzero";
 
+            // The clips this path carries, written once for however many elements it becomes: the outline is in the
+            // path's own space, and a path is not a container, so there is no transform between them.
+            string? clip = WriteClips(path, AffineTransform.Identity);
+
             var strokes = path.Strokes.Where(s => s.HasVisibleOutline).ToList();
             bool plain = strokes.Count <= 1 && strokes.All(Native);
 
@@ -910,6 +933,11 @@ public static class SvgWriter
                 element.Add(new XAttribute("stroke", "none"));
                 }
 
+                if (clip is not null)
+                {
+                    element.SetAttributeValue("clip-path", $"url(#{clip})");
+                }
+
                 parent.Add(element);
                 Wrote("path");
                 return;
@@ -934,13 +962,18 @@ public static class SvgWriter
 
                 ApplyForeign(element, path);
                 element.Add(new XAttribute("stroke", "none"));
+                if (clip is not null)
+                {
+                    element.SetAttributeValue("clip-path", $"url(#{clip})");
+                }
+
                 parent.Add(element);
                 Wrote("path");
             }
 
             foreach (StrokeSpec stroke in strokes)
             {
-                WriteStroke(path, stroke, data, parent);
+                WriteStroke(path, stroke, data, parent, clip);
             }
         }
 
@@ -1002,7 +1035,7 @@ public static class SvgWriter
         /// **alignment** other than centre. Each is a thing SVG has no attribute for, and each is drawn the same
         /// way the renderers draw it, so the file and the canvas agree.
         /// </summary>
-        private void WriteStroke(PathItem path, StrokeSpec stroke, string data, XElement parent)
+        private void WriteStroke(PathItem path, StrokeSpec stroke, string data, XElement parent, string? itemClip)
         {
             var element = new XElement(Svg + "path");
             if (!string.IsNullOrEmpty(path.Name))
@@ -1025,6 +1058,10 @@ public static class SvgWriter
                 element.SetAttributeValue("d", outline);
                 element.SetAttributeValue("fill", Hex(stroke.Color));
                 element.SetAttributeValue("fill-rule", "nonzero");
+                if (itemClip is not null)
+                {
+                    element.SetAttributeValue("clip-path", $"url(#{itemClip})");
+                }
 
                 if (stroke.Color.A < 1.0)
                 {
@@ -1038,6 +1075,10 @@ public static class SvgWriter
 
             element.Add(new XAttribute("d", data));
             element.Add(new XAttribute("stroke", Hex(stroke.Color)));
+            if (itemClip is not null)
+            {
+                element.SetAttributeValue("clip-path", $"url(#{itemClip})");
+            }
 
             if (stroke.Color.A < 1.0)
             {
@@ -1084,9 +1125,24 @@ public static class SvgWriter
             {
                 // SVG has no aligned stroke, so it is drawn as an outline at double width and clipped to the side
                 // it belongs on - the same thing the PDF exporter does with a clipping path.
-                string clip = WriteAlignmentClip(path, stroke.Alignment);
+                string alignment = WriteAlignmentClip(path, stroke.Alignment);
                 element.SetAttributeValue("stroke-width", Number(stroke.Width * 2));
-                element.SetAttributeValue("clip-path", $"url(#{clip})");
+
+                // An element carries one `clip-path`, so when the item is clipped as well the two outlines are
+                // composed by putting the item's clip on a group around it - the intersection, which is what the
+                // model means by an item inside two clips. Overwriting one with the other would delete a crop.
+                if (itemClip is not null)
+                {
+                    element.SetAttributeValue("clip-path", $"url(#{alignment})");
+                    var wrapper = new XElement(Svg + "g", new XAttribute("clip-path", $"url(#{itemClip})"));
+                    wrapper.Add(element);
+                    parent.Add(wrapper);
+                    Wrote("g");
+                    Wrote("path");
+                    return;
+                }
+
+                element.SetAttributeValue("clip-path", $"url(#{alignment})");
             }
 
             parent.Add(element);
@@ -1129,12 +1185,233 @@ public static class SvgWriter
             return id;
         }
 
+        /// <summary>
+        /// Every clip an item carries, as one `clipPath` in `defs`, and the id to refer to it by - or null when
+        /// there is nothing to write or nothing this writer can honestly write.
+        ///
+        /// **The frame is the model's, and the model's frame is the containing space.** The PDF exporter is the
+        /// established reading of that (see `PdfDocumentExporter.AppendClip`, which is handed the item's
+        /// `toDoc`), and the SVG reader states the same thing when it puts a viewport port on the element's own
+        /// group "in the space the enclosing element wrote `x`/`y`/`width`/`height` in": a clip is the outline an
+        /// item is drawn inside, so the group's own transform maps its children into the clip's space rather than
+        /// moving the clip out of it.
+        ///
+        /// SVG applies an element's `clip-path` in the user space **its own** `transform` establishes, so a
+        /// group's outline is carried into that space by the inverse of the group's transform. The rendered result
+        /// is then the outline in the frame the model recorded, for any affine transform including a rotation or a
+        /// skew. An item that is not a group has an identity transform, and composes with nothing.
+        ///
+        /// **What cannot be written is reported, not dropped.** A group whose transform is singular has no local
+        /// space for its clip to be stated in - the outline would collapse - and a clip whose outline holds
+        /// non-finite coordinates is one the model itself refuses to apply (`ClipSpec.Contains` answers "nothing is
+        /// inside" for it). Both are named in <see cref="Missing"/>, the same surface a dropped text block or raster
+        /// goes to, because a crop that silently disappears from a file is the defect this writer exists to avoid.
+        ///
+        /// Nothing is written at all for an item with no clips, which is what keeps the output of every document
+        /// that holds none byte-identical to what it was before clips were written.
+        /// </summary>
+        private string? WriteClips(LayerItem item, AffineTransform toParent)
+        {
+            if (item.Clips.Count == 0)
+            {
+                return null;
+            }
+
+            AffineTransform outlineFrame = AffineTransform.Identity;
+            bool composes = Math.Abs(toParent.A - 1.0) > 1e-12 || Math.Abs(toParent.B) > 1e-12 ||
+                            Math.Abs(toParent.C) > 1e-12 || Math.Abs(toParent.D - 1.0) > 1e-12 ||
+                            Math.Abs(toParent.E) > 1e-12 || Math.Abs(toParent.F) > 1e-12;
+            if (composes)
+            {
+                // A singular transform maps every point to a line, so the item has no interior and there is no
+                // outline to state in its space; saying so is the only honest answer.
+                if (!toParent.IsInvertible)
+                {
+                    Report(item, "the clip could not be written: the group's transform is not invertible, so the " +
+                                 "outline has no local space to be stated in");
+                    return null;
+                }
+
+                outlineFrame = toParent.Inverted();
+            }
+
+            foreach (ClipSpec clip in item.Clips)
+            {
+                foreach (SubPath sub in clip.SubPaths)
+                {
+                    foreach (PathNode node in sub.Nodes)
+                    {
+                        if (!double.IsFinite(node.Anchor.X) || !double.IsFinite(node.Anchor.Y) ||
+                            !double.IsFinite(node.InHandle.X) || !double.IsFinite(node.InHandle.Y) ||
+                            !double.IsFinite(node.OutHandle.X) || !double.IsFinite(node.OutHandle.Y))
+                        {
+                            Report(item, "the clip could not be written: its outline holds a coordinate that is " +
+                                         "not finite, so there is no shape to write");
+                            return null;
+                        }
+                    }
+                }
+            }
+
+            string id = $"clip{++_clipCount}";
+            var element = new XElement(Svg + "clipPath",
+                new XAttribute("id", id),
+                new XAttribute("clipPathUnits", "userSpaceOnUse"));
+
+            foreach (ClipSpec clip in item.Clips)
+            {
+                foreach (SubPath sub in clip.SubPaths)
+                {
+                    // A shape with no extent restricts nothing, so it states nothing the file did not already say.
+                    if (sub.Nodes.Count < 2)
+                    {
+                        continue;
+                    }
+
+                    var path = new XElement(Svg + "path");
+                    if (clip.Rule == FillRule.EvenOdd)
+                    {
+                        path.Add(new XAttribute("clip-rule", "evenodd"));
+                    }
+
+                    path.Add(new XAttribute("d", Outline(new[] { Transformed(sub, outlineFrame) })));
+                    element.Add(path);
+                }
+            }
+
+            if (!element.HasElements)
+            {
+                Report(item, "the clip could not be written: its outline holds no subpath with geometry");
+                return null;
+            }
+
+            XElement defs = _root.Element(Svg + "defs") ?? new XElement(Svg + "defs");
+            defs.Add(element);
+            if (defs.Parent is null)
+            {
+                _root.AddFirst(defs);
+            }
+
+            return id;
+        }
+
+        /// <summary>One clip subpath through a transform, so its outline is stated in the frame being written in.</summary>
+        private static SubPath Transformed(SubPath sub, AffineTransform transform)
+        {
+            var copy = new SubPath { IsClosed = sub.IsClosed };
+            foreach (PathNode node in sub.Nodes)
+            {
+                copy.Nodes.Add(new PathNode(
+                    transform.Transform(node.Anchor),
+                    transform.Transform(node.InHandle),
+                    transform.Transform(node.OutHandle)));
+            }
+
+            return copy;
+        }
+
+        /// <summary>
+        /// A nested `svg` whose viewport is the port it clips to.
+        ///
+        /// **The port's position is carried by the transform, not by `x` and `y`.** The reader composes a nested
+        /// element's `transform` with its `x` and `y` (§7.4), and the model's group transform already carries the
+        /// port's own offset - so writing the offset in both places puts the viewport at twice the distance. Only
+        /// the size is written here, and the transform `WriteItems` writes alongside it places it: the port is the
+        /// rectangle of that size at the origin of a space the transform has already moved.
+        ///
+        /// `overflow="hidden"` is SVG's own default on a viewport - the reader honours that default, and a file
+        /// that said `visible` would not have been given a clip at all - so it is written out rather than left
+        /// implicit: a person reading the file should see the crop stated, not have to know the default to find it.
+        /// </summary>
+        private static XElement ViewportElement((AffineTransform Transform, Rect2D Port) viewport)
+            => new(Svg + "svg",
+                new XAttribute("width", Number(viewport.Port.Width)),
+                new XAttribute("height", Number(viewport.Port.Height)),
+                new XAttribute("overflow", "hidden"));
+
+        /// <summary>
+        /// The viewport a nested `svg` would inherit from a group whose clip is the port itself, or null when the
+        /// clip is not one this writer can put back as a nested `svg` honestly.
+        ///
+        /// **Why a nested `svg` at all.** The reader records a nested viewport's port as a clip on the element's own
+        /// group, and it reads a nested `svg` back into exactly that: the port is the crop *and* the declaration of
+        /// where the content is placed. Writing the group back as a plain `g` with a `clip-path` draws the same
+        /// picture in a viewer - the reference rendering is identical - but this reader drops a bare `clip-path`, so
+        /// the crop would be gone the second time the file was opened. The nested `svg` is the one spelling that
+        /// survives the round trip, and it is what the file said in the first place.
+        ///
+        /// **Only when the port really is the clip.** The port is written in the containing space, so a viewport
+        /// can carry it only when the group's transform moves the content without turning or scaling the space the
+        /// port is stated in - otherwise the port is a parallelogram, which `x`/`y`/`width`/`height` cannot say.
+        /// Anything else, including every arbitrary clip the PDF importer records for a form's `/BBox`, falls back
+        /// to `clip-path`, which is the general and always-honest spelling.
+        /// </summary>
+        private static (AffineTransform Transform, Rect2D Port)? NestedViewport(ArtGroup group, ClipSpec clip)
+        {
+            if (group.Clips.Count != 1 || clip.Rule != FillRule.NonZero)
+            {
+                return null;
+            }
+
+            AffineTransform transform = group.Transform;
+            const double Tolerance = 1e-9;
+            bool moves = Math.Abs(transform.B) > Tolerance || Math.Abs(transform.C) > Tolerance;
+            bool turns = Math.Abs(transform.A - 1.0) > Tolerance || Math.Abs(transform.D - 1.0) > Tolerance;
+            if (moves || turns)
+            {
+                return null;
+            }
+
+            List<Point2D> corners = clip.SubPaths
+                .Where(sub => sub.IsClosed && sub.Nodes.Count == 4)
+                .SelectMany(sub => sub.Nodes)
+                .Select(node => node.Anchor)
+                .ToList();
+
+            if (corners.Count != 4)
+            {
+                return null;
+            }
+
+            double left = corners.Min(p => p.X);
+            double top = corners.Min(p => p.Y);
+            double right = corners.Max(p => p.X);
+            double bottom = corners.Max(p => p.Y);
+
+            // The four corners have to **be** the axis-aligned rectangle they are written as. A rectangle read from
+            // a rotated element, or one whose edges are diagonal, would come back as a different crop.
+            foreach (Point2D corner in corners)
+            {
+                bool onCorner = (Math.Abs(corner.X - left) < Tolerance || Math.Abs(corner.X - right) < Tolerance) &&
+                                (Math.Abs(corner.Y - top) < Tolerance || Math.Abs(corner.Y - bottom) < Tolerance);
+                if (!onCorner)
+                {
+                    return null;
+                }
+            }
+
+            if (right - left <= Tolerance || bottom - top <= Tolerance)
+            {
+                return null;
+            }
+
+            return (transform, new Rect2D(left, top, right - left, bottom - top));
+        }
+
         /// <summary>The `d` attribute for a path: an explicit curve per segment, and `Z` when it closes.</summary>
-        private static string PathData(PathItem path)
+        private static string PathData(PathItem path) => Outline(path.SubPaths);
+
+        /// <summary>
+        /// The `d` attribute for a run of subpaths.
+        ///
+        /// Shared with the clip outlines, because a clip path in SVG is written in exactly the same path syntax as
+        /// the artwork it restricts - one spelling means a clip cannot drift away from the shape it was read from.
+        /// </summary>
+        private static string Outline(IReadOnlyList<SubPath> subpaths)
         {
             var builder = new StringBuilder();
 
-            foreach (SubPath sub in path.SubPaths)
+            foreach (SubPath sub in subpaths)
             {
                 if (sub.Nodes.Count < 2)
                 {
