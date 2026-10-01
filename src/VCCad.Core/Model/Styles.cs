@@ -253,7 +253,8 @@ public sealed record StrokeSpec(
     StrokeAlignment Alignment = StrokeAlignment.Center,
     DashPattern Dash = default,
     WidthProfileSpec? WidthProfile = null,
-    EffectStack? Effects = null)
+    EffectStack? Effects = null,
+    RasterEffectStack? RasterEffects = null)
 {
     /// <summary>Convenience: no visible stroke.</summary>
     public static StrokeSpec None { get; } =
@@ -277,6 +278,12 @@ public sealed record StrokeSpec(
 
     /// <summary>The effects in order, or an empty list when there are none.</summary>
     public IReadOnlyList<OutlineEffectSpec> AllEffects => Effects ?? EffectStack.Empty;
+
+    /// <summary>Whether any raster effect changes the pixels this stroke is drawn as.</summary>
+    public bool HasRasterEffects => RasterEffects is { Count: > 0 };
+
+    /// <summary>The raster effects in order, or an empty list when there are none.</summary>
+    public IReadOnlyList<RasterEffectSpec> AllRasterEffects => RasterEffects ?? RasterEffectStack.Empty;
 
     /// <summary>True when a stroke is visible and has positive width.</summary>
     public bool HasVisibleOutline => IsVisible && Width > 0.0;

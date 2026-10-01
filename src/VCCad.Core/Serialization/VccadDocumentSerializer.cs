@@ -101,11 +101,25 @@ internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, St
 
     // The outline effects on the stroke, in the order they are applied. Absent when there are none.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    OutlineEffectDto[]? Effects = null);
+    OutlineEffectDto[]? Effects = null,
+
+    // The raster effects on the stroke. Separate from the outline effects because they are a different kind of
+    // thing: one reshapes the outline, the other changes the pixels, and a reader has to treat them differently.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    RasterEffectDto[]? RasterEffects = null);
 
 /// <summary>One outline effect on the wire: its kind, its parameters, and the seed its randomness comes from.</summary>
 internal sealed record OutlineEffectDto(
     OutlineEffectKind Kind, double Size, double Detail, int Seed);
+
+/// <summary>One raster effect on the wire, with its tint absent when it takes the stroke's own colour.</summary>
+internal sealed record RasterEffectDto(
+    RasterEffectKind Kind,
+    double Radius,
+    double OffsetX,
+    double OffsetY,
+    double Opacity,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ColorDto? Tint = null);
 
 /// <summary>
 /// A width profile on the wire: its name and its width points, in order.
@@ -477,6 +491,15 @@ internal abstract record ItemDto
                 : null,
             s.HasEffects
                 ? s.AllEffects.Select(e => new OutlineEffectDto(e.Kind, e.Size, e.Detail, e.Seed)).ToArray()
+                : null,
+            s.HasRasterEffects
+                ? s.AllRasterEffects.Select(e => new RasterEffectDto(
+                    e.Kind,
+                    e.Radius,
+                    e.OffsetX,
+                    e.OffsetY,
+                    e.Opacity,
+                    e.Tint is { } tint ? new ColorDto(tint.R, tint.G, tint.B, tint.A) : null)).ToArray()
                 : null);
 }
 
@@ -877,12 +900,29 @@ internal static class ItemDtoExtensions
                 Alignment = s.Alignment,
                 Dash = new DashPattern(s.Dash ?? Array.Empty<double>(), s.DashOffset),
                 Effects = ToEffects(s.Effects),
+                RasterEffects = ToRasterEffects(s.RasterEffects),
             }
             : new StrokeSpec(s.Visible, new ColorRgb(s.Color.R, s.Color.G, s.Color.B, s.Color.A),
                 s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment,
                 new DashPattern(s.Dash ?? Array.Empty<double>(), s.DashOffset),
                 s.WidthProfile?.ToModel(),
-                ToEffects(s.Effects));
+                ToEffects(s.Effects),
+                ToRasterEffects(s.RasterEffects));
+
+    /// <summary>
+    /// The raster effects on the wire, or null when there are none - the same absent-means-none rule the outline
+    /// effects and the width profile follow.
+    /// </summary>
+    private static RasterEffectStack? ToRasterEffects(RasterEffectDto[]? effects)
+        => effects is { Length: > 0 }
+            ? new RasterEffectStack(effects.Select(e => new RasterEffectSpec(
+                e.Kind,
+                e.Radius,
+                e.OffsetX,
+                e.OffsetY,
+                e.Opacity,
+                e.Tint is { } tint ? new ColorRgb(tint.R, tint.G, tint.B, tint.A) : null)))
+            : null;
 
     /// <summary>
     /// The effects on the wire, or null when there are none.

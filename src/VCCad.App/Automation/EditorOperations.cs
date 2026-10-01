@@ -1712,6 +1712,80 @@ public static class EditorOperations
                 return new { changed };
             });
 
+        Add("style.addRasterEffect",
+            "Add a raster effect to the selected paths' strokes. kind is blur, dropShadow, innerGlow or " +
+            "outerGlow. radius is how far it spreads, offsetX/offsetY displace a drop shadow, opacity is the " +
+            "effect's own, and tint is its colour - omitted means the stroke's own colour, which is the usual " +
+            "answer for a glow. One undo step per path.",
+            "kind:string, radius?:number, offsetX?:number, offsetY?:number, opacity?:number, tint?:[r,g,b]",
+            (ctx, p) =>
+            {
+                string kind = p.GetString("kind") ?? string.Empty;
+                RasterEffectKind parsed = kind.ToLowerInvariant() switch
+                {
+                    "blur" or "gaussianblur" => RasterEffectKind.Blur,
+                    "dropshadow" or "drop_shadow" or "shadow" => RasterEffectKind.DropShadow,
+                    "innerglow" or "inner_glow" => RasterEffectKind.InnerGlow,
+                    "outerglow" or "outer_glow" => RasterEffectKind.OuterGlow,
+                    _ => throw new EditorOperationException(
+                        $"'{kind}' is not a raster effect; use blur, dropShadow, innerGlow or outerGlow"),
+                };
+
+                // Presence-checked like every other colour: ParseColor reports its fallback for an absent
+                // parameter, so an omitted tint would arrive as black and stop meaning "the stroke's own colour".
+                ColorRgb? tint = p.ValueKind == JsonValueKind.Object && p.TryGetProperty("tint", out _)
+                    ? p.ParseColor("tint", ColorRgb.Black)
+                    : null;
+
+                var effect = new RasterEffectSpec(
+                    parsed,
+                    p.GetDouble("radius", 4.0),
+                    p.GetDouble("offsetX", 0.0),
+                    p.GetDouble("offsetY", 0.0),
+                    p.GetDouble("opacity", 1.0),
+                    tint);
+
+                int changed = 0;
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    var stack = path.Strokes.ToList();
+                    for (int i = 0; i < stack.Count; i++)
+                    {
+                        stack[i] = stack[i] with
+                        {
+                            RasterEffects = new RasterEffectStack(
+                                stack[i].AllRasterEffects.Concat(new[] { effect })),
+                        };
+                    }
+
+                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Add raster effect"));
+                    changed++;
+                }
+
+                return new { effect = parsed.ToString(), tinted = tint is not null, changed };
+            });
+
+        Add("style.clearRasterEffects",
+            "Remove every raster effect from the selected paths' strokes. One undo step per path.",
+            "",
+            (ctx, _) =>
+            {
+                int changed = 0;
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    var stack = path.Strokes.ToList();
+                    for (int i = 0; i < stack.Count; i++)
+                    {
+                        stack[i] = stack[i] with { RasterEffects = null };
+                    }
+
+                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Clear raster effects"));
+                    changed++;
+                }
+
+                return new { changed };
+            });
+
         Add("profile.create",
             "Create a reusable width profile in the document. points is [{position, left, right, interpolation?}], " +
             "the same shape style.setWidthProfile takes. The name has to be free: two profiles with one name would " +
@@ -5326,6 +5400,19 @@ public static class EditorOperations
                 size = Math.Round(effect.Size, 4),
                 detail = Math.Round(effect.Detail, 4),
                 seed = effect.Seed,
+            }).ToArray()
+            : null,
+        rasterEffects = stroke.HasRasterEffects
+            ? stroke.AllRasterEffects.Select(effect => new
+            {
+                kind = effect.Kind.ToString(),
+                radius = Math.Round(effect.Radius, 4),
+                offsetX = Math.Round(effect.OffsetX, 4),
+                offsetY = Math.Round(effect.OffsetY, 4),
+                opacity = Math.Round(effect.Opacity, 4),
+                tint = effect.Tint is { } tint
+                    ? new[] { Math.Round(tint.R, 6), Math.Round(tint.G, 6), Math.Round(tint.B, 6) }
+                    : null,
             }).ToArray()
             : null,
     };
