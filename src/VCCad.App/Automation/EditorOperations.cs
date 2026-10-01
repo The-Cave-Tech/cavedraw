@@ -1777,6 +1777,163 @@ public static class EditorOperations
                 return new { changed, points = points.Count };
             });
 
+        Add("pathEffect.list",
+            "The live path effects this build implements, and the live path effect each selected path says it has. " +
+            "A path's live path effect is a reference to an element the file defined elsewhere, and this build has " +
+            "no place to keep that element, so the reference travels with the path as one of the foreign attributes " +
+            "it carries and is reported here by id. sourcePathData is what the file wrote in inkscape:original-d - " +
+            "the path the effect was applied to, as opposed to the effect's output that the path's own geometry " +
+            "holds - which is what a translation is built from.",
+            "",
+            (ctx, _) => new
+            {
+                implemented = PathEffects.Implemented,
+                items = ctx.Session.SelectedObjects
+                    .Select(item => new
+                    {
+                        itemId = item.Id,
+                        name = item.Name,
+                        effect = PathEffects.ReferenceOn(item),
+                        sourcePathData = PathEffects.SourcePathData(item),
+                    })
+                    .ToArray(),
+            });
+
+        Add("pathEffect.translate",
+            "Read a live path effect the way a file spells it and report what it becomes in this model, without " +
+            "changing anything. effect is the effect's own name ('powerstroke', 'bend_path', ...) and parameters is " +
+            "the effect element's other attributes, keyed as the file spells them - so a driver can hand over an " +
+            "element exactly as it was read. An effect this build does not implement comes back with supported " +
+            "false, the reason naming it, and no profile: the geometry is left alone rather than redrawn without " +
+            "the effect. The profile is built against the selected path, because Inkscape stores a powerstroke's " +
+            "knots as a segment index and the same knots sit in different places on a longer path.",
+            "effect:string, id?:string, version?:string, parameters?:{string:string}",
+            (ctx, p) =>
+            {
+                PathEffectSpec effect = ReadPathEffect(p);
+                PathItem path = ctx.Session.SelectedPaths().FirstOrDefault()
+                    ?? throw new EditorOperationException(
+                        "pathEffect.translate needs the path the effect is on, because a powerstroke's knots are " +
+                        "positions along it");
+
+                StrokeSpec stroke = path.Strokes.FirstOrDefault() ?? StrokeSpec.None;
+                PathEffectTranslation translation = PathEffects.Translate(effect, path, stroke);
+
+                return new
+                {
+                    effect = effect.Effect,
+                    id = effect.Id,
+                    segments = PathEffects.CurveCount(path),
+                    supported = translation.IsSupported,
+                    refusal = translation.Refusal,
+                    notes = translation.Notes,
+                    join = translation.Stroke?.Join.ToString().ToLowerInvariant(),
+                    cap = translation.Stroke?.Cap.ToString().ToLowerInvariant(),
+                    profile = translation.Stroke?.WidthProfile is { } profile
+                        ? new
+                        {
+                            name = profile.Name,
+                            points = DescribeWidthPoints(profile),
+                        }
+                        : null,
+                };
+            });
+
+        Add("pathEffect.apply",
+            "Translate a live path effect and give the selected paths' strokes the width profile it describes, as " +
+            "the file intends: the effect is converted for drawing and the file's own description is left where it " +
+            "is, on the path, so the export still says what the artwork is. The profile is registered in the " +
+            "document's library, so a converted powerstroke is a reusable asset rather than a stroke naming one " +
+            "that does not exist. An effect this build does not implement changes nothing and is reported in " +
+            "refused, by name. strokeIndex picks one stroke of the stack, counted from the bottom, and defaults to " +
+            "every stroke; a path whose stack is shorter is skipped. One undo step.",
+            "effect:string, id?:string, version?:string, parameters?:{string:string}, name?:string, strokeIndex?:number",
+            (ctx, p) =>
+            {
+                PathEffectSpec effect = ReadPathEffect(p);
+                List<PathItem> paths = ctx.Session.SelectedPaths().ToList();
+                if (paths.Count == 0)
+                {
+                    throw new EditorOperationException("pathEffect.apply needs at least one path selected");
+                }
+
+                CadDocument document = ctx.Document;
+                var library = document.WidthProfiles.ToList();
+                var edits = new List<EditWidthProfilesCommand.StrokeEdit>();
+                var refused = new List<object>();
+                var profiles = new List<string>();
+                int? only = OptionalStrokeIndex(p);
+                string baseName = p.GetString("name") is { Length: > 0 } given
+                    ? given
+                    : effect.Id is { Length: > 0 } ? effect.Id : "Power stroke";
+
+                foreach (PathItem path in paths)
+                {
+                    var stack = path.Strokes.ToList();
+                    for (int i = 0; i < stack.Count; i++)
+                    {
+                        if (only is { } at && at != i)
+                        {
+                            continue;
+                        }
+
+                        PathEffectTranslation translation = PathEffects.Translate(effect, path, stack[i]);
+                        if (translation.Stroke is null)
+                        {
+                            refused.Add(new { itemId = path.Id, name = path.Name, reason = translation.Refusal });
+                            continue;
+                        }
+
+                        // One asset per distinct profile: two paths of different length carry different knots for
+                        // the same effect, so a shared name would put one path's widths on the other.
+                        WidthProfileSpec profile = translation.Stroke.WidthProfile!;
+                        if (library.FirstOrDefault(existing => existing.Name == baseName) is { } taken &&
+                            taken.Points.SequenceEqual(profile.Points))
+                        {
+                            profile = taken;
+                        }
+                        else if (library.Any(existing => existing.Name == baseName))
+                        {
+                            int suffix = 2;
+                            while (library.Any(existing => existing.Name == $"{baseName} {suffix}"))
+                            {
+                                suffix++;
+                            }
+
+                            profile = profile with { Name = $"{baseName} {suffix}" };
+                            library.Add(profile);
+                        }
+                        else
+                        {
+                            profile = profile with { Name = baseName };
+                            library.Add(profile);
+                        }
+
+                        if (!profiles.Contains(profile.Name))
+                        {
+                            profiles.Add(profile.Name);
+                        }
+
+                        edits.Add(new EditWidthProfilesCommand.StrokeEdit(
+                            path, i, stack[i], translation.Stroke with { WidthProfile = profile }));
+                    }
+                }
+
+                if (edits.Count > 0)
+                {
+                    ctx.Session.Execute(new EditWidthProfilesCommand(
+                        document, library, edits, "Apply live path effect"));
+                }
+
+                return new
+                {
+                    effect = effect.Effect,
+                    strokes = edits.Count,
+                    profiles = profiles.ToArray(),
+                    refused = refused.ToArray(),
+                };
+            });
+
         Add("style.addStrokeEffect",
             "Add an outline effect to the selected paths' strokes, on top of the ones they have. kind is one of " +
             "offsetPath, roughen, zigZag or scribble. size is how far a point may move (or how far an offset path " +
@@ -4632,7 +4789,10 @@ public static class EditorOperations
                     objects = result.Objects,
                     byElement = result.ByElement,
                     missing = result.Missing,
-                    warnings = result.Warnings,
+                    warnings = result.Warnings
+                        .Concat(UnreadLivePathEffects(result.Document).Warnings)
+                        .ToArray(),
+                    livePathEffects = UnreadLivePathEffects(result.Document).Effects,
                 };
             });
 
@@ -7063,6 +7223,49 @@ public static class EditorOperations
     /// </summary>
     private static bool Given(JsonElement p, string name)
         => p.ValueKind == JsonValueKind.Object && p.TryGetProperty(name, out _);
+
+    /// <summary>
+    /// A live path effect as a request spells it.
+    ///
+    /// The parameters are taken as **text**, not as numbers, because the effect element's attributes are text in
+    /// the file and several of them (an interpolator's name, a cap's name) are not numbers at all. Reading them
+    /// here as doubles would silently drop the half of an effect that says how to shape it.
+    /// </summary>
+    private static PathEffectSpec ReadPathEffect(JsonElement p)
+    {
+        string effect = p.GetString("effect") ?? string.Empty;
+        if (effect.Length == 0)
+        {
+            throw new EditorOperationException("pathEffect operations need the effect's own name, e.g. 'powerstroke'");
+        }
+
+        var parameters = new List<KeyValuePair<string, string>>();
+        if (p.ValueKind == JsonValueKind.Object &&
+            p.TryGetProperty("parameters", out JsonElement given) &&
+            given.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty parameter in given.EnumerateObject())
+            {
+                parameters.Add(new KeyValuePair<string, string>(
+                    parameter.Name,
+                    parameter.Value.ValueKind == JsonValueKind.String
+                        ? parameter.Value.GetString() ?? string.Empty
+                        : parameter.Value.ToString()));
+            }
+        }
+
+        return new PathEffectSpec(effect, p.GetString("id") ?? string.Empty, p.GetString("version") ?? string.Empty, parameters);
+    }
+
+    /// <summary>The width points of a profile, in the shape every profile-reporting operation prints them.</summary>
+    private static object[] DescribeWidthPoints(WidthProfileSpec profile)
+        => profile.Points.Select(point => (object)new
+        {
+            position = Math.Round(point.Position, 6),
+            left = Math.Round(point.LeftWidth, 4),
+            right = Math.Round(point.RightWidth, 4),
+            interpolation = point.Interpolation.ToString().ToLowerInvariant(),
+        }).ToArray();
 
     /// <summary>
     /// The stroke a caller named, or null when they named none.
