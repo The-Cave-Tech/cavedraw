@@ -192,6 +192,13 @@ public static class SvgWriter
                 }
             }
 
+            // The blend mode goes out as the CSS property the file uses, and only when it is not the default -
+            // a document that never set one has to export byte for byte as it did before this existed.
+            if (item.BlendMode != BlendMode.Normal)
+            {
+                element.SetAttributeValue("mix-blend-mode", item.BlendMode.ToSvgName());
+            }
+
             if (!string.IsNullOrEmpty(item.Name) && _namespaces.ContainsKey("inkscape"))
             {
                 element.SetAttributeValue(

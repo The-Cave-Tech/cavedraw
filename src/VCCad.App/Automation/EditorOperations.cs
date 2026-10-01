@@ -1860,6 +1860,32 @@ public static class EditorOperations
             return new { changed };
         });
 
+        Add("object.setBlendMode",
+            "How the selected objects combine with what is drawn beneath them. mode is a CSS mix-blend-mode name " +
+            "(normal, multiply, screen, darken, lighten, overlay, difference and the rest); an empty or 'normal' " +
+            "mode clears it. The exported SVG carries the property, so a file written here composites the same way " +
+            "in another viewer.",
+            "mode:string",
+            (ctx, p) =>
+            {
+                string name = p.GetString("mode") ?? string.Empty;
+                BlendMode mode = BlendModes.Parse(name) ?? BlendMode.Normal;
+                if (name.Length > 0 && !name.Equals("normal", StringComparison.OrdinalIgnoreCase) &&
+                    BlendModes.Parse(name) is null)
+                {
+                    throw new EditorOperationException($"'{name}' is not a blend mode this build knows");
+                }
+
+                var items = ctx.Session.SelectedObjects.ToList();
+                foreach (LayerItem item in items)
+                {
+                    item.BlendMode = mode;
+                }
+
+                ctx.ViewModel.NotifyDocumentChanged();
+                return new { mode = mode.ToSvgName(), items = items.Count };
+            });
+
         Add("document.metadata",
             "The namespaced data the file carried that the model has no meaning for: the root-level elements kept " +
             "verbatim (Inkscape's named view, the RDF), the namespace prefixes declared, and, for the selection, " +

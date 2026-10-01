@@ -345,6 +345,10 @@ internal abstract record ItemDto
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string[]? ForeignElements { get; init; }
 
+    /// <summary>How the item blends with what is under it, or null when it does not (the default).</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BlendMode? Blend { get; init; }
+
     public static ItemDto From(LayerItem item) => WithForeign(item switch
     {
         PathItem path => ToPath(path) with { Clips = ToClips(item), FilterId = item.FilterId },
@@ -367,6 +371,7 @@ internal abstract record ItemDto
             ? null
             : new Dictionary<string, string>(item.ForeignAttributes, StringComparer.Ordinal),
         ForeignElements = item.ForeignElements.Count == 0 ? null : item.ForeignElements.ToArray(),
+        Blend = item.BlendMode == BlendMode.Normal ? null : item.BlendMode,
     };
 
     private static ClipDto[]? ToClips(LayerItem item)
@@ -402,6 +407,7 @@ internal abstract record ItemDto
         // The filter reference travels the same way as a clip: on the base DTO, restored here for every kind of
         // item, because a filter applies to a group as readily as to a path.
         item.FilterId = dto.FilterId;
+        item.BlendMode = dto.Blend ?? BlendMode.Normal;
 
         foreach (KeyValuePair<string, string> attribute in dto.Foreign ?? new Dictionary<string, string>())
         {

@@ -486,6 +486,7 @@ public static class SvgReader
                 item.FilterId = filterId;
             }
 
+            item.BlendMode = style.Blend;
             CaptureForeign(element, item);
 
             if (item is PathItem shape)
@@ -547,6 +548,7 @@ public static class SvgReader
         AffineTransform transform = Transform(element.Attribute("transform")?.Value);
         var group = new ArtGroup { Name = element.Attribute("id")?.Value ?? string.Empty };
         group.Transform = transform;
+        group.BlendMode = style.Blend;
         CaptureForeign(element, group);
 
         var inside = new Context

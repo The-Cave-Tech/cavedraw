@@ -83,6 +83,21 @@ public abstract class LayerItem : CadObject
     public List<string> ForeignElements { get; } = new();
 
     /// <summary>
+    /// How this item's colour combines with what is already drawn beneath it.
+    ///
+    /// On the base class, like the filter: any item can be blended, and the file writes it per element as CSS's
+    /// `mix-blend-mode`. It is carried whether or not this build renders it everywhere - an exported SVG writes the
+    /// property, so another viewer composites it correctly even where the canvas does not yet.
+    /// </summary>
+    public BlendMode BlendMode
+    {
+        get => _blendMode;
+        set => SetField(ref _blendMode, value);
+    }
+
+    private BlendMode _blendMode = BlendMode.Normal;
+
+    /// <summary>
     /// The name of the document filter this item is drawn through, or null when it is not filtered.
     ///
     /// A **reference**, not the filter itself: a filter is a document-level asset an element points at, which is what

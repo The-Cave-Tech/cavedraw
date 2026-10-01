@@ -31,7 +31,8 @@ public sealed class SvgImportException : Exception
 internal sealed record PresentationStyle(
     FillSpec Fill,
     StrokeSpec Stroke,
-    string? FillGradientId = null)
+    string? FillGradientId = null,
+    BlendMode Blend = BlendMode.Normal)
 {
     /// <summary>SVG's initial values: black fill, no stroke.</summary>
     public static PresentationStyle Default { get; } = new(
@@ -147,7 +148,14 @@ internal sealed record PresentationStyle(
             _ = alpha;
         }
 
-        return new PresentationStyle(fill, stroke, gradientId);
+        // Read from **this** element only, never from `inherited`: CSS's `mix-blend-mode` does not inherit, and a
+        // group's blend leaking onto its children would composite each of them against a backdrop the file never
+        // asked for.
+        return new PresentationStyle(
+            fill,
+            stroke,
+            gradientId,
+            BlendModes.Parse(Value("mix-blend-mode")) ?? BlendMode.Normal);
     }
 
     /// <summary>The declarations inside a `style` attribute, which is a small inline stylesheet.</summary>
