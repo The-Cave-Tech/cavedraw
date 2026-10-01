@@ -57,34 +57,9 @@ internal sealed record PresentationStyle(
 
         // The cascade, in the order CSS puts it. A presentation attribute is the **lowest** of the four, not the
         // highest - it is a fallback for when nothing else says anything - and an important rule beats a
-        // non-important one wherever it came from, including over an inline style.
-        string? Value(string name)
-        {
-            (string Value, bool Important) fromSheet = sheet is not null && sheet.TryGetValue(name, out var s)
-                ? s
-                : (string.Empty, false);
-            bool hasSheet = sheet is not null && sheet.ContainsKey(name);
-            bool hasInline = inline.TryGetValue(name, out string? fromInline);
-            bool inlineIsImportant = inlineImportant.TryGetValue(name, out bool flag) && flag;
-            string? fromAttribute = element.Attribute(name)?.Value;
-
-            if (inlineIsImportant && hasInline)
-            {
-                return fromInline;
-            }
-
-            if (hasSheet && fromSheet.Important)
-            {
-                return fromSheet.Value;
-            }
-
-            if (hasInline)
-            {
-                return fromInline;
-            }
-
-            return hasSheet ? fromSheet.Value : fromAttribute;
-        }
+        // non-important one wherever it came from, including over an inline style. The order itself lives in
+        // SvgProperties, because the text properties come from the same cascade and must not answer it differently.
+        string? Value(string name) => SvgProperties.Value(element, sheet, inline, inlineImportant, name);
 
         FillSpec fill = inherited.Fill;
         StrokeSpec stroke = inherited.Stroke;
@@ -166,7 +141,7 @@ internal sealed record PresentationStyle(
     }
 
     /// <summary>The declarations inside a `style` attribute, which is a small inline stylesheet.</summary>
-    private static Dictionary<string, string> ReadStyleAttribute(System.Xml.Linq.XElement element)
+    internal static Dictionary<string, string> ReadStyleAttribute(System.Xml.Linq.XElement element)
     {
         var declarations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         string? style = element.Attribute("style")?.Value;
@@ -188,7 +163,7 @@ internal sealed record PresentationStyle(
     }
 
     /// <summary>Which of an inline style's declarations say `!important`.</summary>
-    private static Dictionary<string, bool> ReadStyleImportance(System.Xml.Linq.XElement element)
+    internal static Dictionary<string, bool> ReadStyleImportance(System.Xml.Linq.XElement element)
     {
         var importance = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         string? style = element.Attribute("style")?.Value;

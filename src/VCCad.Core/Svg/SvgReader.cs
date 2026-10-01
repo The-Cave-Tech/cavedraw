@@ -29,11 +29,15 @@ public sealed record SvgImportResult(
 /// mistake this project has already made once with PDF form XObjects. A group keeping its own transform is also
 /// what makes nested transforms compose the way the file says rather than approximately.
 ///
-/// What this reads today is the foundation: the basic shapes, paths, groups, transforms, the view box, and the
-/// presentation attributes that decide how they are painted. `use`, `text`, `image`, `style`, symbols and the paint
-/// servers are their own issues, and each hangs off this.
+/// What this reads today: the basic shapes, paths, groups, `use` and symbols, filters, gradients, `image`, `text`
+/// with its runs, the view box, CSS and the presentation attributes that decide how they are painted, with every
+/// length resolved through its unit. The paint servers other than gradients are their own issue.
+///
+/// The text half lives in <c>SvgTextReader.cs</c>, which is a part of this class because a text element is walked
+/// with the same context - the same stylesheets, the same viewport, the same list of things that could not be read -
+/// as everything else.
 /// </summary>
-public static class SvgReader
+public static partial class SvgReader
 {
     private static readonly XNamespace Svg = "http://www.w3.org/2000/svg";
 
@@ -100,7 +104,17 @@ public static class SvgReader
         // Every style element in the document, in document order - including the ones inside defs, which are
         // still stylesheets and still apply. Collecting them by walking the tree as it is read would miss a sheet
         // defined after the elements it styles, which multi-style.svg does.
-        SvgStylesheet sheet = SvgStylesheet.Parse(CollectStyles(root), baseDirectory);
+        string css = CollectStyles(root);
+        SvgStylesheet sheet = SvgStylesheet.Parse(css, baseDirectory);
+
+        // A webfont the file carries is a face this reader does not load: the stylesheet's `@font-face` rules are
+        // at-rules and the sheet reader deliberately does not read them as rules, so a file that supplies its own
+        // face is drawn with whatever this machine has instead. Said out loud, because the difference is the design.
+        if (css.Contains("@font-face", StringComparison.OrdinalIgnoreCase))
+        {
+            warnings.Add("the stylesheet declares @font-face, and this reader does not load fonts from the document");
+        }
+
         SvgGradients gradients = SvgGradients.Collect(root, sheet);
 
         // Filters are document assets: an element refers to one by id, so they are collected once and held on the
@@ -141,6 +155,15 @@ public static class SvgReader
             Warnings = warnings,
             Viewport = viewport,
             BaseDirectory = baseDirectory,
+
+            // The root's own font properties, which a text element inherits like anything else. `xml:space` is
+            // declared on the root in Inkscape's own files, so a reader that only read it on the elements it walked
+            // would collapse white space the file asked it to keep.
+            Text = SvgTextStyle.From(
+                root,
+                SvgTextStyle.Default,
+                sheet.DeclarationsFor(root, Array.Empty<XElement>()),
+                warning => warnings.Add(warning)),
         };
 
         foreach (XElement child in root.Elements())
@@ -455,6 +478,14 @@ public static class SvgReader
         public required SvgGradients Gradients { get; init; }
 
         /// <summary>
+        /// The font and line properties in force here, which a text element inherits the way it inherits paint.
+        ///
+        /// Kept beside the paint rather than inside it because the two are read by different code and answered by
+        /// different questions - a shape has no font and a run has no stroke - while the cascade over them is one.
+        /// </summary>
+        public required SvgTextStyle Text { get; init; }
+
+        /// <summary>
         /// SVG elements the reader does not know, by name, each recorded once.
         ///
         /// Reported rather than silently skipped: an element that is not understood is artwork that went missing,
@@ -548,8 +579,16 @@ public static class SvgReader
             return;
         }
 
-        PresentationStyle style = PresentationStyle.From(element, context.Style, context.Sheet.DeclarationsFor(
-            element, element.Ancestors().ToArray()), context.Viewport, context.Warn);
+        // The declarations the cascade resolves for this element, read once and handed to both readers: the font
+        // properties travel separately from the paint and inherit the same way, so they must not answer the cascade
+        // differently or twice.
+        IReadOnlyDictionary<string, (string Value, bool Important)> declarations =
+            context.Sheet.DeclarationsFor(element, element.Ancestors().ToArray());
+
+        PresentationStyle style = PresentationStyle.From(
+            element, context.Style, declarations, context.Viewport, context.Warn);
+
+        SvgTextStyle text = SvgTextStyle.From(element, context.Text, declarations, context.Warn);
 
         switch (name)
         {
@@ -557,7 +596,11 @@ public static class SvgReader
             case "a":
             case "switch":
             case "svg":
-                ReadGroup(element, context, style);
+                ReadGroup(element, context, style, text);
+                return;
+
+            case "text":
+                ReadTextElement(element, context, style, text);
                 return;
 
             case "defs":
@@ -676,7 +719,7 @@ public static class SvgReader
            Math.Abs(transform.E) < 1e-12 &&
            Math.Abs(transform.F) < 1e-12;
 
-    private static void ReadGroup(XElement element, Context context, PresentationStyle style)
+    private static void ReadGroup(XElement element, Context context, PresentationStyle style, SvgTextStyle text)
     {
         // A group keeps its transform on the group, where the model can apply it to everything inside at once and
         // where a later edit can change it. Baking it into the children would make the group's transform
@@ -701,6 +744,7 @@ public static class SvgReader
             Warnings = context.Warnings,
             Viewport = context.Viewport,
             BaseDirectory = context.BaseDirectory,
+            Text = text,
         };
 
         foreach (XElement child in element.Elements())
@@ -1009,6 +1053,11 @@ public static class SvgReader
             Warnings = context.Warnings,
             Viewport = context.Viewport,
             BaseDirectory = context.BaseDirectory,
+            Text = SvgTextStyle.From(
+                element,
+                context.Text,
+                context.Sheet.DeclarationsFor(element, element.Ancestors().ToArray()),
+                context.Warn),
         };
 
         if (target.Name.LocalName == "symbol")
