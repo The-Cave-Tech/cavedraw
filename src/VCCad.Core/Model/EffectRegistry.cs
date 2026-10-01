@@ -43,7 +43,25 @@ public sealed record EffectDefinition(
     string Kind,
     bool Raster,
     string Meaning,
-    IReadOnlyList<EffectParameter> Parameters);
+    IReadOnlyList<EffectParameter> Parameters,
+    OutlineEffectKind? OutlineKind = null,
+    RasterEffectKind? RasterKind = null,
+    string[]? Aliases = null)
+{
+    /// <summary>What the model holds for this effect, which is what an operation sets.</summary>
+    public object? ModelKind => Raster ? RasterKind : OutlineKind;
+
+    /// <summary>
+    /// Whether a caller's word for this effect names it - the canonical name or an alias, ignoring case.
+    ///
+    /// The aliases are here rather than in the operations because they are the same kind of knowledge as the name:
+    /// `drop_shadow` and `dropShadow` are the same effect, and having each operation keep its own list is how the
+    /// two drift apart and one accepts a spelling the other refuses.
+    /// </summary>
+    public bool AnswersTo(string name)
+        => Kind.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+           (Aliases ?? Array.Empty<string>()).Any(alias => alias.Equals(name, StringComparison.OrdinalIgnoreCase));
+}
 
 /// <summary>Every effect this build has, with what each one takes.</summary>
 public static class EffectRegistry
@@ -87,24 +105,29 @@ public static class EffectRegistry
     /// <summary>Every effect, outline first and then the raster ones - the order a panel offers them in.</summary>
     public static IReadOnlyList<EffectDefinition> All { get; } = new[]
     {
-        new EffectDefinition("zigZag", false, "The outline wobbles to either side of the line.", new[] { Size, Seed }),
-        new EffectDefinition("roughen", false, "The outline is displaced point by point.", new[] { Size, Seed }),
-        new EffectDefinition("offsetPath", false, "The outline moves outward or inward as a whole.", new[] { Size }),
+        new EffectDefinition("zigZag", false, "The outline wobbles to either side of the line.",
+            new[] { Size, Seed }, OutlineEffectKind.ZigZag, null, new[] { "zig_zag" }),
+        new EffectDefinition("roughen", false, "The outline is displaced point by point.",
+            new[] { Size, Seed }, OutlineEffectKind.Roughen),
+        new EffectDefinition("offsetPath", false, "The outline moves outward or inward as a whole.",
+            new[] { Size }, OutlineEffectKind.OffsetPath, null, new[] { "offset_path", "offset" }),
         new EffectDefinition("scribble", false, "The stroke is drawn several times, hand-drawn style.",
-            new[] { Size, Detail, Seed }),
+            new[] { Size, Detail, Seed }, OutlineEffectKind.Scribble),
 
-        new EffectDefinition("blur", true, "The stroke is softened.", new[] { Radius }),
+        new EffectDefinition("blur", true, "The stroke is softened.",
+            new[] { Radius }, null, RasterEffectKind.Blur, new[] { "gaussianBlur", "gaussian_blur" }),
         new EffectDefinition("dropShadow", true, "A displaced copy is drawn behind the stroke.",
-            new[] { Radius, OffsetX, OffsetY, Opacity, Tint }),
+            new[] { Radius, OffsetX, OffsetY, Opacity, Tint }, null, RasterEffectKind.DropShadow,
+            new[] { "drop_shadow", "shadow" }),
         new EffectDefinition("innerGlow", true, "A glow inside the stroke.",
-            new[] { Radius, Opacity, Tint }),
+            new[] { Radius, Opacity, Tint }, null, RasterEffectKind.InnerGlow, new[] { "inner_glow" }),
         new EffectDefinition("outerGlow", true, "A glow around the stroke.",
-            new[] { Radius, Opacity, Tint }),
+            new[] { Radius, Opacity, Tint }, null, RasterEffectKind.OuterGlow, new[] { "outer_glow" }),
     };
 
     /// <summary>The declaration for a kind, or null when this build has no such effect.</summary>
     public static EffectDefinition? Find(string kind)
-        => All.FirstOrDefault(definition => definition.Kind.Equals(kind, StringComparison.OrdinalIgnoreCase));
+        => All.FirstOrDefault(definition => definition.AnswersTo(kind ?? string.Empty));
 
     /// <summary>Whether a kind is one this build has - which is what an operation validates against.</summary>
     public static bool IsKnown(string kind) => Find(kind) is not null;

@@ -1665,15 +1665,17 @@ public static class EditorOperations
             (ctx, p) =>
             {
                 string kind = p.GetString("kind") ?? string.Empty;
-                OutlineEffectKind parsed = kind.ToLowerInvariant() switch
+
+                // The registry decides what a kind is and what it takes, so this operation cannot drift from the
+                // panel's editors - and a new effect is accepted here by being declared there, not by being added
+                // to a switch in each place.
+                EffectDefinition? definition = EffectRegistry.Find(kind);
+                if (definition is null || definition.Raster || definition.OutlineKind is not { } parsed)
                 {
-                    "offsetpath" or "offset_path" or "offset" => OutlineEffectKind.OffsetPath,
-                    "roughen" => OutlineEffectKind.Roughen,
-                    "zigzag" or "zig_zag" => OutlineEffectKind.ZigZag,
-                    "scribble" => OutlineEffectKind.Scribble,
-                    _ => throw new EditorOperationException(
-                        $"'{kind}' is not an outline effect; use offsetPath, roughen, zigZag or scribble"),
-                };
+                    throw new EditorOperationException(
+                        $"'{kind}' is not an outline effect; use " +
+                        string.Join(", ", EffectRegistry.All.Where(e => !e.Raster).Select(e => e.Kind)));
+                }
 
                 var effect = new OutlineEffectSpec(
                     parsed,
@@ -1730,15 +1732,16 @@ public static class EditorOperations
             (ctx, p) =>
             {
                 string kind = p.GetString("kind") ?? string.Empty;
-                RasterEffectKind parsed = kind.ToLowerInvariant() switch
+
+                // Through the registry, for the same reason the outline effects are: one declaration of what a
+                // kind is, so the operation and the panel cannot disagree.
+                EffectDefinition? definition = EffectRegistry.Find(kind);
+                if (definition is null || !definition.Raster || definition.RasterKind is not { } parsed)
                 {
-                    "blur" or "gaussianblur" => RasterEffectKind.Blur,
-                    "dropshadow" or "drop_shadow" or "shadow" => RasterEffectKind.DropShadow,
-                    "innerglow" or "inner_glow" => RasterEffectKind.InnerGlow,
-                    "outerglow" or "outer_glow" => RasterEffectKind.OuterGlow,
-                    _ => throw new EditorOperationException(
-                        $"'{kind}' is not a raster effect; use blur, dropShadow, innerGlow or outerGlow"),
-                };
+                    throw new EditorOperationException(
+                        $"'{kind}' is not a raster effect; use " +
+                        string.Join(", ", EffectRegistry.All.Where(e => e.Raster).Select(e => e.Kind)));
+                }
 
                 // Presence-checked like every other colour: ParseColor reports its fallback for an absent
                 // parameter, so an omitted tint would arrive as black and stop meaning "the stroke's own colour".
