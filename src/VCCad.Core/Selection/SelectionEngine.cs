@@ -881,7 +881,57 @@ public static class SelectionEngine
 
         // Already there: nothing to do, and saying so keeps this from rebuilding the tree on
         // every move that stays where it belongs.
-        return ReferenceEquals(target, items[0].Container) ? null : target;
+        //
+        // Compared by the PAGE, not by the container. A container-identity test says "an object inside a
+        // group is not on the group's layer", so any translation that stayed on its own page tore the
+        // object out of its group and dropped the group's transform on the way - which is how
+        // `object.move` left the artwork somewhere neither the file nor the identical drag put it (#172).
+        // The repository's own wording for this rule is "an object dragged within its own page stays put",
+        // and a page is the artboard.
+        //
+        // Both frames being the pasteboard is the same place too, so a loose object moved around the
+        // pasteboard is left alone.
+        return ReferenceEquals(ArtboardOf(items[0].Container), ArtboardOf(target)) ? null : target;
+    }
+
+    /// <summary>
+    /// The artboard a container belongs to, or null for the pasteboard. Walked rather than read off the
+    /// container so a group, a layer and a detached item all answer the same kind of thing.
+    /// </summary>
+    private static Artboard? ArtboardOf(IItemContainer? container)
+    {
+        for (IItemContainer? c = container; c is not null; c = (c as LayerItem)?.Container)
+        {
+            if (c is Layer layer)
+            {
+                return layer.Artboard;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The combined bounds of a selection in **document/world** coordinates, every enclosing group's
+    /// transform composed in.
+    ///
+    /// Stated here for the same reason <see cref="ToWorld"/> is: a document position that is going to be
+    /// turned into a translation has to be measured in the frame the translation is in, and
+    /// <see cref="PathItem.WorldBounds"/> answers a narrower question - it adds the artboard origin and
+    /// ignores the groups above the path. On a grouped object the two answers differ by the group
+    /// transform, so an absolute position expressed against the narrow one lands somewhere the caller
+    /// never asked for (#172).
+    /// </summary>
+    public static Rect2D WorldBounds(IReadOnlyList<LayerItem> items)
+    {
+        Rect2D box = Rect2D.Empty;
+
+        foreach (LayerItem item in items)
+        {
+            box = box.Union(BoundsOf(item));
+        }
+
+        return box;
     }
 
     /// <summary>The centre of a selection's combined bounds, in document coordinates.</summary>
@@ -914,8 +964,7 @@ public static class SelectionEngine
     }
 
     /// <summary>An object's bounds in document coordinates, every enclosing group's transform composed in.</summary>
-    private static Rect2D BoundsOf(LayerItem item)
-    {
+    private static Rect2D BoundsOf(LayerItem item)    {
         Rect2D box = item switch
         {
             PathItem path => path.BoundingBox(),

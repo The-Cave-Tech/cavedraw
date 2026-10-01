@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using VCCad.Core.Commands;
 using VCCad.Core.Model;
+using VCCad.Core.Selection;
 using VCCad.Core.Serialization;
 using VCCad.Geometry;
 
@@ -1705,7 +1706,18 @@ public sealed class DocumentSession : INotifyPropertyChanged
         }
 
         PathItem before = p.Path.GeometrySnapshot();
-        Vector2D delta = target - node.Anchor;
+
+        // The target is a **document** point and the node is stored in the path's own frame, so the point
+        // is carried into that frame rather than merely having the artboard origin taken off it. The
+        // difference is the whole of #172 for this path: inside `translate(50,50) scale(2)` the requested
+        // (60,45) landed at (127.5,105) - the group transform applied to the point.
+        if (SelectionEngine.FromWorld(p.Path) is not { } fromWorld)
+        {
+            return;
+        }
+
+        Point2D local = fromWorld.Transform(target);
+        Vector2D delta = local - node.Anchor;
         p.Path.TranslateNode(p.Path.SubPaths[p.Sub], p.Node, delta);
         PathItem after = p.Path.GeometrySnapshot();
         Execute(new VCCad.Core.Commands.GeometryReplaceCommand(p.Path, before, after, "Move point"));
@@ -2615,7 +2627,12 @@ public sealed class DocumentSession : INotifyPropertyChanged
 
             if (anyTranslation)
             {
-                path.TranslateGeometryBy(translation);
+                // The translation arrives in **world** coordinates and the geometry it moves is stored in
+                // this path's own placement frame, so the delta is carried into that frame first - the
+                // same composition the drag gesture uses (#165), stated once in SelectionEngine. Adding
+                // the world delta to the stored coordinates moved the artwork by the group transform
+                // applied to the delta: inside `scale(2)` a scripted 30 pt move became 45 (#172).
+                path.TranslateGeometryBy(SelectionEngine.DeltaInItem(path, translation));
             }
 
             double? strokeBefore = null;
@@ -2651,9 +2668,14 @@ public sealed class DocumentSession : INotifyPropertyChanged
         {
             Point2D localPivot = pivot - text.ArtboardOffset();
             Point2D origin = text.Origin;
+
+            // The translation is in world coordinates and the origin is stored in the block's own frame,
+            // so it is carried across in the same step as the scale (#172) - the drag path does exactly
+            // this (#165), and an operation and a gesture must not disagree about a frame.
+            Vector2D carried = SelectionEngine.DeltaInItem(text, translation);
             var moved = new Point2D(
-                localPivot.X + ((origin.X - localPivot.X) * scaleX) + translation.X,
-                localPivot.Y + ((origin.Y - localPivot.Y) * scaleY) + translation.Y);
+                localPivot.X + ((origin.X - localPivot.X) * scaleX) + carried.X,
+                localPivot.Y + ((origin.Y - localPivot.Y) * scaleY) + carried.Y);
 
             if (anyTranslation || anyScale)
             {
@@ -2681,6 +2703,10 @@ public sealed class DocumentSession : INotifyPropertyChanged
             Rect2D before = image.Placement;
             Point2D localPivot = pivot - image.ArtboardOffset();
 
+            // The placement box is stored in the image's own frame, so the world translation is carried
+            // into it, exactly as the drag does (#165, #172).
+            Vector2D carried = SelectionEngine.DeltaInItem(image, translation);
+
             double x = localPivot.X + ((before.X - localPivot.X) * scaleX);
             double y = localPivot.Y + ((before.Y - localPivot.Y) * scaleY);
             double w = before.Width * Math.Abs(scaleX);
@@ -2697,7 +2723,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
             }
 
             image.Placement = new Rect2D(
-                x + translation.X, y + translation.Y, Math.Max(0.5, w), Math.Max(0.5, h));
+                x + carried.X, y + carried.Y, Math.Max(0.5, w), Math.Max(0.5, h));
 
             edits.Add(new ImagePlacementCommand(image, before, image.Placement));
         }

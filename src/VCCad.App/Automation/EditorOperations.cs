@@ -987,12 +987,20 @@ public static class EditorOperations
             {
                 PathItem path = RequireShape(ctx, p, out ShapeDefinition shape);
                 ShapeParameters current = shape.Parameters;
-                Vector2D offset = path.ArtboardOffset();
+
+                // The operation takes **document** coordinates and a shape stores its parameters in the
+                // frame it is placed in, so the point is carried across by the composition #165 stated once
+                // rather than by subtracting the artboard origin. Inside a group the origin-only conversion
+                // put the centre at the group transform applied to the point that was asked for (#172).
+                AffineTransform fromWorld = SelectionEngine.FromWorld(path)
+                    ?? throw new EditorOperationException(
+                        "the group this shape is in collapses the plane, so a document point has no " +
+                        "position in the shape's own frame");
 
                 Point2D centre = p.TryGetProperty("x", out _) || p.TryGetProperty("y", out _)
-                    ? new Point2D(
-                        p.GetDouble("x", current.Centre.X + offset.X) - offset.X,
-                        p.GetDouble("y", current.Centre.Y + offset.Y) - offset.Y)
+                    ? fromWorld.Transform(new Point2D(
+                        p.GetDouble("x", SelectionEngine.ToWorld(path).Transform(current.Centre).X),
+                        p.GetDouble("y", SelectionEngine.ToWorld(path).Transform(current.Centre).Y)))
                     : current.Centre;
 
                 ShapeParameters merged = current with
@@ -1017,7 +1025,7 @@ public static class EditorOperations
                     merged = merged with
                     {
                         HasTail = true,
-                        Tail = new Point2D(tailX.GetDouble() - offset.X, tailY.GetDouble() - offset.Y),
+                        Tail = fromWorld.Transform(new Point2D(tailX.GetDouble(), tailY.GetDouble())),
                     };
                 }
 
@@ -1173,7 +1181,12 @@ public static class EditorOperations
                     ctx.Session.SelectRange(ids.Select(id => RequireItem(ctx.Document, id)).ToArray(), additive: false);
                 }
 
-                Rect2D bounds = ctx.Session.SelectionBounds();
+                // Measured in **document/world** coordinates, because that is the frame `x`/`y` are given in
+                // and the frame the resulting translation is converted from. `SelectionBounds` only adds
+                // the artboard origin, so on an object inside a group it answered in the object's own
+                // frame and the top-left landed at the group transform applied to the point asked for
+                // (#172); the composed bounds are the ones a person sees.
+                Rect2D bounds = SelectionEngine.WorldBounds(ctx.Session.SelectedObjects.ToArray());
                 if (bounds.IsEmpty)
                 {
                     throw new EditorOperationException("Nothing is selected.");
