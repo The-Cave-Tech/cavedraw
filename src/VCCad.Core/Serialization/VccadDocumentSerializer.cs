@@ -882,7 +882,10 @@ internal sealed record DocumentDto(
     string Name,
     ArtboardDto[] Artboards,
     ItemDto[] Orphans,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AiPrivateDataDto? AiPrivateData = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AiPrivateDataDto? AiPrivateData = null,
+
+    // The reusable width profiles, when the document has any.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WidthProfileDto[]? WidthProfiles = null);
 
 /// <summary>
 /// Lossless, deterministic serializer for <see cref="CadDocument"/>.
@@ -988,8 +991,20 @@ public static class VccadDocumentSerializer
             d.Orphans.Children.Select(ItemDto.From).ToArray(),
             d.AiPrivateData is null
                 ? null
-                : new AiPrivateDataDto(d.AiPrivateData.Text, d.AiPrivateData.Format));
+                : new AiPrivateDataDto(d.AiPrivateData.Text, d.AiPrivateData.Format),
+
+            // The reusable width profiles. Absent when the document has none, so a document that never used one
+            // is written exactly as it was before profiles existed.
+            d.WidthProfiles.Count == 0
+                ? null
+                : d.WidthProfiles.Select(ToDto).ToArray());
     }
+
+    private static WidthProfileDto ToDto(WidthProfileSpec profile)
+        => new(
+            profile.Name,
+            profile.Points.Select(p => new WidthPointDto(p.Position, p.LeftWidth, p.RightWidth, p.Interpolation))
+                .ToArray());
 
     private static CadDocument ToModel(DocumentDto dto)
     {
@@ -1004,6 +1019,17 @@ public static class VccadDocumentSerializer
 
         var document = new CadDocument { Name = dto.Name };
         document.RestoreIdentity(dto.Id);
+
+        // One asset at a time, and a profile with no points is not a profile: loading one would put a stroke
+        // into the outline route to draw exactly what it drew before.
+        document.SetWidthProfiles(
+            (dto.WidthProfiles ?? Array.Empty<WidthProfileDto>())
+                .Where(p => p.Points is { Length: > 0 })
+                .Select(p => new WidthProfileSpec(
+                    p.Name,
+                    p.Points!.Select(point => new WidthPoint(
+                        point.Position, point.Left, point.Right, point.Interpolation)))));
+
         foreach (ArtboardDto a in artboards)
         {
             RequireFiniteArtboard(a);

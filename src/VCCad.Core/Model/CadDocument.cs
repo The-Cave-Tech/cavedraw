@@ -20,6 +20,7 @@ namespace VCCad.Core.Model;
 public sealed class CadDocument
 {
     private readonly List<Artboard> _artboards = new();
+    private readonly List<WidthProfileSpec> _widthProfiles = new();
 
     /// <summary>Document-level container for objects that belong to no artboard
     /// (the pasteboard / orphans). These are "parentless" in the sense that no
@@ -44,6 +45,75 @@ public sealed class CadDocument
 
     /// <summary>Artboards in document order; index 0 is the primary/first artboard.</summary>
     public IReadOnlyList<Artboard> Artboards => _artboards;
+
+    /// <summary>
+    /// The document's reusable width profiles, in the order they were created.
+    ///
+    /// A profile is an asset like a colour, and a stroke **refers to it by name**: editing the asset is meant to
+    /// change every stroke that names it, which is the difference between a reusable profile and a copied one.
+    /// The link is the name rather than an id because a name is what a person sees and picks, and it is what the
+    /// operations take.
+    ///
+    /// The consequence is that a profile is never edited on its own: renaming one has to travel with the strokes
+    /// that used the old name, and deleting one has to clear them. That is why every edit here goes through
+    /// <see cref="Commands.EditWidthProfilesCommand"/>, which captures both halves and undoes both together.
+    /// </summary>
+    public IReadOnlyList<WidthProfileSpec> WidthProfiles => _widthProfiles;
+
+    /// <summary>The profile with this name, or null. Names are matched exactly and case-sensitively.</summary>
+    public WidthProfileSpec? FindProfile(string name)
+        => _widthProfiles.FirstOrDefault(p => p.Name == name);
+
+    /// <summary>
+    /// Every item in the document, artboards and pasteboard alike, in tree order.
+    ///
+    /// Needed by anything that has to act on the whole document rather than on a selection - editing a profile
+    /// asset has to reach the strokes that refer to it wherever they are, including inside groups.
+    /// </summary>
+    public IEnumerable<LayerItem> AllItems()
+    {
+        foreach (Artboard artboard in _artboards)
+        {
+            foreach (Layer layer in artboard.Layers)
+            {
+                foreach (LayerItem item in Walk(layer.Children))
+                {
+                    yield return item;
+                }
+            }
+        }
+
+        foreach (LayerItem item in Walk(Orphans.Children))
+        {
+            yield return item;
+        }
+    }
+
+    /// <summary>Every path in the document, in tree order.</summary>
+    public IEnumerable<PathItem> AllPaths() => AllItems().OfType<PathItem>();
+
+    private static IEnumerable<LayerItem> Walk(IEnumerable<LayerItem> items)
+    {
+        foreach (LayerItem item in items)
+        {
+            yield return item;
+
+            if (item is ArtGroup group)
+            {
+                foreach (LayerItem child in Walk(group.Children))
+                {
+                    yield return child;
+                }
+            }
+        }
+    }
+
+    /// <summary>Replaces the library wholesale; deserialization and the edit command use this.</summary>
+    internal void SetWidthProfiles(IEnumerable<WidthProfileSpec> profiles)
+    {
+        _widthProfiles.Clear();
+        _widthProfiles.AddRange(profiles);
+    }
 
     /// <summary>
     /// The decoded Adobe Illustrator private-data payload this document carries,

@@ -1646,6 +1646,206 @@ public static class EditorOperations
                 return new { changed, points = points.Count };
             });
 
+        Add("profile.create",
+            "Create a reusable width profile in the document. points is [{position, left, right, interpolation?}], " +
+            "the same shape style.setWidthProfile takes. The name has to be free: two profiles with one name would " +
+            "make 'the profile called X' ambiguous, and it is the name that strokes refer to. One undo step.",
+            "name:string, points:[{position,left,right,interpolation?}]",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                if (name.Length == 0)
+                {
+                    throw new EditorOperationException("profile.create needs a name");
+                }
+
+                CadDocument document = ctx.Document;
+                if (document.FindProfile(name) is not null)
+                {
+                    throw new EditorOperationException($"there is already a profile called '{name}'");
+                }
+
+                List<WidthPoint> points = ReadWidthPoints(p);
+                if (points.Count == 0)
+                {
+                    throw new EditorOperationException("a profile needs at least one width point");
+                }
+
+                var library = document.WidthProfiles.ToList();
+                library.Add(new WidthProfileSpec(name, points));
+                ctx.Session.Execute(new EditWidthProfilesCommand(
+                    document, library, Array.Empty<EditWidthProfilesCommand.StrokeEdit>(), "Create width profile"));
+
+                return new { created = name, points = points.Count };
+            });
+
+        Add("profile.list", "Every reusable width profile in the document, with its width points.", "", (ctx, _) =>
+            ctx.Document.WidthProfiles.Select(profile => new
+            {
+                name = profile.Name,
+                points = profile.Points.Select(point => new
+                {
+                    position = Math.Round(point.Position, 6),
+                    left = Math.Round(point.LeftWidth, 4),
+                    right = Math.Round(point.RightWidth, 4),
+                    interpolation = point.Interpolation.ToString().ToLowerInvariant(),
+                }).ToArray(),
+            }).ToArray());
+
+        Add("profile.rename",
+            "Rename a profile. Strokes refer to a profile by name, so this renames them with it - a rename that " +
+            "left the strokes naming the old name would leave them pointing at nothing. One undo step.",
+            "from:string, to:string",
+            (ctx, p) =>
+            {
+                string from = p.GetString("from") ?? string.Empty;
+                string to = p.GetString("to") ?? string.Empty;
+                CadDocument document = ctx.Document;
+
+                WidthProfileSpec existing = document.FindProfile(from)
+                    ?? throw new EditorOperationException($"there is no profile called '{from}'");
+                if (to.Length == 0)
+                {
+                    throw new EditorOperationException("profile.rename needs a new name");
+                }
+
+                if (document.FindProfile(to) is not null)
+                {
+                    throw new EditorOperationException($"there is already a profile called '{to}'");
+                }
+
+                var library = document.WidthProfiles
+                    .Select(profile => profile.Name == from ? profile with { Name = to } : profile)
+                    .ToList();
+                List<EditWidthProfilesCommand.StrokeEdit> edits = StrokesNaming(
+                    document, from, stroke => stroke with { WidthProfile = stroke.WidthProfile! with { Name = to } });
+
+                ctx.Session.Execute(new EditWidthProfilesCommand(document, library, edits, "Rename width profile"));
+
+                // The points are carried across untouched, which is the whole promise of a rename: the strokes
+                // that used it look the same afterwards.
+                return new { renamed = from, to, strokes = edits.Count, points = existing.Points.Count };
+            });
+
+        Add("profile.delete",
+            "Delete a profile from the document and clear it from every stroke that used it. The strokes keep " +
+            "their own widths - only the profile goes - which is what makes deleting an asset a safe thing to do. " +
+            "One undo step.",
+            "name:string",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                CadDocument document = ctx.Document;
+                if (document.FindProfile(name) is null)
+                {
+                    throw new EditorOperationException($"there is no profile called '{name}'");
+                }
+
+                var library = document.WidthProfiles.Where(profile => profile.Name != name).ToList();
+                List<EditWidthProfilesCommand.StrokeEdit> edits = StrokesNaming(
+                    document, name, stroke => stroke with { WidthProfile = null });
+
+                ctx.Session.Execute(new EditWidthProfilesCommand(document, library, edits, "Delete width profile"));
+                return new { deleted = name, cleared = edits.Count };
+            });
+
+        Add("profile.apply",
+            "Apply a stored profile to the selected paths' strokes. One undo step per path.",
+            "name:string",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                WidthProfileSpec profile = ctx.Document.FindProfile(name)
+                    ?? throw new EditorOperationException($"there is no profile called '{name}'");
+
+                int changed = 0;
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    var stack = path.Strokes.ToList();
+                    for (int i = 0; i < stack.Count; i++)
+                    {
+                        stack[i] = stack[i] with { WidthProfile = profile };
+                    }
+
+                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Apply width profile"));
+                    changed++;
+                }
+
+                return new { applied = name, paths = changed };
+            });
+
+        Add("profile.setPoint",
+            "Change one width point of a stored profile - its position, either width, or its interpolation. " +
+            "Only the members given change. The strokes that use the profile are edited with it, because that is " +
+            "what makes it an asset rather than a copy. One undo step.",
+            "name:string, index:number, position?:number, left?:number, right?:number, interpolation?:linear|cubic",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                CadDocument document = ctx.Document;
+                WidthProfileSpec profile = document.FindProfile(name)
+                    ?? throw new EditorOperationException($"there is no profile called '{name}'");
+
+                int index = (int)p.GetLong("index", -1);
+                if (index < 0 || index >= profile.Points.Count)
+                {
+                    throw new EditorOperationException(
+                        $"'{name}' has {profile.Points.Count} width points, so there is no point {index}");
+                }
+
+                bool given = p.ValueKind == JsonValueKind.Object;
+                WidthPoint point = profile.Points[index];
+                WidthPoint changed = point with
+                {
+                    Position = given && p.TryGetProperty("position", out _) ? p.GetDouble("position", point.Position) : point.Position,
+                    LeftWidth = given && p.TryGetProperty("left", out _) ? p.GetDouble("left", point.LeftWidth) : point.LeftWidth,
+                    RightWidth = given && p.TryGetProperty("right", out _) ? p.GetDouble("right", point.RightWidth) : point.RightWidth,
+                    Interpolation = given && p.TryGetProperty("interpolation", out _)
+                        ? ParseEnum(p.GetString("interpolation"), point.Interpolation)
+                        : point.Interpolation,
+                };
+
+                return ApplyProfileEdit(ctx, document, profile, name, points =>
+                {
+                    List<WidthPoint> edited = points.ToList();
+                    edited[index] = changed;
+                    return edited;
+                }, "Edit width point");
+            });
+
+        Add("profile.removePoint",
+            "Remove one width point from a stored profile, and from the strokes that use it. A profile cannot lose " +
+            "its last point - one that says nothing about width is not a profile - so removing the last one is " +
+            "refused rather than turning the profile into an empty one. One undo step.",
+            "name:string, index:number",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                CadDocument document = ctx.Document;
+                WidthProfileSpec profile = document.FindProfile(name)
+                    ?? throw new EditorOperationException($"there is no profile called '{name}'");
+
+                int index = (int)p.GetLong("index", -1);
+                if (index < 0 || index >= profile.Points.Count)
+                {
+                    throw new EditorOperationException(
+                        $"'{name}' has {profile.Points.Count} width points, so there is no point {index}");
+                }
+
+                if (profile.Points.Count <= 1)
+                {
+                    throw new EditorOperationException(
+                        $"'{name}' would be left with no width points, which is not a profile - delete it instead");
+                }
+
+                return ApplyProfileEdit(ctx, document, profile, name, points =>
+                {
+                    List<WidthPoint> edited = points.ToList();
+                    edited.RemoveAt(index);
+                    return edited;
+                }, "Remove width point");
+            });
+
         Add("style.strokes",
             "The stroke stack on each selected path, bottom to top: every stroke's colour, width, cap, join, " +
             "miter limit, alignment and dash. What a driver reads to check a path that has more than one " +
@@ -4911,6 +5111,61 @@ public static class EditorOperations
                 ? new Point2D(tailX.GetDouble() - offset.X, tailY.GetDouble() - offset.Y)
                 : centre,
         };
+    }
+
+    /// <summary>
+    /// Every stroke in the document whose profile has this name, with where it is and what it should become.
+    ///
+    /// A profile is referred to by name, so an edit to the asset has to reach the strokes that named it wherever
+    /// they are - including inside groups, and including in the pasteboard. Missing one would leave a stroke
+    /// drawn from a profile the document no longer has.
+    /// </summary>
+    private static List<EditWidthProfilesCommand.StrokeEdit> StrokesNaming(
+        CadDocument document, string name, Func<StrokeSpec, StrokeSpec> map)
+    {
+        var edits = new List<EditWidthProfilesCommand.StrokeEdit>();
+
+        foreach (PathItem path in document.AllPaths())
+        {
+            for (int i = 0; i < path.Strokes.Count; i++)
+            {
+                if (path.Strokes[i].WidthProfile?.Name == name)
+                {
+                    edits.Add(new EditWidthProfilesCommand.StrokeEdit(
+                        path, i, path.Strokes[i], map(path.Strokes[i])));
+                }
+            }
+        }
+
+        return edits;
+    }
+
+    /// <summary>
+    /// Applies a change to a stored profile's points, and to every stroke that uses it, as one undo step.
+    ///
+    /// The re-pointed strokes are **fresh copies** of the profile rather than the library's own instance: a
+    /// stroke holds a value, so handing every stroke the same instance would make one stroke's later edit an
+    /// edit to all of them, which is not what the model says.
+    /// </summary>
+    private static object ApplyProfileEdit(
+        AutomationContext ctx,
+        CadDocument document,
+        WidthProfileSpec profile,
+        string name,
+        Func<IReadOnlyList<WidthPoint>, IReadOnlyList<WidthPoint>> edit,
+        string description)
+    {
+        IReadOnlyList<WidthPoint> points = edit(profile.Points);
+        var updated = profile with { Points = points };
+
+        var library = document.WidthProfiles
+            .Select(existing => existing.Name == name ? updated : existing)
+            .ToList();
+        List<EditWidthProfilesCommand.StrokeEdit> edits = StrokesNaming(
+            document, name, stroke => stroke with { WidthProfile = updated });
+
+        ctx.Session.Execute(new EditWidthProfilesCommand(document, library, edits, description));
+        return new { profile = name, points = points.Count, strokes = edits.Count };
     }
 
     /// <summary>
