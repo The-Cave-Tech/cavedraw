@@ -9,12 +9,22 @@
     and tests the desktop-relevant projects instead, so a Windows developer can
     run the whole suite with one command.
 
+    The web version is built and verified too, when the workload is installed: it
+    is a shipped target - the Docker image serves the bundle - and it runs the same
+    shell and the same operation registry, so a change that breaks the browser head
+    should be found here rather than by CI after a push. Without the workload the
+    web step skips cleanly, the way corpus tests skip without their corpus.
+
     Reference corpora are detected automatically and exported for the child test
     processes, which is what makes the PDF corpus sweeps expand from ~120 tests
     to ~3,500. Corpora are never modified.
 
 .PARAMETER Configuration
     Build configuration. Defaults to Release.
+
+.PARAMETER NoWeb
+    Do not build or verify the web (WebAssembly) bundle. Useful for a quick loop on
+    the desktop suites; CI builds the bundle regardless.
 
 .PARAMETER NoCorpus
     Do not export corpus paths, even when they are found. Useful for a fast run
@@ -31,6 +41,7 @@
 .EXAMPLE
     ./scripts/test-all.ps1
     ./scripts/test-all.ps1 -NoCorpus
+    ./scripts/test-all.ps1 -NoWeb
     ./scripts/test-all.ps1 -Filter "FullyQualifiedName~AiPrivateData"
 #>
 [CmdletBinding()]
@@ -38,6 +49,7 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
     [switch]$NoCorpus,
+    [switch]$NoWeb,
     [string]$CorpusRoot = '',
     [string]$Filter = ''
 )
@@ -63,6 +75,63 @@ try {
         throw "build failed (exit $LASTEXITCODE)"
     }
 
+    # The web version, which is a shipped target: the Docker image serves this bundle and it runs the **same**
+    # shell and the same operation registry. `dotnet build VCCad.sln` deliberately cannot run on a box without
+    # wasm-tools, and this script used to avoid the whole solution - including the project that needs the
+    # workload. Avoiding the *solution* is right; avoiding the *project* meant nothing local ever built the web
+    # version, so a change that compiled for net10.0 and broke the browser head was found by CI after a push.
+    #
+    # A machine without the workload gets a clean skip, the way every corpus test here skips without its corpus.
+    $workloads = (& dotnet workload list 2>&1 | Out-String)
+    if ($NoWeb) {
+        Write-Host '==> -NoWeb: skipping the web build'
+    }
+    elseif ($workloads -notmatch 'wasm-tools') {
+        Write-Host '==> wasm-tools workload not installed; skipping the web build (CI still builds it)'
+    }
+    else {
+        Write-Host "==> dotnet publish src/VCCad.App.Browser -c $Configuration -o artifacts/web"
+        & dotnet publish 'src/VCCad.App.Browser/VCCad.App.Browser.csproj' -c $Configuration -o 'artifacts/web'
+        if ($LASTEXITCODE -ne 0) {
+            throw "web publish failed (exit $LASTEXITCODE)"
+        }
+
+        # Verify the bundle the browser actually loads. The editor is matched by **name and shape**, because both
+        # of the traps AGENTS.md records are live here: the assembly is not at the publish root, and a name-only
+        # match also matches `runtimeconfig.json` - a check that passed for a year while proving nothing. A
+        # *prefix* match is wrong too, because `VCCad.App.` also matches the six-kilobyte `VCCad.App.Browser.`
+        # host; counting the dotted segments is what tells the editor from the host, since the hash has no dots.
+        $wwwroot = 'artifacts/web/wwwroot'
+        $framework = Join-Path $wwwroot '_framework'
+        $problems = @()
+
+        if (-not (Test-Path (Join-Path $wwwroot 'index.html'))) {
+            $problems += "no index.html in $wwwroot"
+        }
+
+        if (-not (Get-ChildItem $framework -Filter 'dotnet*.js' -ErrorAction SilentlyContinue)) {
+            $problems += "no dotnet*.js in $framework"
+        }
+
+        $editor = Get-ChildItem $framework -ErrorAction SilentlyContinue | Where-Object {
+            ($_.Name -like 'VCCad.App.*.wasm' -or $_.Name -like 'VCCad.App.*.webcil') -and
+            $_.Name.Split('.').Count -eq 4
+        } | Select-Object -First 1
+
+        if (-not $editor) {
+            $problems += "no VCCad.App.<hash>.wasm or .webcil in $framework - the bundle has no editor in it"
+        }
+        elseif ($editor.Length -lt 200000) {
+            $problems += "$($editor.Name) is only $($editor.Length) bytes, which is not the editor"
+        }
+
+        if ($problems.Count -gt 0) {
+            throw "web bundle check failed: $($problems -join '; ')"
+        }
+
+        Write-Host ("    web bundle OK: {0} ({1:N1} MB)" -f $editor.Name, ($editor.Length / 1MB))
+    }
+
     if (-not $NoCorpus) {
         $roots = @()
         if ($CorpusRoot) {
@@ -75,6 +144,10 @@ try {
         }
 
         $cache = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $cache) {
+            Write-Host '==> no corpus cache found; corpus sweeps will skip (still green)'
+        }
+
         if ($cache) {
             $gs = Join-Path $cache 'ghostscript'
             $ai = Join-Path $cache 'ai'
@@ -99,9 +172,6 @@ try {
         }
         else {
             Write-Host "    VCCAD_SAMPLES=(not checked out - the sample pattern tests will skip)"
-        }
-        else {
-            Write-Host '==> no corpus cache found; corpus sweeps will skip (still green)'
         }
 
         # The standard PDF fonts (Helvetica, Times, Courier, Symbol, ZapfDingbats) come
@@ -170,10 +240,19 @@ try {
         }
         $output | Where-Object { $_ -match 'error (CS|MSB)\d' } | ForEach-Object { Write-Host "    $_" }
         $summary = $output | Select-String -Pattern 'Passed!|Failed!' | Select-Object -Last 1
+
+        # A filter that matches nothing in **this** project is not a failure. Without this, `-Filter
+        # "FullyQualifiedName~AiPrivateData"` - the documented way to run one feature's tests - reported the four
+        # projects with no matching test as failures and made the run unusable for the case it names.
+        $noMatch = $output | Select-String -Pattern 'No test matches' -Quiet
+
         if ($summary) {
             Write-Host ("    {0}" -f ($summary.ToString().Trim()))
             if ($summary -match 'Passed:\s+(\d+)') { $total += [int]$Matches[1] }
             if ($summary -match 'Failed:\s+(\d+)' -and [int]$Matches[1] -gt 0) { $failed += $name }
+        }
+        elseif ($noMatch) {
+            Write-Host '    no test matched the filter in this project (not a failure)'
         }
         else {
             Write-Host "    no test summary produced"

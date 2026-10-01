@@ -435,13 +435,17 @@ with an explicit `-r` (above).
 Only the desktop project (and the libraries it pulls in) builds without extra
 setup. `VCCad.App.Browser` needs the **`wasm-tools` workload**, so
 `dotnet build VCCad.sln` / `dotnet test VCCad.sln` **fail on Windows without it**.
-`scripts/test-all.ps1` builds the desktop host and runs all five test projects
-instead, exporting the corpus paths it finds so the sweeps expand (~3,650 tests
-with corpora versus ~270 without):
+`scripts/test-all.ps1` builds the desktop host, **publishes and verifies the WebAssembly bundle**, and runs all five
+test projects, exporting the corpus paths it finds so the sweeps expand (~3,650 tests with corpora versus ~270
+without). The web step skips cleanly without the `wasm-tools` workload, or with `-NoWeb`. The bundle is checked by
+name **and** shape - `VCCad.App.<hash>.wasm`, not a prefix, because `VCCad.App.` also matches the six-kilobyte
+`VCCad.App.Browser.` host; `tests/VCCad.App.Tests/WebBundleTests.cs` asserts the same contract against the published
+bundle and skips when none exists:
 
 ```powershell
-./scripts/test-all.ps1                 # Release, every corpus it can find
+./scripts/test-all.ps1                 # Release, every corpus it can find, web bundle included
 ./scripts/test-all.ps1 -NoCorpus       # fast run; corpus tests skip cleanly
+./scripts/test-all.ps1 -NoWeb          # desktop loop only
 ./scripts/test-all.ps1 -Filter "FullyQualifiedName~AiPrivateData"
 ```
 
