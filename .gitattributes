@@ -1,0 +1,10 @@
+# Shell scripts run under WSL and in containers, where a carriage return at the end of the shebang line makes
+# the file unrunnable: the kernel looks for an interpreter literally named "bash\r". Git had been checking
+# these out with Windows line endings, so every one of them failed with "/usr/bin/env: 'bash\r': No such file
+# or directory" - a message that names neither the file nor the reason.
+*.sh text eol=lf
+*.bash text eol=lf
+docker/Dockerfile text eol=lf
+
+# PowerShell runs on Windows, where CRLF is what it expects.
+*.ps1 text eol=crlf
