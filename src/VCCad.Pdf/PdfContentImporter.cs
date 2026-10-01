@@ -1800,6 +1800,20 @@ internal sealed class PdfContentImporter
         double effectiveSize = fontSize * scale;
         double rotation = -Math.Atan2(matrix.B, matrix.A);
 
+        // The canvas places a block as `R(rot) * S(XSign, YSign)`, and a single-axis mirror is the one
+        // thing the rotation cannot carry: it is read from the matrix's first column alone, so a
+        // reflection comes back turned rather than flipped and the block lands a whole ascent away from
+        // the baseline the file states (issue #171).
+        //
+        // The determinant names it. `R(rot) * S(xs, ys)` has determinant `xs * ys`, so a negative one is
+        // exactly the single-axis mirror, and the half-turn it leaves in `rotation` is the *other*
+        // single-axis mirror - the same map stated the other way round, since `R(r) * S(-1, 1)` is
+        // `R(r + pi) * S(1, -1)`. `MirrorY` is therefore the whole of it and `MirrorX` is never needed:
+        // normalising the first column to `scale` is what fixes `xs` at 1, and `ys` is the only free
+        // sign left. Both signs stay 1 when the determinant is positive, so an unflipped matrix reads
+        // back exactly as it did.
+        bool mirrored = matrix.Determinant < 0;
+
         // PDF origins sit on the baseline; the model stores the block's top-left,
         // which is one ascent up the text's *own* up axis (the matrix's second
         // column, y-flipped). Applying it straight down breaks rotated labels.
@@ -1815,6 +1829,7 @@ internal sealed class PdfContentImporter
                 (_pageHeight - baseline.Y) + (ascentPoints * upY)),
             Color = color,
             RotationRadians = rotation,
+            MirrorY = mirrored,
         };
         var run = new TextRun
         {
