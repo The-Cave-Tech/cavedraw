@@ -1,0 +1,40 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="VCCad.App.Views.Panes.AppearancePane">
+  <ScrollViewer>
+    <StackPanel Margin="10,8" Spacing="6">
+      <TextBlock Text="APPEARANCE" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
+                 Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- Stated in the panel rather than left to be inferred: a list of strokes has an order, and the order
+           decides what is drawn on top, so a person should not have to guess which end is which. -->
+      <TextBlock Text="Bottom to top, as on the canvas." FontSize="{DynamicResource VcFontSize}"
+                 Foreground="{DynamicResource VcTextDim}"/>
+
+      <ListBox x:Name="StrokeList" Height="120" Background="Transparent">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <Grid ColumnDefinitions="Auto,*,Auto" Height="22">
+              <Border Grid.Column="0" Width="16" Height="16" Margin="0,0,6,0"
+                      Background="{Binding Swatch}"
+                      BorderBrush="{DynamicResource VcTextDim}" BorderThickness="1"/>
+              <TextBlock Grid.Column="1" Text="{Binding Label}" VerticalAlignment="Center"
+                         Foreground="{DynamicResource VcText}" FontSize="{DynamicResource VcFontSize}"/>
+              <TextBlock Grid.Column="2" Text="{Binding Badge}" VerticalAlignment="Center"
+                         Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+
+      <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="4">
+        <Button x:Name="AddStrokeButton" Grid.Column="0" Content="Add" HorizontalAlignment="Stretch"
+                ToolTip.Tip="Add a stroke on top, copying the current one"/>
+        <Button x:Name="RemoveStrokeButton" Grid.Column="1" Content="Remove" HorizontalAlignment="Stretch"/>
+        <Button x:Name="MoveUpButton" Grid.Column="2" Content="Up" HorizontalAlignment="Stretch"
+                ToolTip.Tip="Move this stroke towards the top"/>
+        <Button x:Name="MoveDownButton" Grid.Column="3" Content="Down" HorizontalAlignment="Stretch"/>
+      </Grid>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

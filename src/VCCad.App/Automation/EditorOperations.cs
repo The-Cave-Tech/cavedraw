@@ -2097,20 +2097,14 @@ public static class EditorOperations
             "alignment?:center|inside|outside, dash?:number[]",
             (ctx, p) =>
             {
-                int changed = 0;
-                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
-                {
-                    StrokeSpec top = path.Strokes.Count > 0
-                        ? path.Strokes[^1]
-                        : StrokeSpec.Hairline(ColorRgb.Black);
+                // Through the session, so the appearance panel's add button and this run one implementation
+                // rather than two that have to be kept in step.
+                StrokeSpec? requested = p.ValueKind == JsonValueKind.Object
+                    ? ReadStroke(p, ctx.Session.SelectedPaths().FirstOrDefault()?.Strokes.LastOrDefault()
+                        ?? StrokeSpec.Hairline(ColorRgb.Black))
+                    : null;
 
-                    var stack = path.Strokes.ToList();
-                    stack.Add(ReadStroke(p, top));
-                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Add stroke"));
-                    changed++;
-                }
-
-                return new { changed };
+                return new { changed = ctx.Session.AddStroke(requested) };
             });
 
         Add("style.removeStroke",
@@ -2120,28 +2114,13 @@ public static class EditorOperations
             "index?:number",
             (ctx, p) =>
             {
-                int changed = 0;
-                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
-                {
-                    if (path.Strokes.Count == 0)
-                    {
-                        continue;
-                    }
-
-                    // Default to the top: "remove the stroke" on a path with a stack means the last one added.
-                    int index = (int)p.GetLong("index", path.Strokes.Count - 1);
-                    if (index < 0 || index >= path.Strokes.Count)
-                    {
-                        continue;
-                    }
-
-                    var stack = path.Strokes.ToList();
-                    stack.RemoveAt(index);
-                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Remove stroke"));
-                    changed++;
-                }
-
-                return new { changed };
+                // The index counts from the bottom and defaults to the top one: "remove the stroke" on a path with
+                // a stack means the last one added. Presence-checked, because an undefined element throws on a
+                // property read rather than answering "not given".
+                int? index = p.ValueKind == JsonValueKind.Object && p.TryGetProperty("index", out _)
+                    ? (int)p.GetLong("index", 0)
+                    : null;
+                return new { changed = ctx.Session.RemoveStroke(index) };
             });
 
         Add("style.reorderStroke",
@@ -2153,24 +2132,7 @@ public static class EditorOperations
             {
                 int from = (int)p.GetLong("from", 0);
                 int to = (int)p.GetLong("to", 0);
-                int changed = 0;
-
-                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
-                {
-                    if (from < 0 || from >= path.Strokes.Count)
-                    {
-                        continue;
-                    }
-
-                    var stack = path.Strokes.ToList();
-                    StrokeSpec moved = stack[from];
-                    stack.RemoveAt(from);
-                    stack.Insert(Math.Clamp(to, 0, stack.Count), moved);
-                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Reorder stroke"));
-                    changed++;
-                }
-
-                return new { from, to, changed };
+                return new { from, to, changed = ctx.Session.MoveStroke(from, to) };
             });
 
         // ---- text --------------------------------------------------------

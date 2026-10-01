@@ -1614,6 +1614,87 @@ public sealed class DocumentSession : INotifyPropertyChanged
         ExecuteIfAny(edits, "Clear stroke");
     }
 
+    /// <summary>
+    /// Adds a stroke to every selected path, on top of the ones it has, and reports how many paths changed.
+    ///
+    /// Here rather than inside the operation, so the appearance panel and a driver run the **same** code. A
+    /// capability that exists only inside a control's event handler is a defect in this repository, and the way to
+    /// avoid one is for the panel to call this rather than to reimplement it.
+    ///
+    /// A stroke that is not given is a copy of the path's current top stroke - what pressing add gives a person: a
+    /// copy they then edit, which is why the new one is the one selected afterwards.
+    /// </summary>
+    public int AddStroke(StrokeSpec? stroke = null)
+    {
+        int changed = 0;
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            StrokeSpec top = path.Strokes.Count > 0
+                ? path.Strokes[^1]
+                : StrokeSpec.Hairline(ColorRgb.Black);
+
+            var stack = path.Strokes.ToList();
+            stack.Add(stroke ?? top);
+            Execute(new SetStrokesCommand(path, stack, "Add stroke"));
+            changed++;
+        }
+
+        return changed;
+    }
+
+    /// <summary>
+    /// Removes a stroke from every selected path. The index counts from the bottom and defaults to the top one.
+    ///
+    /// A path left with none gets a single invisible stroke, because a path with no strokes is not a state the
+    /// model has - and the panel wants a row to fall back to rather than an empty list.
+    /// </summary>
+    public int RemoveStroke(int? index = null)
+    {
+        int changed = 0;
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            if (path.Strokes.Count == 0)
+            {
+                continue;
+            }
+
+            int at = index ?? path.Strokes.Count - 1;
+            if (at < 0 || at >= path.Strokes.Count)
+            {
+                continue;
+            }
+
+            var stack = path.Strokes.ToList();
+            stack.RemoveAt(at);
+            Execute(new SetStrokesCommand(path, stack, "Remove stroke"));
+            changed++;
+        }
+
+        return changed;
+    }
+
+    /// <summary>Moves a stroke within the stack, which is how a person changes which one is on top.</summary>
+    public int MoveStroke(int from, int to)
+    {
+        int changed = 0;
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            if (from < 0 || from >= path.Strokes.Count)
+            {
+                continue;
+            }
+
+            var stack = path.Strokes.ToList();
+            StrokeSpec moved = stack[from];
+            stack.RemoveAt(from);
+            stack.Insert(Math.Clamp(to, 0, stack.Count), moved);
+            Execute(new SetStrokesCommand(path, stack, "Reorder stroke"));
+            changed++;
+        }
+
+        return changed;
+    }
+
     /// <summary>Applies a stroke colour to every selected path, keeping each path's
     /// existing width/caps/joins.</summary>
     public void ApplyStrokeColor(ColorRgb color)

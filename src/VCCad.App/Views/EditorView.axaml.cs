@@ -354,6 +354,12 @@ public partial class EditorView : UserControl
         gradient.Attach(_viewModel);
         var stroke = new StrokePane();
         stroke.Attach(_viewModel);
+
+        // The strokes a path carries, as a list: the panel half of the appearance stack. It sits beside the stroke
+        // inspector rather than replacing it - one describes the stroke being edited, the other says which stroke
+        // that is.
+        var appearanceList = new AppearancePane();
+        appearanceList.Attach(_viewModel);
         var swatches = new SwatchesPane();
         swatches.Attach(_viewModel);
         var objects = new ObjectsPane();
@@ -372,6 +378,7 @@ public partial class EditorView : UserControl
         appearance.Tabs.Add(new DockTab { Id = "gradient", Title = "Gradient", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => gradient });
         appearance.Tabs.Add(new DockTab { Id = "swatches", Title = "Swatches", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => swatches });
         appearance.Tabs.Add(new DockTab { Id = "stroke", Title = "Stroke", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => stroke, IsOpen = true });
+        appearance.Tabs.Add(new DockTab { Id = "appearance-list", Title = "Appearance", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => appearanceList });
         appearance.Tabs.Add(new DockTab { Id = "text", Title = "Text", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => text });
         // The chooser is a tab of its own so it can be left open beside the canvas while
         // somebody works through families, which a dropdown cannot.
