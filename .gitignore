@@ -60,3 +60,7 @@ secrets/
 # The copyrighted sample PDFs live in a private repository and are checked out beside this one.
 # Ignored here so they cannot be added back by accident.
 samples/
+
+# Machine-local settings: the model endpoint, its key, and anything else that is a deployment value.
+# An endpoint and a key are not source, and a repository that ships them ships a secret.
+settings.json

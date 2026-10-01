@@ -1,5 +1,5 @@
 # VCCad compose — local/remote containerised run.
-# Target host: user@host (Docker 29.x). See project plan §6.
+# Target host: $VCCAD_DOCKER_HOST. See project plan §6.
 
 services:
   vccad:

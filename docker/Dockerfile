@@ -7,7 +7,7 @@
 #   final   - publish the API and merge the wasm wwwroot for static serving
 #
 # Runtime image is Ubuntu-based .NET 8 ASP.NET and runs as a non-root user.
-# Build and run on the docker host:  ssh user@host (see project plan §6).
+# Build and run on the docker host:  ssh $VCCAD_DOCKER_HOST (see project plan §6).
 # =============================================================================
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build

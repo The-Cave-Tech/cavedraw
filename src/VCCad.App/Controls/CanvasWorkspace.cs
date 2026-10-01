@@ -3732,7 +3732,7 @@ public sealed class CanvasWorkspace : Control
             case PathItem path when path.IsVisible:
                 Rect2D bounds = path.WorldBounds();
                 if (!bounds.IsEmpty &&
-                    !bounds.Inflated(path.Stroke.Width + 1).Intersects(_worldViewport))
+                    !bounds.Inflated(WidestStroke(path) + 1).Intersects(_worldViewport))
                 {
                     return; // culled (off-screen)
                 }
@@ -3777,6 +3777,9 @@ public sealed class CanvasWorkspace : Control
         // A hatch is hatching, not a filled shape: its lines take the stroke's colour, which is the colour that
         // belongs to a line. The thickness keeps the same minimum the stroke does, so a hatch stays visible at
         // any zoom rather than fading to nothing.
+        // A hatch is hatching, not a filled shape: its lines take the stroke's colour, which is the colour that
+        // belongs to a line. On a path with a stack that is the bottom stroke - the outline the hatching sits
+        // in - rather than an arbitrary one.
         IBrush brush = ToBrush(path.Stroke.Color, opacity);
         const double MinDevicePixels = 0.75;
         double floor = MinDevicePixels / Math.Max(_layout.Zoom, 1e-6);
@@ -3804,45 +3807,55 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
+    /// <summary>
+    /// The widest visible stroke on a path, or zero when it has none.
+    ///
+    /// Used where a path is treated as one object rather than as its strokes - culling, and the node overlay's
+    /// line weight. Reading the bottom stroke instead would cull a path whose second stroke reaches further than
+    /// the first, which is a drawing that vanishes at some zoom levels and not others.
+    /// </summary>
+    private static double WidestStroke(PathItem path)
+        => path.HasVisibleStroke
+            ? path.Strokes.Where(s => s.HasVisibleOutline).Max(s => s.Width)
+            : 0.0;
+
     private void PaintPath(DrawingContext context, PathItem path, double opacity)
     {
         bool anyClosed = path.SubPaths.Any(sp => sp.IsClosed);
         // PDF fills implicitly close open subpaths, so honour Fill.IsVisible
         // regardless of closure (imported content relies on this).
         bool fillVisible = path.Fill.IsVisible;
-        bool strokeVisible = path.Stroke.HasVisibleOutline;
+        bool strokeVisible = path.HasVisibleStroke;
         if (!fillVisible && !strokeVisible)
         {
             return;
         }
 
         StreamGeometry geometry = GetGeometry(path);
-        double width = Math.Max(0.01, path.Stroke.Width);
 
         // Keep hairlines visible. A 0.3pt stroke is 0.08 device pixels at 27% zoom, so
         // it faded to nothing and an imported pattern looked washed out next to a
         // reference render. Viewers hold thin strokes at roughly a pixel.
         const double MinDevicePixels = 0.75;
-        width = Math.Max(width, MinDevicePixels / Math.Max(_layout.Zoom, 1e-6));
 
-        Pen StrokePen(double thickness)
+        Pen StrokePen(StrokeSpec stroke, double thickness)
         {
             var pen = new Pen(
-                ToBrush(path.Stroke.Color, opacity),
+                ToBrush(stroke.Color, opacity),
                 thickness: Math.Max(0.01, thickness),
-                lineCap: ToLineCap(path.Stroke.Cap),
-                lineJoin: ToLineJoin(path.Stroke.Join),
-                miterLimit: path.Stroke.MiterLimit);
+                lineCap: ToLineCap(stroke.Cap),
+                lineJoin: ToLineJoin(stroke.Join),
+                miterLimit: stroke.MiterLimit);
 
-            if (!path.Stroke.Dash.IsEmpty)
+            if (!stroke.Dash.IsEmpty)
             {
                 // Dash lengths are in the same user-space units as the stroke width,
                 // so scale them by the same factor used for the (possibly group-
                 // transformed) width.
-                double factor = path.Stroke.Width > 0 ? thickness / path.Stroke.Width : 1.0;
+                double factor = stroke.Width > 0 ? thickness / stroke.Width : 1.0;
                 pen.DashStyle = new DashStyle(
-                    path.Stroke.Dash.Segments.Select(d => Math.Max(0.01, d * factor)).ToArray(),
-                    path.Stroke.Dash.Offset * factor);
+                    stroke.Dash.Segments.Select(d => Math.Max(0.01, d * factor)).ToArray(),
+                    stroke.Dash.Offset * factor);
             }
 
             return pen;
@@ -3863,19 +3876,34 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        bool aligned = path.Stroke.Alignment != StrokeAlignment.Center && anyClosed;
-        if (!aligned)
+        // **Every stroke, bottom to top.** Each one states its own width, colour, cap, join, miter limit and
+        // dash, because a pen is built per stroke - so the canvas and the exported file agree about a stack
+        // rather than each picking the stroke it happened to read.
+        foreach (StrokeSpec stroke in path.Strokes)
         {
-            context.DrawGeometry(null, StrokePen(width), geometry);
-            return;
-        }
+            if (!stroke.HasVisibleOutline)
+            {
+                continue;
+            }
 
-        Avalonia.Media.Geometry clip = path.Stroke.Alignment == StrokeAlignment.Inside
-            ? geometry
-            : BuildGeometry(path, outsideClip: true);
-        using (context.PushGeometryClip(clip))
-        {
-            context.DrawGeometry(null, StrokePen(width * 2), geometry);
+            double width = Math.Max(
+                Math.Max(0.01, stroke.Width),
+                MinDevicePixels / Math.Max(_layout.Zoom, 1e-6));
+
+            bool aligned = stroke.Alignment != StrokeAlignment.Center && anyClosed;
+            if (!aligned)
+            {
+                context.DrawGeometry(null, StrokePen(stroke, width), geometry);
+                continue;
+            }
+
+            Avalonia.Media.Geometry clip = stroke.Alignment == StrokeAlignment.Inside
+                ? geometry
+                : BuildGeometry(path, outsideClip: true);
+            using (context.PushGeometryClip(clip))
+            {
+                context.DrawGeometry(null, StrokePen(stroke, width * 2), geometry);
+            }
         }
     }
 
@@ -4782,8 +4810,8 @@ public sealed class CanvasWorkspace : Control
             // Overlay a dashed line in the same colour used for control handle
             // lines, at 90% of the segment's own rendered width (so it reads as a
             // selection highlight without changing the underlying pen).
-            double overlayWidth = path.Stroke.HasVisibleOutline
-                ? Math.Max(1.0, path.Stroke.Width * _layout.Zoom * 0.9)
+            double overlayWidth = path.HasVisibleStroke
+                ? Math.Max(1.0, WidestStroke(path) * _layout.Zoom * 0.9)
                 : 1.5;
             var segmentPen = new Pen(HandleLineBrush, overlayWidth)
             {

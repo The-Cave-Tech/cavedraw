@@ -1,12 +1,12 @@
 # =============================================================================
 # VCCad — CD: build the docker image on a v* tag, then deploy to the docker
-# host (user@host) over SSH. Registry push is optional; the example below
+# host over SSH. Registry push is optional; the example below
 # loads the image directly on the host and restarts the container, which keeps
 # the pipeline dependency-free.
 #
 # Required repository secrets:
 #   DOCKER_HOST_SSH_KEY   — private key for the `cave` user
-#   DOCKER_HOST_SSH_HOST  — <host>
+#   DOCKER_HOST_SSH_HOST  — the host to deploy to
 #   DOCKER_HOST_SSH_USER  — cave
 # =============================================================================
 name: docker

@@ -295,7 +295,7 @@ Optional / environment-specific (tests skip cleanly when absent):
 | Ghostscript/MuPDF PDF test corpus (208 PDFs, incl. the Ghent Output Suite) | `VCCAD_GS_CORPUS` | `$HOME/.cache/vccad-corpora/ghostscript` |
 | Illustrator `.ai` fixture corpus (66 files) | `VCCAD_AI_CORPUS` | `$HOME/.cache/vccad-corpora/ai` |
 | pdf.js test corpus | `VCCAD_PDFJS_CORPUS` | `$HOME/.cache/vccad-corpora/pdfjs/test/pdfs` |
-| qwen vision endpoint | `QWEN_BASE`, `QWEN_KEY`, `QWEN_MODEL` | `https://your-endpoint.example/v1`, `<your-api-key>`, `qwen3.8-27b` |
+| qwen vision endpoint | `QWEN_BASE`, `QWEN_KEY`, `QWEN_MODEL` | `VCCAD_LLM_BASE`, `VCCAD_LLM_KEY`, `VCCAD_LLM_MODEL`, or `settings.json` - **not committed**: see `settings.example.json` |
 | URW base-35 fonts (standard PDF faces) | `VCCAD_URW_FONTS` | `/usr/share/fonts/opentype/urw-base35` (Debian/Ubuntu), Ghostscript's `Resource/Font`, or the WSL copy |
 
 One-shot bootstrap:
@@ -560,7 +560,7 @@ overlay's height — so a fitted artboard is never hidden behind the panel and a
 imported page is never shown at the previous document's scale. Screenshots taken by
 automation therefore show a sensibly-sized artboard from the first frame.
 
-The assistant talks to `https://your-endpoint.example/v1` with model
+The assistant talks to the endpoint named in `VCCAD_LLM_BASE` or `settings.json`, with model
 `qwen3.8-27b` by default; override with `--model/--llm-url/--api-key` or
 `VCCAD_LLM_MODEL/VCCAD_LLM_BASE/VCCAD_LLM_KEY`.
 
@@ -685,12 +685,12 @@ mean 0.045.
 
 ---
 
-## 7. Deployment (Docker host `user@host`)
+## 7. Deployment (a Docker host of your own)
 
 ```bash
 # Commit first — the script archives HEAD, not the working tree.
 ./scripts/deploy-remote.sh            # build image on host + restart container
-VCCAD_DOCKER_HOST=user@host ./scripts/deploy-remote.sh 0.1.0
+VCCAD_DOCKER_HOST=user@host ./scripts/deploy-remote.sh 0.1.0   # required: there is no default host
 # → http://<host>:8080   (health: /api/v1/health)
 ```
 

@@ -89,7 +89,45 @@ public sealed class SetStrokeWidthCommand : IUndoableCommand
 }
 
 /// <summary>
-/// Scales every run of a text item's type by a factor, as one undo step.
+/// Replaces a path's whole stroke stack, as one undo step.
+///
+/// Adding a stroke, removing one and reordering them are the same edit seen three ways - an ordered list
+/// becoming another ordered list - so one command covers all three and undo is exact rather than a reverse
+/// operation that has to be got right three times. The stack is never empty, so a caller removing the last
+/// stroke replaces it with an invisible one rather than leaving a path with none.
+/// </summary>
+public sealed class SetStrokesCommand : IUndoableCommand
+{
+    private readonly PathItem _path;
+    private readonly List<StrokeSpec> _before;
+    private readonly List<StrokeSpec> _after;
+
+    public SetStrokesCommand(PathItem path, IEnumerable<StrokeSpec> after, string description = "Stroke stack")
+    {
+        _path = path;
+        _before = path.Strokes.ToList();
+        _after = after.ToList();
+        if (_after.Count == 0)
+        {
+            _after.Add(StrokeSpec.None);
+        }
+
+        Description = description;
+    }
+
+    public string Description { get; }
+
+    public void Do() => Apply(_after);
+
+    public void Undo() => Apply(_before);
+
+    private void Apply(List<StrokeSpec> strokes)
+    {
+        _path.Strokes.Clear();
+        _path.Strokes.AddRange(strokes);
+        _path.NotifyStrokesChanged();
+    }
+}
 ///
 /// Per-run rather than one size for the whole block: a heading and a caption in the same frame have different
 /// sizes, and scaling them to a single value would flatten the block's typography instead of enlarging it.

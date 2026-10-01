@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TAG="${1:-0.1.0}"
-HOST="${VCCAD_DOCKER_HOST:-user@host}"
+HOST="${VCCAD_DOCKER_HOST:?set VCCAD_DOCKER_HOST to user@host - there is no default host}"
 REMOTE_DIR="~/vccad-build"
 ARCHIVE="/tmp/vccad-src.tgz"
 

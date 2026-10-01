@@ -17,9 +17,9 @@ from PIL import Image, ImageDraw
 
 ROOT = pathlib.Path(r"C:\Users\submu\vccad-win")
 WORK = ROOT / "artifacts" / "catalogue"
-BASE = "https://your-endpoint.example/v1"
-KEY = "<your-api-key>"
-MODEL = "qwen3.8-27b"
+BASE = os.environ.get("QWEN_BASE", "")
+KEY = os.environ.get("QWEN_KEY", "")
+MODEL = os.environ.get("QWEN_MODEL", "")
 
 PROMPT = (
     "These two images are the SAME page of a PDF pattern, rendered by two different "

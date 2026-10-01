@@ -253,7 +253,7 @@ Ensure the skeleton is trustworthy before feature work.
 | 3 | `[x]` projectplan.md (this document) | 2 | M |
 | 4 | `[x]` CI `ci.yml` (build+test+publish WASM) | 3 | M |
 | 5 | `[x]` Multi-stage `Dockerfile` + compose | 2 | M |
-| 6 | `[x]` Docker build + run verified on docker host `user@host` | 1 | M |
+| 6 | `[x]` Docker build + run verified on a real docker host (`VCCAD_DOCKER_HOST`) | 1 | M |
 | 7 | `[ ]` CI badge + local `./scripts/dev.sh` (build/test/publish/run) | 2 | S |
 | 8 | `[ ]` Branch protection + conventional-commit lint on `main` | 1 | S |
 
@@ -416,7 +416,7 @@ spike task before planning. *(planning-level only)*
 | 5 | v1.0 tag, image promotion, runbook for the docker host | 2 | M |
 
 **Accept (release gate):** CI green, integration + e2e green, docs shipped, image
-deployed and healthchecked on `user@host`.
+deployed and healthchecked on a real docker host.
 
 ### Sequencing
 ```

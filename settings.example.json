@@ -1,0 +1,17 @@
+{
+  "//": [
+    "Copy this to settings.json and fill it in. settings.json is ignored by git, and this example is not:",
+    "an endpoint and an API key are deployment values, and a repository that ships them ships a secret.",
+    "",
+    "The file is read from the working directory, or from VCCAD_SETTINGS if that names another path.",
+    "An environment variable wins over the file, so a build machine can set VCCAD_LLM_BASE and",
+    "VCCAD_LLM_KEY without writing anything down.",
+    "",
+    "Nothing here is required: without it the editor runs normally and the assistant reports that it is not",
+    "configured, rather than reaching for a baked-in endpoint."
+  ],
+
+  "llmBase": "https://your-endpoint.example/v1",
+  "llmKey": "your-api-key",
+  "llmModel": "your-model-name"
+}

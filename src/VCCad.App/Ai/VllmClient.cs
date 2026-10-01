@@ -6,26 +6,39 @@ using VCCad.App.Automation;
 
 namespace VCCad.App.Ai;
 
-/// <summary>Connection settings for the language/vision model endpoint.</summary>
+/// <summary>
+/// Connection settings for the language/vision model endpoint.
+///
+/// There is deliberately **no default endpoint and no default key**: those are deployment values, and a
+/// repository that ships them ships a secret. They come from <see cref="LlmSettings"/> - an environment
+/// variable or a settings file this repository ignores - and <see cref="IsConfigured"/> is how a caller asks
+/// whether there is an endpoint to talk to at all. The model *name* keeps a default, because a name is not a
+/// secret and a sensible default saves a setting.
+///
+/// See `settings.example.json`.
+/// </summary>
 public sealed class LlmOptions
 {
-    /// <summary>Default vLLM endpoint used by this build.</summary>
-    public const string DefaultBaseUrl = "https://your-endpoint.example/v1";
-
-    /// <summary>Default model served by the endpoint.</summary>
+    /// <summary>The model this build prefers, when the settings do not name one.</summary>
     public const string DefaultModel = "qwen3.8-27b";
 
-    /// <summary>Default API key for the endpoint.</summary>
-    public const string DefaultApiKey = "<your-api-key>";
-
-    /// <summary>OpenAI-compatible base URL, without a trailing slash.</summary>
-    public string BaseUrl { get; set; } = Environment.GetEnvironmentVariable("VCCAD_LLM_BASE") ?? DefaultBaseUrl;
+    /// <summary>OpenAI-compatible base URL, without a trailing slash. Empty when not configured.</summary>
+    public string BaseUrl { get; set; } = LlmSettings.Resolve("VCCAD_LLM_BASE", "llmBase");
 
     /// <summary>Model name.</summary>
-    public string Model { get; set; } = Environment.GetEnvironmentVariable("VCCAD_LLM_MODEL") ?? DefaultModel;
+    public string Model { get; set; } = LlmSettings.Resolve("VCCAD_LLM_MODEL", "llmModel", DefaultModel);
 
-    /// <summary>Bearer token.</summary>
-    public string ApiKey { get; set; } = Environment.GetEnvironmentVariable("VCCAD_LLM_KEY") ?? DefaultApiKey;
+    /// <summary>Bearer token. Empty when not configured - never a baked-in key.</summary>
+    public string ApiKey { get; set; } = LlmSettings.Resolve("VCCAD_LLM_KEY", "llmKey");
+
+    /// <summary>
+    /// Whether there is an endpoint and a key to use.
+    ///
+    /// The assistant reports this rather than attempting a request that cannot succeed, and the message names
+    /// the file it read, because "the assistant is not configured" is not actionable on its own.
+    /// </summary>
+    public bool IsConfigured
+        => !string.IsNullOrWhiteSpace(BaseUrl) && !string.IsNullOrWhiteSpace(ApiKey);
 
     /// <summary>Sampling temperature; low because the model emits tool calls.</summary>
     public double Temperature { get; set; } = 0.1;

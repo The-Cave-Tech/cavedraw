@@ -7,17 +7,17 @@ vision model (OpenAI-compatible endpoint) to score how visually close they are.
 Writes append-only results so progress can be tracked over time.
 
 Env:
-  QWEN_BASE   default https://your-endpoint.example/v1
-  QWEN_KEY    default <your-api-key>
-  QWEN_MODEL  default qwen3.8-27b
+  QWEN_BASE   required: the endpoint to talk to
+  QWEN_KEY    required: the API key
+  QWEN_MODEL  required: the model name
 """
 import os, sys, csv, json, base64, random, subprocess, tempfile, re, time
 from concurrent.futures import ThreadPoolExecutor
 from urllib import request
 
-BASE = os.environ.get("QWEN_BASE", "https://your-endpoint.example/v1")
-KEY = os.environ.get("QWEN_KEY", "<your-api-key>")
-MODEL = os.environ.get("QWEN_MODEL", "qwen3.8-27b")
+BASE = os.environ.get("QWEN_BASE", os.environ["QWEN_BASE"])
+KEY = os.environ.get("QWEN_KEY", os.environ["QWEN_KEY"])
+MODEL = os.environ.get("QWEN_MODEL", os.environ.get("QWEN_MODEL", "")
 
 CORPUS = sys.argv[1] if len(sys.argv) > 1 else "/tmp/opencode/veraPDF-corpus"
 OURS = sys.argv[2] if len(sys.argv) > 2 else "/tmp/opencode/rc/out"
