@@ -88,12 +88,19 @@ jobs:
           test -f artifacts/wasm/wwwroot/index.html
           find artifacts/wasm -name 'dotnet*.js' -print -quit | grep .
 
-          # The application assembly. A Blazor WebAssembly publish puts it in `_framework` alongside the
-          # runtime, not at the publish root - which is what the previous version of this step asserted, and
-          # why it failed every time it was reached. Matched by name rather than by extension as well,
-          # because .NET 8 publishes assemblies as `.webcil` by default: demanding a `.dll` would fail for a
-          # reason that has nothing to do with whether a browser can load the app.
-          find artifacts/wasm -name 'VCCad.App.Browser.*' -print -quit | grep .
+          # The application assembly, in `_framework` alongside the runtime.
+          #
+          # Two traps, both hit for real. The publish does not put the assembly at the publish root, so a path
+          # guessed from the csproj name finds nothing. And matching `VCCad.App.Browser.*` alone is too loose:
+          # `runtimeconfig.json` matches it, so the check passed while proving nothing about whether the app
+          # itself was published - which is how it looked green when it was not. Match the assembly's shape as
+          # well, accepting both extensions: `.wasm` on .NET 10, `.webcil` on .NET 8. One `find` with `-o`,
+          # because only one of them will exist and two independent checks would fail on the other.
+          app=$(find artifacts/wasm/wwwroot/_framework \
+                  -name 'VCCad.App.Browser.*.wasm' -o -name 'VCCad.App.Browser.*.webcil' \
+                  | head -1)
+          test -n "$app"
+          echo "app assembly: $app"
           echo "wasm bundle OK"
 
       - name: Upload wasm bundle

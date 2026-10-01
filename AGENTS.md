@@ -9,7 +9,7 @@ running commands.
 
 ## 1. What this project is
 
-**VCCad** is an Adobe-Illustrator-style vector editor: C# / .NET 8, Avalonia UI
+**VCCad** is an Adobe-Illustrator-style vector editor: C# / .NET 10, Avalonia UI
 compiled to **WebAssembly**, fully automatable (REST + JSON-RPC over WebSocket),
 storing documents **losslessly as PDF**. It imports real-world PDFs into its model
 and re-exports them faithfully.
@@ -130,10 +130,11 @@ Facts about the runner that cost real time to learn, all now handled in `ci.yml`
   text-export tests embed `Nimbus Sans`; the faces are located on the machine and never
   shipped, so a runner without them fails on a missing font key rather than on anything to
   do with the code. `VCCAD_URW_FONTS` points at the same path `scripts/test-all.ps1` probes.
-- **A Blazor WebAssembly publish puts the app assembly in `wwwroot/_framework`, and .NET 8
-  publishes it as `.webcil`.** An artifact check demanding `VCCad.App.Browser.dll` at the
-  publish root cannot match anything. Match by **name**, not by extension and not by a path
-  guessed from a different SDK version.
+- **A Blazor WebAssembly publish puts the app assembly in `wwwroot/_framework`, as `.wasm` on .NET 10 and
+  `.webcil` on .NET 8.** An artifact check demanding `VCCad.App.Browser.dll` at the
+  publish root cannot match anything. Match the assembly's **name and extension**, not by a path
+  guessed from a different SDK version - and not by name alone either, because `runtimeconfig.json`
+  matches the name: that check passed for a year while proving nothing, which is worse than one that fails.
 - `gh run view <id> --log-failed` refuses to open a log until the whole run finishes, but
   `gh run view <id>` shows **per-job** status while it is still going - which is how to
   learn the answer from `build-test` without waiting for `desktop-publish`.
