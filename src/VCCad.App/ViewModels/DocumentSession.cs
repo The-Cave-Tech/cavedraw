@@ -2563,28 +2563,48 @@ public sealed class DocumentSession : INotifyPropertyChanged
         }
 
         var edits = new List<IUndoableCommand>();
+
+        // The whole edit as one **world-space** affine: the translation, then the scale about the pivot,
+        // then the rotation about it - the order the three fields have always been applied in. Stating it
+        // once is what lets each item's own frame be conjugated into it below, which is what makes the
+        // numbers a person types land where the fields say (#173).
+        AffineTransform world = AffineTransform.Identity;
+        if (anyTranslation)
+        {
+            world = AffineTransform.CreateTranslation(translation.X, translation.Y);
+        }
+
+        if (anyScale)
+        {
+            world = AffineTransform.CreateScaleAround(pivot, scaleX, scaleY).Compose(world);
+        }
+
+        if (anyRotation)
+        {
+            world = AffineTransform.CreateRotationAround(pivot, rotationDegrees * Math.PI / 180.0).Compose(world);
+        }
+
         foreach (PathItem path in SelectedPaths(ownOnly))
         {
             PathItem before = path.GeometrySnapshot();
 
-            // Paths store artboard-local coordinates; convert the world pivot.
-            Point2D localPivot = pivot - path.ArtboardOffset();
-
-            if (anyTranslation)
+            // Paths store their geometry in the frame their own groups establish, and the pivot arrives in
+            // **world** coordinates, so the whole map is carried across by the one conjugation - not by
+            // subtracting the artboard origin, which is the right pivot only when no group has a transform.
+            // A group that turns its contents a quarter turn maps a world x-scale onto the item's y axis,
+            // so carrying the pivot alone is not enough either: the linear part is conjugated too (#173).
+            if (SelectionEngine.InItemFrame(path, world) is not { } inFrame)
             {
-                // The translation arrives in **world** coordinates and the geometry it moves is stored in
-                // this path's own placement frame, so the delta is carried into that frame first - the
-                // same composition the drag gesture uses (#165), stated once in SelectionEngine. Adding
-                // the world delta to the stored coordinates moved the artwork by the group transform
-                // applied to the delta: inside `scale(2)` a scripted 30 pt move became 45 (#172).
-                path.TranslateGeometryBy(SelectionEngine.DeltaInItem(path, translation));
+                // The frame collapses the plane, so the object is painted nowhere and there is nothing
+                // honest to move. Reported by leaving it alone rather than guessing a position.
+                continue;
             }
+
+            path.TransformGeometry(inFrame);
 
             double? strokeBefore = null;
             if (anyScale)
             {
-                path.ScaleGeometryAbout(localPivot, scaleX, scaleY);
-
                 // A stroke width is a distance in the document, so leaving it fixed makes a scaled drawing
                 // disagree with its own geometry: a piece scaled up keeps a hairline, one scaled down turns
                 // into a smear. The undo is the same step as the geometry, because a person who scales
@@ -2598,11 +2618,6 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 }
             }
 
-            if (anyRotation)
-            {
-                path.RotateGeometryAbout(localPivot, rotationDegrees * Math.PI / 180.0);
-            }
-
             edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot()));
         }
 
@@ -2611,7 +2626,16 @@ public sealed class DocumentSession : INotifyPropertyChanged
         // takes the type with it, which is the difference between enlarging a label and reflowing a frame.
         foreach (TextItem text in _selectedObjects.OfType<TextItem>())
         {
-            Point2D localPivot = pivot - text.ArtboardOffset();
+            // The pivot arrives in world coordinates and the origin is stored in the block's own frame, so
+            // the pivot is carried across by the same conjugation the paths use. A block stores an origin,
+            // one angle and a size - a similarity - so where the map is not one, the nearest similarity is
+            // what the model can hold; that limit is stated on #165 rather than hidden here.
+            if (SelectionEngine.FromWorld(text) is not { } textFrame)
+            {
+                continue;
+            }
+
+            Point2D localPivot = textFrame.Transform(pivot);
             Point2D origin = text.Origin;
 
             // The translation is in world coordinates and the origin is stored in the block's own frame,
@@ -2646,7 +2670,15 @@ public sealed class DocumentSession : INotifyPropertyChanged
         foreach (ImageItem image in _selectedObjects.OfType<ImageItem>())
         {
             Rect2D before = image.Placement;
-            Point2D localPivot = pivot - image.ArtboardOffset();
+
+            // As for text: the placement box is an axis-aligned rectangle in the image's own frame, so the
+            // world pivot is carried into that frame and the box scales about it there.
+            if (SelectionEngine.FromWorld(image) is not { } imageFrame)
+            {
+                continue;
+            }
+
+            Point2D localPivot = imageFrame.Transform(pivot);
 
             // The placement box is stored in the image's own frame, so the world translation is carried
             // into it, exactly as the drag does (#165, #172).
@@ -2687,6 +2719,13 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// (AGENTS.md §9), so both record the mirror as state and the renderer maps through it. That is
     /// also what keeps a flipped block editable - the text editor works in the block's own space,
     /// where nothing has moved.
+    ///
+    /// The centre is the selection's centre **in world coordinates**, and the mirror is conjugated into
+    /// each item's own frame before it is applied (#173). Which local axis the world mirror reflects in is
+    /// not a constant: a group that turns its contents a quarter turn maps the page's vertical mirror onto
+    /// the item's horizontal one, so the sign the person asked for and the sign the item records are two
+    /// different things. A group that shear or scales unevenly leaves no mirror the model records, so the
+    /// nearer axis is used and the limit is stated on #173 rather than hidden.
     /// </summary>
     public void FlipSelection(bool horizontal, bool vertical)
     {
@@ -2695,7 +2734,16 @@ public sealed class DocumentSession : INotifyPropertyChanged
             return;
         }
 
-        Rect2D box = SelectionBounds();
+        // **World** bounds, through the one composition. `SelectionBounds` adds the artboard origin and
+        // stops there, so on a grouped object it answers in the object's own frame and the mirror is taken
+        // about a point the person is not looking at (#173). Ungrouped items are unaffected: with no group
+        // above them the two compositions agree term for term.
+        var flipping = SelectedPaths().Cast<LayerItem>()
+            .Concat(SelectedTextItems())
+            .Concat(_selectedObjects.OfType<ImageItem>())
+            .ToList();
+
+        Rect2D box = SelectionEngine.WorldBounds(flipping);
         if (box.IsEmpty)
         {
             return;
@@ -2704,43 +2752,53 @@ public sealed class DocumentSession : INotifyPropertyChanged
         Point2D centre = new(box.X + (box.Width / 2), box.Y + (box.Height / 2));
         double sx = horizontal ? -1 : 1;
         double sy = vertical ? -1 : 1;
+        AffineTransform mirror = AffineTransform.CreateScaleAround(centre, sx, sy);
 
         var edits = new List<IUndoableCommand>();
 
         foreach (PathItem path in SelectedPaths())
         {
             PathItem before = path.GeometrySnapshot();
-            path.ScaleGeometryAbout(centre - path.ArtboardOffset(), sx, sy);
+
+            if (SelectionEngine.InItemFrame(path, mirror) is { } inFrame)
+            {
+                path.TransformGeometry(inFrame);
+            }
+
             edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot()));
         }
 
         foreach (ImageItem image in _selectedObjects.OfType<ImageItem>())
         {
+            if (SelectionEngine.InItemFrame(image, mirror) is not { } imageFrame)
+            {
+                continue;
+            }
+
+            (bool onX, bool onY) = MirroredAxes(imageFrame, horizontal, vertical);
             edits.Add(new ImageFlipCommand(
                 image,
-                horizontal ? !image.MirrorX : image.MirrorX,
-                vertical ? !image.MirrorY : image.MirrorY));
+                onX != image.MirrorX,
+                onY != image.MirrorY));
         }
 
         foreach (TextItem text in SelectedTextItems())
         {
             TextItem before = (TextItem)text.Clone();
-            Point2D local = centre - text.ArtboardOffset();
 
-            // Mirroring about the same centre would leave the origin where it was, so the block
-            // would not move: the origin goes to the other side of the centre, and the mirror
-            // state says which way the block then runs.
-            if (horizontal)
+            if (SelectionEngine.InItemFrame(text, mirror) is not { } inFrame)
             {
-                text.MirrorX = !text.MirrorX;
-                text.Origin = new Point2D((2 * local.X) - text.Origin.X, text.Origin.Y);
+                continue;
             }
 
-            if (vertical)
-            {
-                text.MirrorY = !text.MirrorY;
-                text.Origin = new Point2D(text.Origin.X, (2 * local.Y) - text.Origin.Y);
-            }
+            // The conjugated map carries the origin to the other side of the item's own centre, so the
+            // block lands where the world mirror puts it; the mirror **state** says which of the block's own
+            // axes it then runs along, and the renderer maps through it.
+            Point2D origin = inFrame.Transform(text.Origin);
+            (bool onX, bool onY) = MirroredAxes(inFrame, horizontal, vertical);
+            text.MirrorX = onX != text.MirrorX;
+            text.MirrorY = onY != text.MirrorY;
+            text.Origin = origin;
 
             edits.Add(new ReplaceTextCommand(text, before, (TextItem)text.Clone(), "Flip text"));
         }
@@ -2754,6 +2812,21 @@ public sealed class DocumentSession : INotifyPropertyChanged
             ? edits[0]
             : new CompositeCommand(horizontal && vertical ? "Flip both" : horizontal ? "Flip horizontal" : "Flip vertical", edits));
     }
+
+    /// <summary>
+    /// Which of an item's **own** axes a world mirror reflects in, read off the map already conjugated into
+    /// its frame.
+    ///
+    /// A negative diagonal toggles that axis's flag, so a frame the page's axes are turned in swaps the
+    /// axis the person aimed at: inside `rotate(90)` a horizontal world flip is a vertical flip of the
+    /// item's own space. When the frame carries the mirror off both of the item's axes - a shear, or a
+    /// scale that is not uniform - no pair of flags describes it, so the axis the person asked for is used
+    /// and the limit is stated on #173.
+    /// </summary>
+    private static (bool X, bool Y) MirroredAxes(AffineTransform inFrame, bool horizontal, bool vertical)
+        => Math.Abs(inFrame.B) <= 1e-9 && Math.Abs(inFrame.C) <= 1e-9
+            ? (inFrame.A < 0, inFrame.D < 0)
+            : (horizontal, vertical);
 
 
     // ------------------------------------------------------------------

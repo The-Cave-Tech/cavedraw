@@ -340,6 +340,33 @@ public sealed class PathItem : LayerItem
         TouchGeometry();
     }
 
+    /// <summary>
+    /// Maps every anchor and handle through an affine transform, in this path's own
+    /// coordinate space.
+    ///
+    /// An affine map carries a Bézier exactly when it carries its four control points, so
+    /// mapping the anchors and the handles is the whole of it - curves stay curves and
+    /// nothing is flattened. This is the general case of <see cref="TranslateGeometryBy"/>,
+    /// <see cref="ScaleGeometryAbout"/> and <see cref="RotateGeometryAbout"/>: a rotation,
+    /// a scale and a translate are all affines, and a **conjugated** one (a scale stated in
+    /// the frame a group establishes, turned back into the path's own frame) is an affine
+    /// that none of the three expresses on its own.
+    /// </summary>
+    public void TransformGeometry(AffineTransform transform)
+    {
+        foreach (SubPath sp in SubPaths)
+        {
+            foreach (PathNode node in sp.Nodes)
+            {
+                node.Anchor = transform.Transform(node.Anchor);
+                node.InHandle = transform.Transform(node.InHandle);
+                node.OutHandle = transform.Transform(node.OutHandle);
+            }
+        }
+
+        TouchGeometry();
+    }
+
     /// <inheritdoc/>
     /// <summary>
     /// The CMYK components the file painted this path's fill and stroke with, when it used

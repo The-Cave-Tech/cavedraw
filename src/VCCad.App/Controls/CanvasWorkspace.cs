@@ -207,7 +207,6 @@ public sealed class CanvasWorkspace : Control
     private SubPath? _segmentSub;
     private int _segmentIndex;
     private PathItem? _segmentBefore;
-    private Vector2D _segmentOffset;
     private PathNode? _segmentNodeA;
     private PathNode? _segmentNodeB;
     private (Point2D A, Point2D I, Point2D O) _segmentOrigA;
@@ -626,8 +625,19 @@ public sealed class CanvasWorkspace : Control
         return best;
     }
 
-    /// <summary>Converts a world point into a path's artboard-local frame.</summary>
-    private static Point2D LocalFor(PathItem path, Point2D world) => world - path.ArtboardOffset();
+    /// <summary>
+    /// Converts a world point into the frame a path's own geometry is stored in - every enclosing group's
+    /// transform composed in, not merely the artboard origin - or null when that frame collapses the plane.
+    ///
+    /// The node tool picks nodes by comparing stored coordinates, so the pointer has to arrive in the same
+    /// frame the nodes are written in. Subtracting the artboard origin alone is that frame only when no
+    /// group above the path has a transform: inside `translate(50,50) scale(2)` the nodes are drawn at
+    /// twice their stored coordinates, so the tool looked for them where they are not and a drag could not
+    /// be aimed at all (#173). <see cref="SelectionEngine.FromWorld"/> is the one place that composition is
+    /// inverted.
+    /// </summary>
+    private static Point2D? InPathFrame(PathItem path, Point2D world)
+        => SelectionEngine.FromWorld(path)?.Transform(world);
 
     private Rect2D ComputeExtent()
     {
@@ -2270,26 +2280,15 @@ public sealed class CanvasWorkspace : Control
     // its inverse and nothing else.
 
     /// <summary>
-    /// A world-space affine as it acts on an item whose geometry is stored in its own placement frame:
-    /// <c>ToWorld⁻¹ ∘ world ∘ ToWorld</c>.
-    ///
-    /// The conjugation is exact for any invertible frame - scale, rotation, flip and shear alike - and it
-    /// reduces to the plain world operation when there is no group above the item, which is why the
-    /// ungrouped behaviour is unchanged. Null when the frame collapses the plane: the item is not painted
-    /// anywhere a pointer could reach, so there is nothing honest to move.
-    /// </summary>
-    private static AffineTransform? InItemFrame(LayerItem item, AffineTransform world)
-        => SelectionEngine.FromWorld(item) is { } fromWorld
-            ? fromWorld.Compose(world).Compose(SelectionEngine.ToWorld(item))
-            : null;
-
-    /// <summary>
     /// A world-space affine as it acts on an item whose geometry is stored in the item's own placement
     /// frame, or the identity when that frame collapses the plane - for callers that have a fixed shape to
     /// apply rather than a point list to walk.
+    ///
+    /// The conversion itself is <see cref="SelectionEngine.InItemFrame"/>, stated once in Core so that the
+    /// canvas, the pane and the commands cannot come to three answers about the frame (#173).
     /// </summary>
     private static AffineTransform InItemFrameOrIdentity(LayerItem item, AffineTransform world)
-        => InItemFrame(item, world) ?? AffineTransform.Identity;
+        => SelectionEngine.InItemFrame(item, world) ?? AffineTransform.Identity;
 
     /// <summary>The four corners of a rectangle, which is how a box is carried through a transform that may
     /// turn or shear it.</summary>
@@ -2300,22 +2299,6 @@ public sealed class CanvasWorkspace : Control
         new Point2D(box.Right, box.Bottom),
         new Point2D(box.Left, box.Bottom),
     };
-
-    /// <summary>Maps every anchor and both handles of a path through an affine transform.</summary>
-    private static void TransformGeometry(PathItem path, AffineTransform transform)
-    {
-        foreach (SubPath sub in path.SubPaths)
-        {
-            foreach (PathNode node in sub.Nodes)
-            {
-                node.Anchor = transform.Transform(node.Anchor);
-                node.InHandle = transform.Transform(node.InHandle);
-                node.OutHandle = transform.Transform(node.OutHandle);
-            }
-        }
-
-        path.GeometryChanged();
-    }
 
     /// <summary>
     /// Applies an affine map, already expressed in a text block's own frame, to that block.
@@ -2528,9 +2511,9 @@ public sealed class CanvasWorkspace : Control
                     SelectionEngine.ToWorld(path).Transform(path.BoundingBox().Center), sx, sx)
                 : resizeWorld;
 
-            if (InItemFrame(path, world) is { } inFrameLocal)
+            if (SelectionEngine.InItemFrame(path, world) is { } inFrameLocal)
             {
-                TransformGeometry(path, inFrameLocal);
+                path.TransformGeometry(inFrameLocal);
             }
         }
 
@@ -2683,9 +2666,9 @@ public sealed class CanvasWorkspace : Control
         foreach (PathItem path in _rotatePaths)
         {
             path.RestoreGeometryFrom(_rotateOriginals[path]);
-            if (InItemFrame(path, turn) is { } inFrameTurn)
+            if (SelectionEngine.InItemFrame(path, turn) is { } inFrameTurn)
             {
-                TransformGeometry(path, inFrameTurn);
+                path.TransformGeometry(inFrameTurn);
             }
         }
 
@@ -2928,7 +2911,9 @@ public sealed class CanvasWorkspace : Control
         NodePick? pick = null;
         foreach (PathItem candidate in _vm.SelectedPaths())
         {
-            NodePick? candidatePick = PathPicking.PickNode(candidate, LocalFor(candidate, model), PickTolerance * 1.6);
+            NodePick? candidatePick = InPathFrame(candidate, model) is { } local
+                ? PathPicking.PickNode(candidate, local, PickTolerance * 1.6)
+                : null;
             if (candidatePick is not null)
             {
                 pick = candidatePick;
@@ -2940,9 +2925,9 @@ public sealed class CanvasWorkspace : Control
         if (pick is null)
         {
             pickPath = HitTestTopPath(model);
-            if (pickPath is not null)
+            if (pickPath is not null && InPathFrame(pickPath, model) is { } local)
             {
-                pick = PathPicking.PickNode(pickPath, LocalFor(pickPath, model), PickTolerance * 1.6);
+                pick = PathPicking.PickNode(pickPath, local, PickTolerance * 1.6);
             }
         }
 
@@ -2953,7 +2938,9 @@ public sealed class CanvasWorkspace : Control
                 _vm.SelectObject(pickPath); // select the path whose node we grab
             }
 
-            BeginNodeDrag(pickPath, pick.Value, LocalFor(pickPath, model));
+            // The gesture is stated in **world** coordinates - where the pointer is - and carried into the
+            // path's own frame once, by the delta conversion in NodeDrag (#173).
+            BeginNodeDrag(pickPath, pick.Value, model);
 
             // Anchor grabs become "point" selections (position-only editing);
             // handle grabs edit the curve, so they drop any point selection.
@@ -2972,15 +2959,15 @@ public sealed class CanvasWorkspace : Control
         // 2) Clicking a line/Bézier segment selects it (Shift adds toggles);
         //    the segment can then be dragged to slide its end nodes.
         PathItem? segmentPath = pickPath;
-        SegmentPick? segment = segmentPath is null
+        SegmentPick? segment = segmentPath is null || InPathFrame(segmentPath, model) is not { } segmentLocal
             ? null
-            : PathPicking.ClosestSegment(segmentPath, LocalFor(segmentPath, model), PickTolerance * 1.6);
+            : PathPicking.ClosestSegment(segmentPath, segmentLocal, PickTolerance * 1.6);
         if (segment is null)
         {
             segmentPath = HitTestTopPath(model);
-            segment = segmentPath is null
+            segment = segmentPath is null || InPathFrame(segmentPath, model) is not { } again
                 ? null
-                : PathPicking.ClosestSegment(segmentPath, LocalFor(segmentPath, model), PickTolerance * 1.6);
+                : PathPicking.ClosestSegment(segmentPath, again, PickTolerance * 1.6);
         }
 
         if (segment is not null && segmentPath is not null)
@@ -3006,10 +2993,10 @@ public sealed class CanvasWorkspace : Control
                 _pendingInsertPath = segmentPath;
                 _pendingInsertSub = subIndex;
                 _pendingInsertSeg = segment.Value.SegmentIndex;
-                _pendingInsertPoint = LocalFor(segmentPath, model);
+                _pendingInsertPoint = InPathFrame(segmentPath, model) ?? default;
             }
 
-            BeginSegmentDrag(segmentPath, subIndex, segment.Value.SegmentIndex, LocalFor(segmentPath, model));
+            BeginSegmentDrag(segmentPath, subIndex, segment.Value.SegmentIndex, model);
             return;
         }
 
@@ -3062,7 +3049,7 @@ public sealed class CanvasWorkspace : Control
         return vi.Dot(vo) < 0 && Math.Abs(vi.Cross(vo)) <= 1e-6 * scale;
     }
 
-    private void BeginSegmentDrag(PathItem path, int subIndex, int segmentIndex, Point2D model)
+    private void BeginSegmentDrag(PathItem path, int subIndex, int segmentIndex, Point2D world)
     {
         SubPath sub = path.SubPaths[subIndex];
         (int a, int b) = sub.SegmentEndNodes(segmentIndex);
@@ -3070,7 +3057,6 @@ public sealed class CanvasWorkspace : Control
         _segmentSub = sub;
         _segmentIndex = segmentIndex;
         _segmentBefore = path.GeometrySnapshot();
-        _segmentOffset = path.ArtboardOffset();
         _chromeRect = null;
         _chromeAngle = 0;
         _segmentNodeA = sub.Nodes[a];
@@ -3084,18 +3070,23 @@ public sealed class CanvasWorkspace : Control
         // The grab parameter u locates where on the segment the pointer grabbed
         // (projected onto the A-B chord). During the drag we bend the curve so it
         // passes through the pointer at that same u — the endpoints never move.
+        //
+        // The chord is written in the path's own frame, so the world pointer is carried into it first:
+        // the group above the path is not a plain offset, and a projection taken in the world frame puts
+        // the bend somewhere the pointer is not (#173).
+        Point2D local = InPathFrame(path, world) ?? world;
         Point2D a0 = _segmentOrigA.A;
         Point2D b0 = _segmentOrigB.A;
         Vector2D chord = b0 - a0;
         double u = 0.5;
         if (chord.LengthSquared > 1e-9)
         {
-            u = MathUtils.Clamp01((model - a0).Dot(chord) / chord.LengthSquared);
+            u = MathUtils.Clamp01((local - a0).Dot(chord) / chord.LengthSquared);
         }
 
         _segmentBendMode = a != b;
         _bendGrabU = MathUtils.Clamp(u, 0.1, 0.9);
-        _dragStartModel = model;
+        _dragStartModel = world;
         _gestureMoved = false;
     }
 
@@ -3113,11 +3104,19 @@ public sealed class CanvasWorkspace : Control
             // originals — never restoring whole geometry mid-gesture. The delta
             // is measured from the grab point (press position), so a handle
             // follows the cursor 1:1 instead of inheriting a fixed offset.
+            //
+            // The pointer travels in **world** coordinates and the node's coordinates are stored in the
+            // path's own placement frame, so the world delta is carried across once, by the composition
+            // #165 stated - the whole of the drag below is stated in the stored frame. Applying the world
+            // delta to the stored anchor moved a node inside `scale(2)` half as far again as the pointer
+            // (#173); the release snap in ApplyNodeSnap was converted in #165 and the drag itself was not.
             Vector2D delta = model - _dragStartModel;
             if (_shiftHeld)
             {
                 delta = SnapTranslation(delta);
             }
+
+            delta = SelectionEngine.DeltaInItem(_nodePath, delta);
 
             if (delta.IsZero)
             {
@@ -3195,7 +3194,10 @@ public sealed class CanvasWorkspace : Control
             Point2D targetWorld = _shiftHeld
                 ? _dragStartModel + SnapTranslation(model - _dragStartModel)
                 : model;
-            Point2D target = targetWorld - _segmentOffset;
+
+            // The bend is solved in the path's own frame, so the world pointer is carried into it there -
+            // the artboard origin alone is that frame only when no group has a transform (#173).
+            Point2D target = InPathFrame(_segmentPath, targetWorld) ?? targetWorld;
             Point2D baseline = a0 + (b0 - a0) * u;
             Vector2D h = (target - baseline) / spread;
             if (h.LengthSquared < 1e-12)
@@ -5480,40 +5482,51 @@ public sealed class CanvasWorkspace : Control
         context.DrawEllipse(Brushes.White, new Pen(accent, 1.4), rot, r, r);
     }
 
-    /// <summary>Node tool chrome: anchors and handles only — no bounding rectangle.</summary>
+    /// <summary>
+    /// Node tool chrome: anchors and handles only — no bounding rectangle.
+    ///
+    /// The nodes are stored in the path's own placement frame and the overlay is drawn outside every
+    /// group's pushed transform, so each point is carried out by <see cref="SelectionEngine.ToWorld"/>
+    /// first. Drawing them at their stored coordinates put the handles somewhere the artwork is not, and
+    /// therefore somewhere the pointer could not grab them - the picture and the hit test have to agree
+    /// about the frame as surely as the edit does (#173).
+    /// </summary>
     private void PaintNodeChrome(DrawingContext context, PathItem path)
     {
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
         var pen = new Pen(accent, 1.4);
         double half = 4.0;
 
+        AffineTransform toWorld = SelectionEngine.ToWorld(path);
+        Point Map(Point2D stored) => ModelToScreen(toWorld.Transform(stored));
+
         foreach (SubPath sub in path.SubPaths)
         {
             foreach (PathNode node in sub.Nodes)
             {
-                Point anchor = ModelToScreen(node.Anchor);
+                Point anchor = Map(node.Anchor);
                 if (!node.HasStraightIncoming)
                 {
-                    DrawHandleLine(context, anchor, ModelToScreen(node.InHandle));
+                    DrawHandleLine(context, anchor, Map(node.InHandle));
                 }
 
                 if (!node.HasStraightOutgoing)
                 {
-                    DrawHandleLine(context, anchor, ModelToScreen(node.OutHandle));
+                    DrawHandleLine(context, anchor, Map(node.OutHandle));
                 }
             }
 
             foreach (PathNode node in sub.Nodes)
             {
-                Point anchor = ModelToScreen(node.Anchor);
+                Point anchor = Map(node.Anchor);
                 if (!node.HasStraightIncoming)
                 {
-                    context.DrawEllipse(Brushes.White, pen, ModelToScreen(node.InHandle), half, half);
+                    context.DrawEllipse(Brushes.White, pen, Map(node.InHandle), half, half);
                 }
 
                 if (!node.HasStraightOutgoing)
                 {
-                    context.DrawEllipse(Brushes.White, pen, ModelToScreen(node.OutHandle), half, half);
+                    context.DrawEllipse(Brushes.White, pen, Map(node.OutHandle), half, half);
                 }
 
                 context.DrawRectangle(Brushes.White, pen,
@@ -5530,16 +5543,20 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        // Stored coordinates, carried out through the one composition, exactly as PaintNodeChrome does.
+        AffineTransform toWorld = SelectionEngine.ToWorld(_nodePath);
+        Point Map(Point2D stored) => ModelToScreen(toWorld.Transform(stored));
+
         PathNode node = _nodeSub.Nodes[_nodeIndex];
         Point2D dragged = _nodeIsIn ? node.InHandle : node.OutHandle;
-        Point anchor = ModelToScreen(_nodeAnchorStart);
-        Point handle = ModelToScreen(dragged);
+        Point anchor = Map(_nodeAnchorStart);
+        Point handle = Map(dragged);
 
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
 
         // Faint line from the anchor to the (future) mirrored position.
         context.DrawLine(new Pen(accent, 1.0) { DashStyle = new DashStyle(new[] { 3.0, 3.0 }, 0) },
-            anchor, ModelToScreen(_handleSnapPos));
+            anchor, Map(_handleSnapPos));
 
         // Heavier control handle to signal "release to snap".
         double big = 3.6;

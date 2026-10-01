@@ -1,4 +1,5 @@
 using VCCad.Core.Model;
+using VCCad.Core.Selection;
 using VCCad.Geometry;
 
 namespace VCCad.Core.Commands;
@@ -326,7 +327,7 @@ public sealed class DeleteArtboardCommand : IUndoableCommand
             layer.RemoveItem(item);
             if (_keepChildren)
             {
-                TranslateDescendants(item, _offset);
+                FrameMove.TranslateDescendants(item, _offset);
                 _document.Orphans.AddItem(item);
             }
         }
@@ -341,7 +342,7 @@ public sealed class DeleteArtboardCommand : IUndoableCommand
             if (_keepChildren)
             {
                 _document.Orphans.RemoveItem(item);
-                TranslateDescendants(item, _offset.Negated);
+                FrameMove.TranslateDescendants(item, _offset.Negated);
             }
 
             layer.AddItem(item, index);
@@ -349,13 +350,31 @@ public sealed class DeleteArtboardCommand : IUndoableCommand
 
         _document.InsertArtboard(_artboard, _artboardIndex);
     }
+}
 
-    private static void TranslateDescendants(LayerItem item, Vector2D delta)
+/// <summary>
+/// The frame arithmetic every command that moves art between containers shares.
+///
+/// `DeleteArtboardCommand` (a page's objects to the pasteboard) and `ReparentItemsCommand` (the
+/// pasteboard's objects onto a page) both compensate the frame change by translating the stored geometry,
+/// and the displacement they state is a **world** one - the artboard origin, gained or lost. The geometry
+/// is stored in the frame the item's own groups establish, so the displacement is carried across by
+/// <see cref="SelectionEngine.DeltaInItem"/> rather than added raw. Added raw it moved a grouped object by
+/// the group transform applied to the artboard origin, so a page's grouped art jumped when the page was
+/// deleted or reparented (#173).
+///
+/// A displacement and not a point: the linear part of a frame cancels for a translation, which is what
+/// makes this the same conversion the canvas gestures and the API translations use rather than a second
+/// rule.
+/// </summary>
+internal static class FrameMove
+{
+    public static void TranslateDescendants(LayerItem item, Vector2D delta)
     {
         switch (item)
         {
             case PathItem path:
-                path.TranslateGeometryBy(delta);
+                path.TranslateGeometryBy(SelectionEngine.DeltaInItem(path, delta));
                 break;
             case ArtGroup group:
                 foreach (LayerItem child in group.Children)
@@ -405,7 +424,7 @@ public sealed class ReparentItemsCommand : IUndoableCommand
         foreach (LayerItem item in _items)
         {
             _from.RemoveItem(item);
-            TranslateDescendants(item, _delta);
+            FrameMove.TranslateDescendants(item, _delta);
             _to.AddItem(item);
         }
     }
@@ -420,25 +439,8 @@ public sealed class ReparentItemsCommand : IUndoableCommand
         foreach (LayerItem item in _items)
         {
             _to.RemoveItem(item);
-            TranslateDescendants(item, _delta.Negated);
+            FrameMove.TranslateDescendants(item, _delta.Negated);
             _from.AddItem(item);
-        }
-    }
-
-    private static void TranslateDescendants(LayerItem item, Vector2D delta)
-    {
-        switch (item)
-        {
-            case PathItem path:
-                path.TranslateGeometryBy(delta);
-                break;
-            case ArtGroup group:
-                foreach (LayerItem child in group.Children)
-                {
-                    TranslateDescendants(child, delta);
-                }
-
-                break;
         }
     }
 }

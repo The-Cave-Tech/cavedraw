@@ -129,6 +129,26 @@ public static class SelectionEngine
         => FromWorld(item) is { } fromWorld ? fromWorld.Transform(worldDelta) : default;
 
     /// <summary>
+    /// A transform stated in **world** coordinates as it acts on geometry stored in an item's own
+    /// placement frame: <c>FromWorld ∘ world ∘ ToWorld</c>, or null when the frame collapses the plane.
+    ///
+    /// <see cref="DeltaInItem"/> carries a **displacement** across, which is enough for a translation
+    /// because the linear part of the frame cancels. A scale or a rotation does not cancel: a group that
+    /// turns its contents a quarter turn maps a world x-scale onto the item's own y axis, and a world
+    /// mirror onto the item's other mirror axis. The honest answer is therefore the whole affine
+    /// conjugated by the frame, which is exact in any invertible frame and is one rule rather than a
+    /// family of special cases - the composition <see cref="ToWorld"/> states, read the other way round
+    /// (#165, #172, #173).
+    ///
+    /// Null rather than the identity, for the reason <see cref="FromWorld"/> gives: an item whose frame
+    /// collapses the plane is painted nowhere a pointer could reach, so "where does this go" has no answer.
+    /// </summary>
+    public static AffineTransform? InItemFrame(LayerItem item, AffineTransform world)
+        => FromWorld(item) is { } fromWorld
+            ? fromWorld.Compose(world).Compose(ToWorld(item))
+            : null;
+
+    /// <summary>
     /// The uniform scale an affine transform applies, √|det|.
     ///
     /// Used to move the pick tolerance into whichever frame a point is being tested in: three document
