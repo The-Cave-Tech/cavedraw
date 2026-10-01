@@ -487,6 +487,19 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         set => _active.TextCaretRunIndex = value;
     }
 
+    /// <summary>
+    /// The caret as a character offset into the block being edited - the coordinate the text helpers take.
+    ///
+    /// <see cref="TextCaretRunIndex"/> is the same caret as a run index; the two are published together so a
+    /// caller can ask in the coordinate it needs rather than converting, which is where the type toolbar went
+    /// wrong (issue #157).
+    /// </summary>
+    public int TextCaretOffset
+    {
+        get => _active.TextCaretOffset;
+        set => _active.TextCaretOffset = value;
+    }
+
     public int TextSelectionStart
     {
         get => _active.TextSelectionStart;

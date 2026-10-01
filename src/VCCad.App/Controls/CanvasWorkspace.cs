@@ -5401,6 +5401,13 @@ public sealed class CanvasWorkspace : Control
             ? IndexAtLocal(text, ToTextLocal(text, point))
             : TextEditing.Length(text);
         _editAnchor = _caret;
+
+        // The caret is published **before** the edit is announced. Opening the block is what makes the type
+        // toolbar and the text panel re-read the caret, so announcing first left both describing the run of the
+        // previous caret until something else happened to re-sync them - and the run the caret is actually in is
+        // the one thing this toolbar exists to show (issue #157).
+        UpdateCaretInfo();
+
         _vm!.SelectObject(text);
         _vm.IsEditingText = true;
 
@@ -5409,7 +5416,6 @@ public sealed class CanvasWorkspace : Control
         _vm.EditingText = text;
         _caretOn = true;
         UpdateCaretBlink();
-        UpdateCaretInfo();
         Focus();
         InvalidateVisual();
     }
@@ -5477,8 +5483,18 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        (int run, _) = TextEditing.Locate(_editingText, _caret);
-        _vm.TextCaretRunIndex = run;
+        // Both coordinates of the one caret: the run index the panel names and the character offset the text
+        // helpers take. They are published together so a reader never has to convert - telling the two apart at
+        // a call site is exactly what the type toolbar got wrong (issue #157).
+        //
+        // The index comes from **`RunAt`**, the single place that answers "which run is the caret in", rather
+        // than from `Locate`, which uses a different rule at a run boundary: `RunAt` says the character before
+        // the caret decides (the run the next character joins) while `Locate` gives the run the caret is drawn
+        // at. Two rules meant the panel and the toolbar could name different runs for one caret - the
+        // disagreement this issue is about, one boundary position away from the reported case.
+        _vm.TextCaretOffset = _caret;
+        TextRun? at = TextEditing.RunAt(_editingText, _caret);
+        _vm.TextCaretRunIndex = at is null ? 0 : Math.Max(0, _editingText.Runs.IndexOf(at));
         _vm.TextSelectionStart = Math.Min(_caret, _editAnchor);
         _vm.TextSelectionEnd = Math.Max(_caret, _editAnchor);
     }

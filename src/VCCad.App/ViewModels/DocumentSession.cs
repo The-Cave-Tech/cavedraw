@@ -133,6 +133,16 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// <summary>Run index under the text caret (for run-aware styling).</summary>
     public int TextCaretRunIndex { get; set; }
 
+    /// <summary>
+    /// Where the text caret is, as a **character offset** into the block being edited.
+    ///
+    /// The same caret the run index above is read from, published in the coordinate the text helpers take
+    /// (`TextEditing.RunAt`, `FontAt`). It exists because two integers that mean different things cannot be told
+    /// apart at a call site: the type toolbar was handed the run index where an offset was wanted and described
+    /// the first run for every caret past it (issue #157).
+    /// </summary>
+    public int TextCaretOffset { get; set; }
+
     /// <summary>Current text selection range (global char indices) while editing.</summary>
     public int TextSelectionStart { get; set; }
 

@@ -93,7 +93,12 @@ public sealed class TextToolbar
         // heading and a caption in one frame - so the first run's font is wrong for most carets, and it was
         // what the panel showed while typing went into the run at the caret. The canvas adopts the caret's
         // font as well, and both ask `TextEditing.RunAt`, so the two cannot disagree.
-        TextRun? run = TextEditing.RunAt(item, _view.ViewModel.TextCaretRunIndex)
+        //
+        // `RunAt` takes a **character offset**, and this passed `TextCaretRunIndex` - a **run index** - so for
+        // any block whose first run was non-empty the offset 1 meant "the second character of run 1" and the
+        // toolbar described the first run for every caret past it (issue #157). The offset is now published
+        // alongside the run index, so the toolbar asks in the coordinate `RunAt` takes.
+        TextRun? run = TextEditing.RunAt(item, _view.ViewModel.TextCaretOffset)
                        ?? (item.Runs.Count > 0 ? item.Runs[0] : null);
 
         _suppress = true;
