@@ -13,14 +13,25 @@ namespace VCCad.Core.Model;
 /// </summary>
 public sealed class FlattenedOutline
 {
-    public FlattenedOutline(IReadOnlyList<Point2D> points)
+    public FlattenedOutline(IReadOnlyList<Point2D> points, bool isClosed = true)
     {
         Points = points;
+        IsClosed = isClosed;
         SignedArea = ComputeSignedArea(points);
     }
 
-    /// <summary>The outline, in order. The last point joins back to the first.</summary>
+    /// <summary>The outline, in order.</summary>
     public IReadOnlyList<Point2D> Points { get; }
+
+    /// <summary>
+    /// Whether the last point joins back to the first.
+    ///
+    /// Carried through rather than assumed, because the two are not interchangeable: the closing segment is part
+    /// of a closed outline's length and takes part in the first and last vertex normals, and including it in an
+    /// open one double-counts the path. A width profile measured against a doubled length reaches only half way
+    /// along - a taper that stops in the middle of the line.
+    /// </summary>
+    public bool IsClosed { get; }
 
     /// <summary>
     /// Twice the signed area, halved. Positive and negative are the two winding directions, which is
@@ -163,6 +174,20 @@ public static class PathFlattener
 
     /// <summary>The path's closed subpaths as polygons, flattened to <see cref="Tolerance"/>.</summary>
     public static IReadOnlyList<FlattenedOutline> Flatten(PathItem path, double? tolerance = null)
+        => FlattenCore(path, tolerance, minimumPoints: 3);
+
+    /// <summary>
+    /// The path's subpaths as polylines - open ones included - which is what **stroking** needs.
+    ///
+    /// <see cref="Flatten"/> answers "what polygons does this path fill", and a stroke is not a filled polygon: a
+    /// two-point open line has no area and is still a line, and a stroke has to follow it. So this keeps the open
+    /// polylines, down to two points, and carries each one's closure - which a width profile needs, because the
+    /// closing segment of a closed outline is part of its length and the closing segment of an open one is not.
+    /// </summary>
+    public static IReadOnlyList<FlattenedOutline> FlattenForStroke(PathItem path, double? tolerance = null)
+        => FlattenCore(path, tolerance, minimumPoints: 2);
+
+    private static IReadOnlyList<FlattenedOutline> FlattenCore(PathItem path, double? tolerance, int minimumPoints)
     {
         double limit = tolerance ?? Tolerance;
         var outlines = new List<FlattenedOutline>();
@@ -182,16 +207,16 @@ public static class PathFlattener
                 FlattenCurve(curve, limit, points);
             }
 
-            if (points.Count >= 3)
+            if (points.Count >= minimumPoints)
             {
                 // A closed subpath's last segment ends where the first began, so the closing point is
                 // the first one again. Dropping it here means no consumer has to remember to skip it.
-                if (points.Count > 3 && points[0].NearlyEquals(points[^1], 1e-9))
+                if (points.Count > minimumPoints && points[0].NearlyEquals(points[^1], 1e-9))
                 {
                     points.RemoveAt(points.Count - 1);
                 }
 
-                outlines.Add(new FlattenedOutline(points));
+                outlines.Add(new FlattenedOutline(points, sub.IsClosed));
             }
         }
 
