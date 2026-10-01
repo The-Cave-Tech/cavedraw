@@ -1931,10 +1931,19 @@ public static class EditorOperations
                 }).ToArray(),
             });
 
+        // Filters are a document asset a driver can **edit**, not only replace: the graph is the filter, so a
+        // primitive is added, wired, retuned and removed in place. Every kind and every parameter is declared once,
+        // in FilterPrimitiveRegistry, and these operations refuse anything that declaration does not have rather
+        // than guessing - an unknown kind, a parameter the kind does not take, a buffer nothing produces.
+        //
+        // **The PDF export writes no filter.** `PdfExportSupport` records it, and `document.exportSupport` reports
+        // it: a filtered object exports as the artwork without the filter. So the canvas and the SVG export are
+        // proven to draw the same picture (FilterIdentityTests), and the canvas and the PDF export are not.
         Add("filter.list",
             "The document's filters, with the primitives each holds and the wiring between them. A filter is a " +
             "directed graph rather than a list of effects, so what is reported is what each step reads and what it " +
-            "calls its answer, not just the order.",
+            "calls its answer, not just the order. Every kind's parameters are declared in filter.kinds, which is " +
+            "what a panel is drawn from.",
             "",
             (ctx, _) => ctx.Document.Filters.Select(filter => new
             {
@@ -1944,17 +1953,44 @@ public static class EditorOperations
                 width = filter.Width,
                 height = filter.Height,
                 units = filter.ObjectBoundingBox ? "objectBoundingBox" : "userSpaceOnUse",
+                output = filter.Output.Length == 0 ? null : filter.Output,
                 primitives = filter.Primitives.Select(DescribePrimitive).ToArray(),
             }).ToArray());
 
+        Add("filter.kinds",
+            "Every primitive this build has, with the parameters each one takes, which of them are required and what " +
+            "each means. This is the declaration the other filter operations validate against, so a panel or a " +
+            "driver can be generated from it rather than from a hand-written list that falls out of step; a " +
+            "parameter added to a kind appears here by existing.",
+            "",
+            (ctx, _) => FilterPrimitiveRegistry.All.Select(definition => new
+            {
+                kind = definition.Kind,
+                element = definition.Element,
+                meaning = definition.Meaning,
+                parameters = definition.Parameters.Select(parameter => new
+                {
+                    name = parameter.Name,
+                    kind = parameter.Kind.ToString().ToLowerInvariant(),
+                    meaning = parameter.Meaning,
+                    required = parameter.Required,
+                    @default = parameter.Default,
+                    minimum = double.IsNegativeInfinity(parameter.Minimum) ? (double?)null : parameter.Minimum,
+                    maximum = double.IsPositiveInfinity(parameter.Maximum) ? (double?)null : parameter.Maximum,
+                    choices = parameter.Choices,
+                }).ToArray(),
+            }).ToArray());
+
         Add("filter.create",
-            "Create or replace a filter. primitives is [{kind, in?, in2?, result?, ...}] where kind is " +
-            "gaussianBlur, offset, flood, composite or blend; in/in2 name the buffers a step reads - SourceGraphic, " +
-            "SourceAlpha, or another step's result - and result names this step's answer. The wiring is the filter: " +
-            "a step that reads a named buffer gets that buffer, not whatever happened to run before it. One undo " +
-            "step.",
-            "name:string, primitives:[{kind,in?,in2?,result?,radius?,dx?,dy?,floodColor?,floodOpacity?," +
-            "operator?,mode?}], x?, y?, width?, height?, userSpace?:bool",
+            "Create or replace a filter. primitives is [{kind, in?, in2?, result?, ...}] where kind names a primitive " +
+            "from filter.kinds - gaussianBlur, offset, flood, composite or blend - and in/in2 name the buffers a step " +
+            "reads: SourceGraphic, SourceAlpha, or another step's result. The wiring is the filter: a step that reads " +
+            "a named buffer gets that buffer, not whatever happened to run before it. output names the buffer the " +
+            "filter answers with, which may be an intermediate step's; omitted means the last primitive's. An unknown " +
+            "kind, a parameter the kind does not take, a name nothing produces and a graph that reads its own output " +
+            "are all refused rather than guessed. The library is document state and is not on the undo stack.",
+            "name:string, primitives:[{kind,in?,in2?,result?,...}], x?, y?, width?, height?, userSpace?:bool, " +
+            "output?:string",
             (ctx, p) =>
             {
                 string name = p.GetString("name")
@@ -1965,11 +2001,7 @@ public static class EditorOperations
                 {
                     foreach (JsonElement entry in list.EnumerateArray())
                     {
-                        FilterPrimitive? primitive = ReadPrimitive(entry);
-                        if (primitive is not null)
-                        {
-                            primitives.Add(primitive);
-                        }
+                        primitives.Add(ReadPrimitive(entry));
                     }
                 }
 
@@ -1986,11 +2018,275 @@ public static class EditorOperations
                     Width = p.GetDouble("width", 1.2),
                     Height = p.GetDouble("height", 1.2),
                     ObjectBoundingBox = !p.GetBool("userSpace", false),
+                    Output = p.GetString("output") ?? string.Empty,
                 };
 
-                ctx.Document.AddFilter(filter);
+                ValidateGraph(filter);
+                ReplaceFilter(ctx, filter);
+                return new { created = name, primitives = primitives.Count, output = filter.Output };
+            });
+
+        Add("filter.setRegion",
+            "Where a filter is evaluated and what it answers with - the filter's own settings rather than a step's. " +
+            "The region decides whether a blur near an edge grows into the margin or is cut off, so it is not " +
+            "decoration. Only the members given change; an empty output means the last primitive's result, which is " +
+            "SVG's own rule.",
+            "name:string, x?:number, y?:number, width?:number, height?:number, userSpace?:bool, output?:string",
+            (ctx, p) =>
+            {
+                FilterSpec filter = RequireFilter(ctx, p.GetString("name"));
+                bool given = p.ValueKind == JsonValueKind.Object;
+
+                double width = given && p.TryGetProperty("width", out _) ? p.GetDouble("width", filter.Width) : filter.Width;
+                double height = given && p.TryGetProperty("height", out _) ? p.GetDouble("height", filter.Height) : filter.Height;
+                if (width <= 0 || height <= 0)
+                {
+                    throw new EditorOperationException(
+                        $"a region of {width} by {height} has no area, so nothing would be evaluated - a filter " +
+                        "that paints nothing is not a filter");
+                }
+
+                string output = given && p.TryGetProperty("output", out _)
+                    ? p.GetString("output") ?? string.Empty
+                    : filter.Output;
+
+                FilterSpec edited = filter with
+                {
+                    X = given && p.TryGetProperty("x", out _) ? p.GetDouble("x", filter.X) : filter.X,
+                    Y = given && p.TryGetProperty("y", out _) ? p.GetDouble("y", filter.Y) : filter.Y,
+                    Width = width,
+                    Height = height,
+                    ObjectBoundingBox = given && p.TryGetProperty("userSpace", out _)
+                        ? !p.GetBool("userSpace", false)
+                        : filter.ObjectBoundingBox,
+                    Output = output,
+                };
+
+                ValidateGraph(edited);
+                ReplaceFilter(ctx, edited);
+                return new
+                {
+                    name = edited.Name,
+                    x = edited.X,
+                    y = edited.Y,
+                    width = edited.Width,
+                    height = edited.Height,
+                    units = edited.ObjectBoundingBox ? "objectBoundingBox" : "userSpaceOnUse",
+                    output = edited.Output,
+                };
+            });
+
+        Add("filter.delete",
+            "Delete a filter and clear it from every item that drew through it. The items keep their geometry and " +
+            "their appearance - only the filter goes - which is what makes deleting an asset safe rather than " +
+            "destructive, and matching profile.delete. This writes nothing to the PDF either way: the export carries " +
+            "no filter to begin with.",
+            "name:string",
+            (ctx, p) =>
+            {
+                CadDocument document = ctx.Document;
+                string name = p.GetString("name") ?? string.Empty;
+                if (document.FindFilter(name) is null)
+                {
+                    throw new EditorOperationException($"there is no filter called '{name}'");
+                }
+
+                int cleared = 0;
+                foreach (LayerItem item in document.AllItems().ToList())
+                {
+                    if (item.FilterId == name)
+                    {
+                        item.FilterId = null;
+                        cleared++;
+                    }
+                }
+
+                document.RemoveFilter(name);
                 ctx.ViewModel.NotifyDocumentChanged();
-                return new { created = name, primitives = primitives.Count };
+                return new { deleted = name, cleared };
+            });
+
+        Add("filter.addPrimitive",
+            "Add one step to a filter, at index (the end by default), with the parameters that step's kind takes - " +
+            "the same names filter.kinds declares. The step lands unwired unless in/in2/result are given: a buffer " +
+            "left out is the previous step's result, and filter.connectPrimitive is what names one explicitly. A " +
+            "kind this build does not have, a parameter the kind does not take, a name nothing produces, a result " +
+            "another step already claims and a wiring that runs in a circle are all refused.",
+            "name:string, kind:string, index?:number, in?:string, in2?:string, result?:string, <the kind's own " +
+            "parameters>",
+            (ctx, p) =>
+            {
+                FilterSpec filter = RequireFilter(ctx, p.GetString("name"));
+                FilterPrimitive primitive = ReadPrimitive(p, "name", "index");
+
+                int index = p.ValueKind == JsonValueKind.Object && p.TryGetProperty("index", out _)
+                    ? (int)p.GetLong("index", filter.Primitives.Count)
+                    : filter.Primitives.Count;
+                if (index < 0 || index > filter.Primitives.Count)
+                {
+                    throw new EditorOperationException(
+                        $"'{filter.Name}' has {filter.Primitives.Count} primitives, so there is nowhere to insert " +
+                        $"one at {index}");
+                }
+
+                List<FilterPrimitive> primitives = filter.Primitives.ToList();
+                primitives.Insert(index, primitive);
+
+                FilterSpec edited = filter with { Primitives = primitives };
+                ValidateGraph(edited);
+                ReplaceFilter(ctx, edited);
+                return new { name = edited.Name, index, kind = primitive.Kind.ToString(), primitives = primitives.Count };
+            });
+
+        Add("filter.removePrimitive",
+            "Remove one step from a filter. A step another step still reads is refused rather than removed, because " +
+            "its consumer would be left reading a name nothing produces and would silently receive a transparent " +
+            "buffer - rewire the consumer with filter.connectPrimitive first, or the picture changes somewhere the " +
+            "edit does not point at. A filter cannot lose its last primitive: one with none paints nothing, so " +
+            "delete the filter instead.",
+            "name:string, index:number",
+            (ctx, p) =>
+            {
+                FilterSpec filter = RequireFilter(ctx, p.GetString("name"));
+                int index = PrimitiveIndex(p, filter);
+                FilterPrimitive removed = filter.Primitives[index];
+
+                List<string> readers = filter.ConsumersOf(removed.Result)
+                    .Where(consumer => !ReferenceEquals(consumer, removed))
+                    .Select(consumer => consumer.Kind.ToString())
+                    .ToList();
+                if (removed.Result.Length > 0 && readers.Count > 0)
+                {
+                    throw new EditorOperationException(
+                        $"'{removed.Result}' is read by {string.Join(", ", readers)}, so removing its producer would " +
+                        "leave them reading a buffer nothing makes");
+                }
+
+                if (removed.Result.Length > 0 && filter.Output == removed.Result)
+                {
+                    throw new EditorOperationException(
+                        $"'{removed.Result}' is the filter's own output, so removing its producer would leave the " +
+                        "filter with nothing to answer with");
+                }
+
+                if (filter.Primitives.Count <= 1)
+                {
+                    throw new EditorOperationException(
+                        $"'{filter.Name}' would be left with no primitives, which paints nothing - delete the filter " +
+                        "instead");
+                }
+
+                List<FilterPrimitive> primitives = filter.Primitives.ToList();
+                primitives.RemoveAt(index);
+
+                FilterSpec edited = filter with { Primitives = primitives };
+                ValidateGraph(edited);
+                ReplaceFilter(ctx, edited);
+                return new { name = edited.Name, removed = removed.Kind.ToString(), remaining = primitives.Count };
+            });
+
+        Add("filter.connectPrimitive",
+            "Name the buffers one step reads and the buffer it produces - the wiring, which is what makes a filter a " +
+            "graph rather than a list. An input may be SourceGraphic, SourceAlpha, BackgroundImage, FillPaint or " +
+            "StrokePaint, or the result of any step in this filter; only the members given change. A name nothing " +
+            "produces, a result another step already claims, a connection that would make the graph read its own " +
+            "output, and an input the step's kind does not take (feFlood reads nothing) are each refused, because " +
+            "each of them changes what every later step receives without saying so.",
+            "name:string, index:number, in?:string, in2?:string, result?:string",
+            (ctx, p) =>
+            {
+                FilterSpec filter = RequireFilter(ctx, p.GetString("name"));
+                int index = PrimitiveIndex(p, filter);
+                FilterPrimitive primitive = filter.Primitives[index];
+                FilterPrimitiveDefinition definition = FilterPrimitiveRegistry.Find(primitive.Kind.ToString())
+                    ?? throw new EditorOperationException(
+                        $"{primitive.Kind} is not a primitive filter.kinds declares");
+
+                bool given = p.ValueKind == JsonValueKind.Object;
+                bool has(string member) => given && p.TryGetProperty(member, out _);
+
+                foreach (string member in new[] { "in", "in2", "result" })
+                {
+                    if (has(member) && definition.Parameter(member) is null)
+                    {
+                        throw new EditorOperationException(
+                            $"{definition.Element} has no '{member}'; it takes " +
+                            $"{string.Join(", ", definition.Parameters.Select(parameter => parameter.Name))}");
+                    }
+                }
+
+                FilterPrimitive wired = primitive with
+                {
+                    Input = has("in") ? NullIfEmpty(p.GetString("in")) : primitive.Input,
+                    Input2 = has("in2") ? NullIfEmpty(p.GetString("in2")) : primitive.Input2,
+                    Result = has("result") ? p.GetString("result") ?? string.Empty : primitive.Result,
+                };
+
+                List<FilterPrimitive> primitives = filter.Primitives.ToList();
+                primitives[index] = wired;
+
+                FilterSpec edited = filter with { Primitives = primitives };
+                ValidateGraph(edited);
+                ReplaceFilter(ctx, edited);
+                return new
+                {
+                    name = edited.Name,
+                    index,
+                    input = wired.Input,
+                    input2 = wired.Input2,
+                    result = wired.Result.Length == 0 ? null : wired.Result,
+                };
+            });
+
+        Add("filter.setPrimitiveParameter",
+            "Change one value of one step - a blur's radius, an offset's displacement, a flood's colour and opacity, " +
+            "a composite's operator, a blend's mode. The parameter is named as filter.kinds declares it, and a name " +
+            "that kind does not take is refused rather than ignored. Colours are [r,g,b] with components 0-255. " +
+            "Inputs and results are wiring rather than values, so they belong to filter.connectPrimitive.",
+            "name:string, index:number, parameter:string, value:number|string|array",
+            (ctx, p) =>
+            {
+                FilterSpec filter = RequireFilter(ctx, p.GetString("name"));
+                int index = PrimitiveIndex(p, filter);
+                FilterPrimitive primitive = filter.Primitives[index];
+                FilterPrimitiveDefinition definition = FilterPrimitiveRegistry.Find(primitive.Kind.ToString())
+                    ?? throw new EditorOperationException(
+                        $"{primitive.Kind} is not a primitive filter.kinds declares");
+
+                string parameterName = p.GetString("parameter")
+                    ?? throw new EditorOperationException("filter.setPrimitiveParameter needs 'parameter'");
+                FilterParameter parameter = definition.Parameter(parameterName)
+                    ?? throw new EditorOperationException(
+                        $"{definition.Element} has no parameter '{parameterName}'; it takes " +
+                        $"{string.Join(", ", definition.Parameters.Select(entry => entry.Name))}");
+
+                if (parameter.Kind == FilterParameterKind.Buffer)
+                {
+                    throw new EditorOperationException(
+                        $"'{parameter.Name}' is wiring rather than a value - use filter.connectPrimitive");
+                }
+
+                if (p.ValueKind != JsonValueKind.Object || !p.TryGetProperty("value", out JsonElement value))
+                {
+                    throw new EditorOperationException("filter.setPrimitiveParameter needs 'value'");
+                }
+
+                ValidateValue(definition, parameter, value);
+                FilterPrimitive changed = WithParameter(primitive, parameter.Name, value);
+
+                List<FilterPrimitive> primitives = filter.Primitives.ToList();
+                primitives[index] = changed;
+
+                FilterSpec edited = filter with { Primitives = primitives };
+                ValidateGraph(edited);
+                ReplaceFilter(ctx, edited);
+                return new
+                {
+                    name = edited.Name,
+                    index,
+                    parameter = parameter.Name,
+                    primitive = DescribePrimitive(changed),
+                };
             });
 
         Add("filter.apply", "Draw the selected items through a filter. An empty name removes the filter.",
@@ -5879,50 +6175,300 @@ public static class EditorOperations
         radius = Math.Round(primitive.Radius, 4),
         dx = Math.Round(primitive.Dx, 4),
         dy = Math.Round(primitive.Dy, 4),
-        floodColor = primitive.FloodColor is { } colour
-            ? new[] { Math.Round(colour.R, 6), Math.Round(colour.G, 6), Math.Round(colour.B, 6) }
-            : null,
+        // 0-255, because that is how every operation takes a colour - so what filter.list reports can be sent
+        // straight back to filter.setPrimitiveParameter without a caller having to know the model stores 0-1.
+        floodColor = primitive.FloodColor is { } colour ? ColourBytes(colour) : null,
         floodOpacity = Math.Round(primitive.FloodOpacity, 4),
         op = primitive.Operator,
         mode = primitive.Mode,
     };
 
+    private static int[] ColourBytes(ColorRgb colour) => new[]
+    {
+        (int)Math.Round(Math.Clamp(colour.R, 0.0, 1.0) * 255),
+        (int)Math.Round(Math.Clamp(colour.G, 0.0, 1.0) * 255),
+        (int)Math.Round(Math.Clamp(colour.B, 0.0, 1.0) * 255),
+    };
+
     /// <summary>
-    /// A primitive from the parameters a caller sent, or null when the kind is not one this build has.
+    /// A primitive from the parameters a caller sent, validated against the declaration for its kind.
     ///
-    /// A primitive that is not understood is **skipped** rather than approximated: a filter is a graph, and a step
-    /// that silently does nothing changes what every step after it receives.
+    /// A kind this build does not have, a parameter the kind does not take, and a required parameter that is
+    /// missing are each **refused**: a filter is a graph, and a step that silently does nothing changes what every
+    /// step after it receives. <paramref name="ignored"/> names the members of the caller's own envelope - `name`,
+    /// `index` - which are not the primitive's.
     /// </summary>
-    private static FilterPrimitive? ReadPrimitive(JsonElement entry)
+    private static FilterPrimitive ReadPrimitive(JsonElement entry, params string[] ignored)
     {
         if (entry.ValueKind != JsonValueKind.Object)
         {
-            return null;
+            throw new EditorOperationException("a primitive must be an object like {kind, in?, in2?, result?, ...}");
         }
 
-        string kind = (entry.GetString("kind") ?? string.Empty).ToLowerInvariant();
+        string kind = entry.GetString("kind") ?? string.Empty;
+        FilterPrimitiveDefinition definition = FilterPrimitiveRegistry.Find(kind)
+            ?? throw new EditorOperationException(
+                $"'{kind}' is not a filter primitive this build has; filter.kinds lists " +
+                string.Join(", ", FilterPrimitiveRegistry.All.Select(known => known.Kind)));
+
+        foreach (JsonProperty member in entry.EnumerateObject())
+        {
+            if (member.NameEquals("kind") || ignored.Contains(member.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            FilterParameter? parameter = definition.Parameter(member.Name);
+            if (parameter is null)
+            {
+                throw new EditorOperationException(
+                    $"{definition.Element} has no parameter '{member.Name}'; it takes " +
+                    string.Join(", ", definition.Parameters.Select(p => p.Name)));
+            }
+
+            ValidateValue(definition, parameter, member.Value);
+        }
+
+        foreach (FilterParameter parameter in definition.Required)
+        {
+            if (!entry.TryGetProperty(parameter.Name, out _))
+            {
+                throw new EditorOperationException($"{definition.Element} needs '{parameter.Name}': {parameter.Meaning}");
+            }
+        }
+
         string? input = entry.GetString("in");
         string? input2 = entry.GetString("in2");
         string result = entry.GetString("result") ?? string.Empty;
 
-        return kind switch
+        return definition.ModelKind switch
         {
-            "gaussianblur" or "blur" => FilterPrimitive.Blur(entry.GetDouble("radius", 2.0), input, result),
-            "offset" => FilterPrimitive.OffsetBy(
-                entry.GetDouble("dx", 0.0), entry.GetDouble("dy", 0.0), input, result),
-            "flood" => FilterPrimitive.Solid(
-                entry.TryGetProperty("floodColor", out _)
-                    ? entry.ParseColor("floodColor", ColorRgb.Black)
-                    : ColorRgb.Black,
+            FilterPrimitiveKind.GaussianBlur => FilterPrimitive.Blur(entry.GetDouble("radius", 0), input, result),
+            FilterPrimitiveKind.Offset => FilterPrimitive.OffsetBy(
+                entry.GetDouble("dx", 0), entry.GetDouble("dy", 0), input, result),
+            FilterPrimitiveKind.Flood => FilterPrimitive.Solid(
+                entry.TryGetColorArray("floodColor", out ColorRgb ink) ? ink : ColorRgb.Black,
                 entry.GetDouble("floodOpacity", 1.0),
                 result),
-            "composite" => FilterPrimitive.Combine(
+            FilterPrimitiveKind.Composite => FilterPrimitive.Combine(
                 entry.GetString("operator") ?? "over", input ?? "SourceGraphic", input2 ?? string.Empty, result),
-            "blend" => FilterPrimitive.Blended(
+            _ => FilterPrimitive.Blended(
                 entry.GetString("mode") ?? "normal", input ?? "SourceGraphic", input2 ?? string.Empty, result),
-            _ => null,
         };
     }
+
+    /// <summary>
+    /// Whether a value is one the declaration allows for a parameter - the range of a number, the words of a
+    /// choice, the shape of a colour.
+    ///
+    /// Refusing here rather than clamping is the point: an operator or a radius outside what the kind declares is a
+    /// caller who believed it meant something, and a value silently moved is a picture that does not match the
+    /// request with nothing to explain it.
+    /// </summary>
+    private static void ValidateValue(
+        FilterPrimitiveDefinition definition, FilterParameter parameter, JsonElement value)
+    {
+        string where = $"{definition.Element} '{parameter.Name}'";
+
+        switch (parameter.Kind)
+        {
+            case FilterParameterKind.Number:
+            {
+                if (value.ValueKind != JsonValueKind.Number)
+                {
+                    throw new EditorOperationException($"{where} takes a number");
+                }
+
+                double number = value.GetDouble();
+                if (number >= parameter.Minimum && number <= parameter.Maximum)
+                {
+                    break;
+                }
+
+                string bound =
+                    parameter.Minimum > double.NegativeInfinity && parameter.Maximum < double.PositiveInfinity
+                        ? $"between {parameter.Minimum} and {parameter.Maximum}"
+                        : parameter.Minimum > double.NegativeInfinity
+                            ? $"at least {parameter.Minimum}"
+                            : $"at most {parameter.Maximum}";
+                throw new EditorOperationException($"{where} must be {bound}; {number} is not");
+            }
+
+            case FilterParameterKind.Color:
+                if (!TryColour(value, out _))
+                {
+                    throw new EditorOperationException(
+                        $"{where} takes a colour as [r,g,b] with components 0-255, or a hex string");
+                }
+
+                break;
+
+            case FilterParameterKind.Choice:
+            {
+                string? text = value.ValueKind == JsonValueKind.String ? value.GetString()?.Trim() : null;
+                if (text is null || (parameter.Choices is { Length: > 0 } choices &&
+                                     !choices.Contains(text, StringComparer.OrdinalIgnoreCase)))
+                {
+                    throw new EditorOperationException(
+                        $"{where} is not one of {string.Join(", ", parameter.Choices ?? Array.Empty<string>())}");
+                }
+
+                break;
+            }
+
+            case FilterParameterKind.Buffer:
+                if (value.ValueKind != JsonValueKind.String)
+                {
+                    throw new EditorOperationException($"{where} takes a buffer name");
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>
+    /// A colour the way every other operation takes one: [r,g,b] with components 0-255, or a hex string.
+    ///
+    /// The model's own channels are 0-1, which is the one place in this build where a colour is not a byte - so
+    /// this is where the two meet, rather than each operation converting on its own.
+    /// </summary>
+    private static bool TryColour(JsonElement value, out ColorRgb colour)
+    {
+        colour = ColorRgb.Black;
+
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            double[] parts = value.EnumerateArray()
+                .Where(part => part.ValueKind == JsonValueKind.Number)
+                .Select(part => part.GetDouble())
+                .ToArray();
+            if (parts.Length < 3)
+            {
+                return false;
+            }
+
+            static byte Channel(double component) => (byte)Math.Clamp((int)Math.Round(component), 0, 255);
+            colour = ColorRgb.FromBytes(Channel(parts[0]), Channel(parts[1]), Channel(parts[2]));
+            return true;
+        }
+
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            try
+            {
+                colour = HexColor.Parse(value.GetString()!);
+                return true;
+            }
+            catch (FormatException)
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>One value of one primitive, set by the name the declaration gives it.</summary>
+    private static FilterPrimitive WithParameter(FilterPrimitive primitive, string parameter, JsonElement value) =>
+        parameter switch
+        {
+            "radius" => primitive with { Radius = value.GetDouble() },
+            "dx" => primitive with { Dx = value.GetDouble() },
+            "dy" => primitive with { Dy = value.GetDouble() },
+            "floodColor" => primitive with { FloodColor = TryColour(value, out ColorRgb ink) ? ink : ColorRgb.Black },
+            "floodOpacity" => primitive with { FloodOpacity = value.GetDouble() },
+            "operator" => primitive with { Operator = value.GetString()!.Trim() },
+            "mode" => primitive with { Mode = value.GetString()!.Trim() },
+            // A parameter the registry declares but this build cannot set is a defect, not a caller error: it says
+            // the declaration grew a parameter without the engine learning it. Failing loudly is how it is found.
+            _ => throw new EditorOperationException(
+                $"'{parameter}' is declared for {primitive.Kind} but this build has no way to set it"),
+        };
+
+    /// <summary>The filter a caller named, or an error naming what is missing.</summary>
+    private static FilterSpec RequireFilter(AutomationContext ctx, string? name)
+    {
+        name ??= string.Empty;
+        return ctx.Document.FindFilter(name)
+            ?? throw new EditorOperationException($"there is no filter called '{name}'");
+    }
+
+    /// <summary>The primitive a caller named by position, or an error naming how many there are.</summary>
+    private static int PrimitiveIndex(JsonElement p, FilterSpec filter)
+    {
+        int index = (int)p.GetLong("index", -1);
+        if (index < 0 || index >= filter.Primitives.Count)
+        {
+            throw new EditorOperationException(
+                $"'{filter.Name}' has {filter.Primitives.Count} primitives, so there is no primitive {index}");
+        }
+
+        return index;
+    }
+
+    /// <summary>
+    /// Puts an edited filter back.
+    ///
+    /// Filters are document state rather than a property of an item, so an edit **replaces the whole spec**: the
+    /// canvas looks the filter up as it paints, and there is no list element or plain property to assign to here
+    /// that anything would hear.
+    /// </summary>
+    private static void ReplaceFilter(AutomationContext ctx, FilterSpec filter)
+    {
+        ctx.Document.AddFilter(filter);
+        ctx.ViewModel.NotifyDocumentChanged();
+    }
+
+    /// <summary>
+    /// Whether a graph can be evaluated at all: one producer per name, every buffer either supplied by the renderer
+    /// or produced by a step, an output that exists, and no wiring that runs in a circle.
+    ///
+    /// These are the rules that make "the wiring is the filter" survivable for an editor. Each failure is a
+    /// *silent* one at draw time - the engine hands back a transparent buffer - so the picture changes without
+    /// anything pointing at the edit that changed it, and refusing where the reason can be said is the only place
+    /// it can be said.
+    /// </summary>
+    private static void ValidateGraph(FilterSpec filter)
+    {
+        var named = new HashSet<string>(StringComparer.Ordinal);
+        foreach (FilterPrimitive primitive in filter.Primitives)
+        {
+            if (primitive.Result.Length > 0 && !named.Add(primitive.Result))
+            {
+                throw new EditorOperationException(
+                    $"two steps both call their answer '{primitive.Result}'; a buffer name has to have one producer, " +
+                    "or a step reading it gets whichever of them is evaluated last");
+            }
+
+            foreach (string? name in new[] { primitive.Input, primitive.Input2 })
+            {
+                if (name is not { Length: > 0 } || FilterSpec.IsSourceInput(name) || filter.ProducerOf(name) is not null)
+                {
+                    continue;
+                }
+
+                throw new EditorOperationException(
+                    $"'{name}' is not a buffer anything produces; a step reads SourceGraphic, SourceAlpha, " +
+                    "BackgroundImage, FillPaint, StrokePaint, or the result of another step");
+            }
+        }
+
+        if (filter.Output.Length > 0 && filter.ProducerOf(filter.Output) is null)
+        {
+            throw new EditorOperationException(
+                $"'{filter.Output}' is not a result any step names, so the filter would have no answer");
+        }
+
+        if (filter.HasCycle)
+        {
+            throw new EditorOperationException(
+                "the wiring runs in a circle - a step ends up reading the buffer it produces, which has no answer " +
+                "to evaluate");
+        }
+    }
+
+    private static string? NullIfEmpty(string? name)
+        => string.IsNullOrEmpty(name) ? null : name;
 
     /// <summary>
     /// The stroke a caller named, or null when they named none.

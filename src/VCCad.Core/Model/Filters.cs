@@ -125,6 +125,21 @@ public sealed record FilterSpec
     public bool IsEmpty => Primitives.Count == 0;
 
     /// <summary>
+    /// The buffers a renderer supplies rather than a primitive producing them.
+    ///
+    /// These are the names a graph is allowed to read without a producer. The engine treats the last three as
+    /// transparent because this model has no fill, stroke or background picture to hand them, which is a documented
+    /// gap rather than a reason to refuse a file that uses them.
+    /// </summary>
+    public static IReadOnlyList<string> SourceInputs { get; } = new[]
+    {
+        "SourceGraphic", "SourceAlpha", "BackgroundImage", "FillPaint", "StrokePaint",
+    };
+
+    /// <summary>Whether a buffer name is one the renderer supplies.</summary>
+    public static bool IsSourceInput(string name) => SourceInputs.Contains(name, StringComparer.Ordinal);
+
+    /// <summary>
     /// The primitive that produces a named buffer, or null.
     ///
     /// Used by a renderer to walk the graph from the output backwards, which is the only way to evaluate what is
@@ -132,6 +147,81 @@ public sealed record FilterSpec
     /// </summary>
     public FilterPrimitive? ProducerOf(string name)
         => Primitives.LastOrDefault(p => p.Result == name);
+
+    /// <summary>
+    /// The primitives that **read** a named buffer - the other end of <see cref="ProducerOf"/>.
+    ///
+    /// One result feeding several consumers is the shape that tells a graph from a pipeline, so this is what an
+    /// edit asks before removing a step or renaming its result: a consumer left reading a name nothing produces
+    /// silently receives a transparent buffer, and the picture goes wrong somewhere else entirely.
+    /// </summary>
+    public IEnumerable<FilterPrimitive> ConsumersOf(string name)
+        => Primitives.Where(p => p.Input == name || p.Input2 == name);
+
+    /// <summary>
+    /// Whether the wiring runs in a circle - a step that reads, through any chain of consumers, the buffer it
+    /// produces.
+    ///
+    /// A cycle has no answer to evaluate: the engine deliberately refuses to recurse into one and hands back a
+    /// transparent buffer rather than hanging, so a graph like this draws nothing at all. This is what lets an
+    /// operation refuse to build one in the first place, where the reason can be said.
+    /// </summary>
+    public bool HasCycle
+    {
+        get
+        {
+            // Two primitives that agree on every field are equal as records, so the walk is over positions rather
+            // than over primitives: a graph is allowed to hold the same step twice.
+            var producers = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (int i = 0; i < Primitives.Count; i++)
+            {
+                if (Primitives[i].Result.Length > 0)
+                {
+                    // The last producer wins, which is the same answer ProducerOf gives.
+                    producers[Primitives[i].Result] = i;
+                }
+            }
+
+            var settled = new bool[Primitives.Count];
+            var onPath = new bool[Primitives.Count];
+
+            bool Walk(int index)
+            {
+                if (onPath[index])
+                {
+                    return true;
+                }
+
+                if (settled[index])
+                {
+                    return false;
+                }
+
+                onPath[index] = true;
+                foreach (string? name in new[] { Primitives[index].Input, Primitives[index].Input2 })
+                {
+                    if (name is { Length: > 0 } && producers.TryGetValue(name, out int producer) && Walk(producer))
+                    {
+                        return true;
+                    }
+                }
+
+                onPath[index] = false;
+                settled[index] = true;
+                return false;
+            }
+
+            for (int i = 0; i < Primitives.Count; i++)
+            {
+                if (Walk(i))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
 
     /// <summary>The buffers every primitive reads, which is how a renderer finds its roots.</summary>
     public IEnumerable<string> Inputs

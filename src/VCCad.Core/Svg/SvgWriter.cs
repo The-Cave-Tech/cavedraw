@@ -271,6 +271,15 @@ public static class SvgWriter
                     }
                 }
 
+                // Which buffer the filter **answers with**, when it is not the last step's. SVG has no attribute for
+                // this - a viewer always takes the last primitive - but the model carries it, the reader reads it
+                // from here, and a round trip that dropped it would hand back a graph whose last step is not the
+                // one it was drawn from: a different picture, with nothing in the file to say so.
+                if (filter.Output.Length > 0)
+                {
+                    element.Add(new XAttribute("result", filter.Output));
+                }
+
                 foreach (FilterPrimitive primitive in filter.Primitives)
                 {
                     element.Add(PrimitiveElement(primitive));
