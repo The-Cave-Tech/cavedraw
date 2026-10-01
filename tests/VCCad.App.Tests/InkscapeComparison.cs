@@ -37,15 +37,20 @@ public sealed record RenderComparison(
     /// <summary>True when this measurement ignored a border, which changes what the number means.</summary>
     public bool IsInset => Inset > 0;
 
-    public override string ToString() =>
-        string.Create(
+    public override string ToString()
+    {
+        string measured = string.Create(
             CultureInfo.InvariantCulture,
             $"sizes {Width}x{Height} vs {OtherWidth}x{OtherHeight}" +
             $" ({(SizesMatch ? "match" : "MISMATCH")}), compared {Pixels} px," +
             $" mean|delta| {MeanAbsoluteError:F4}/255, max|delta| {MaxChannelDifference}," +
             $" differing {DifferingPixels}/{(Pixels == 0 ? 1 : Pixels)}" +
-            $" ({DifferingProportion * 100.0:F3}%)" +
-            (IsInset ? $", {Inset} px inset ignored" : string.Empty));
+            $" ({DifferingProportion * 100.0:F3}%)");
+
+        return IsInset
+            ? measured + string.Create(CultureInfo.InvariantCulture, $", {Inset} px inset ignored")
+            : measured;
+    }
 }
 
 /// <summary>
@@ -69,6 +74,14 @@ public sealed record RenderComparison(
 /// export of that same model. It measures the canvas and the SVG writer against a foreign
 /// implementation; it does not measure the PDF exporter. That comparison — PDF through poppler —
 /// already exists in <c>tools/qwen-corpus-tracker</c>.
+///
+/// **The editor's chrome is in the picture.** <c>PageRenderer</c> renders through the same
+/// <c>CanvasWorkspace</c> a person sees, so the raster carries what the editor draws on top of the
+/// artwork and the SVG does not: a one-pixel grey page frame around the artboard, and the dashed
+/// bounding box and eight handles of anything that happens to be selected. Both are real
+/// differences, both are the editor rather than the document, and a caller has to deal with them —
+/// <see cref="Compare"/>'s <c>inset</c> for the frame, and clearing the selection before rendering
+/// (as <c>scripts/compare-inkscape.ps1</c> does) for the handles.
 /// </summary>
 public static class InkscapeComparison
 {
@@ -191,8 +204,10 @@ public static class InkscapeComparison
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Inkscape could not be started: " + inkscape);
 
-            string stdout = process.StandardOutput.ReadToEnd();
-            string stderr = process.StandardError.ReadToEnd();
+            // Drained on their own tasks rather than with ReadToEnd, so the timeout below is what
+            // bounds the wait: reading to the end of a pipe on a hung process blocks for ever.
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
             if (!process.WaitForExit((int)RenderTimeout.TotalMilliseconds))
             {
                 try
@@ -208,6 +223,8 @@ public static class InkscapeComparison
                     $"Inkscape did not finish within {RenderTimeout.TotalSeconds:0} s rendering {exportDpi:F4} dpi.");
             }
 
+            string stdout = stdoutTask.GetAwaiter().GetResult();
+            string stderr = stderrTask.GetAwaiter().GetResult();
             if (!File.Exists(pngPath))
             {
                 throw new InvalidOperationException(
@@ -249,7 +266,7 @@ public static class InkscapeComparison
     /// own a <see cref="VCCad.App.Views.PageRenderer"/> workspace, and so a test can substitute a
     /// fixed raster when it is checking the comparison maths rather than the renderer.
     /// </param>
-    public static RenderPair RenderPair(
+    public static RenderPair RenderBoth(
         CadDocument document,
         int pageIndex,
         double dpi,
@@ -277,7 +294,7 @@ public static class InkscapeComparison
         int inset = 0,
         string? inkscapePath = null)
     {
-        RenderPair pair = RenderPair(document, pageIndex, dpi, renderWithVccad, inkscapePath);
+        RenderPair pair = RenderBoth(document, pageIndex, dpi, renderWithVccad, inkscapePath);
         return Compare(pair.VccadPng, pair.InkscapePng, channelTolerance, inset);
     }
 

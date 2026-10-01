@@ -144,7 +144,7 @@ public class InkscapeComparisonTests
         }
 
         CadDocument document = CalibrationDocument();
-        InkscapeComparison.RenderPair pair = InkscapeComparison.RenderPair(document, 0, 72, Render);
+        InkscapeComparison.RenderPair pair = InkscapeComparison.RenderBoth(document, 0, 72, Render);
         RenderComparison whole = InkscapeComparison.Compare(pair.VccadPng, pair.InkscapePng);
         RenderComparison artwork = InkscapeComparison.Compare(pair.VccadPng, pair.InkscapePng, inset: 1);
 
