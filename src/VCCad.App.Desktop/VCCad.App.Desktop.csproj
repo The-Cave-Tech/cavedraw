@@ -28,6 +28,12 @@
   <ItemGroup>
     <PackageReference Include="Avalonia.Desktop" Version="11.3.11" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.11" />
+
+    <!-- Avalonia's X11 desktop backend needs D-Bus on Linux and pulls this in transitively, so it is in no
+         csproj and only a publish surfaces it. 0.21.2 carries a known high severity advisory
+         (GHSA-xrw6-gwf8-vvr9); this pins the patched release rather than suppressing the warning, because
+         a suppression would hide the next one too. -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" />
   </ItemGroup>
 
   <ItemGroup>
