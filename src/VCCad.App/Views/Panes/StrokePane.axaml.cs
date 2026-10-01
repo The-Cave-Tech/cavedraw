@@ -201,7 +201,18 @@ public partial class StrokePane : UserControl
         }
     }
 
-    /// <summary>Applies the current stroke fields to the selection (and current style).</summary>
+    /// <summary>
+    /// Applies the current fields to **the stroke the pane is describing** - the inspected one - by calling the
+    /// session, the way the operations do, rather than building the edit here.
+    ///
+    /// The old version of this wrote the selection's **top** stroke (`PathItem.Stroke`, the compatibility property),
+    /// so typing a width while the appearance panel showed stroke 2 changed stroke 3: one panel describing a stroke
+    /// the other was not editing. Naming the index is what closes that, and the panel does not build the edit itself
+    /// because a capability living only in a click handler is a defect here.
+    ///
+    /// With nothing selected there is no stroke to edit, and the fields keep doing what they did before - becoming
+    /// the style objects drawn next get, which is why setting a width before drawing works.
+    /// </summary>
     private void ApplyNow()
     {
         if (_vm is null || _syncing)
@@ -214,7 +225,23 @@ public partial class StrokePane : UserControl
         StrokeCap cap = StrokeCapBox.SelectedIndex switch { 1 => StrokeCap.Round, 2 => StrokeCap.Square, _ => StrokeCap.Butt };
         StrokeJoin join = StrokeJoinBox.SelectedIndex switch { 1 => StrokeJoin.Round, 2 => StrokeJoin.Bevel, _ => StrokeJoin.Miter };
         StrokeAlignment align = StrokeAlignBox.SelectedIndex switch { 1 => StrokeAlignment.Inside, 2 => StrokeAlignment.Outside, _ => StrokeAlignment.Center };
-        _vm.ApplyStroke(width, cap, join, miter, align, DashPreset(StrokeDashBox.SelectedIndex));
+        DashPattern dash = DashPreset(StrokeDashBox.SelectedIndex);
+
+        if (_vm.ActiveSession.SelectedPaths().FirstOrDefault() is not { } path)
+        {
+            _vm.ApplyStroke(width, cap, join, miter, align, dash);
+            return;
+        }
+
+        int index = _vm.InspectedStroke;
+        if (index < 0 || index >= path.Strokes.Count)
+        {
+            // Nothing is being inspected, so there is no stroke this could honestly be applied to. Editing the top
+            // one instead is exactly the disagreement the shared index exists to prevent.
+            return;
+        }
+
+        _vm.ActiveSession.ApplyStrokeAt(index, width, cap, join, miter, align, dash);
     }
 
     public void Attach(EditorViewModel vm)
@@ -222,6 +249,18 @@ public partial class StrokePane : UserControl
         _vm = vm;
         vm.DocumentChanged += (_, _) => Refresh();
         vm.SelectionChanged += (_, _) => Refresh();
+
+        // The appearance panel is what chooses the inspected stroke, and it does so by writing the shared state
+        // rather than by telling this pane. Listening for that is what keeps the fields describing the stroke the
+        // other panel is showing instead of the one that was showing when this panel last refreshed.
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(EditorViewModel.InspectedStroke) or nameof(EditorViewModel.InspectedStrokeLabel))
+            {
+                Refresh();
+            }
+        };
+
         Refresh();
     }
 
@@ -248,50 +287,80 @@ public partial class StrokePane : UserControl
         return 0;
     }
 
-    private void Refresh()
+    /// <summary>
+    /// The stroke this pane describes: the first selected path's stroke at the shared inspected index, or null when
+    /// there is nothing to describe - no selected path, no inspected stroke, or a stack shorter than the index.
+    ///
+    /// One place, read by both <see cref="Refresh"/> and <see cref="ApplyNow"/>, because a pane that shows one stroke
+    /// and edits another is the defect this is here to remove.
+    /// </summary>
+    private StrokeSpec? InspectedStrokeSpec()
     {
-        if (_vm?.PrimarySelection is not PathItem path)
+        if (_vm?.ActiveSession.SelectedPaths().FirstOrDefault() is not { } path)
         {
-            StrokeWidthBox.Text = string.Empty;
-            MiterBox.Text = string.Empty;
-            ShowExportWarning(null);
-            RefreshEffects(null);
-            return;
+            return null;
         }
 
+        int index = _vm.InspectedStroke;
+        return index >= 0 && index < path.Strokes.Count ? path.Strokes[index] : null;
+    }
+
+    private void Refresh()
+    {
+        PathItem? path = _vm?.ActiveSession.SelectedPaths().FirstOrDefault();
+
+        // The same words the appearance panel uses, so the two panels cannot be describing different strokes without
+        // saying so.
+        StrokeTargetLabel.Text = _vm?.InspectedStrokeLabel ?? "none";
+
+        // The export warning is about the object (its filter, its blend mode, whether any of its strokes carries a
+        // raster effect), so it reads the path even when no stroke is inspected. The effects list deliberately still
+        // reads the top of the stack: the effect session methods work across the stack rather than on one member, so
+        // pointing the list at the inspected stroke would show one stroke's effects while the buttons edited
+        // another's. Widening those is separate work; leaving the list as it was is at least honest about what it is.
         ShowExportWarning(path);
         RefreshEffects(path);
+
+        StrokeSpec? stroke = InspectedStrokeSpec();
+        if (stroke is null)
+        {
+            _syncing = true;
+            StrokeWidthBox.Text = string.Empty;
+            MiterBox.Text = string.Empty;
+            _syncing = false;
+            return;
+        }
 
         _syncing = true;
         if (!StrokeWidthBox.IsFocused)
         {
-            StrokeWidthBox.Text = path.Stroke.Width.ToString("0.##", CultureInfo.InvariantCulture);
+            StrokeWidthBox.Text = stroke.Width.ToString("0.##", CultureInfo.InvariantCulture);
         }
 
         if (!MiterBox.IsFocused)
         {
-            MiterBox.Text = path.Stroke.MiterLimit.ToString("0.##", CultureInfo.InvariantCulture);
+            MiterBox.Text = stroke.MiterLimit.ToString("0.##", CultureInfo.InvariantCulture);
         }
 
-        StrokeCapBox.SelectedIndex = path.Stroke.Cap switch
+        StrokeCapBox.SelectedIndex = stroke.Cap switch
         {
             StrokeCap.Round => 1,
             StrokeCap.Square => 2,
             _ => 0,
         };
-        StrokeJoinBox.SelectedIndex = path.Stroke.Join switch
+        StrokeJoinBox.SelectedIndex = stroke.Join switch
         {
             StrokeJoin.Round => 1,
             StrokeJoin.Bevel => 2,
             _ => 0,
         };
-        StrokeAlignBox.SelectedIndex = path.Stroke.Alignment switch
+        StrokeAlignBox.SelectedIndex = stroke.Alignment switch
         {
             StrokeAlignment.Inside => 1,
             StrokeAlignment.Outside => 2,
             _ => 0,
         };
-        StrokeDashBox.SelectedIndex = DashIndexOf(path.Stroke.Dash);
+        StrokeDashBox.SelectedIndex = DashIndexOf(stroke.Dash);
         _syncing = false;
     }
 

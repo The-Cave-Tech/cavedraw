@@ -2088,6 +2088,60 @@ public sealed class DocumentSession : INotifyPropertyChanged
         ExecuteIfAny(edits, "Stroke");
     }
 
+    /// <summary>
+    /// Applies stroke geometry to **one** stroke of every selected path - the one at <paramref name="index"/>, counted
+    /// from the bottom of the stack - and reports how many paths changed.
+    ///
+    /// The member-wise counterpart of <see cref="ApplyStroke"/>. With the appearance stack there is no such thing as
+    /// "the stroke" on a selection, so a panel editing a stroke has to name which one it is describing rather than
+    /// overwriting whichever happens to be on top. Here rather than inside the panel, so a person's field and a
+    /// driver's operation run the **same** code - the same reason <see cref="AddStroke"/> is here.
+    ///
+    /// The colour and the width profile are left as the stroke's own: this edit is the geometry a person typed, and
+    /// rebuilding the whole spec would silently discard what the stroke otherwise is. `CurrentStroke`, the style
+    /// objects drawn next get, is deliberately untouched too - it is "the stroke" rather than a member of somebody's
+    /// stack, and there is no honest way to choose which member's geometry should become it.
+    ///
+    /// One <see cref="SetStrokesCommand"/> per path and a composite across the selection, so a gesture is one undo
+    /// step.
+    /// </summary>
+    public int ApplyStrokeAt(int index, double width, StrokeCap cap, StrokeJoin join, double miterLimit,
+        StrokeAlignment alignment, DashPattern? dash = null)
+    {
+        if (index < 0)
+        {
+            return 0;
+        }
+
+        var edits = new List<IUndoableCommand>();
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            // A path whose stack is shorter simply has no stroke at this index - the same reading `StrokeSummary`
+            // takes, where that is a gap in the selection rather than a disagreement about a value.
+            if (index >= path.Strokes.Count)
+            {
+                continue;
+            }
+
+            var stack = path.Strokes.ToList();
+            StrokeSpec before = stack[index];
+            stack[index] = before with
+            {
+                Width = Math.Max(0, width),
+                Cap = cap,
+                Join = join,
+                MiterLimit = Math.Max(1, miterLimit),
+                Alignment = alignment,
+                Dash = dash ?? before.Dash,
+            };
+
+            edits.Add(new SetStrokesCommand(path, stack, "Stroke"));
+        }
+
+        ExecuteIfAny(edits, "Stroke");
+        return edits.Count;
+    }
+
     private void ExecuteIfAny(List<IUndoableCommand> edits, string label)
     {
         if (edits.Count == 0)

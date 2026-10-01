@@ -4,6 +4,13 @@
   <ScrollViewer>
     <StackPanel Margin="10,8" Spacing="8">
       <TextBlock Text="STROKE" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- Which stroke of the selection's stack the fields below describe, in the same words the appearance panel
+           uses. With a stack there is no such thing as "the stroke", so the pane has to say which member it is
+           showing rather than leaving a person to assume it is the top one. -->
+      <TextBlock x:Name="StrokeTargetLabel" TextWrapping="Wrap"
+                 Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+
       <Grid ColumnDefinitions="Auto,*,10,Auto,*">
         <TextBlock Text="Width" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="StrokeWidthBox" Grid.Column="1"/>
