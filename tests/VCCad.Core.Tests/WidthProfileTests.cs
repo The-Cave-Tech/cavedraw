@@ -213,15 +213,22 @@ public class WidthProfileTests
     }
 
     /// <summary>
-    /// **A sharp corner is bevelled rather than left as a needle.**
+    /// **The miter limit is the outer corner's rule: a sharp point is bevelled rather than left as a needle, and
+    /// the corner on the other side is still the intersection of the two offset edges.**
     ///
     /// A mitre at a nearly-straight corner meets the two offset lines a very long way out - the length grows as
-    /// 1/sin(half the turn), so a ten-degree corner reaches 11.5 times the half-width. That is the spike the
-    /// issue calls a bow-tie, and leaving it in is how a stroke acquires a needle sticking out of its artwork at
-    /// every sharp point. Past the miter limit the corner is bevelled instead, which is finite.
+    /// 1/sin(half the included angle), so a ten-degree corner reaches 11.5 times the half-width. Left in, that is
+    /// a needle sticking out of the artwork at every sharp point, so past the miter limit the *outer* corner is
+    /// bevelled instead, which is finite.
+    ///
+    /// Both offset edges meet that far out, on opposite sides of the vertex, and this test used to demand the
+    /// limit on both. That was wrong, and it produced the bow-tie the powerstroke join case draws: the inner
+    /// corner is a **concave** corner of the region, not a spike, so shortening it to one half-width makes the
+    /// two inner edges travel past it and back and the loop crosses itself. The inner assertion below is the
+    /// positive form of what this test used to pin the wrong way.
     /// </summary>
     [Fact]
-    public void ASharpCornerIsBevelledRatherThanSpiking()
+    public void ASharpCornerIsBevelledOnTheOutsideAndMetOnTheInside()
     {
         // A corner with a ten-degree **included** angle - the path doubles back, turning by 170 degrees. This is
         // the shape that spikes, and the one a first attempt gets wrong: a ten-degree *turn* is very nearly
@@ -248,11 +255,20 @@ public class WidthProfileTests
         double Distance(Point2D p)
             => Math.Sqrt(((p.X - corner.X) * (p.X - corner.X)) + ((p.Y - corner.Y) * (p.Y - corner.Y)));
 
-        double furthest = Math.Max(Distance(outline[1]), Distance(outline[3 + 1]));
+        // The path turns towards its own right-hand side, so the left edge is the point of the needle.
+        double outer = Distance(outline[1]);
 
-        // Without the limit the corner would be 11.5 half-widths out - 57.5 - so the two answers are not close.
-        Assert.True(furthest <= (4.0 * 5.0) + 1e-6, $"a bevelled corner stays within the limit, but reached {furthest}");
-        Assert.True(furthest > 4.9, $"and it is still a corner rather than a rounded one: {furthest}");
+        // Without the limit the outer corner would be 11.5 half-widths out - 57.5 - so the two answers are not
+        // close.
+        Assert.True(outer <= (4.0 * 5.0) + 1e-6, $"a bevelled corner stays within the limit, but reached {outer}");
+        Assert.True(outer > 4.9, $"and it is still a corner rather than a rounded one: {outer}");
+
+        // The inner corner is the intersection itself: half the width over the cosine of half the turn, 57.37
+        // here - which is exactly the distance the limit would have cut it back to 5.
+        double inner = Distance(outline[3 + 1]);
+        double expected = 5.0 / Math.Cos(Turn / 2.0);
+        Assert.Equal(expected, inner, 6);
+        Assert.True(inner > 50.0, $"the inner corner is where the edges meet, not inside the limit: {inner}");
     }
 
     /// <summary>

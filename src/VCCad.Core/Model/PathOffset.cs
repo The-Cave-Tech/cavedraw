@@ -157,9 +157,25 @@ public static class PathOffset
                 return;
 
             default:
-                into.Add(MiterPoint(points, index, incoming, outgoing, halfWidth, left, miterLimit));
+                into.Add(MiterPoint(
+                    points, index, incoming, outgoing, halfWidth, left, miterLimit,
+                    IsInner(incoming[index], outgoing[index], left)));
                 return;
         }
+    }
+
+    /// <summary>
+    /// Whether this edge is on the side the path turns **towards** - the concave side of the corner.
+    ///
+    /// The turn's direction is the cross product of the two directions, which is positive when the path turns
+    /// towards its own right-hand side. So the left edge is the inner one exactly when that product is negative,
+    /// and the right edge exactly when it is positive. This is what tells a corner where a join style applies from
+    /// one where only the two offset edges matter - see <see cref="MiterPoint"/>.
+    /// </summary>
+    private static bool IsInner(Vector2D incoming, Vector2D outgoing, bool left)
+    {
+        double turn = (incoming.X * outgoing.Y) - (incoming.Y * outgoing.X);
+        return left ? turn < 0.0 : turn > 0.0;
     }
 
     /// <summary>Whether two offset directions describe the same line, so there is no corner between them.</summary>
@@ -275,6 +291,13 @@ public static class PathOffset
     /// Past the miter limit the two lines are nearly parallel or doubling back, and the intersection runs off to
     /// infinity; there the vertex is bevelled - moved by the offset along the bisector - which is finite, and is
     /// what every renderer does with a spike.
+    ///
+    /// **The limit is the outer corner's rule, and does not apply to the inner one.** The inner corner is where
+    /// the two offset edges genuinely meet, however far that is, and there is no spike to suppress because the
+    /// region folds around it rather than running out to a point. Applying the limit there replaces a corner that
+    /// is legitimately a hundred half-widths away with one a single half-width away, and the two edges then have
+    /// to travel past it and back - so the loop crosses itself and a filled outline becomes a bow-tie. That is
+    /// what Inkscape's powerstroke join test draws.
     /// </summary>
     private static Point2D MiterPoint(
         IReadOnlyList<Point2D> points,
@@ -283,7 +306,8 @@ public static class PathOffset
         Vector2D[] outgoing,
         double halfWidth,
         bool left,
-        double miterLimit)
+        double miterLimit,
+        bool inner = false)
     {
         Vector2D n1 = OffsetNormal(incoming[index], left);
         Vector2D n2 = OffsetNormal(outgoing[index], left);
@@ -297,10 +321,11 @@ public static class PathOffset
         // gives 11.5, which is the needle a viewer would draw sticking out of the artwork.
         double ratio = Math.Sqrt(2.0 / Math.Max(1e-9, denominator));
 
-        if (denominator < 1e-3 || ratio > Math.Max(1.0, miterLimit))
+        if (denominator < 1e-3 || (!inner && ratio > Math.Max(1.0, miterLimit)))
         {
             // Past the limit the two offset lines meet so far out that the join is a spike, so the corner is
-            // bevelled: finite, and the same fallback every renderer uses.
+            // bevelled: finite, and the same fallback every renderer uses. A doubled-back path has no finite
+            // intersection on either side, so the inner corner falls back as well.
             return points[index] + (Normalise(n1 + n2) * halfWidth);
         }
 
