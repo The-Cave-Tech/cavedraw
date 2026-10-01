@@ -325,6 +325,27 @@ public partial class TransformPane : UserControl
         }
 
         double rotationDelta = TryRead(AngleBox, out double angle) ? angle - currentAngle : 0;
+
+        // **Nothing to do when the fields still say what the object already is.**
+        //
+        // These fields display measurements, and reading one back is a round trip through a unit and a
+        // formatted string. That round trip is not exact, so committing an untouched field asks for a scale of
+        // about 0.999 - invisible on a path, and very visible on type, because a text item's size is its font
+        // size. Opening a block for editing moves focus out of these fields, which commits them, so merely
+        // clicking into a text block shrank it a little - and again on the next click.
+        //
+        // A transform within a thousandth of the identity **is** the identity: far below anything a person can
+        // express in these fields, and far above the error the round trip introduces.
+        bool unchanged = translation.IsZero
+                         && Math.Abs(rotationDelta) < 1e-6
+                         && Math.Abs(scaleX - 1.0) < 1e-3
+                         && Math.Abs(scaleY - 1.0) < 1e-3;
+        if (unchanged)
+        {
+            Refresh();
+            return;
+        }
+
         _vm.ApplyTransform(reference, translation, scaleX, scaleY, rotationDelta);
         Refresh();
     }
