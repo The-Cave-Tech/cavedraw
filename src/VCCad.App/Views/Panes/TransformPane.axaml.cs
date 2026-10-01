@@ -22,6 +22,12 @@ public partial class TransformPane : UserControl
     // object starts at, not its middle. The panel opens there and the person can pick
     // another of the nine.
     private int _pivot = 0;
+
+    /// <summary>Whether W and H move together. Pane state, not document state.</summary>
+    private bool _uniformScale;
+
+    /// <summary>Guards the boxes while they are being filled from the document.</summary>
+    private bool _syncingOptions;
     private readonly List<Button> _pivotButtons = new();
     private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
     private static readonly IBrush IdleBrush = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x52));
@@ -34,6 +40,15 @@ public partial class TransformPane : UserControl
         {
             box.LostFocus += (_, _) => CommitFromField(box);
         }
+
+        // The lock is a state of the pane, not of the document: it says how the next edit to W or H will be
+        // read, and it stays engaged while the person works through a set of pieces.
+        UniformLock.IsCheckedChanged += (_, _) => _uniformScale = UniformLock.IsChecked == true;
+
+        // The scale options are the document session's, not the pane's: they decide what a scale does to
+        // every object, and a property of the edit does not belong to the control that happens to show it.
+        ScaleLineWeights.IsCheckedChanged += (_, _) => ApplyScaleOptions();
+        ScaleTextContents.IsCheckedChanged += (_, _) => ApplyScaleOptions();
     }
 
     public void Attach(EditorViewModel vm)
@@ -98,6 +113,7 @@ public partial class TransformPane : UserControl
 
     private void Refresh()
     {
+        SyncScaleOptions();
         if (_vm is null)
         {
             return;
@@ -185,7 +201,42 @@ public partial class TransformPane : UserControl
         }
     }
 
-    private void CommitFromField(TextBox field)
+    /// <summary>Reads the document's scale options into the boxes. Called on every refresh.</summary>
+    private void SyncScaleOptions()
+    {
+        if (_vm is null || _syncingOptions)
+        {
+            return;
+        }
+
+        _syncingOptions = true;
+        try
+        {
+            VCCad.Core.Commands.ScaleWithObject options = _vm.ScaleOptions;
+            ScaleLineWeights.IsChecked = options.LineWeights;
+            ScaleTextContents.IsChecked = options.TextFrameContents;
+        }
+        finally
+        {
+            _syncingOptions = false;
+        }
+    }
+
+    /// <summary>Writes the boxes back to the document's scale options.</summary>
+    private void ApplyScaleOptions()
+    {
+        if (_vm is null || _syncingOptions)
+        {
+            return;
+        }
+
+        VCCad.Core.Commands.ScaleWithObject options = _vm.ScaleOptions;
+        options.LineWeights = ScaleLineWeights.IsChecked == true;
+        options.TextFrameContents = ScaleTextContents.IsChecked == true;
+        _vm.RaiseTransformChanged();
+    }
+
+    internal void CommitFromField(TextBox field)
     {
         if (_vm is null)
         {
@@ -256,6 +307,21 @@ public partial class TransformPane : UserControl
         if (TryRead(HBox, out double h) && bounds.Height > 1e-6)
         {
             scaleY = h / bounds.Height;
+        }
+
+        // Uniform scaling: the field that was edited governs both. The ratio is the object's current one,
+        // read from its bounds at the moment of the edit, so the two fields cannot chase each other while
+        // one of them is mid-typing - only the committed value is mirrored.
+        if (_uniformScale)
+        {
+            if (ReferenceEquals(field, WBox) && scaleX > 0)
+            {
+                scaleY = scaleX;
+            }
+            else if (ReferenceEquals(field, HBox) && scaleY > 0)
+            {
+                scaleX = scaleY;
+            }
         }
 
         double rotationDelta = TryRead(AngleBox, out double angle) ? angle - currentAngle : 0;

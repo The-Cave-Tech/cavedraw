@@ -17,7 +17,7 @@
              A narrow caption column and a small gap, because the caption belongs to its field:
              at a wide gap the eye pairs "X" with the wrong box. -->
         <Grid Grid.Column="2"
-              ColumnDefinitions="11,*,7,11,*"
+              ColumnDefinitions="11,*,7,11,*,Auto"
               RowDefinitions="Auto,Auto,Auto"
               ColumnSpacing="2" RowSpacing="3">
           <TextBlock Text="X" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
@@ -43,12 +43,52 @@
           <TextBlock Text="S" Grid.Row="2" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
           <TextBox x:Name="SkewBox" Grid.Row="2" Grid.Column="4" Padding="3,1" KeyDown="OnFieldKeyDown"
                    VerticalContentAlignment="Center" KeyboardNavigation.TabIndex="5"/>
+
+          <!-- Uniform scaling: while this is engaged, editing either W or H moves the other with it, so
+               the aspect ratio is held without arithmetic. It sits beside the two fields it governs
+               rather than in a menu, because a state that changes what the fields mean has to be
+               visible while they are being typed into. -->
+          <ToggleButton x:Name="UniformLock" Grid.Column="5" Grid.Row="0" Grid.RowSpan="2"
+                        Width="30" Padding="2,0" VerticalAlignment="Center"
+                        Content="Lock" FontSize="10"
+                        ToolTip.Tip="Keep the aspect ratio: editing W or H changes the other to match">
+            <ToggleButton.Styles>
+              <Style Selector="ToggleButton:checked">
+                <Setter Property="Background" Value="#4C9AFF"/>
+                <Setter Property="Foreground" Value="White"/>
+              </Style>
+            </ToggleButton.Styles>
+          </ToggleButton>
         </Grid>
       </Grid>
 
       <TextBlock x:Name="Hint" FontSize="10" Foreground="{DynamicResource VcTextDim}"
                  TextWrapping="Wrap"
                  Text="Type a measurement or a sum, e.g. 5.5in * 5 / 2"/>
+
+      <!-- What is scaled when an object is scaled. A dropdown rather than a row of checkboxes, because
+           these are set once and then left alone, and the pane is short. -->
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Grid.Column="0" Text="Scale options" VerticalAlignment="Center"
+                   FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+        <Button x:Name="ScaleOptionsButton" Grid.Column="1" Padding="6,2" Content="Scale with object ▾"
+                FontSize="{DynamicResource VcFontSize}">
+          <Button.Flyout>
+            <Flyout Placement="BottomEdgeAlignedRight">
+              <StackPanel Spacing="6" Width="260">
+                <CheckBox x:Name="ScaleLineWeights" Content="Line weights"/>
+                <TextBlock Text="Stroke widths grow and shrink with the object"
+                           FontSize="10" TextWrapping="Wrap" Margin="24,-4,0,0"
+                           Foreground="{DynamicResource VcTextDim}"/>
+                <CheckBox x:Name="ScaleTextContents" Content="Text frame contents"/>
+                <TextBlock Text="Type inside the frame scales with it, rather than the frame growing around it"
+                           FontSize="10" TextWrapping="Wrap" Margin="24,-4,0,0"
+                           Foreground="{DynamicResource VcTextDim}"/>
+              </StackPanel>
+            </Flyout>
+          </Button.Flyout>
+        </Button>
+      </Grid>
     </StackPanel>
   </ScrollViewer>
 </UserControl>
