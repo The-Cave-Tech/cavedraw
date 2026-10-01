@@ -75,7 +75,8 @@ public class SvgUnitTests
     /// <summary>
     /// **A non-pixel width and height establish the user-unit scale.** The view box is in user units and the view
     /// port is a physical size, so a page declared an inch wide holding a 48-unit view box draws that view box at
-    /// twice its size - which is the relationship a reader that ignored the unit cannot express at all.
+    /// twice its size - which is the relationship a reader that ignored the unit cannot express at all. An inch of
+    /// page is 72 points, and the 48 units are drawn across it.
     /// </summary>
     [Fact]
     public void ANonPixelWidthEstablishesTheUserUnitScale()
@@ -84,12 +85,12 @@ public class SvgUnitTests
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1in\" height=\"1in\" viewBox=\"0 0 48 48\">" +
             "<rect x=\"0\" y=\"0\" width=\"48\" height=\"48\"/></svg>");
 
-        Assert.Equal(96.0, result.Document.Artboards[0].Width, 9);
+        Assert.Equal(72.0, result.Document.Artboards[0].Width, 9);
 
         ArtGroup group = result.Document.Artboards[0].Layers[0].Children.OfType<ArtGroup>().Single();
         Point2D corner = group.Transform.Transform(new Point2D(48, 48));
-        Assert.Equal(96.0, corner.X, 9);
-        Assert.Equal(96.0, corner.Y, 9);
+        Assert.Equal(72.0, corner.X, 9);
+        Assert.Equal(72.0, corner.Y, 9);
     }
 
     /// <summary>A unit in the stroke properties is read the same way, and reaches the model as the same length.</summary>
@@ -151,9 +152,10 @@ public class SvgUnitTests
             "<rect x=\"0\" y=\"0\" width=\"10\" height=\"10\"/></svg>");
 
         // The fallback is the view box, which is the best available answer - but it is not the file's, and the
-        // warning is what makes the difference visible.
-        Assert.Equal(96.0, result.Document.Artboards[0].Width, 9);
-        Assert.Equal(48.0, result.Document.Artboards[0].Height, 9);
+        // warning is what makes the difference visible. The view box is in user units, so the page it becomes is
+        // three quarters of it in points.
+        Assert.Equal(72.0, result.Document.Artboards[0].Width, 9);
+        Assert.Equal(36.0, result.Document.Artboards[0].Height, 9);
         Assert.Contains(result.Warnings, w =>
             w.Contains("width=\"50%\"", StringComparison.Ordinal) &&
             w.Contains("containing block", StringComparison.Ordinal));
@@ -210,5 +212,155 @@ public class SvgUnitTests
         List<PathItem> paths = result.Document.AllPaths().ToList();
         Assert.Equal(-10.5, paths[0].SubPaths[0].Nodes[0].Anchor.X, 9);
         Assert.Equal(100.0, paths[1].SubPaths[0].Nodes[0].Anchor.X, 9);
+    }
+
+    // ---------------------------------------------------------------- the file's unit in the model's space
+
+    /// <summary>
+    /// A point's coordinate **as the artboard sees it**, with every enclosing group's transform composed in.
+    ///
+    /// A path's own nodes are in the space the file wrote them in - the view box's - and it is the groups above it
+    /// that carry that space into the model's. A test that read the node alone would be measuring the file rather
+    /// than the document, which is exactly the difference this section is about.
+    /// </summary>
+    private static Point2D InArtboard(PathItem path, int node = 0)
+    {
+        AffineTransform transform = AffineTransform.Identity;
+        for (IItemContainer? container = path.Container;
+             container is not null;
+             container = (container as LayerItem)?.Container)
+        {
+            if (container is ArtGroup group)
+            {
+                transform = group.Transform.Compose(transform);
+            }
+        }
+
+        return transform.Transform(path.SubPaths[0].Nodes[node].Anchor);
+    }
+
+    /// <summary>
+    /// **A bare viewport is measured in CSS pixels and the model stores points.** A file that says 800x600 with no
+    /// unit is 600x450 pt of paper — three quarters of the number it writes — and the geometry inside it is carried
+    /// into that same space rather than left a third larger than its own page.
+    /// </summary>
+    [Fact]
+    public void ABareViewportImportsAtItsPointSize()
+    {
+        SvgImportResult result = ReadRoot(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"600\">" +
+            "<rect x=\"100\" y=\"100\" width=\"100\" height=\"100\"/></svg>");
+
+        Assert.Equal(600.0, result.Document.Artboards[0].Width, 9);
+        Assert.Equal(450.0, result.Document.Artboards[0].Height, 9);
+
+        PathItem rect = FirstPath(result);
+        Point2D corner = InArtboard(rect);
+
+        // 100 user units in from each edge is 75 pt, and the rect is 75 pt across.
+        Assert.Equal(75.0, corner.X, 9);
+        Assert.Equal(75.0, corner.Y, 9);
+        Assert.Equal(75.0, InArtboard(rect, 2).X - corner.X, 9);
+        Assert.Equal(75.0, InArtboard(rect, 2).Y - corner.Y, 9);
+    }
+
+    /// <summary>
+    /// **A physical unit states the size it describes.** This is the number that does not move: 210mm is 595.28 pt
+    /// whether the unit table is applied in pixel space or in the model's, which is what makes it the check that the
+    /// conversion was added rather than moved.
+    /// </summary>
+    [Fact]
+    public void AnExplicitPhysicalUnitStatesItsPointSize()
+    {
+        SvgImportResult result = ReadRoot(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"210mm\" height=\"297mm\" viewBox=\"0 0 210 297\">" +
+            "<rect x=\"0\" y=\"0\" width=\"210\" height=\"297\"/></svg>");
+
+        Assert.Equal(PageSizes.A4Portrait.Width, result.Document.Artboards[0].Width, 9);
+        Assert.Equal(PageSizes.A4Portrait.Height, result.Document.Artboards[0].Height, 9);
+    }
+
+    /// <summary>
+    /// Every spelling of one inch is still the same length, and that length is **72 pt** — an inch of the model's
+    /// paper. `1in` used to import as 96 of the model's units, which is an inch of CSS pixels and a third more paper
+    /// than the file asks for.
+    /// </summary>
+    [Theory]
+    [InlineData("1in")]
+    [InlineData("96px")]
+    [InlineData("72pt")]
+    [InlineData("25.4mm")]
+    [InlineData("2.54cm")]
+    [InlineData("6pc")]
+    [InlineData("96")]
+    public void AnInchIsSeventyTwoPointsInTheModel(string written)
+    {
+        SvgImportResult result = ReadRoot(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"96\" height=\"96\" viewBox=\"0 0 96 96\">" +
+            $"<rect x=\"{written}\" y=\"0\" width=\"10\" height=\"10\"/></svg>");
+
+        Assert.Empty(result.Warnings);
+        Assert.Equal(72.0, InArtboard(FirstPath(result)).X, 9);
+    }
+
+    /// <summary>
+    /// **A view box whose shape differs from the port's still scales the way SVG says**: uniformly to fit (`meet`),
+    /// with the leftover space centred. The fit is measured against the port **in points**, so getting this wrong
+    /// does not just move the drawing - it draws it at the wrong size on a page that is the right one.
+    /// </summary>
+    [Fact]
+    public void AViewBoxWithADifferentAspectScalesAsSvgSays()
+    {
+        SvgImportResult result = ReadRoot(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"200\" viewBox=\"0 0 100 100\">" +
+            "<rect x=\"0\" y=\"0\" width=\"100\" height=\"100\"/></svg>");
+
+        Assert.Equal(300.0, result.Document.Artboards[0].Width, 9);
+        Assert.Equal(150.0, result.Document.Artboards[0].Height, 9);
+
+        // 100 user units of view box fit 150 pt of port, so the square is 150 pt across and centred in 300 pt.
+        PathItem rect = FirstPath(result);
+        Assert.Equal(75.0, InArtboard(rect).X, 9);
+        Assert.Equal(0.0, InArtboard(rect).Y, 9);
+        Assert.Equal(225.0, InArtboard(rect, 2).X, 9);
+        Assert.Equal(150.0, InArtboard(rect, 2).Y, 9);
+    }
+
+    /// <summary>
+    /// **The conversion happens once, at the root.** A nested `svg` is followed in the file's own space, so nothing
+    /// inside it is converted a second time - which would draw everything within it three quarters of the size the
+    /// file asked for, and would look like a content bug rather than a unit one.
+    /// </summary>
+    [Fact]
+    public void ANestedSvgDoesNotApplyTheConversionTwice()
+    {
+        SvgImportResult result = ReadRoot(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"600\">" +
+            "<svg x=\"0\" y=\"0\" width=\"200\" height=\"100\">" +
+            "<rect x=\"0\" y=\"0\" width=\"100\" height=\"100\"/></svg></svg>");
+
+        Assert.Equal(600.0, result.Document.Artboards[0].Width, 9);
+        Assert.Equal(75.0, InArtboard(FirstPath(result), 2).X, 9);
+        Assert.Equal(75.0, InArtboard(FirstPath(result), 2).Y, 9);
+    }
+
+    /// <summary>
+    /// A percentage is a fraction of the viewport **in the file's own space**, and only then carried into the
+    /// model's - so it is the same fraction of the page the file describes rather than a fraction of a page four
+    /// thirds of the size.
+    /// </summary>
+    [Fact]
+    public void APercentageIsAFractionOfTheViewportInTheFilesSpace()
+    {
+        SvgImportResult result = ReadRoot(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"600\">" +
+            "<rect x=\"50%\" y=\"50%\" width=\"50%\" height=\"50%\"/></svg>");
+
+        // 50% of 800 user units is 400, which is 300 of the 600 points the page is; 50% of 600 is 225 of 450.
+        PathItem rect = FirstPath(result);
+        Assert.Equal(300.0, InArtboard(rect).X, 9);
+        Assert.Equal(225.0, InArtboard(rect).Y, 9);
+        Assert.Equal(600.0, InArtboard(rect, 2).X, 9);
+        Assert.Equal(450.0, InArtboard(rect, 2).Y, 9);
     }
 }

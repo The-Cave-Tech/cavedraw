@@ -220,16 +220,18 @@ public class SvgReaderTests
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\" viewBox=\"0 0 200 200\">" +
             "<rect x=\"0\" y=\"0\" width=\"200\" height=\"200\"/></svg>");
 
-        Assert.Equal(100.0, result.Document.Artboards[0].Width, 6);
+        // A hundred CSS pixels of page is seventy-five points of paper.
+        Assert.Equal(75.0, result.Document.Artboards[0].Width, 6);
 
-        // The scale is on a group, so the rectangle is still two hundred units wide and the group halves it.
+        // The content is still two hundred of the file's units wide and the group above it carries them into the
+        // model: 200 units fitted into a 100-unit port, and the port itself three quarters of its number in points.
         ArtGroup group = result.Document.Artboards[0].Layers[0].Children.OfType<ArtGroup>().Single();
         Point2D corner = group.Transform.Transform(new Point2D(200, 200));
-        Assert.Equal(100.0, corner.X, 6);
-        Assert.Equal(100.0, corner.Y, 6);
+        Assert.Equal(75.0, corner.X, 6);
+        Assert.Equal(75.0, corner.Y, 6);
     }
 
-    /// <summary>A file with no view box has nothing to map: the declared size is the space.</summary>
+    /// <summary>A file with no view box has nothing to map: the declared size is the page, in points.</summary>
     [Fact]
     public void ADocumentWithNoViewBoxUsesItsDeclaredSize()
     {
@@ -237,10 +239,12 @@ public class SvgReaderTests
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"30\">" +
             "<rect x=\"1\" y=\"2\" width=\"3\" height=\"4\"/></svg>");
 
-        Assert.Equal(40.0, result.Document.Artboards[0].Width, 6);
-        Assert.Equal(30.0, result.Document.Artboards[0].Height, 6);
-        Assert.Equal(new Point2D(1, 2), FirstAnchor(result));
-        Assert.Empty(result.Document.Artboards[0].Layers[0].Children.OfType<ArtGroup>());
+        Assert.Equal(30.0, result.Document.Artboards[0].Width, 6);
+        Assert.Equal(22.5, result.Document.Artboards[0].Height, 6);
+
+        // The file's own numbers survive on the content, and the one group above it is what makes them points.
+        ArtGroup group = result.Document.Artboards[0].Layers[0].Children.OfType<ArtGroup>().Single();
+        Assert.Equal(new Point2D(0.75, 1.5), group.Transform.Transform(FirstAnchor(result)));
     }
 
     /// <summary>
@@ -249,7 +253,8 @@ public class SvgReaderTests
     /// This test used to assert the opposite, and the corpus changed the answer. Inkscape's own test files include
     /// glyph fragments - an `svg` element with no size and nothing drawable but `<glyph>` definitions - and refusing
     /// them made four real files fail to import. The default object size CSS gives a replaced element with no
-    /// intrinsic dimensions is what a viewer uses, so that is what this does.
+    /// intrinsic dimensions is what a viewer uses, so that is what this does - and it is measured in the same unit
+    /// as any other size the file might have written, so 300 CSS pixels is 225 points.
     /// </summary>
     [Fact]
     public void ADocumentWithNoSizeGetsTheDefaultViewport()
@@ -257,8 +262,8 @@ public class SvgReaderTests
         SvgImportResult result = SvgReader.Read(
             "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"1\" height=\"1\"/></svg>");
 
-        Assert.Equal(300.0, result.Document.Artboards[0].Width, 6);
-        Assert.Equal(300.0, result.Document.Artboards[0].Height, 6);
+        Assert.Equal(225.0, result.Document.Artboards[0].Width, 6);
+        Assert.Equal(225.0, result.Document.Artboards[0].Height, 6);
         Assert.Single(result.Document.AllPaths());
     }
 
@@ -269,8 +274,8 @@ public class SvgReaderTests
         SvgImportResult result = SvgReader.Read(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"120\"><rect width=\"1\" height=\"1\"/></svg>");
 
-        Assert.Equal(120.0, result.Document.Artboards[0].Width, 6);
-        Assert.Equal(300.0, result.Document.Artboards[0].Height, 6);
+        Assert.Equal(90.0, result.Document.Artboards[0].Width, 6);
+        Assert.Equal(225.0, result.Document.Artboards[0].Height, 6);
     }
 
     // ---------------------------------------------------------------- paint

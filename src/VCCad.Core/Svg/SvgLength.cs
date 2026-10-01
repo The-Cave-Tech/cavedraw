@@ -44,13 +44,15 @@ internal enum SvgAxis
 ///
 /// The space they resolve INTO is the document's own: SVG's user unit, which is a CSS pixel, and which is the same
 /// unit the page's `width` and `height` are measured in. That is what makes the answer a single number for a length
-/// wherever it appears. (The model's own storage unit is the PDF point, four thirds of a user unit; carrying an
-/// entire SVG page into points is a change to the reader's whole coordinate space, not to how a length is read.)
+/// wherever it appears. Carrying the whole page from that space into the model's points is the reader's business and
+/// not this table's: it is one factor (<see cref="UserUnitsToPoints"/>) applied in one place, the viewport - so the
+/// unit a length was written in decides its number, and where it sits decides nothing.
 ///
-/// A bare number is already a user unit and is returned unchanged. A percentage is **reported as such** rather than
-/// silently resolving to its number: what it means depends on the axis and the viewport, and only the caller knows
-/// either - so a caller that has no viewport to offer reports it instead of substituting a value the file did not
-/// write.
+/// A bare number is already a user unit and is returned unchanged - SVG's rule is that a number with no unit is a
+/// length in the current user space, which is the page's own space until a view box says otherwise. A percentage is
+/// **reported as such** rather than silently resolving to its number: what it means depends on the axis and the
+/// viewport, and only the caller knows either - so a caller that has no viewport to offer reports it instead of
+/// substituting a value the file did not write.
 /// </summary>
 internal static class SvgLength
 {
@@ -59,6 +61,16 @@ internal static class SvgLength
 
     /// <summary>PostScript points per inch, which is the unit the model is stored in.</summary>
     internal const double PointsPerInch = 72.0;
+
+    /// <summary>
+    /// Model points per SVG user unit, which is the one factor between the file's space and the model's.
+    ///
+    /// A user unit is a CSS pixel and the model stores PDF points (`AGENTS.md` §8), so a length the file writes is
+    /// three quarters of the length it describes. The factor is applied **once**, where the document's viewport is
+    /// read, so a value cannot resolve differently depending on which element reads it - which is what a per-attribute
+    /// conversion would eventually do.
+    /// </summary>
+    internal const double UserUnitsToPoints = PointsPerInch / PixelsPerInch;
 
     /// <summary>Millimetres per inch, the exact definition of the inch.</summary>
     internal const double MillimetresPerInch = 25.4;

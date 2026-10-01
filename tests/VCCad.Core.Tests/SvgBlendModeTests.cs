@@ -49,7 +49,9 @@ public class SvgBlendModeTests
         SvgImportResult result = Read(
             "<g style=\"mix-blend-mode:multiply\"><rect width=\"10\" height=\"10\"/></g>");
 
-        Assert.Equal(BlendMode.Multiply, result.Document.AllGroups().Single().BlendMode);
+        // The group the file itself wrote is the one inside the reader's root transform, which carries the file's
+        // units into the model's points.
+        Assert.Equal(BlendMode.Multiply, result.Document.AllGroups().Last().BlendMode);
         Assert.Equal(BlendMode.Normal, result.Document.AllPaths().Single().BlendMode);
     }
 

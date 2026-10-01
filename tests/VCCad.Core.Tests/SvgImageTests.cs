@@ -122,7 +122,9 @@ public class SvgImageTests
             "<g transform=\"translate(100,10)\">" +
             $"<image x=\"0\" y=\"0\" width=\"20\" height=\"20\" href=\"{DataUri(RedAndBluePng())}\"/></g>");
 
-        ArtGroup group = result.Document.Artboards[0].Layers[0].Children.OfType<ArtGroup>().Single();
+        // The file's own group is the one inside the reader's root transform; the placement and the transform are
+        // both in the file's space, which is what that root transform carries into points.
+        ArtGroup group = result.Document.AllGroups().Last();
         Assert.Equal(new Rect2D(0, 0, 20, 20), FirstImage(result).Placement);
         Assert.Equal(new Point2D(100, 10), group.Transform.Transform(new Point2D(0, 0)));
     }

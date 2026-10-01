@@ -27,6 +27,15 @@ public class SvgMetadataTests
     /// <summary>Import, export, import - the only test that says the file means what it meant.</summary>
     private static SvgImportResult RoundTrip(string body) => SvgReader.Read(SvgWriter.Write(Read(body).Document));
 
+    /// <summary>
+    /// The group the **file** wrote, which is the innermost one in tree order.
+    ///
+    /// Every file the reader takes is wrapped in one group carrying the file's own units into the model's points, so
+    /// a document that the file gave one group has two in the model; these tests are about the file's own data, so
+    /// they mean the inner one.
+    /// </summary>
+    private static ArtGroup FileGroup(CadDocument document) => document.AllGroups().Last();
+
     // ---------------------------------------------------------------- the label IS the name
 
     [Fact]
@@ -36,7 +45,7 @@ public class SvgMetadataTests
             "<g id=\"layer1\" inkscape:label=\"UK 14\">" +
             "<rect inkscape:label=\"bodice\" width=\"10\" height=\"10\"/></g>");
 
-        ArtGroup group = result.Document.AllGroups().Single();
+        ArtGroup group = FileGroup(result.Document);
         PathItem rect = result.Document.AllPaths().Single();
 
         Assert.Equal("UK 14", group.Name);
@@ -49,7 +58,7 @@ public class SvgMetadataTests
     {
         SvgImportResult result = Read("<g id=\"layer1\" sodipodi:insensitive=\"true\"><rect width=\"1\" height=\"1\"/></g>");
 
-        Assert.True(result.Document.AllGroups().Single().IsLocked);
+        Assert.True(FileGroup(result.Document).IsLocked);
     }
 
     /// <summary>And the name survives the round trip, which is the point of reading the label as a name.</summary>
@@ -58,7 +67,7 @@ public class SvgMetadataTests
     {
         SvgImportResult back = RoundTrip("<g id=\"layer1\" inkscape:label=\"UK 14\"><rect width=\"10\" height=\"10\"/></g>");
 
-        Assert.Equal("UK 14", back.Document.AllGroups().Single().Name);
+        Assert.Equal("UK 14", FileGroup(back.Document).Name);
     }
 
     // ---------------------------------------------------------------- unknown attributes
@@ -158,7 +167,7 @@ public class SvgMetadataTests
             "payload=\"preserved\"/>" +
             "<rect width=\"10\" height=\"10\"/></g>");
 
-        ArtGroup group = result.Document.AllGroups().Single();
+        ArtGroup group = FileGroup(result.Document);
 
         Assert.Equal("keep me", group.ForeignAttributes["sodipodi:someData"]);
         Assert.Equal("layer", group.ForeignAttributes["inkscape:groupmode"]);
@@ -172,8 +181,7 @@ public class SvgMetadataTests
         Assert.Contains("inkscape:label=\"Group\"", svg, StringComparison.Ordinal);
 
         // Two round trips, so a loss that only shows up on the second trip is caught too.
-        ArtGroup twice = SvgReader.Read(SvgWriter.Write(SvgReader.Read(svg).Document))
-            .Document.AllGroups().Single();
+        ArtGroup twice = FileGroup(SvgReader.Read(SvgWriter.Write(SvgReader.Read(svg).Document)).Document);
 
         Assert.Equal("keep me", twice.ForeignAttributes["sodipodi:someData"]);
         Assert.Contains("preserved", twice.ForeignElements[0], StringComparison.Ordinal);
@@ -221,7 +229,7 @@ public class SvgMetadataTests
         CadDocument reloaded = VccadDocumentSerializer.Deserialize(
             VccadDocumentSerializer.SerializeToBytes(first.Document));
 
-        ArtGroup group = reloaded.AllGroups().Single();
+        ArtGroup group = FileGroup(reloaded);
         Assert.Equal("Group", group.Name);
         Assert.Equal("keep me", group.ForeignAttributes["sodipodi:someData"]);
         Assert.Contains("preserved", group.ForeignElements[0], StringComparison.Ordinal);

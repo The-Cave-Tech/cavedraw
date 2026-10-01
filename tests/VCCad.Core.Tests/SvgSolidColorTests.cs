@@ -101,8 +101,10 @@ public class SvgSolidColorTests
         List<PathItem> paths = result.Document.AllPaths().ToList();
 
         Assert.Equal(2, paths.Count);
-        Assert.Equal(200.0, result.Document.Artboards[0].Width, 6);
-        Assert.Equal(100.0, result.Document.Artboards[0].Height, 6);
+
+        // The file states no size, only a 200x100 view box, so the view box is the page - and the page is points.
+        Assert.Equal(150.0, result.Document.Artboards[0].Width, 6);
+        Assert.Equal(75.0, result.Document.Artboards[0].Height, 6);
 
         // Neither is black, which is exactly what the file exists to catch.
         Assert.All(paths, p => Assert.True(

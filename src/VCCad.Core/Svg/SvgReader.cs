@@ -92,9 +92,16 @@ public static partial class SvgReader
         Artboard artboard = document.AddArtboard(new Size2D(width, height), "SVG");
         Layer layer = artboard.AddLayer("SVG");
 
-        // The view box applies to everything, so it goes on one group - but only when there is something to
-        // apply. A group that carries the identity would be structure the file does not have.
-        ArtGroup? viewGroup = IsIdentity(viewBox) ? null : new ArtGroup { Name = "viewBox", Transform = viewBox };
+        // The file's own space applies to everything, so the transform that carries it into the model's points goes
+        // on one group - but only when there is something to apply. A group that carries the identity would be
+        // structure the file does not have.
+        //
+        // It is named after the view box only where the file has one. Where it does not, the group carries the unit
+        // conversion alone, and calling that a view box would be a name the file never wrote.
+        bool stated = Numbers(root.Attribute("viewBox")?.Value) is { Length: 4 };
+        ArtGroup? viewGroup = IsIdentity(viewBox)
+            ? null
+            : new ArtGroup { Name = stated ? "viewBox" : string.Empty, Transform = viewBox };
 
         // Every id in the file, indexed before anything is drawn: a `use` may refer to a definition that appears
         // after it, and a reader that indexed as it went would find nothing and silently drop the instance.
@@ -335,13 +342,20 @@ public static partial class SvgReader
     // ------------------------------------------------------------------ the view box
 
     /// <summary>
-    /// The artboard size, the viewport a percentage resolves against, and the transform the view box implies.
+    /// The artboard size, the viewport a percentage resolves against, and the transform the file's own space implies.
     ///
-    /// **The port is measured in the file's own units.** SVG's user unit is a CSS pixel and the page is sized in
-    /// the same units its content is written in - so the declared size is the artboard, the view box is the scale
-    /// between them, and a length anywhere in the file resolves to one number regardless of whether it was written
-    /// as `1in`, `96px` or `72pt`. (The model's own storage unit is the point; carrying the SVG page into points is
-    /// a change to the whole reader and its writer rather than to how a length is read, and is not this change.)
+    /// **The port is a page and the model measures pages in points.** SVG writes the page in the same user units its
+    /// content is written in - one CSS pixel each - and the model stores PDF points, so the number the file writes is
+    /// three quarters of the size it describes. A bare `width="800"` is 600 pt of paper, not 800.
+    ///
+    /// **The conversion happens here, once.** Every length the reader takes anywhere in the document stays in the
+    /// file's own units; what carries them into the model is the transform returned below, which maps the file's
+    /// space onto the page in points. A length therefore cannot resolve differently depending on which attribute
+    /// read it, and a nested element cannot apply the factor a second time. The view box is fitted against the port
+    /// **in points** and the box in the file's units, so the fit itself is where the two spaces meet.
+    ///
+    /// The viewport a percentage resolves against stays in the file's units, because that is the space the geometry
+    /// it is measuring sits in until the transform is applied.
     ///
     /// `preserveAspectRatio` is honoured in its two common forms: **meet** fits the whole view box inside the view
     /// port and leaves space, **slice** fills the view port and crops, and **none** stretches - the one that
@@ -367,8 +381,12 @@ public static partial class SvgReader
             double fallbackWidth = width ?? DefaultViewport;
             double fallbackHeight = height ?? DefaultViewport;
 
-            return (fallbackWidth, fallbackHeight, new SvgViewport(fallbackWidth, fallbackHeight),
-                AffineTransform.Identity);
+            // With no box to fit there is nothing to place but the unit itself: the page is the declared size in
+            // points, and the content's own space is that size in user units.
+            return (fallbackWidth * SvgLength.UserUnitsToPoints,
+                fallbackHeight * SvgLength.UserUnitsToPoints,
+                new SvgViewport(fallbackWidth, fallbackHeight),
+                AffineTransform.CreateScale(SvgLength.UserUnitsToPoints, SvgLength.UserUnitsToPoints));
         }
 
         double boxWidth = box[2];
@@ -382,13 +400,20 @@ public static partial class SvgReader
         double viewHeight = height ?? boxHeight;
 
         (double finalX, double finalY, double offsetX, double offsetY) = Fit(
-            viewWidth, viewHeight, boxWidth, boxHeight, root.Attribute("preserveAspectRatio")?.Value);
+            viewWidth * SvgLength.UserUnitsToPoints,
+            viewHeight * SvgLength.UserUnitsToPoints,
+            boxWidth,
+            boxHeight,
+            root.Attribute("preserveAspectRatio")?.Value);
 
         AffineTransform transform = AffineTransform.CreateTranslation(offsetX, offsetY)
             .Compose(AffineTransform.CreateScale(finalX, finalY))
             .Compose(AffineTransform.CreateTranslation(-box[0], -box[1]));
 
-        return (viewWidth, viewHeight, new SvgViewport(viewWidth, viewHeight), transform);
+        return (viewWidth * SvgLength.UserUnitsToPoints,
+            viewHeight * SvgLength.UserUnitsToPoints,
+            new SvgViewport(viewWidth, viewHeight),
+            transform);
     }
 
     /// <summary>

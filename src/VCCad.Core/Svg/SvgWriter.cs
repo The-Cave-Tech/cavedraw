@@ -76,8 +76,10 @@ public static class SvgWriter
         Rect2D extent = singlePage is null
             ? Extent(document)
             : new Rect2D(singlePage.X, singlePage.Y, singlePage.Width, singlePage.Height);
-        root.Add(new XAttribute("width", Number(extent.Width)));
-        root.Add(new XAttribute("height", Number(extent.Height)));
+        // The model's extent is in points, so the unit is stated rather than left to the reader: a bare number is
+        // 0.75pt in the corrected reader, and the three-way round trip has to stay the identity.
+        root.Add(new XAttribute("width", Number(extent.Width) + "pt"));
+        root.Add(new XAttribute("height", Number(extent.Height) + "pt"));
         root.Add(new XAttribute("viewBox",
             $"{Number(extent.X)} {Number(extent.Y)} {Number(extent.Width)} {Number(extent.Height)}"));
 
