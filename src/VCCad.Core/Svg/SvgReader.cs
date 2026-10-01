@@ -31,7 +31,8 @@ public sealed record SvgImportResult(
 ///
 /// What this reads today: the basic shapes, paths, groups, `use` and symbols, filters, gradients, `image`, `text`
 /// with its runs, the view box, CSS and the presentation attributes that decide how they are painted, with every
-/// length resolved through its unit. The paint servers other than gradients are their own issue.
+/// length resolved through its unit, and a `svg` viewport's clip on what it holds. The paint servers other than
+/// gradients are their own issue.
 ///
 /// The text half lives in <c>SvgTextReader.cs</c>, which is a part of this class because a text element is walked
 /// with the same context - the same stylesheets, the same viewport, the same list of things that could not be read -
@@ -979,11 +980,18 @@ public static partial class SvgReader
     /// as it does at the root. What cannot be established honestly is **reported and skipped** rather than drawn at
     /// the outer scale, because drawing it at the outer scale is precisely the defect this closes: a plausible
     /// wrong answer is harder to notice than a refusal.
+    ///
+    /// **The port then clips what the viewport holds**, unless the file states `overflow: visible` - the property's
+    /// value on an `svg` element is `hidden`, and a nested viewport is usually there to crop. See below for the
+    /// outline's frame and for why a port that cuts nothing is not recorded.
     /// </summary>
     private static void ReadNestedSvg(XElement element, Context context, PresentationStyle style, SvgTextStyle text)
     {
-        double x = context.Length(element.Attribute("x")?.Value, SvgAxis.X, "x") ?? 0.0;
-        double y = context.Length(element.Attribute("y")?.Value, SvgAxis.Y, "y") ?? 0.0;
+        if (NestedOrigin(element, "x", SvgAxis.X, context) is not { } x ||
+            NestedOrigin(element, "y", SvgAxis.Y, context) is not { } y)
+        {
+            return;
+        }
 
         if (NestedPort(element, "width", SvgAxis.X, context) is not { } portWidth ||
             NestedPort(element, "height", SvgAxis.Y, context) is not { } portHeight)
@@ -1063,10 +1071,162 @@ public static partial class SvgReader
             ReadElement(child, inside);
         }
 
+        // **A viewport clips what is inside it, and that is usually why the file nested one.**
+        //
+        // SVG's `overflow` is `hidden` on an `svg` element unless the file says otherwise, so content that reaches
+        // past the port is cut at it. The port belongs to the element and everything the element holds is what it
+        // clips, so the outline goes on the element's own group - the shape the PDF importer gives a form's /BBox,
+        // which is the same statement one format over. A viewport around this one keeps its own outline, and
+        // several clips on the way down intersect, which is what the model has always said they mean.
+        //
+        // The outline is written **in the space the enclosing element wrote `x`, `y`, `width` and `height` in** -
+        // the frame a group's own transform maps into rather than the frame its children are written in - because
+        // that is how the model records and applies a clip on a group, and because that is where the port is: a
+        // 50-unit port at (50,50) is a 50-unit rectangle at (50,50), not one at the origin.
+        //
+        // A port that cuts nothing is not recorded, for the reason a form's /BBox that already contains its
+        // content is not: a clip that removes nothing is a mask on every file that happens to nest a viewport,
+        // and it states nothing the file did not already say.
+        if (OverflowClips(element, context))
+        {
+            // The element's own `transform` sits outside its `x` and `y` (§7.4), so it carries the port into the
+            // containing space exactly as it carries the content, and the port is a parallelogram when it turns.
+            AffineTransform own = Transform(element.Attribute("transform")?.Value);
+            Rect2D port = own.Transform(new Rect2D(x, y, portWidth, portHeight));
+            Rect2D content = group.Transform.Transform(ContentBounds(group, AffineTransform.Identity));
+
+            if (PortCuts(port, content))
+            {
+                group.Clips.Add(PortClip(own, x, y, portWidth, portHeight));
+            }
+        }
+
         // Kept even when empty, the way a group is: the file has the element, and the transform and the name are
         // the element's own.
         context.Add(group);
         context.Counts["svg"] = context.Counts.GetValueOrDefault("svg") + 1;
+    }
+
+    /// <summary>
+    /// Whether a viewport cuts its content at the port.
+    ///
+    /// `overflow` decides it, and its value on an `svg` element is `hidden` unless the file states otherwise, so
+    /// content drawn past a port is meant to be cut - which is the reason to nest a viewport in the first place.
+    ///
+    /// `visible` is the other answer SVG has for this property, and it is honoured by recording no clip at all:
+    /// a file that says its content is not cut keeps all of it. Read through the same cascade as every other
+    /// property, so `overflow` as an attribute, in a `style` attribute, or in a stylesheet rule all mean the same
+    /// thing - a stylesheet that says `visible` and a presentation attribute that says `hidden` are one property
+    /// with one winner, decided by CSS's own order, in which the attribute ranks below every rule.
+    /// </summary>
+    private static bool OverflowClips(XElement element, Context context)
+    {
+        string? stated = SvgProperties.Value(
+            element,
+            context.Sheet.DeclarationsFor(element, element.Ancestors().ToArray()),
+            "overflow");
+
+        return stated is null || !stated.Trim().Equals("visible", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The port's outline, carried into the containing space by the element's own transform.
+    ///
+    /// Four corners transformed rather than a rectangle's width and height, because a rotation or a skew makes the
+    /// port a parallelogram and a clip is geometry, not a box.
+    /// </summary>
+    private static ClipSpec PortClip(AffineTransform own, double x, double y, double width, double height)
+    {
+        var clip = new ClipSpec { Rule = FillRule.NonZero };
+        var rect = new SubPath { IsClosed = true };
+
+        foreach ((double px, double py) in new[]
+                 {
+                     (x, y), (x + width, y), (x + width, y + height), (x, y + height),
+                 })
+        {
+            rect.Nodes.Add(new PathNode(own.Transform(new Point2D(px, py))));
+        }
+
+        clip.SubPaths.Add(rect);
+        return clip;
+    }
+
+    /// <summary>
+    /// Whether the port removes any of what the viewport holds.
+    ///
+    /// Compared as boxes, which is enough for the question being asked - does anything reach past the port - and
+    /// generous by a hundredth of a point so that content sitting exactly on the port's edge is not called an
+    /// overflow by the last bit of a double. A viewport with nothing in it has nothing to cut.
+    /// </summary>
+    private static bool PortCuts(Rect2D port, Rect2D content)
+    {
+        const double Tolerance = 0.01;
+
+        return !content.IsEmpty &&
+               (content.Left < port.Left - Tolerance ||
+                content.Top < port.Top - Tolerance ||
+                content.Right > port.Right + Tolerance ||
+                content.Bottom > port.Bottom + Tolerance);
+    }
+
+    /// <summary>
+    /// Everything a container holds, in that container's own coordinate space, with any groups inside it composed
+    /// in.
+    ///
+    /// <see cref="ArtGroup.BoundingBox"/> answers a narrower question - it measures the shapes a group draws - so a
+    /// viewport whose content is text or an image reads as empty there, and a port one of them clearly overflows
+    /// would go unclipped. What a port cuts is everything the viewport holds, so this asks that question instead.
+    /// </summary>
+    private static Rect2D ContentBounds(IItemContainer container, AffineTransform toContainer)
+    {
+        Rect2D box = Rect2D.Empty;
+
+        foreach (LayerItem child in container.Children)
+        {
+            Rect2D childBox = child switch
+            {
+                ArtGroup inner => ContentBounds(inner, toContainer.Compose(inner.Transform)),
+                PathItem path => toContainer.Transform(path.BoundingBox()),
+                TextItem text => toContainer.Transform(text.BoundingBox()),
+                ImageItem image => toContainer.Transform(image.Placement),
+                _ => Rect2D.Empty,
+            };
+
+            box = box.Union(childBox);
+        }
+
+        return box;
+    }
+
+    /// <summary>
+    /// One coordinate of a nested viewport's origin, in the containing space, or null when it cannot be
+    /// established.
+    ///
+    /// An attribute the file does not write is SVG's own default of **0**, which the specification gives it and
+    /// nobody invented. A coordinate the file *does* write is never replaced by that default: the port is what the
+    /// content is cut to, so a port dropped at the origin because its `x` could not be read cuts the drawing
+    /// somewhere the file never said while looking deliberate. The caller reports the gap and leaves the subtree
+    /// undrawn, which is the rule its `width` and `height` already follow - these are the other two sides of the
+    /// same rectangle.
+    /// </summary>
+    private static double? NestedOrigin(XElement element, string attribute, SvgAxis axis, Context context)
+    {
+        string? text = element.Attribute(attribute)?.Value;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return 0.0;
+        }
+
+        if (context.Length(text, axis, attribute) is { } stated)
+        {
+            return stated;
+        }
+
+        context.Warnings.Add(
+            $"a nested <svg> states {attribute}=\"{text}\", which this reader cannot resolve, so its viewport is " +
+            "not established and its content is not drawn rather than drawn somewhere the file did not put it");
+        return null;
     }
 
     /// <summary>
