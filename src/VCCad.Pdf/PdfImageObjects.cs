@@ -19,6 +19,7 @@ internal sealed class PdfImageObjects
     private readonly Dictionary<ImageItem, string> _names = new();
     private readonly List<(string Name, int Object)> _entries = new();
     private int _sampled;
+    private int _filtered;
 
     public PdfImageObjects(PdfAssembler assembler, IEnumerable<ImageItem> images, List<string>? notes = null)
     {
@@ -97,6 +98,71 @@ internal sealed class PdfImageObjects
             _names[image] = name;
             _entries.Add((name, objectNumber));
         }
+    }
+
+    /// <summary>
+    /// Writes a filtered object as an image XObject with its transparency in an <c>/SMask</c>, and returns the
+    /// resource name to paint it with.
+    ///
+    /// A filter's answer has an alpha channel - a blur has a soft edge, a shadow is mostly transparent - and PDF
+    /// has no per-pixel alpha in a colour image, so the coverage goes into a separate greyscale mask. Colour is
+    /// written **straight** (not premultiplied) because that is what the viewer multiplies the mask into.
+    /// </summary>
+    public string AddFilteredImage(Core.Raster.FilterBuffer pixels, string filterName)
+    {
+        (byte[] rgb, byte[] alpha, int width, int height) = Separate(pixels);
+
+        string name = $"Fx{++_filtered}";
+        int maskObject = _assembler.Allocate();
+        _assembler.SetBody(maskObject, PdfDocumentExporter.MakeStreamObject(
+            PdfDocumentExporter.CompressBytes(alpha),
+            $" /Type /XObject /Subtype /Image /Width {width} /Height {height}" +
+            " /BitsPerComponent 8 /ColorSpace /DeviceGray"));
+
+        int objectNumber = _assembler.Allocate();
+        _assembler.SetBody(objectNumber, PdfDocumentExporter.MakeStreamObject(
+            PdfDocumentExporter.CompressBytes(rgb),
+            $" /Type /XObject /Subtype /Image /Width {width} /Height {height}" +
+            $" /BitsPerComponent 8 /ColorSpace /DeviceRGB /SMask {maskObject} 0 R"));
+
+        _notes.Add(
+            $"the filter '{filterName}' is written as an image: the page shows what the filter draws, and a " +
+            "foreign reader is given pixels rather than a filter it could re-evaluate.");
+
+        _entries.Add((name, objectNumber));
+        return name;
+    }
+
+    private static byte Channel(float value) => (byte)Math.Round(Math.Clamp(value, 0f, 1f) * 255f);
+
+    /// <summary>
+    /// The filtered buffer split into the two pictures PDF needs: colour without alpha, and coverage.
+    ///
+    /// Exposed to the test suite because the split is where "did the filter actually blur anything" is
+    /// answerable - the mask is the rendered result, and a hard-edged shape and a blurred one are told apart by
+    /// the values in it.
+    /// </summary>
+    internal static (byte[] Rgb, byte[] Alpha, int Width, int Height) Separate(Core.Raster.FilterBuffer pixels)
+    {
+        int width = pixels.Width;
+        int height = pixels.Height;
+        var rgb = new byte[width * height * 3];
+        var alpha = new byte[width * height];
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                (float r, float g, float b, float a) = pixels.Get(x, y);
+                int at = (y * width) + x;
+                rgb[at * 3] = Channel(r);
+                rgb[(at * 3) + 1] = Channel(g);
+                rgb[(at * 3) + 2] = Channel(b);
+                alpha[at] = Channel(a);
+            }
+        }
+
+        return (rgb, alpha, width, height);
     }
 
     /// <summary>True once at least one image was written.</summary>

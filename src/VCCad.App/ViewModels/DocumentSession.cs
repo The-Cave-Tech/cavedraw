@@ -2665,6 +2665,21 @@ public sealed class DocumentSession : INotifyPropertyChanged
     // Commands / undo / actions
     // ------------------------------------------------------------------
 
+    /// <summary>Whether there is an edit left to undo.</summary>
+    public bool CanUndo => _stack.CanUndo;
+
+    /// <summary>Whether an undo left something that can be redone.</summary>
+    public bool CanRedo => _stack.CanRedo;
+
+    /// <summary>
+    /// How many edits are on the stack.
+    ///
+    /// The stack keeps its own position rather than exposing itself, and "did that gesture take one step or two"
+    /// is a question that has to be answerable from outside - the alternative is counting by undoing, which
+    /// answers it by changing the answer.
+    /// </summary>
+    public int UndoDepth => _stack.Depth;
+
     public void Execute(IUndoableCommand command)
     {
         _stack.Execute(command);

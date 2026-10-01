@@ -41,7 +41,8 @@ public class ExportSupportOperationTests
             .Select(e => e.GetString()!).ToArray();
 
         Assert.Contains("rasterEffect", lossy);
-        Assert.Contains("filter", lossy);
+        // The PDF writes a filter now, as an image XObject, so it is no longer in the lossy list.
+        Assert.DoesNotContain("filter", lossy);
         Assert.DoesNotContain("outlineEffect", lossy);
     }
 }

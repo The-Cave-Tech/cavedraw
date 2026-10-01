@@ -34,9 +34,13 @@ public static class PdfExportSupport
             "Not written. A blur or a glow is a pixel operation, and exporting one needs the stroke rasterised " +
             "into an image and placed; the exporter draws vectors only."),
 
-        new Feature("filter", false,
-            "Not written. A filtered object exports unfiltered - the filter is carried in the document and in the " +
-            "SVG export, but nothing rasterises it for PDF."),
+        new Feature("filter", true,
+            "Written. A filter is a raster operation, so the filtered object is drawn into its filter region, the " +
+            "graph runs over those pixels and the answer is placed as an image with its coverage in an /SMask - " +
+            "the same route the canvas takes, and the only one PDF has for a blur. A graph that reads " +
+            "BackgroundImage cannot be evaluated by an exporter that draws one item at a time, and a region past " +
+            "what this build will allocate is not, so those two export unfiltered and say so in the export notes " +
+            "rather than in silence."),
 
         new Feature("blendMode", false,
             "Not written. The value travels in the sidecar and the SVG export; the PDF is painted without it."),

@@ -153,7 +153,8 @@ public static class PdfDocumentExporter
         for (int i = 0; i < document.Artboards.Count; i++)
         {
             contents[i] = BuildArtboardContent(
-                document.Artboards[i], embedder, alphaStates, imageObjects, shadingObjects);
+                document.Artboards[i], document, embedder, alphaStates, imageObjects, shadingObjects,
+                notes ?? new List<string>());
         }
 
         string resources =
@@ -268,7 +269,14 @@ public static class PdfDocumentExporter
     /// mapping rules. The returned bytes are the plain content (uncompressed);
     /// callers wrap them via <see cref="MakeStreamObject"/>.
     /// </summary>
-    private static byte[] BuildArtboardContent(Artboard artboard, PdfFontEmbedder embedder, PdfAlphaStates alphaStates, PdfImageObjects? images = null, PdfShadingObjects? shadings = null)
+    private static byte[] BuildArtboardContent(
+        Artboard artboard,
+        CadDocument document,
+        PdfFontEmbedder embedder,
+        PdfAlphaStates alphaStates,
+        PdfImageObjects? images = null,
+        PdfShadingObjects? shadings = null,
+        List<string>? notes = null)
     {
         var ops = new List<string>();
 
@@ -289,7 +297,8 @@ public static class PdfDocumentExporter
 
                 foreach (LayerItem item in layer.Children)
                 {
-                    PaintItem(ops, item, AffineTransform.Identity, 1.0, alphaStates, images, shadings);
+                    PaintItem(ops, item, AffineTransform.Identity, 1.0, alphaStates, images, shadings,
+                        document, notes);
                 }
             }
         }
@@ -440,7 +449,7 @@ public static class PdfDocumentExporter
         }
     }
 
-    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfImageObjects? images = null, PdfShadingObjects? shadings = null)
+    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfImageObjects? images = null, PdfShadingObjects? shadings = null, CadDocument? document = null, List<string>? notes = null)
     {
         if (!item.IsEffectivelyVisible())
         {
@@ -473,7 +482,7 @@ public static class PdfDocumentExporter
         switch (item)
         {
             case PathItem path:
-                PaintPath(ops, path, toDoc, opacity, alphaStates, shadings, images);
+                PaintPath(ops, path, toDoc, opacity, alphaStates, shadings, images, document, notes);
                 break;
 
             case ImageItem image:
@@ -486,7 +495,8 @@ public static class PdfDocumentExporter
                 AffineTransform childToDoc = toDoc.Compose(group.Transform);
                 foreach (LayerItem child in group.Children)
                 {
-                    PaintItem(ops, child, childToDoc, opacity * group.Opacity, alphaStates, images, shadings);
+                    PaintItem(ops, child, childToDoc, opacity * group.Opacity, alphaStates, images, shadings,
+                        document, notes);
                 }
 
                 break;
@@ -543,8 +553,26 @@ public static class PdfDocumentExporter
     /// closed (fillable) and open (stroke-only), so the renderer never fills an
     /// open path as PDF would implicitly do.
     /// </summary>
-    private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfShadingObjects? shadings = null, PdfImageObjects? images = null)
+    private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfShadingObjects? shadings = null, PdfImageObjects? images = null, CadDocument? document = null, List<string>? notes = null)
     {
+        // A filter is a raster operation, so an object that has one is drawn into pixels and the graph runs over
+        // them - the same route the canvas takes, and the only one PDF has for a blur. Nothing else about the item
+        // changes; a path with no filter, or one this build cannot carry, falls through to the vectors below.
+        if (document is not null &&
+            path.FilterId is { Length: > 0 } filterId &&
+            document.FindFilter(filterId) is { } filter &&
+            FilterRasteriser.Rasterise(
+                path, filter, path.WorldBounds(), WorldTransform(path, toDoc), opacity,
+                notes ?? new List<string>()) is { } picture &&
+            images?.AddFilteredImage(picture.Pixels, filter.Name) is { } resource)
+        {
+            ops.Add("q");
+            ops.Add(FilterRasteriser.Placement(picture, toDoc) + " cm");
+            ops.Add($"/{resource} Do");
+            ops.Add("Q");
+            return;
+        }
+
         // Bake geometry into artboard space: anchors and both handles per node.
         var contours = new List<Contour>();
         foreach (SubPath sub in path.SubPaths)
@@ -856,6 +884,21 @@ public static class PdfDocumentExporter
                 ops.Add("S");
             }
         }
+    }
+
+    /// <summary>
+    /// The transform from a path's own coordinates to **world** units, with any group transform already applied.
+    ///
+    /// The canvas draws in world space and gives its filtered objects world boxes, so that is the space a filter's
+    /// region and an <c>objectBoundingBox</c> primitive length are read in. A path keeps its geometry relative to
+    /// its artboard, so the page's own origin is what turns the two into the same numbers - and getting it wrong
+    /// puts a filtered object a page-origin away from where it is drawn, which is the failure
+    /// <c>CanvasWorkspace</c> records for the same reason.
+    /// </summary>
+    private static AffineTransform WorldTransform(PathItem path, AffineTransform toDoc)
+    {
+        Vector2D offset = path.ArtboardOffset();
+        return toDoc.Compose(AffineTransform.CreateTranslation(offset.X, offset.Y));
     }
 
     private static void CollectAlphas(Artboard artboard, double opacity, List<double> alphas)

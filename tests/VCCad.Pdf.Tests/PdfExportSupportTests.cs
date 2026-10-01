@@ -57,46 +57,10 @@ public class PdfExportSupportTests
     /// The export embeds the lossless sidecar, so changing any model value changes the bytes - a raster effect
     /// changes the file while changing nothing that is drawn. Asking "did the file change" would therefore answer
     /// yes for every feature and the test would prove nothing. What a fidelity warning is about is the picture, so
-    /// this keeps only the streams that contain drawing operators: a content stream sets a stroke width (`w`) and
-    /// the sidecar's JSON does not.
+    /// this keeps only the page content streams, found through the page tree rather than by looking for bytes that
+    /// happen to look like operators.
     /// </summary>
-    private static string Drawing(byte[] pdf)
-    {
-        string latin = System.Text.Encoding.Latin1.GetString(pdf);
-        var drawing = new System.Text.StringBuilder();
-
-        foreach (System.Text.RegularExpressions.Match match in
-                 System.Text.RegularExpressions.Regex.Matches(latin, @"(?<!end)stream\r?\n"))
-        {
-            int start = match.Index + match.Length;
-            int end = latin.IndexOf("endstream", start, StringComparison.Ordinal);
-            if (end < 0)
-            {
-                break;
-            }
-
-            string text;
-            try
-            {
-                using var input = new MemoryStream(pdf, start, end - start);
-                using var zlib = new System.IO.Compression.ZLibStream(
-                    input, System.IO.Compression.CompressionMode.Decompress, leaveOpen: false);
-                using var reader = new StreamReader(zlib, System.Text.Encoding.Latin1);
-                text = reader.ReadToEnd();
-            }
-            catch (Exception exception) when (exception is InvalidDataException or IOException)
-            {
-                continue;
-            }
-
-            if (text.Contains(" w", StringComparison.Ordinal) || text.Contains(" re", StringComparison.Ordinal))
-            {
-                drawing.Append(text);
-            }
-        }
-
-        return drawing.ToString();
-    }
+    private static string Drawing(byte[] pdf) => PdfDrawing.Of(pdf);
 
     [Fact]
     public void AGradientChangesTheFile()
@@ -153,7 +117,7 @@ public class PdfExportSupportTests
     }
 
     [Fact]
-    public void AFilterDoesNotChangeTheFile()
+    public void AFilterChangesTheFile()
     {
         Assert.Equal(PdfExportSupport.Find("filter")!.Written, Changes(document =>
         {
@@ -191,6 +155,10 @@ public class PdfExportSupportTests
     {
         Assert.All(PdfExportSupport.Lossy, feature => Assert.False(feature.Written));
         Assert.Contains(PdfExportSupport.Lossy, f => f.Name == "rasterEffect");
+        Assert.Contains(PdfExportSupport.Lossy, f => f.Name == "blendMode");
         Assert.DoesNotContain(PdfExportSupport.Lossy, f => f.Name == "outlineEffect");
+
+        // The filter is no longer one of them: the exporter draws the graph's answer and places it.
+        Assert.DoesNotContain(PdfExportSupport.Lossy, f => f.Name == "filter");
     }
 }

@@ -106,9 +106,10 @@ public class StrokePaneExportWarningTests
         Assert.Contains("blur", warning.Text ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>A filter and a blend mode are per object, and both are declared unwritten.</summary>
+    /// <summary>A blend mode is per object and is declared unwritten. A filter no longer is: the PDF carries it
+    /// as an image XObject, so the pane must stop warning about it.</summary>
     [AvaloniaFact]
-    public void AFilterAndABlendModeShowTheWarning()
+    public void ABlendModeShowsTheWarningAndAFilterNoLongerDoes()
     {
         (StrokePane pane, EditorViewModel viewModel) = Host();
         Selected(viewModel, path =>
@@ -124,7 +125,7 @@ public class StrokePaneExportWarningTests
         string text = Warning(pane).Text ?? string.Empty;
 
         Assert.True(Warning(pane).IsVisible);
-        Assert.Contains("filter", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("filter", text, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("blend", text, StringComparison.OrdinalIgnoreCase);
     }
 

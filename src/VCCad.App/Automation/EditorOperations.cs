@@ -4,6 +4,7 @@ using System.Text.Json;
 using Avalonia;
 using Avalonia.VisualTree;
 using Avalonia.Threading;
+using VCCad.App.Commands;
 using VCCad.App.Controls;
 using VCCad.App.Fonts;
 using VCCad.Pdf;
@@ -2077,9 +2078,15 @@ public static class EditorOperations
         // in FilterPrimitiveRegistry, and these operations refuse anything that declaration does not have rather
         // than guessing - an unknown kind, a parameter the kind does not take, a buffer nothing produces.
         //
-        // **The PDF export writes no filter.** `PdfExportSupport` records it, and `document.exportSupport` reports
-        // it: a filtered object exports as the artwork without the filter. So the canvas and the SVG export are
-        // proven to draw the same picture (FilterIdentityTests), and the canvas and the PDF export are not.
+        // **A filter edit is one undo step.** The library and every item that refers to it move together through
+        // `FilterEditCommand`, on the same command stack every other edit uses, so a driver's Undo is the person's -
+        // and an edit that changes nothing, such as setting a parameter to the value it already had, takes no step
+        // at all rather than making someone press Undo twice for a change they never made.
+        //
+        // **The PDF export writes a filter.** The filtered object is rasterised into its region, the graph runs over
+        // those pixels and the answer is placed as an image, which is what `PdfExportSupport` records. A graph that
+        // reads the backdrop cannot be evaluated by an exporter that draws one item at a time, so that case and an
+        // unallocatable region export unfiltered and say so in the export notes.
         Add("filter.list",
             "The document's filters, with the primitives each holds and the wiring between them. A filter is a " +
             "directed graph rather than a list of effects, so what is reported is what each step reads and what it " +
@@ -2129,7 +2136,8 @@ public static class EditorOperations
             "and `filterRes` is the resolution the filter is evaluated at: one number for both axes or a pair of " +
             "them, and null to let the caller's own scale decide. A resolution this build will not allocate is " +
             "refused here rather than stored, because the engine refuses it at draw time and a filter that throws " +
-            "while painting takes the artwork with it. The library is document state and is not on the undo stack.",
+            "while painting takes the artwork with it. The library is document state, so creating or replacing a " +
+            "filter is one undo step like any other edit.",
             "name:string, primitives:[{kind,in?,in2?,result?,...}], x?, y?, width?, height?, userSpace?:bool, " +
             "primitiveUnits?:string, filterRes?:number|[x,y], output?:string",
             (ctx, p) =>
@@ -2175,7 +2183,7 @@ public static class EditorOperations
                 }
 
                 ValidateGraph(filter);
-                ReplaceFilter(ctx, filter);
+                ReplaceFilter(ctx, filter, "Create filter");
                 return new
                 {
                     created = name,
@@ -2242,15 +2250,15 @@ public static class EditorOperations
                 };
 
                 ValidateGraph(edited);
-                ReplaceFilter(ctx, edited);
+                ReplaceFilter(ctx, edited, "Set filter region");
                 return DescribeFilter(edited);
             });
 
         Add("filter.delete",
             "Delete a filter and clear it from every item that drew through it. The items keep their geometry and " +
             "their appearance - only the filter goes - which is what makes deleting an asset safe rather than " +
-            "destructive, and matching profile.delete. This writes nothing to the PDF either way: the export carries " +
-            "no filter to begin with.",
+            "destructive, and matching profile.delete. One undo step restores both halves: the filter and the " +
+            "references to it, which is why they are captured together rather than as two edits.",
             "name:string",
             (ctx, p) =>
             {
@@ -2261,19 +2269,19 @@ public static class EditorOperations
                     throw new EditorOperationException($"there is no filter called '{name}'");
                 }
 
-                int cleared = 0;
+                var cleared = new List<FilterEditCommand.ItemEdit>();
                 foreach (LayerItem item in document.AllItems().ToList())
                 {
                     if (item.FilterId == name)
                     {
-                        item.FilterId = null;
-                        cleared++;
+                        cleared.Add(new FilterEditCommand.ItemEdit(item, name, null));
                     }
                 }
 
-                document.RemoveFilter(name);
-                ctx.ViewModel.NotifyDocumentChanged();
-                return new { deleted = name, cleared };
+                IReadOnlyList<FilterSpec> library =
+                    document.Filters.Where(entry => entry.Name != name).ToList();
+                EditFilters(ctx, library, cleared, "Delete filter");
+                return new { deleted = name, cleared = cleared.Count };
             });
 
         Add("filter.addPrimitive",
@@ -2304,7 +2312,7 @@ public static class EditorOperations
 
                 FilterSpec edited = filter with { Primitives = primitives };
                 ValidateGraph(edited);
-                ReplaceFilter(ctx, edited);
+                ReplaceFilter(ctx, edited, "Add filter primitive");
                 return new { name = edited.Name, index, kind = primitive.Kind.ToString(), primitives = primitives.Count };
             });
 
@@ -2351,7 +2359,7 @@ public static class EditorOperations
 
                 FilterSpec edited = filter with { Primitives = primitives };
                 ValidateGraph(edited);
-                ReplaceFilter(ctx, edited);
+                ReplaceFilter(ctx, edited, "Remove filter primitive");
                 return new { name = edited.Name, removed = removed.Kind.ToString(), remaining = primitives.Count };
             });
 
@@ -2397,7 +2405,7 @@ public static class EditorOperations
 
                 FilterSpec edited = filter with { Primitives = primitives };
                 ValidateGraph(edited);
-                ReplaceFilter(ctx, edited);
+                ReplaceFilter(ctx, edited, "Connect filter primitive");
                 return new
                 {
                     name = edited.Name,
@@ -2451,7 +2459,7 @@ public static class EditorOperations
 
                 FilterSpec edited = filter with { Primitives = primitives };
                 ValidateGraph(edited);
-                ReplaceFilter(ctx, edited);
+                ReplaceFilter(ctx, edited, "Set filter primitive parameter");
                 return new
                 {
                     name = edited.Name,
@@ -2461,7 +2469,10 @@ public static class EditorOperations
                 };
             });
 
-        Add("filter.apply", "Draw the selected items through a filter. An empty name removes the filter.",
+        Add("filter.apply",
+            "Draw the selected items through a filter. An empty name removes the filter. This is an appearance edit " +
+            "like any other, so it is one undo step, and the step remembers what each item was drawing through " +
+            "before - which is what makes Undo restore the previous reference rather than merely clearing it.",
             "name:string",
             (ctx, p) =>
             {
@@ -2471,13 +2482,13 @@ public static class EditorOperations
                     throw new EditorOperationException($"there is no filter called '{name}'");
                 }
 
-                var items = ctx.Session.SelectedObjects.ToList();
-                foreach (LayerItem item in items)
-                {
-                    item.FilterId = name.Length == 0 ? null : name;
-                }
+                string? applied = name.Length == 0 ? null : name;
+                var items = ctx.Session.SelectedObjects
+                    .Where(item => item.FilterId != applied)
+                    .Select(item => new FilterEditCommand.ItemEdit(item, item.FilterId, applied))
+                    .ToList();
 
-                ctx.ViewModel.NotifyDocumentChanged();
+                EditFilters(ctx, ctx.Document.Filters, items, "Apply filter");
                 return new { applied = name, items = items.Count };
             });
 
@@ -6799,16 +6810,85 @@ public static class EditorOperations
     }
 
     /// <summary>
-    /// Puts an edited filter back.
+    /// Puts an edited filter back, as **one** undo step.
     ///
     /// Filters are document state rather than a property of an item, so an edit **replaces the whole spec**: the
     /// canvas looks the filter up as it paints, and there is no list element or plain property to assign to here
     /// that anything would hear.
     /// </summary>
-    private static void ReplaceFilter(AutomationContext ctx, FilterSpec filter)
+    private static void ReplaceFilter(AutomationContext ctx, FilterSpec filter, string description)
+        => EditFilters(
+            ctx,
+            LibraryWith(ctx.Document, filter),
+            Array.Empty<FilterEditCommand.ItemEdit>(),
+            description);
+
+    /// <summary>
+    /// Applies an edit to the filter library and to the items that refer to it, as one undo step.
+    ///
+    /// This is the filter half of "the person and the assistant have exactly the same powers": writing the document
+    /// directly would change the picture without putting anything on the stack, so a driver's Undo would not be the
+    /// Undo a person gets from the same edit. Going through <see cref="DocumentSession.Execute"/> is what makes one
+    /// operation one step.
+    ///
+    /// An edit that changes nothing - a parameter set to the value it already had, a filter applied to a selection
+    /// that already had it - takes **no** step, because a person pressing Undo after a no-op should get their
+    /// previous edit back rather than watch nothing happen.
+    /// </summary>
+    private static void EditFilters(
+        AutomationContext ctx,
+        IReadOnlyList<FilterSpec> library,
+        IReadOnlyList<FilterEditCommand.ItemEdit> items,
+        string description)
     {
-        ctx.Document.AddFilter(filter);
+        if (items.Count == 0 && SameLibrary(ctx.Document.Filters, library))
+        {
+            return;
+        }
+
+        ctx.Session.Execute(new FilterEditCommand(ctx.Document, library, items, description));
         ctx.ViewModel.NotifyDocumentChanged();
+    }
+
+    /// <summary>The library with one filter added or replaced, keeping the order the document already has.</summary>
+    private static IReadOnlyList<FilterSpec> LibraryWith(CadDocument document, FilterSpec filter)
+    {
+        var library = document.Filters.ToList();
+        int existing = library.FindIndex(entry => entry.Name == filter.Name);
+        if (existing >= 0)
+        {
+            library[existing] = filter;
+        }
+        else
+        {
+            library.Add(filter);
+        }
+
+        return library;
+    }
+
+    /// <summary>
+    /// Whether two versions of the filter library are the same filters **in the same order**.
+    ///
+    /// The order is part of the answer rather than an implementation detail: it is the order the serializer writes
+    /// them in, so the same filters in a different order are a different file.
+    /// </summary>
+    private static bool SameLibrary(IReadOnlyList<FilterSpec> a, IReadOnlyList<FilterSpec> b)
+    {
+        if (a.Count != b.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < a.Count; i++)
+        {
+            if (a[i] != b[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

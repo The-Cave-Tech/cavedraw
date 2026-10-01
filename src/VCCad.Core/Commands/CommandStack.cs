@@ -32,6 +32,15 @@ public sealed class CommandStack
     /// <summary>True when there is something to undo.</summary>
     public bool CanUndo => _position > 0;
 
+    /// <summary>
+    /// How many edits are currently applied - the depth an undo walks back through.
+    ///
+    /// Read-only, and it stays that way: the position is the stack's to move. It exists because "was that gesture
+    /// one edit or three" has to be answerable from outside the stack, and counting by undoing answers it by
+    /// changing the answer.
+    /// </summary>
+    public int Depth => _position;
+
     /// <summary>True when an undo has left a redo-able tail.</summary>
     public bool CanRedo => _position < _history.Count;
 
