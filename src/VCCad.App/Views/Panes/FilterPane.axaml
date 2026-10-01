@@ -1,0 +1,111 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="VCCad.App.Views.Panes.FilterPane">
+  <ScrollViewer>
+    <StackPanel Margin="10,8" Spacing="8">
+      <TextBlock Text="FILTERS" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- Why the last action was refused, in the operation's own words. A graph edit that is silently dropped is
+           indistinguishable from one that worked, and a filter draws somewhere else than the person thinks. -->
+      <TextBlock x:Name="FilterMessage" IsVisible="False" TextWrapping="Wrap"
+                 Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+
+      <!-- A filter is document state rather than a property of the selection, so this is the document's library and
+           the rest of the pane describes the one selected here. -->
+      <ListBox x:Name="FilterList" Height="80" Background="Transparent"
+               ToolTip.Tip="The filters this document holds"/>
+
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="4">
+        <TextBox x:Name="NewFilterNameBox" Grid.Column="0" Watermark="new filter name"
+                 ToolTip.Tip="The name a new filter is known by. A name already in use replaces that filter."/>
+        <Button x:Name="CreateFilterButton" Grid.Column="1" Content="New"
+                ToolTip.Tip="Create a filter holding one primitive of the kind chosen below"/>
+        <Button x:Name="DeleteFilterButton" Grid.Column="2" Content="Delete"
+                ToolTip.Tip="Delete the selected filter and clear it from every item that drew through it"/>
+        <Button x:Name="ApplyFilterButton" Grid.Column="3" Content="Apply"
+                ToolTip.Tip="Draw the selection through the selected filter"/>
+        <!-- `filter.apply` with an empty name is how a filter comes off again, so leaving it out would be a
+             capability a driver has and a person does not. -->
+        <Button x:Name="ClearFilterButton" Grid.Column="4" Content="Clear"
+                ToolTip.Tip="Remove whatever filter the selection is drawn through"/>
+      </Grid>
+
+      <TextBlock Text="PRIMITIVES" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
+                 Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- The order is a starting point, not a pipeline: what each step reads is the wiring, edited below. The row
+           carries the index so a person can see where in the order a step sits. -->
+      <ListBox x:Name="PrimitiveList" Height="110" Background="Transparent">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6" Height="20">
+              <TextBlock Grid.Column="0" Text="{Binding Index}" VerticalAlignment="Center"
+                         Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+              <TextBlock Grid.Column="1" Text="{Binding Kind}" VerticalAlignment="Center"
+                         Foreground="{DynamicResource VcText}" FontSize="{DynamicResource VcFontSize}"/>
+              <TextBlock Grid.Column="2" Text="{Binding Wiring}" VerticalAlignment="Center"
+                         Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+              <TextBlock Grid.Column="3" Text="{Binding ResultName}" VerticalAlignment="Center"
+                         Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="4">
+        <!-- Filled from FilterPrimitiveRegistry, the declaration `filter.kinds` reports, so every primitive this
+             build has is offered here by existing rather than by being added to a list in the panel. -->
+        <ComboBox x:Name="AddKindBox" Grid.Column="0" HorizontalAlignment="Stretch"
+                  ToolTip.Tip="The primitive to add, from the declaration filter.kinds reports"/>
+        <TextBox x:Name="AddIndexBox" Grid.Column="1" Width="46" Watermark="end"
+                 ToolTip.Tip="Where in the order to insert it. Empty appends."/>
+        <Button x:Name="AddPrimitiveButton" Grid.Column="2" Content="Add"/>
+        <Button x:Name="RemovePrimitiveButton" Grid.Column="3" Content="Remove"/>
+      </Grid>
+
+      <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="4">
+        <Button x:Name="MovePrimitiveUpButton" Grid.Column="0" Content="Up" IsEnabled="False"/>
+        <Button x:Name="MovePrimitiveDownButton" Grid.Column="1" Content="Down" IsEnabled="False"/>
+        <!-- Reordering needs an operation, and this build has none: the buttons above are off rather than
+             pretending. `style.reorderStrokeEffect` is the shape such an operation takes, and the day one exists
+             for filter primitives these two call it like every other control here calls its operation. -->
+        <TextBlock x:Name="MoveNote" Grid.Column="2" VerticalAlignment="Center" TextWrapping="Wrap"
+                   Text="reordering needs filter.movePrimitive, which this build has not got"
+                   Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+      </Grid>
+
+      <TextBlock Text="PARAMETERS" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
+                 Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- Built from the declaration whenever a step is selected: one control per parameter the kind declares, of
+           the shape its kind calls for, so a parameter added to the declaration gets an editor without this pane
+           changing. -->
+      <StackPanel x:Name="PrimitiveParameters" Spacing="4"/>
+
+      <TextBlock Text="REGION" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
+                 Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- Where the filter is evaluated and what it answers with. It is not decoration: a blur that spreads past
+           the region is cut off, which is the first thing that looks wrong in a rendering. -->
+      <Grid ColumnDefinitions="Auto,*,10,Auto,*" ColumnSpacing="0">
+        <TextBlock Text="X" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="RegionXBox" Grid.Column="1"/>
+        <TextBlock Text="Y" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="RegionYBox" Grid.Column="4"/>
+      </Grid>
+      <Grid ColumnDefinitions="Auto,*,10,Auto,*" ColumnSpacing="0">
+        <TextBlock Text="Width" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="RegionWidthBox" Grid.Column="1"/>
+        <TextBlock Text="Height" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="RegionHeightBox" Grid.Column="4"/>
+      </Grid>
+      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="4">
+        <TextBlock Text="Output" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="OutputBox" Grid.Column="1"
+                 ToolTip.Tip="The buffer the filter answers with. Empty means the last step's result."/>
+        <CheckBox x:Name="RegionUnitsBox" Grid.Column="2" Content="User space"
+                  ToolTip.Tip="Checked: the region's numbers are user-space lengths. Unchecked: fractions of the shape's box."/>
+      </Grid>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

@@ -373,6 +373,12 @@ public partial class EditorView : UserControl
         var arrange = new ArrangePane();
         arrange.Attach(_viewModel);
 
+        // The filter graph editor: the graph is a document asset, so it belongs beside the other paint panels rather
+        // than in the inspector. Every control in it runs an operation from the registry, which is what makes a
+        // filter a person builds here reproducible by a driver.
+        var filter = new FilterPane();
+        filter.Attach(_viewModel);
+
         var appearance = new DockPanelModel { Id = "appearance", Title = "Appearance", Side = DockSide.Right };
         appearance.Tabs.Add(new DockTab { Id = "colors", Title = "Color", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => colors, IsOpen = true });
         appearance.Tabs.Add(new DockTab { Id = "gradient", Title = "Gradient", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => gradient });
@@ -383,6 +389,7 @@ public partial class EditorView : UserControl
         // The chooser is a tab of its own so it can be left open beside the canvas while
         // somebody works through families, which a dropdown cannot.
         appearance.Tabs.Add(new DockTab { Id = "fonts", Title = "Fonts", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => fonts });
+        appearance.Tabs.Add(new DockTab { Id = "filter", Title = "Filter", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => filter });
         appearance.ActiveTabId = "colors";
 
         // The colour panel is only as tall as its contents; the Layers panel takes everything
