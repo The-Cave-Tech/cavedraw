@@ -166,7 +166,12 @@ internal sealed record PathDto(
     // gives back an editable star rather than ten anonymous points. Optional, so every file written
     // before shapes existed still loads unchanged.
     ShapeKind? ShapeKind = null,
-    ShapeParameters? ShapeParameters = null) : ItemDto;
+    ShapeParameters? ShapeParameters = null,
+
+    // The stroke stack, when a path has more than one. Omitting it for the ordinary single-stroke path is what
+    // keeps a document written before strokes became a stack byte-identical to one written now, and a file
+    // without the member loads as a stack of one - the same rule gradients and clips follow.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] StrokeDto[]? Strokes = null) : ItemDto;
 
 internal sealed record GroupDto(
     Guid Id,
@@ -373,7 +378,11 @@ internal abstract record ItemDto
         p.SourceFillCmyk,
         p.SourceStrokeCmyk,
         p.Shape?.Kind,
-        p.Shape?.Parameters);
+        p.Shape?.Parameters,
+
+        // Only when there is more than one: a single stroke travels as `Stroke` alone, so nothing that has one
+        // changes on the way out.
+        p.Strokes.Count > 1 ? p.Strokes.Select(ToStroke).ToArray() : null);
 
     private static GroupDto ToGroup(ArtGroup g) => new(
         g.Id,
@@ -567,6 +576,20 @@ internal static class ItemDtoExtensions
                 : null,
         };
         path.RestoreIdentity(p.Id);
+
+        // The stack, when the file carried one. A file without the member holds a single stroke - already set
+        // through the initialiser above - so this only ever adds.
+        if (p.Strokes is { Length: > 0 } stack)
+        {
+            path.Strokes.Clear();
+            foreach (StrokeDto stroke in stack)
+            {
+                path.Strokes.Add(stroke.ToModel());
+            }
+
+            path.NotifyStrokesChanged();
+        }
+
         foreach (SubPathDto sp in VccadDocumentSerializer.RequireArray(p.SubPaths, nameof(p.SubPaths)))
         {
             var sub = path.AddSubPath(sp.Closed);

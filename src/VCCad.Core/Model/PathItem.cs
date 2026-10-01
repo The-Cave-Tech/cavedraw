@@ -20,7 +20,7 @@ namespace VCCad.Core.Model;
 public sealed class PathItem : LayerItem
 {
     private FillSpec _fill = FillSpec.None;
-    private StrokeSpec _stroke = StrokeSpec.Hairline(ColorRgb.Black);
+    private readonly List<StrokeSpec> _strokes = new() { StrokeSpec.Hairline(ColorRgb.Black) };
     private double _opacity = 1.0;
 
     /// <summary>Subpaths in draw order; usually one, but compound shapes use many.</summary>
@@ -59,12 +59,56 @@ public sealed class PathItem : LayerItem
         set => SetField(ref _fill, value);
     }
 
-    /// <summary>The stroke paint (width, colour, caps, joins).</summary>
+    /// <summary>
+    /// The strokes painted on this path, <b>bottom to top</b>.
+    ///
+    /// A path carries an ordered stack rather than one stroke, because that is what a person draws with: an
+    /// outline under a highlight, a wide stroke under a narrow one. The list is never empty, so callers can read
+    /// it without a null check: a new path holds the classic hairline, and a path with no visible stroke holds a
+    /// single <see cref="StrokeSpec.None"/>. The ordinary path is a stack of one.
+    /// </summary>
+    public List<StrokeSpec> Strokes => _strokes;
+
+    /// <summary>
+    /// The bottom stroke. Reading this is the <b>compatibility behaviour, not the correct one</b>: a path with
+    /// two strokes needs every one of them painted, exported, scaled and dumped, and a caller that reads this
+    /// gets one of them.
+    ///
+    /// It exists so the model could gain a stack without every one of its ninety-odd call sites changing in the
+    /// same commit. The call sites that matter read <see cref="Strokes"/>. Setting it replaces the whole stack
+    /// with that single stroke, which is what "set the stroke" means on a path that has one.
+    /// </summary>
     public StrokeSpec Stroke
     {
-        get => _stroke;
-        set => SetField(ref _stroke, value);
+        get => _strokes.Count > 0 ? _strokes[0] : StrokeSpec.None;
+        set
+        {
+            if (_strokes.Count == 1 && _strokes[0] == value)
+            {
+                return;
+            }
+
+            _strokes.Clear();
+            _strokes.Add(value);
+            NotifyStrokesChanged();
+        }
     }
+
+    /// <summary>
+    /// Announces that the stroke stack changed.
+    ///
+    /// A list cannot raise a notification, so code that adds, removes or reorders a stroke through
+    /// <see cref="Strokes"/> directly has to call this. Without it a panel or a renderer that caches against
+    /// the stack keeps showing the old one.
+    /// </summary>
+    public void NotifyStrokesChanged()
+    {
+        NotifyPropertyChanged(nameof(Stroke));
+        NotifyPropertyChanged(nameof(Strokes));
+    }
+
+    /// <summary>Whether any stroke on this path has a visible outline.</summary>
+    public bool HasVisibleStroke => _strokes.Any(s => s.HasVisibleOutline);
 
     /// <summary>Whole-object opacity in [0,1]; the layer and artboard apply on top.</summary>
     public double Opacity
@@ -320,7 +364,7 @@ public sealed class PathItem : LayerItem
             IsVisible = IsVisible,
             IsLocked = IsLocked,
             Fill = _fill,
-            Stroke = _stroke,
+            Stroke = Stroke,
             Opacity = _opacity,
 
             // The original ink values are part of what the item is; a copy that dropped
@@ -328,6 +372,15 @@ public sealed class PathItem : LayerItem
             SourceFillCmyk = SourceFillCmyk is null ? null : (double[])SourceFillCmyk.Clone(),
             SourceStrokeCmyk = SourceStrokeCmyk is null ? null : (double[])SourceStrokeCmyk.Clone(),
         };
+
+        // The rest of the stroke stack. The initialiser above set the first stroke through the compatibility
+        // property, so the remainder is copied here - a clone that kept only the bottom stroke would quietly
+        // lose artwork the moment a path had two.
+        for (int i = 1; i < _strokes.Count; i++)
+        {
+            copy.Strokes.Add(_strokes[i]);
+        }
+
         copy.SubPaths.AddRange(SubPaths.Select(sp => sp.Clone()));
 
         // Shared, not cloned: the definition is immutable, and a copy that forgot it would turn a
