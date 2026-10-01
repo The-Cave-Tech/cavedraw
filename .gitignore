@@ -59,7 +59,12 @@ secrets/
 
 # The copyrighted sample PDFs live in a private repository and are checked out beside this one.
 # Ignored here so they cannot be added back by accident.
-samples/
+#
+# **Root-anchored on purpose.** An unanchored `samples/` also matches `src/VCCad.Core/Samples/`, which is source
+# code the build needs - so the repository compiled only on machines where that folder happened to exist, and a
+# clean checkout failed with "the type or namespace name 'Samples' does not exist". That slash is the difference
+# between ignoring a checkout and ignoring a namespace.
+/samples/
 
 # Machine-local settings: the model endpoint, its key, and anything else that is a deployment value.
 # An endpoint and a key are not source, and a repository that ships them ships a secret.
