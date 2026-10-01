@@ -337,13 +337,36 @@ internal abstract record ItemDto
         Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? FilterId { get; init; }
 
-    public static ItemDto From(LayerItem item) => item switch
+    /// <summary>The namespaced attributes the file carried, by qualified name, or null when there were none.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? Foreign { get; init; }
+
+    /// <summary>Child elements that are not artwork, verbatim, or null when there were none.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string[]? ForeignElements { get; init; }
+
+    public static ItemDto From(LayerItem item) => WithForeign(item switch
     {
         PathItem path => ToPath(path) with { Clips = ToClips(item), FilterId = item.FilterId },
         ArtGroup group => ToGroup(group) with { Clips = ToClips(item), FilterId = item.FilterId },
         TextItem text => ToText(text) with { Clips = ToClips(item), FilterId = item.FilterId },
         ImageItem image => ToImage(image) with { Clips = ToClips(item), FilterId = item.FilterId },
         _ => throw new NotSupportedException($"Unsupported layer item type {item.GetType().Name}."),
+    }, item);
+
+    /// <summary>
+    /// The namespaced baggage an item carried - `inkscape:`/`sodipodi:` attributes and any child element the model
+    /// has no meaning for - or nothing at all when it had none.
+    ///
+    /// Absent rather than empty, like every other optional member: a document that never held one has to serialise
+    /// exactly as it did before this existed, or the fidelity tests would be pinning a new shape.
+    /// </summary>
+    private static ItemDto WithForeign(ItemDto dto, LayerItem item) => dto with
+    {
+        Foreign = item.ForeignAttributes.Count == 0
+            ? null
+            : new Dictionary<string, string>(item.ForeignAttributes, StringComparer.Ordinal),
+        ForeignElements = item.ForeignElements.Count == 0 ? null : item.ForeignElements.ToArray(),
     };
 
     private static ClipDto[]? ToClips(LayerItem item)
@@ -379,6 +402,13 @@ internal abstract record ItemDto
         // The filter reference travels the same way as a clip: on the base DTO, restored here for every kind of
         // item, because a filter applies to a group as readily as to a path.
         item.FilterId = dto.FilterId;
+
+        foreach (KeyValuePair<string, string> attribute in dto.Foreign ?? new Dictionary<string, string>())
+        {
+            item.ForeignAttributes[attribute.Key] = attribute.Value;
+        }
+
+        item.ForeignElements.AddRange(dto.ForeignElements ?? Array.Empty<string>());
 
         return item;
     }
@@ -1072,7 +1102,13 @@ internal sealed record DocumentDto(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WidthProfileDto[]? WidthProfiles = null,
 
     // The filters, when the document has any. Document state, like the profiles: an element refers to one by name.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FilterDto[]? Filters = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FilterDto[]? Filters = null,
+
+    // Root-level elements that are not artwork (the Inkscape named view, the RDF), verbatim, when there are any.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string[]? SvgExtras = null,
+
+    // The namespace prefixes the file declared, so the writer uses the same ones rather than generated ones.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<string, string>? SvgNamespaces = null);
 
 /// <summary>
 /// Lossless, deterministic serializer for <see cref="CadDocument"/>.
@@ -1186,7 +1222,11 @@ public static class VccadDocumentSerializer
                 ? null
                 : d.WidthProfiles.Select(ToDto).ToArray(),
 
-            d.Filters.Count == 0 ? null : d.Filters.Select(ToFilterDto).ToArray());
+            d.Filters.Count == 0 ? null : d.Filters.Select(ToFilterDto).ToArray(),
+
+            d.SvgExtras.Count == 0 ? null : d.SvgExtras.ToArray(),
+
+            d.SvgNamespaces.Count == 0 ? null : new Dictionary<string, string>(d.SvgNamespaces));
     }
 
     private static WidthProfileDto ToDto(WidthProfileSpec profile)
@@ -1264,6 +1304,9 @@ public static class VccadDocumentSerializer
 
         // And the filters, for the same reason: an element refers to one by name, so a library that did not load
         // would leave every filtered shape unfiltered.
+        document.SetSvgExtras(dto.SvgExtras ?? Array.Empty<string>());
+        document.SetSvgNamespaces(dto.SvgNamespaces ?? new Dictionary<string, string>(StringComparer.Ordinal));
+
         document.SetFilters(
             (dto.Filters ?? Array.Empty<FilterDto>())
                 .Where(f => f.Primitives is { Length: > 0 })

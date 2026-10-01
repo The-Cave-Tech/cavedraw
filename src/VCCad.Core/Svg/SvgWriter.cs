@@ -53,7 +53,28 @@ public static class SvgWriter
         root.Add(new XAttribute("viewBox",
             $"{Number(extent.X)} {Number(extent.Y)} {Number(extent.Width)} {Number(extent.Height)}"));
 
-        var writer = new Writer(root);
+        var writer = new Writer(root, document.SvgNamespaces);
+
+        // The prefixes the file declared, declared again - so every namespaced attribute written below uses the
+        // name it had rather than a generated one.
+        foreach (KeyValuePair<string, string> entry in document.SvgNamespaces)
+        {
+            root.SetAttributeValue(XNamespace.Xmlns + entry.Key, entry.Value);
+        }
+
+        // The root-level elements that are not artwork: the named view, the RDF. Written back verbatim, because a
+        // file that loses them resets the document's own settings when it is opened again.
+        foreach (string extra in document.SvgExtras)
+        {
+            try
+            {
+                root.Add(XElement.Parse(extra));
+            }
+            catch (System.Xml.XmlException)
+            {
+                // Unreadable XML is not worth failing an export over; the artwork is the part that has to survive.
+            }
+        }
 
         // Gradients first, because a path refers to them by id and a definition may come after its use.
         writer.WriteGradients(document);
@@ -121,10 +142,62 @@ public static class SvgWriter
     {
         private readonly XElement _root;
         private readonly Dictionary<GradientSpec, string> _gradientIds = new(GradientKey.Instance);
+        private readonly IReadOnlyDictionary<string, string> _namespaces;
         private int _gradientCount;
         private int _clipCount;
 
-        public Writer(XElement root) => _root = root;
+        public Writer(XElement root, IReadOnlyDictionary<string, string>? namespaces = null)
+        {
+            _root = root;
+            _namespaces = namespaces ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
+        /// <summary>
+        /// Puts back the namespaced attributes the file carried, and the label that is the item's name.
+        ///
+        /// The label is written from the **name**, not from the stored attribute: it is the same fact, and writing
+        /// both would leave a renamed object disagreeing with itself.
+        /// </summary>
+        private void ApplyForeign(XElement element, LayerItem item)
+        {
+            foreach (KeyValuePair<string, string> attribute in item.ForeignAttributes)
+            {
+                int colon = attribute.Key.IndexOf(':');
+                if (colon <= 0)
+                {
+                    continue;
+                }
+
+                string prefix = attribute.Key[..colon];
+                string local = attribute.Key[(colon + 1)..];
+                if (!_namespaces.TryGetValue(prefix, out string? uri))
+                {
+                    continue;
+                }
+
+                element.SetAttributeValue(XName.Get(local, uri), attribute.Value);
+            }
+
+            // A child the model does not understand goes back under the element it came from, before the label so
+            // the written form keeps the file's own ordering.
+            foreach (string foreign in item.ForeignElements)
+            {
+                try
+                {
+                    element.Add(XElement.Parse(foreign));
+                }
+                catch (System.Xml.XmlException)
+                {
+                    // Unreadable XML is not worth failing an export over.
+                }
+            }
+
+            if (!string.IsNullOrEmpty(item.Name) && _namespaces.ContainsKey("inkscape"))
+            {
+                element.SetAttributeValue(
+                    XName.Get("label", _namespaces["inkscape"]), item.Name);
+            }
+        }
 
         /// <summary>
         /// Every gradient the document uses, written once each, in `defs`.
@@ -351,6 +424,7 @@ public static class SvgWriter
                     case ArtGroup group:
                     {
                         var element = new XElement(Svg + "g");
+                        ApplyForeign(element, group);
                         if (!string.IsNullOrEmpty(group.Name))
                         {
                             element.Add(new XAttribute("id", group.Name));
@@ -457,7 +531,8 @@ public static class SvgWriter
                 }
                 else
                 {
-                    element.Add(new XAttribute("stroke", "none"));
+                    ApplyForeign(element, path);
+                element.Add(new XAttribute("stroke", "none"));
                 }
 
                 parent.Add(element);
@@ -481,6 +556,7 @@ public static class SvgWriter
                     element.Add(new XAttribute("fill-rule", fillRule));
                 }
 
+                ApplyForeign(element, path);
                 element.Add(new XAttribute("stroke", "none"));
                 parent.Add(element);
             }
@@ -557,6 +633,7 @@ public static class SvgWriter
                 element.Add(new XAttribute("id", path.Name));
             }
 
+            ApplyForeign(element, path);
             element.Add(new XAttribute("fill", "none"));
 
             if (stroke.HasWidthProfile || stroke.HasEffects)

@@ -1860,6 +1860,29 @@ public static class EditorOperations
             return new { changed };
         });
 
+        Add("document.metadata",
+            "The namespaced data the file carried that the model has no meaning for: the root-level elements kept " +
+            "verbatim (Inkscape's named view, the RDF), the namespace prefixes declared, and, for the selection, " +
+            "the foreign attributes and child elements on its items. Read-only - the model carries these rather " +
+            "than interpreting them, and they go back out with the same names they came in with.",
+            "",
+            (ctx, _) => new
+            {
+                extras = ctx.Document.SvgExtras.Count,
+                namespaces = ctx.Document.SvgNamespaces
+                    .Select(entry => new { prefix = entry.Key, uri = entry.Value })
+                    .ToArray(),
+                selection = ctx.Session.SelectedObjects.Select(item => new
+                {
+                    itemId = item.Id,
+                    name = item.Name,
+                    attributes = item.ForeignAttributes
+                        .Select(entry => new { name = entry.Key, value = entry.Value })
+                        .ToArray(),
+                    elements = item.ForeignElements.Count,
+                }).ToArray(),
+            });
+
         Add("filter.list",
             "The document's filters, with the primitives each holds and the wiring between them. A filter is a " +
             "directed graph rather than a list of effects, so what is reported is what each step reads and what it " +

@@ -23,6 +23,52 @@ public sealed class CadDocument
     private readonly List<WidthProfileSpec> _widthProfiles = new();
     private readonly List<FilterSpec> _filters = new();
 
+    /// <summary>
+    /// Root-level elements the model has no meaning for, kept verbatim as XML.
+    ///
+    /// `sodipodi:namedview` holds the grid, the zoom and the page settings; `&lt;metadata&gt;` holds the RDF.
+    /// Neither is artwork and neither is ours to interpret - but a file that loses its named view comes back to
+    /// Inkscape with the document's own settings reset, which is a silent rewrite of somebody's file.
+    ///
+    /// Stored as text for the same reason an item's foreign attributes are: the model carries them, and does not
+    /// pretend to understand them.
+    /// </summary>
+    public IReadOnlyList<string> SvgExtras => _svgExtras;
+
+    private readonly List<string> _svgExtras = new();
+
+    /// <summary>Replaces the preserved root-level elements.</summary>
+    public void SetSvgExtras(IEnumerable<string> extras)
+    {
+        _svgExtras.Clear();
+        _svgExtras.AddRange(extras);
+    }
+
+    /// <summary>
+    /// The namespace prefixes the file declared, prefix to URI, excluding the default namespace.
+    ///
+    /// Carried so that what is written back uses the **same prefixes** the file used. The namespace is what matters
+    /// semantically - `p1:label` and `inkscape:label` are the same attribute to a parser - but a file that comes
+    /// back with machine-generated prefixes is not the file that went in, and a person reading it would reasonably
+    /// call that a rewrite.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> SvgNamespaces => _svgNamespaces;
+
+    private readonly Dictionary<string, string> _svgNamespaces = new(StringComparer.Ordinal);
+
+    /// <summary>Replaces the declared namespace prefixes.</summary>
+    public void SetSvgNamespaces(IEnumerable<KeyValuePair<string, string>> namespaces)
+    {
+        _svgNamespaces.Clear();
+        foreach (KeyValuePair<string, string> entry in namespaces)
+        {
+            if (entry.Key.Length > 0)
+            {
+                _svgNamespaces[entry.Key] = entry.Value;
+            }
+        }
+    }
+
     /// <summary>Document-level container for objects that belong to no artboard
     /// (the pasteboard / orphans). These are "parentless" in the sense that no
     /// artboard owns them; their coordinates are document/world coordinates.</summary>

@@ -104,6 +104,23 @@ public static class SvgReader
             document.AddFilter(filter);
         }
 
+        // Root-level elements that are neither artwork nor ours: `sodipodi:namedview` holds the grid, the zoom and
+        // the page settings, and `<metadata>` holds the RDF. Kept verbatim, because a file that comes back without
+        // them resets the document's own settings in Inkscape - a silent rewrite of somebody's file.
+        document.SetSvgExtras(root.Elements()
+            .Where(child => child.Name.LocalName == "metadata" ||
+                            (child.Name.Namespace != XNamespace.None && child.Name.Namespace != Svg))
+            .Select(child => child.ToString()));
+
+        // The prefixes the file declared, so what is written back uses the same ones. A namespace is a namespace to
+        // a parser, but a file that comes back as `p1:label` instead of `inkscape:label` is not the file that went
+        // in, and a person reading it would reasonably call that a rewrite.
+        document.SetSvgNamespaces(root.Attributes()
+            .Where(attribute => attribute.IsNamespaceDeclaration)
+            .Select(attribute => new KeyValuePair<string, string>(
+                attribute.Name.LocalName == "xmlns" ? string.Empty : attribute.Name.LocalName,
+                attribute.Value)));
+
         var context = new Context
         {
             Layer = layer,
@@ -160,6 +177,83 @@ public static class SvgReader
 
         return builder.ToString();
     }
+
+    /// <summary>
+    /// Keeps the namespaced attributes the model has no meaning for, and reads the two that matter.
+    ///
+    /// SVG files are dense with `inkscape:` and `sodipodi:` attributes - Inkscape's own test files use `inkscape:`
+    /// 226 times and `sodipodi:` 94 - and this repository's rule is *reflect the file, never invent*. Dropping them
+    /// silently rewrites every document that passes through.
+    ///
+    /// Two of them are not decoration: **`inkscape:label` IS the layer or object name** (it is what a person sees
+    /// in the layer list), and `sodipodi:insensitive` is what locks a layer. Everything else is carried verbatim.
+    /// </summary>
+    private static void CaptureForeign(XElement element, LayerItem item)
+    {
+        foreach (KeyValuePair<string, string> attribute in ReadForeign(element))
+        {
+            item.ForeignAttributes[attribute.Key] = attribute.Value;
+        }
+
+        // A child element the model has no meaning for is kept the same way its attributes are. Reading only the
+        // attributes would drop a file's own data while looking as though it had been preserved.
+        foreach (XElement child in element.Elements())
+        {
+            if (child.Name.Namespace != XNamespace.None && child.Name.Namespace != Svg)
+            {
+                item.ForeignElements.Add(child.ToString());
+            }
+        }
+
+        if (element.Attribute(Inkscape + "label")?.Value is { Length: > 0 } label)
+        {
+            item.Name = label;
+        }
+
+        if (string.Equals(element.Attribute(Sodipodi + "insensitive")?.Value, "true", StringComparison.OrdinalIgnoreCase))
+        {
+            item.IsLocked = true;
+        }
+    }
+
+    /// <summary>
+    /// The namespaced attributes this element carries, keyed by the name the **file** used - prefix included - so
+    /// the writer can put them back under the same prefixes rather than machine-generated ones.
+    /// </summary>
+    private static Dictionary<string, string> ReadForeign(XElement element)
+    {
+        var attributes = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (XAttribute attribute in element.Attributes())
+        {
+            if (attribute.IsNamespaceDeclaration || attribute.Name.Namespace == XNamespace.None)
+            {
+                continue;
+            }
+
+            // `xlink:href` and `xml:*` are the parser's business, not the file's baggage.
+            if (attribute.Name.NamespaceName is "http://www.w3.org/1999/xlink"
+                or "http://www.w3.org/XML/1998/namespace")
+            {
+                continue;
+            }
+
+            string? prefix = element.GetPrefixOfNamespace(attribute.Name.Namespace);
+            if (prefix is null)
+            {
+                // No prefix in scope means the attribute's namespace is the default one, which attributes never
+                // take - so there is nothing to write back under a prefix.
+                continue;
+            }
+
+            attributes[$"{prefix}:{attribute.Name.LocalName}"] = attribute.Value;
+        }
+
+        return attributes;
+    }
+
+    private static readonly XNamespace Inkscape = "http://www.inkscape.org/namespaces/inkscape";
+    private static readonly XNamespace Sodipodi = "http://sodipodi.sourceforge.net/DTD/sodipodi-0.0.dtd";
 
     /// <summary>`filter="url(#id)"` resolves to the id, or null when the element is not filtered.</summary>
     private static string? FilterReference(XElement element)
@@ -392,6 +486,8 @@ public static class SvgReader
                 item.FilterId = filterId;
             }
 
+            CaptureForeign(element, item);
+
             if (item is PathItem shape)
             {
                 // A gradient is normalised against the shape's own box, in the space the shape is **written** in -
@@ -451,6 +547,7 @@ public static class SvgReader
         AffineTransform transform = Transform(element.Attribute("transform")?.Value);
         var group = new ArtGroup { Name = element.Attribute("id")?.Value ?? string.Empty };
         group.Transform = transform;
+        CaptureForeign(element, group);
 
         var inside = new Context
         {

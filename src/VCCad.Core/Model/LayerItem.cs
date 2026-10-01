@@ -61,6 +61,28 @@ public abstract class LayerItem : CadObject
     }
 
     /// <summary>
+    /// Namespaced attributes this item carried that the model has no meaning for, by qualified name.
+    ///
+    /// SVG files are dense with `inkscape:` and `sodipodi:` attributes - Inkscape's own test files use `inkscape:`
+    /// 226 times and `sodipodi:` 94 - and the repository's rule is *reflect the file, never invent*. Dropping them
+    /// silently rewrites every document that passes through, and the person who opens the result finds their layer
+    /// names and lock states gone.
+    ///
+    /// Held as text rather than as parsed XML: the model has no opinion about them, so all it has to do is carry
+    /// them from the file it read to the file it writes.
+    /// </summary>
+    public Dictionary<string, string> ForeignAttributes { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Children this item carried that are not artwork and not ours, kept verbatim as XML.
+    ///
+    /// The adversarial case the issue names: an element with an unknown namespaced attribute **and** an unknown
+    /// element must not lose either. Attributes alone are not enough - a file may hang its own data under a shape,
+    /// and dropping the child while keeping the attribute is the same silent rewrite one level down.
+    /// </summary>
+    public List<string> ForeignElements { get; } = new();
+
+    /// <summary>
     /// The name of the document filter this item is drawn through, or null when it is not filtered.
     ///
     /// A **reference**, not the filter itself: a filter is a document-level asset an element points at, which is what
