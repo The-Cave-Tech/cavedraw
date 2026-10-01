@@ -46,7 +46,7 @@ public static class SvgReader
     private const double DefaultViewport = 300.0;
 
     /// <summary>Reads an SVG document from a string.</summary>
-    public static SvgImportResult Read(string svg)
+    public static SvgImportResult Read(string svg, string? baseDirectory = null)
     {
         XDocument xml;
         try
@@ -89,6 +89,11 @@ public static class SvgReader
         var ids = new Dictionary<string, XElement>(StringComparer.Ordinal);
         Index(root, ids);
 
+        // Every style element in the document, in document order - including the ones inside defs, which are
+        // still stylesheets and still apply. Collecting them by walking the tree as it is read would miss a sheet
+        // defined after the elements it styles, which multi-style.svg does.
+        SvgStylesheet sheet = SvgStylesheet.Parse(CollectStyles(root), baseDirectory);
+
         var context = new Context
         {
             Layer = layer,
@@ -98,6 +103,7 @@ public static class SvgReader
             Ids = ids,
             Resolving = new HashSet<string>(StringComparer.Ordinal),
             Missing = new List<string>(),
+            Sheet = sheet,
         };
 
         foreach (XElement child in root.Elements())
@@ -111,6 +117,36 @@ public static class SvgReader
         }
 
         return new SvgImportResult(document, counts, context.Missing);
+    }
+
+    /// <summary>
+    /// Every stylesheet in the document, joined in document order.
+    ///
+    /// Document order matters: two rules of equal specificity are decided by which comes later, so a reader that
+    /// applied each sheet as it met it would get a file with two `style` elements wrong whenever the later one
+    /// restates a class - which is exactly what Inkscape's multi-style file tests.
+    ///
+    /// A sheet inside `defs` counts. `defs` means "not drawn here", not "not applied": it is still a stylesheet,
+    /// and skipping it because its parent is not drawn loses the colours of everything it styles.
+    /// </summary>
+    private static string CollectStyles(XElement root)
+    {
+        var builder = new System.Text.StringBuilder();
+
+        foreach (XElement style in root.DescendantsAndSelf().Where(e =>
+                     e.Name.LocalName == "style" &&
+                     (string.IsNullOrEmpty(e.Name.NamespaceName) || e.Name.Namespace == Svg)))
+        {
+            // A CDATA section and a comment inside a stylesheet both arrive as content; `Value` gives the text
+            // either way, and the CSS reader strips the comments.
+            string text = style.Value;
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                builder.Append('\n').Append(text).Append('\n');
+            }
+        }
+
+        return builder.ToString();
     }
 
     /// <summary>Indexes every element that has an id, so a reference resolves whichever way round it is written.</summary>
@@ -136,7 +172,7 @@ public static class SvgReader
             throw new SvgImportException($"there is no file at '{path}'");
         }
 
-        return Read(File.ReadAllText(path));
+        return Read(File.ReadAllText(path), System.IO.Path.GetDirectoryName(path));
     }
 
     // ------------------------------------------------------------------ the view box
@@ -224,6 +260,9 @@ public static class SvgReader
         /// <summary>The ids that were referred to and not found, which are reported rather than dropped.</summary>
         public required List<string> Missing { get; init; }
 
+        /// <summary>The document's stylesheets, cascaded together.</summary>
+        public required SvgStylesheet Sheet { get; init; }
+
         /// <summary>Where a shape is added: the group it is inside, or the layer when there is no group.</summary>
         public void Add(LayerItem item)
         {
@@ -255,7 +294,8 @@ public static class SvgReader
             return;
         }
 
-        PresentationStyle style = PresentationStyle.From(element, context.Style);
+        PresentationStyle style = PresentationStyle.From(element, context.Style, context.Sheet.DeclarationsFor(
+            element, element.Ancestors().ToArray()));
 
         switch (name)
         {
@@ -338,6 +378,7 @@ public static class SvgReader
             Ids = context.Ids,
             Resolving = context.Resolving,
             Missing = context.Missing,
+            Sheet = context.Sheet,
         };
 
         foreach (XElement child in element.Elements())
@@ -635,6 +676,7 @@ public static class SvgReader
             Ids = context.Ids,
             Resolving = context.Resolving,
             Missing = context.Missing,
+            Sheet = context.Sheet,
         };
 
         if (target.Name.LocalName == "symbol")

@@ -37,15 +37,45 @@ internal sealed record PresentationStyle(
         FillSpec.Solid(ColorRgb.Black),
         StrokeSpec.None);
 
-    /// <summary>Reads an element's own paint, falling back to what it inherited.</summary>
-    public static PresentationStyle From(System.Xml.Linq.XElement element, PresentationStyle inherited)
+    /// <summary>Reads an element's own paint, with the cascade of attributes, stylesheet and inline style resolved.</summary>
+    public static PresentationStyle From(
+        System.Xml.Linq.XElement element,
+        PresentationStyle inherited,
+        IReadOnlyDictionary<string, (string Value, bool Important)>? sheet = null)
     {
-        Dictionary<string, string> style = ReadStyleAttribute(element);
+        Dictionary<string, string> inline = ReadStyleAttribute(element);
+        Dictionary<string, bool> inlineImportant = ReadStyleImportance(element);
 
+        // The cascade, in the order CSS puts it. A presentation attribute is the **lowest** of the four, not the
+        // highest - it is a fallback for when nothing else says anything - and an important rule beats a
+        // non-important one wherever it came from, including over an inline style.
         string? Value(string name)
-            => style.TryGetValue(name, out string? fromStyle)
-                ? fromStyle
-                : element.Attribute(name)?.Value;
+        {
+            (string Value, bool Important) fromSheet = sheet is not null && sheet.TryGetValue(name, out var s)
+                ? s
+                : (string.Empty, false);
+            bool hasSheet = sheet is not null && sheet.ContainsKey(name);
+            bool hasInline = inline.TryGetValue(name, out string? fromInline);
+            bool inlineIsImportant = inlineImportant.TryGetValue(name, out bool flag) && flag;
+            string? fromAttribute = element.Attribute(name)?.Value;
+
+            if (inlineIsImportant && hasInline)
+            {
+                return fromInline;
+            }
+
+            if (hasSheet && fromSheet.Important)
+            {
+                return fromSheet.Value;
+            }
+
+            if (hasInline)
+            {
+                return fromInline;
+            }
+
+            return hasSheet ? fromSheet.Value : fromAttribute;
+        }
 
         FillSpec fill = inherited.Fill;
         StrokeSpec stroke = inherited.Stroke;
@@ -119,6 +149,28 @@ internal sealed record PresentationStyle(
         }
 
         return declarations;
+    }
+
+    /// <summary>Which of an inline style's declarations say `!important`.</summary>
+    private static Dictionary<string, bool> ReadStyleImportance(System.Xml.Linq.XElement element)
+    {
+        var importance = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        string? style = element.Attribute("style")?.Value;
+        if (string.IsNullOrWhiteSpace(style))
+        {
+            return importance;
+        }
+
+        foreach (string part in style.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            (string property, _, bool important) = SvgStylesheet.SplitDeclaration(part);
+            if (property.Length > 0)
+            {
+                importance[property] = important;
+            }
+        }
+
+        return importance;
     }
 
     private static FillSpec ParseFill(string value, string? opacity)
