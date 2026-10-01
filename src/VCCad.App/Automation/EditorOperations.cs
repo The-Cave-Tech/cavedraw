@@ -1676,10 +1676,14 @@ public static class EditorOperations
             "Add an outline effect to the selected paths' strokes, on top of the ones they have. kind is one of " +
             "offsetPath, roughen, zigZag or scribble. size is how far a point may move (or how far an offset path " +
             "moves the edges), detail is how many passes a scribble draws, and seed is what makes a random-looking " +
-            "effect the same every time it is drawn - the same document must render and export identically. " +
-            "strokeIndex picks one stroke of the stack, counted from the bottom, and defaults to every stroke; a " +
-            "path whose stack is shorter is skipped. One undo step per path.",
-            "kind:string, size?:number, detail?:number, seed?:number, strokeIndex?:number",
+            "effect the same every time it is drawn - the same document must render and export identically. Every " +
+            "other parameter the kind declares (see style.effectParameters) is taken from the request under that " +
+            "name, so an effect can be added with its settings in one call. strokeIndex picks one stroke of the " +
+            "stack, counted from the bottom, and defaults to every stroke; a path whose stack is shorter is skipped. " +
+            "One undo step per path.",
+            "kind:string, size?:number, detail?:number, seed?:number, strokeIndex?:number, " +
+            "ridges?:number, smooth?:number, join?:number, density?:number, overlap?:number, width?:number, " +
+            "curviness?:number, scatter?:number",
             (ctx, p) =>
             {
                 string kind = p.GetString("kind") ?? string.Empty;
@@ -1700,6 +1704,13 @@ public static class EditorOperations
                     p.GetDouble("size", 2.0),
                     p.GetDouble("detail", 1.0),
                     (int)p.GetLong("seed", 1));
+
+                // Every **other** parameter the kind declares is read from the request under the name the
+                // declaration gives it. Hand-building the record above meant the registry could declare a parameter
+                // this operation silently ignored: a driver had to add the effect and then set the value in a
+                // second call, while a person could do it in one - the parity defect this project treats as a bug.
+                // Reading them from the declaration is what makes the comment above true rather than aspirational.
+                effect = ApplyDeclaredEffectParameters(effect, definition, p);
 
                 // Through the session, so the stroke pane's Add button and this run one implementation.
                 int? strokeIndex = OptionalStrokeIndex(p);
@@ -6481,6 +6492,52 @@ public static class EditorOperations
         => p.ValueKind == JsonValueKind.Object && p.TryGetProperty("strokeIndex", out _)
             ? (int)p.GetLong("strokeIndex", 0)
             : null;
+
+    /// <summary>
+    /// Reads the parameters an effect kind declares out of the request, by the names the declaration gives them.
+    ///
+    /// The declaration decides **which** names to look for, so a parameter added to the registry is reachable here
+    /// without this method changing; the switch below only says which property each name sets, because a name and a
+    /// member are the same thing written twice in C#. A name the request does not carry is left at its default, and
+    /// a name the declaration does not have is never read - so nothing here can invent a parameter.
+    ///
+    /// `size`, `detail` and `seed` are handled by the caller, because they are the arguments of the record's own
+    /// constructor rather than optional settings on it.
+    /// </summary>
+    private static OutlineEffectSpec ApplyDeclaredEffectParameters(
+        OutlineEffectSpec effect, EffectDefinition definition, JsonElement p)
+    {
+        foreach (EffectParameter parameter in definition.Parameters)
+        {
+            if (parameter.Name is "size" or "detail" or "seed")
+            {
+                continue;
+            }
+
+            if (p.ValueKind != JsonValueKind.Object ||
+                !p.TryGetProperty(parameter.Name, out JsonElement value) ||
+                value.ValueKind != JsonValueKind.Number)
+            {
+                continue;
+            }
+
+            double number = value.GetDouble();
+            effect = parameter.Name switch
+            {
+                "ridges" => effect with { Ridges = (int)number },
+                "smooth" => effect with { Smooth = number != 0 },
+                "join" => effect with { Join = (OutlineJoin)(int)number },
+                "density" => effect with { Density = number },
+                "overlap" => effect with { Overlap = number },
+                "width" => effect with { Width = number },
+                "curviness" => effect with { Curviness = number },
+                "scatter" => effect with { Scatter = number },
+                _ => effect,
+            };
+        }
+
+        return effect;
+    }
 
     /// <summary>
     /// The width points a caller sent, or an empty list when they sent none.
