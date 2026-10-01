@@ -161,9 +161,12 @@ public sealed class TextToolbar
             ? s
             : run.FontSize;
 
-        // Styling is the same path a driver takes: it reuses the object's own content.
-        _view.ViewModel.UpdateSelectedText(
-            item.PlainText, family, size, _bold.IsChecked == true, _italic.IsChecked == true, item.Color);
+        // Styling is the same path a driver takes, and it names only the members this control is for: content and
+        // colour are members nobody changed here, and writing them would put this block's words and colour over a
+        // selection that does not agree with itself.
+        _view.ViewModel.ApplyTextFieldsAt(
+            _view.ViewModel.InspectedRun, null, family, size, _bold.IsChecked == true, _italic.IsChecked == true,
+            null);
     }
 
     /// <summary>
@@ -191,13 +194,11 @@ public sealed class TextToolbar
         _previewed ??= item.Runs[0].FontFamily;
 
         _suppress = true;
-        _view.ViewModel.UpdateSelectedText(
-            item.PlainText,
-            family,
-            item.Runs[0].FontSize,
-            item.Runs[0].Bold,
-            item.Runs[0].Italic,
-            item.Color);
+
+        // A preview changes the face of the run the pointer is over and nothing else: content and colour belong to
+        // the block, and a preview that wrote them would leave a mixed selection holding one block's words.
+        _view.ViewModel.ApplyTextFieldsAt(
+            _view.ViewModel.InspectedRun, null, family, null, null, null, null);
         _suppress = false;
     }
 
@@ -218,9 +219,8 @@ public sealed class TextToolbar
 
         TextItem item = items[0];
         _suppress = true;
-        _view.ViewModel.UpdateSelectedText(
-            item.PlainText, original, item.Runs[0].FontSize, item.Runs[0].Bold,
-            item.Runs[0].Italic, item.Color);
+        _view.ViewModel.ApplyTextFieldsAt(
+            _view.ViewModel.InspectedRun, null, original, null, null, null, null);
         _suppress = false;
     }
 
@@ -275,9 +275,8 @@ public sealed class TextToolbar
             return;
         }
 
-        _view.ViewModel.UpdateSelectedText(
-            item.PlainText, run.FontFamily, run.FontSize, run.Bold, run.Italic,
-            new ColorRgb(r, g, b));
+        _view.ViewModel.ApplyTextFieldsAt(
+            _view.ViewModel.InspectedRun, null, null, null, null, null, new ColorRgb(r, g, b));
     }
 
     private void OnSetWidth(object? sender, RoutedEventArgs e)

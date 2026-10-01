@@ -141,19 +141,24 @@ public class TextPaneTests
     }
 
     /// <summary>
-    /// **The face fields follow the run the caret is in**, not the block's first run: a block can hold a heading and
-    /// a caption, and the first run's size is wrong for every caret but one.
+    /// **The face fields describe the shared inspected run**, not the block's first run: a block can hold a heading
+    /// and a caption, and the first run's size is wrong for every run but one.
+    ///
+    /// The run is view state the view model owns, the way `InspectedStroke` is for the appearance stack - the caret's
+    /// run reaches it from `CanvasWorkspace.UpdateCaretInfo` while a person types, and a driver sets it by name with
+    /// `text.inspectRun`. The panel reads the shared state rather than the caret, which is what lets a run picker
+    /// outlive the caret and what stops the panel and a driver describing different runs.
     /// </summary>
     [AvaloniaFact]
-    public void TheFaceFieldsFollowTheRunTheCaretIsIn()
+    public void TheFaceFieldsFollowTheInspectedRun()
     {
         var viewModel = new EditorViewModel();
         TextItem block = Block(viewModel, Run("Title", "Nimbus Sans", 24), Run("caption", "Nimbus Roman", 8, italic: true));
         viewModel.SelectObject(block);
 
-        // The caret is in the second run, and the selection and the caret are both in place before Attach.
+        // The inspected run is the second one, and it is in place before Attach.
         viewModel.IsEditingText = true;
-        viewModel.TextCaretRunIndex = 1;
+        viewModel.InspectedRun = 1;
 
         var pane = new TextPane();
         pane.Attach(viewModel);
@@ -226,7 +231,7 @@ public class TextPaneTests
         TextItem block = Block(viewModel, Run("Title", size: 24), Run("caption", size: 8));
         viewModel.SelectObject(block);
         viewModel.IsEditingText = true;
-        viewModel.TextCaretRunIndex = 1;
+        viewModel.InspectedRun = 1;
 
         var pane = new TextPane();
         pane.Attach(viewModel);

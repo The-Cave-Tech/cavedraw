@@ -3256,31 +3256,44 @@ public static class EditorOperations
                 return DescribeOne(item);
             });
 
-        Add("text.update", "Update the selected text objects.",
-            "text?:string, family?, fontSize?, bold?:bool, italic?:bool, color?:[r,g,b]",
+        Add("text.update",
+            "Update the selected text objects **member by member**. Each member is written only where it is given, " +
+            "and an omitted member is left exactly as each block has it - so a mixed selection can have its size " +
+            "changed without the block whose words or colour differ having them written over. One content string and " +
+            "one colour are block members; family, size, weight and slant are per run, and runIndex names the run " +
+            "they land on, with a block that has no run there skipped rather than counted as a disagreement. With no " +
+            "runIndex the face members style every run, which is the uniform edit a whole-block request means. " +
+            "Reports how many blocks changed and what the selection now reads, so a caller can tell which members " +
+            "were altered and which are still mixed. One undo step.",
+            "text?:string, family?:string, fontSize?:number, bold?:bool, italic?:bool, color?:[r,g,b], " +
+            "runIndex?:number",
             (ctx, p) =>
             {
-                TextItem? first = ctx.Session.SelectedTextItems().FirstOrDefault();
-                if (first is null)
-                {
-                    throw new EditorOperationException("No text object is selected.");
-                }
+                // A member is written only where it is **given**: the presence of the key, not its value, is what
+                // makes an edit. Reading a missing bold as `false` would make every request clear the weight of
+                // everything it touched, which is the all-or-nothing defect this replaced.
+                string? content = p.ValueKind == JsonValueKind.Object && p.TryGetProperty("text", out _)
+                    ? p.GetString("text")
+                    : null;
+                string? family = p.GetString("family");
+                double? size = OptionalNumber(p, "fontSize");
+                bool? bold = OptionalBool(p, "bold");
+                bool? italic = OptionalBool(p, "italic");
+                ColorRgb? color = p.TryGetColorArray("color", out ColorRgb wanted) ? wanted : null;
 
-                TextRun run = first.Runs.FirstOrDefault() ?? new TextRun();
-                string family = p.GetString("family") ?? run.FontFamily;
+                // Null styles every run, which is what a whole-block face edit means; an index names one.
+                int? runIndex = OptionalNumber(p, "runIndex") is { } at ? (int)at : null;
 
-                ctx.Session.UpdateSelectedText(
-                    p.GetString("text") ?? first.PlainText,
-                    family,
-                    p.GetDouble("fontSize", run.FontSize),
-                    p.GetBool("bold", run.Bold),
-                    p.GetBool("italic", run.Italic),
-                    p.TryGetColorArray("color", out ColorRgb color) ? color : first.Color);
+                int changed = ctx.Session.ApplyTextFieldsAt(runIndex, content, family, size, bold, italic, color);
 
                 // Choosing a font is what makes it recent, so the picker's "recent" list is a
                 // record of what was actually used rather than of what was scrolled past.
-                FontFavourites.Shared.Used(family);
-                return Summary(ctx);
+                if (family is { Length: > 0 })
+                {
+                    FontFavourites.Shared.Used(family);
+                }
+
+                return TextCommonReport(ctx, runIndex is { } named ? named : ctx.ViewModel.InspectedRun, changed);
             });
 
         Add("text.setAlignment", "Set text alignment: left|center|right.", "alignment:string",
@@ -3288,6 +3301,46 @@ public static class EditorOperations
             {
                 ctx.Session.SetTextAlignment(ParseEnum(p.GetString("alignment"), TextAlignment.Left));
                 return Summary(ctx);
+            });
+
+        Add("text.common",
+            "What the selected text blocks agree on, and what they do not: each member is either the common value " +
+            "or explicitly mixed. This is the reading the Text panel shows, built from the same summary, so a person " +
+            "and a driver cannot be told different things about the same selection. A panel editing a selection has " +
+            "to show one value per member, and showing the first block's words, colour or size as though they were " +
+            "everyone's is how a person types a number and believes it describes what they selected. runIndex names " +
+            "the run the face members (family, size, weight, slant) are read from, and a block with no run there is a " +
+            "gap rather than a disagreement - blocks carry different numbers of runs, and counting a shorter one as " +
+            "\"different\" would make every selection of unequal blocks report every face member as mixed. Without " +
+            "runIndex the shared inspected run is read, which is the run the panel's face fields describe.",
+            "runIndex?:number",
+            (ctx, p) =>
+            {
+                int? runIndex = OptionalNumber(p, "runIndex") is { } at ? (int)at : null;
+                return TextCommonReport(
+                    ctx, runIndex ?? ctx.ViewModel.InspectedRun, ctx.Session.SelectedTextItems().Count());
+            });
+
+        Add("text.inspectRun",
+            "Which run of the selected text blocks is being inspected - the state the Text panel and a driver share, " +
+            "so both describe the same run rather than each holding its own idea. Face is per run in this model, so " +
+            "with a multi-run block there is no such thing as \"the font\"; without index it reports which run is " +
+            "inspected. Index is clamped to the selection's run list, so a selection change cannot leave it pointing " +
+            "at a run that does not exist.",
+            "index?:number",
+            (ctx, p) =>
+            {
+                if (p.ValueKind == JsonValueKind.Object && p.TryGetProperty("index", out _))
+                {
+                    ctx.ViewModel.InspectedRun = (int)p.GetLong("index", 0);
+                }
+
+                return new
+                {
+                    index = ctx.ViewModel.InspectedRun,
+                    label = ctx.ViewModel.InspectedRunLabel,
+                    runs = ctx.Session.SelectedTextItems().FirstOrDefault()?.Runs.Count ?? 0,
+                };
             });
 
         Add("text.runs",
@@ -7987,6 +8040,89 @@ public static class EditorOperations
         // there is to lose should be visible rather than inferred.
         modified = ctx.Session.IsModified,
     };
+
+    // ------------------------------------------------------------------
+    // Member-by-member members, which are "leave it alone" when absent
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// A number member, or null when it was not given.
+    ///
+    /// The **presence** of the key is the edit, not its value: reading an absent size as 0 would make every request
+    /// set the size of everything it touched, and a member nobody named is exactly what a mixed selection cannot
+    /// have invented for it. A key that is present but not a number is null too, which means "leave it alone" rather
+    /// than a silent zero.
+    /// </summary>
+    private static double? OptionalNumber(JsonElement p, string name)
+        => p.ValueKind == JsonValueKind.Object &&
+           p.TryGetProperty(name, out JsonElement value) &&
+           value.ValueKind == JsonValueKind.Number &&
+           value.TryGetDouble(out double parsed)
+            ? parsed
+            : null;
+
+    /// <summary>A boolean member, or null when it was not given. See <see cref="OptionalNumber"/> for why.</summary>
+    private static bool? OptionalBool(JsonElement p, string name)
+        => p.ValueKind == JsonValueKind.Object && p.TryGetProperty(name, out JsonElement value)
+            ? value.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                _ => null,
+            }
+            : null;
+
+    /// <summary>
+    /// What the selection's text blocks agree on, and what they do not - the report `text.common` returns and
+    /// `text.update` answers with, built from the same <see cref="TextSummary"/> the Text panel reads.
+    ///
+    /// One implementation, so a driver and a person cannot be told different things about the same selection: a
+    /// second opinion formed here could drift from the panel's, and the whole point of the mixed reading is that it
+    /// is believed.
+    /// </summary>
+    private static object TextCommonReport(AutomationContext ctx, int runIndex, int changed)
+    {
+        var blocks = ctx.Session.SelectedTextItems().ToList();
+        TextSummary summary = TextSummary.Of(blocks, runIndex);
+
+        return new
+        {
+            changed,
+            blocks = summary.Blocks,
+            runs = summary.Runs,
+            runIndex,
+            empty = summary.IsEmpty,
+            mixed = summary.IsMixed,
+            content = summary.Content,
+            contentMixed = summary.ContentMixed,
+            family = summary.Family,
+            familyMixed = summary.FamilyMixed,
+            size = summary.FontSize,
+            sizeMixed = summary.FontSizeMixed,
+            bold = summary.Bold,
+            boldMixed = summary.BoldMixed,
+            italic = summary.Italic,
+            italicMixed = summary.ItalicMixed,
+            colour = summary.Color is { } colour ? DescribeColorValue(colour) : null,
+            colourMixed = summary.ColorMixed,
+            alignment = summary.Alignment?.ToString(),
+            alignmentMixed = summary.AlignmentMixed,
+            leading = summary.LineSpacing,
+            leadingMixed = summary.LineSpacingMixed,
+            space = summary.ParagraphSpacing,
+            spaceMixed = summary.ParagraphSpacingMixed,
+            turn = summary.RotationDegrees,
+            turnMixed = summary.RotationMixed,
+            frame = summary.FrameWidth,
+            frameMixed = summary.FrameWidthMixed,
+        };
+    }
+
+    /// <summary>A colour as the bytes every field and operation speaks, which is where the model's fractions are read from.</summary>
+    private static string DescribeColorValue(ColorRgb color)
+        => $"{Byte(color.R)},{Byte(color.G)},{Byte(color.B)},{Byte(color.A)}";
+
+    private static int Byte(double value) => (int)Math.Round(Math.Clamp(value, 0, 1) * 255);
 
     private static IEnumerable<object> Describe(IEnumerable<LayerItem> items) => items.Select(DescribeOne);
 

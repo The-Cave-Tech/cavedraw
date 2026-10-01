@@ -136,8 +136,11 @@ public partial class FontsPane : UserControl
         foreach (Core.Model.TextItem item in _vm.SelectedTextItems().ToList())
         {
             string family = row.Family;
-            _vm.UpdateSelectedText(
-                item.PlainText, family, item.Runs[0].FontSize, bold, italic, item.Color);
+
+            // The face members alone: the words and the block colour are members this pane does not offer, and
+            // writing them would put one block's text and colour over a selection that disagrees with itself.
+            _vm.ApplyTextFieldsAt(
+                _vm.InspectedRun, null, family, null, bold, italic, null);
         }
 
         FontFavourites.Shared.Used(row.Family);

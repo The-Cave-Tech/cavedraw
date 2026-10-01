@@ -5805,6 +5805,13 @@ public sealed class CanvasWorkspace : Control
         _vm.TextCaretOffset = _caret;
         TextRun? at = TextEditing.RunAt(_editingText, _caret);
         _vm.TextCaretRunIndex = at is null ? 0 : Math.Max(0, _editingText.Runs.IndexOf(at));
+
+        // The caret's run is also the run the face fields describe, and that is **shared state** now: publishing it
+        // here is what keeps the panel following the caret while a person types, while a driver can still name a run
+        // through `text.inspectRun` and have the panel describe it. Holding the index in one place is what stops the
+        // panel and a driver describing different runs.
+        _vm.InspectedRun = _vm.TextCaretRunIndex;
+
         _vm.TextSelectionStart = Math.Min(_caret, _editAnchor);
         _vm.TextSelectionEnd = Math.Max(_caret, _editAnchor);
     }

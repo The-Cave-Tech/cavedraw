@@ -318,6 +318,74 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(InspectedStrokeLabel));
     }
 
+    /// <summary>
+    /// Which run of the selected text block is being inspected, or -1 for none.
+    ///
+    /// **View state, shared**, the same pattern as <see cref="InspectedStroke"/>. Face is per run in this model, so
+    /// with a multi-run block there is no such thing as "the font" - the panel and a driver have to agree about which
+    /// run the face fields describe. The text panel used to take the run under the caret while a block was open for
+    /// editing and the first run otherwise: the caret is not a run picker, and outside editing it holds whatever the
+    /// last edit left, which may belong to a block that is no longer selected. Holding it here is what lets a run
+    /// picker outlive the caret without the two views drifting apart.
+    ///
+    /// Clamped to the selection's own run list **on read**, because the selection can change without anybody
+    /// assigning to this property, and an index that outlives the list it pointed into is exactly how two views end
+    /// up describing different runs.
+    /// </summary>
+    public int InspectedRun
+    {
+        get
+        {
+            int count = ActiveSession.SelectedTextItems().FirstOrDefault()?.Runs.Count ?? 0;
+            if (count == 0)
+            {
+                return -1;
+            }
+
+            return _inspectedRun < 0 ? 0 : Math.Min(_inspectedRun, count - 1);
+        }
+
+        set
+        {
+            int count = ActiveSession.SelectedTextItems().FirstOrDefault()?.Runs.Count ?? 0;
+            int clamped = count == 0 ? -1 : Math.Clamp(value, 0, count - 1);
+
+            if (clamped == _inspectedRun)
+            {
+                return;
+            }
+
+            _inspectedRun = clamped;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(InspectedRunLabel));
+        }
+    }
+
+    private int _inspectedRun;
+
+    /// <summary>What to show for the inspected run, so both views can say the same thing.</summary>
+    public string InspectedRunLabel
+    {
+        get
+        {
+            int count = ActiveSession.SelectedTextItems().FirstOrDefault()?.Runs.Count ?? 0;
+            return count == 0 ? "no run" : $"run {InspectedRun + 1} of {count}";
+        }
+    }
+
+    /// <summary>
+    /// Tells a listener that which run is being inspected may have changed because the **selection** did.
+    ///
+    /// The property clamps on read, so its value is never stale - but a view is only told to ask again when
+    /// something raises a change, and a selection change is exactly such a moment. Without this the panel keeps
+    /// showing the run from the selection before, which is the disagreement the shared state exists to prevent.
+    /// </summary>
+    private void NotifyInspectedRun()
+    {
+        OnPropertyChanged(nameof(InspectedRun));
+        OnPropertyChanged(nameof(InspectedRunLabel));
+    }
+
     /// <summary>Whether the active document has changes that are not on disk.</summary>
     public bool IsActiveModified => _active.IsModified;
 
@@ -478,6 +546,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             _active.IsEditingText = value;
             // The text toolbar shows and hides on this, so it has to announce itself.
             OnPropertyChanged();
+            // Opening or closing a block changes what the selection's run list is - the block being edited is
+            // yielded while nothing else is selected - so the inspected run has to be re-read and re-clamped.
+            NotifyInspectedRun();
         }
     }
 
@@ -539,12 +610,18 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     {
         _active.SelectObject(item);
         NotifyInspectedStroke();
+        NotifyInspectedRun();
     }
-    public void ToggleObjectSelection(LayerItem item) => _active.ToggleObjectSelection(item);
+    public void ToggleObjectSelection(LayerItem item)
+    {
+        _active.ToggleObjectSelection(item);
+        NotifyInspectedRun();
+    }
     public void SelectRange(IEnumerable<LayerItem> items, bool additive)
     {
         _active.SelectRange(items, additive);
         NotifyInspectedStroke();
+        NotifyInspectedRun();
     }
     public void SelectSegment(PathItem path, int sub, int seg, bool additive) => _active.SelectSegment(path, sub, seg, additive);
     public void SelectPoint(PathItem path, int sub, int node) => _active.SelectPoint(path, sub, node);
@@ -556,6 +633,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     {
         _active.ClearSelection();
         NotifyInspectedStroke();
+        NotifyInspectedRun();
     }
     public void MovePointTo(Point2D target) => _active.MovePointTo(target);
     public void SelectArtboard(Artboard? artboard) => _active.SelectArtboard(artboard);
@@ -644,9 +722,14 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public void SetArtboardBounds(Artboard artboard, Rect2D before, Rect2D after) => _active.SetArtboardBounds(artboard, before, after);
 
     public TextItem CreateTextAt(Point2D world, string family, double fontSize) => _active.CreateTextAt(world, family, fontSize);
-    public void UpdateSelectedText(string content, string family, double size, bool bold, bool italic,
-        ColorRgb color, int? runIndex = null)
-        => _active.UpdateSelectedText(content, family, size, bold, italic, color, runIndex);
+
+    /// <summary>
+    /// Applies text fields **member by member** to the selected blocks; see
+    /// <see cref="DocumentSession.ApplyTextFieldsAt"/>, which the `text.update` operation calls too.
+    /// </summary>
+    public int ApplyTextFieldsAt(int? runIndex, string? content, string? family, double? fontSize,
+        bool? bold, bool? italic, ColorRgb? color)
+        => _active.ApplyTextFieldsAt(runIndex, content, family, fontSize, bold, italic, color);
 
 
     /// <summary>Paragraph style and orientation on the selected text, one undo step.</summary>

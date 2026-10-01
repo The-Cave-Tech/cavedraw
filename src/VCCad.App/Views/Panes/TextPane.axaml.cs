@@ -95,13 +95,13 @@ public partial class TextPane : UserControl
         vm.DocumentChanged += (_, _) => Refresh();
         vm.SelectionChanged += (_, _) => Refresh();
 
-        // Entering or leaving text edit changes which run the face fields describe, and that is the one moment the
-        // caret's run becomes meaningful, so the panel re-reads then. The run index itself raises no change - it is
-        // session state the canvas writes, and the view model does not announce it (`InspectedStroke` does, and the
-        // stroke inspector listens for exactly that). Reported rather than worked around.
+        // Which run the face fields describe is shared state, and a change to it - or to the selection that clamps
+        // it - has to re-read the panel. The caret's own run raises no change; the run index that the panel actually
+        // reads now does, so entering and leaving text edit is covered by the same notification as a driver's
+        // `text.inspectRun`, and the two cannot describe different runs.
         vm.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName is nameof(EditorViewModel.IsEditingText))
+            if (e.PropertyName is nameof(EditorViewModel.IsEditingText) or nameof(EditorViewModel.InspectedRun))
             {
                 Refresh();
             }
@@ -471,14 +471,14 @@ public partial class TextPane : UserControl
     }
 
     /// <summary>
-    /// The run the face fields describe: the one the caret is in while a block is open for editing, and the block's
-    /// first run otherwise.
+    /// The run the face fields describe: the shared <see cref="EditorViewModel.InspectedRun"/>.
     ///
-    /// The caret is not a run picker. Outside editing it holds whatever the last edit left, which may belong to a
-    /// block that is no longer selected, so naming the first run is honest where trusting it would not be. Reading
-    /// it while typing is what keeps this panel and the canvas agreeing about which run is being styled. A run
-    /// picker that outlived the caret would need the view model to carry the index the way it carries
-    /// `InspectedStroke`, which is a change outside this panel and is reported rather than faked here.
+    /// The panel used to take the run under the caret while a block was open for editing and the first run
+    /// otherwise. A caret is not a run picker - outside editing it holds whatever the last edit left, which may
+    /// belong to a block that is no longer selected - so the index lives in the view model, clamped to the selection
+    /// on read, the way <see cref="EditorViewModel.InspectedStroke"/> does for the appearance stack. That is what
+    /// lets the panel and a driver agree about which run is being described, and what lets the index outlive the
+    /// caret.
     /// </summary>
     private int InspectedRunIndex(List<TextItem> items)
     {
@@ -487,8 +487,7 @@ public partial class TextPane : UserControl
             return -1;
         }
 
-        int index = _vm.IsEditingText ? _vm.TextCaretRunIndex : 0;
-        return Math.Clamp(index, 0, items[0].Runs.Count - 1);
+        return _vm.InspectedRun;
     }
 
     /// <summary>A number field's value, or null when the person did not change it.</summary>

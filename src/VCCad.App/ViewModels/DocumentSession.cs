@@ -985,80 +985,25 @@ public sealed class DocumentSession : INotifyPropertyChanged
         _ = family;
     }
 
-    /// <summary>Updates the content and uniform style of the selected text
-    /// object(s). One undo step.</summary>
-    public void UpdateSelectedText(string content, string family, double fontSize, bool bold, bool italic,
-        ColorRgb color, int? runIndex = null)
-    {
-        var edits = new List<IUndoableCommand>();
-        foreach (TextItem text in SelectedTextItems())
-        {
-            TextItem before = (TextItem)text.Clone();
-
-            if (IsEditingText && TextSelectionEnd > TextSelectionStart)
-            {
-                // Style exactly the selected range (rich text).
-                TextEditing.ApplyStyle(text, TextSelectionStart, TextSelectionEnd, run =>
-                {
-                    run.FontFamily = family;
-                    ChoseFace(run, family);
-                    run.FontSize = fontSize;
-                    run.Bold = bold;
-                    run.Italic = italic;
-                });
-            }
-            else if (runIndex is { } r && r >= 0 && r < text.Runs.Count)
-            {
-                // Style just the run under the caret.
-                TextRun run = text.Runs[r];
-                run.FontFamily = family;
-                ChoseFace(run, family);
-                run.FontSize = fontSize;
-                run.Bold = bold;
-                run.Italic = italic;
-            }
-            else
-            {
-                text.PlainText = content;
-                foreach (TextRun run in text.Runs)
-                {
-                    run.FontFamily = family;
-                    ChoseFace(run, family);
-                    run.FontSize = fontSize;
-                    run.Bold = bold;
-                    run.Italic = italic;
-                }
-            }
-
-            text.Color = color;
-            edits.Add(new ReplaceTextCommand(text, before, (TextItem)text.Clone(), "Edit text"));
-        }
-
-        if (edits.Count == 0)
-        {
-            SetStatus("Select a text object first");
-            return;
-        }
-
-        Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Edit text", edits));
-        SetStatus("Text updated");
-    }
-
     /// <summary>
     /// Applies text fields **member by member** to the selected text blocks, where a member that is null is left
     /// exactly as the block has it, and reports how many blocks changed.
     ///
-    /// This is the shape a panel editing a mixed selection needs, and the reason <see cref="UpdateSelectedText"/>
-    /// could not serve it: that method takes one content string, one colour and one face for the whole selection, so
-    /// where two selected blocks hold different words the caller has no value it could pass without writing one
-    /// block's text over the other's from a field nobody touched. Naming the members to change is the same judgement
-    /// <see cref="ApplyStrokeFieldsAt"/> makes about the fields within a stroke.
+    /// **This is the only path that edits text**, and it is deliberately the shape a panel editing a mixed selection
+    /// needs: naming the members to change is the same judgement <see cref="ApplyStrokeFieldsAt"/> makes about the
+    /// fields within a stroke. The method it replaced took one content string, one colour and one face for the whole
+    /// selection, so where two selected blocks held different words the caller had no value it could pass without
+    /// writing one block's text over the other's from a field nobody touched - the exact defect the panel's mixed
+    /// readout exists to remove. That path also wrote content through <see cref="TextItem.PlainText"/>, whose setter
+    /// rewrites the first run and drops the rest, so it collapsed every block it touched to a single run and took each
+    /// run's own face and colour with it. A driver and a person must not have different powers over the same block, so
+    /// there is one implementation rather than two that have to be kept in step.
     ///
     /// <paramref name="runIndex"/> names the run the face members land on. A block whose run list is shorter is
     /// **skipped** for those members rather than having them clamped onto a run nobody named - the same gap
-    /// `StrokeSummary` reports, and the reason it is a gap rather than a disagreement. Null styles every run, which
-    /// is the uniform style <see cref="UpdateSelectedText"/> applies. Content and colour belong to the block: the
-    /// model holds one string and one colour per block and no per-run colour at all.
+    /// `TextSummary` reports, and the reason it is a gap rather than a disagreement. Null styles every run, which is
+    /// the uniform style of a whole-block face edit. Content is a block member and is written wherever it is given;
+    /// colour is a block member too, and <see cref="TextRun.Color"/> is the run's own and is not touched here.
     ///
     /// One <see cref="ReplaceTextCommand"/> per block and a composite across the selection, so a gesture is one undo
     /// step; a request that changes nothing adds no command, because an undo step that undoes to exactly where it
