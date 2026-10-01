@@ -297,43 +297,9 @@ public static class PdfDocumentExporter
 
                 foreach (LayerItem item in layer.Children)
                 {
-                    PaintItem(ops, item, AffineTransform.Identity, 1.0, alphaStates, images, shadings,
+                    PaintItem(ops, item, AffineTransform.Identity, 1.0, alphaStates, embedder, images, shadings,
                         document, notes);
                 }
-            }
-        }
-
-        // Text objects. Each is written in the frame it is placed in - the same accumulated frame paths and images
-        // get from PaintItem - rather than at its own local origin (issue #164).
-        foreach ((TextItem text, AffineTransform textToDoc) in AllPlacedText(artboard))
-        {
-            if (!text.IsVisible)
-            {
-                continue;
-            }
-
-            // Text is clipped like anything else. It used to be painted with no clip at all,
-            // because paths and images go through PaintItem and text has its own loop — so a
-            // clipped label came out unclipped, showing text the file had hidden. The
-            // Transparency Guide clips its page furniture this way.
-            // What is written here is this item's own clips; an ancestor's are written by the ancestor's own group.
-            // The outline is stated in the block's own coordinates, so it goes through the block's frame too —
-            // otherwise the text would be placed by the group and clipped by an outline that never moved.
-            bool clipped = text.Clips.Count > 0;
-            if (clipped)
-            {
-                ops.Add("q");
-                foreach (ClipSpec clip in text.Clips)
-                {
-                    AppendClip(ops, clip, textToDoc);
-                }
-            }
-
-            WriteText(ops, text, embedder, alphaStates, textToDoc);
-
-            if (clipped)
-            {
-                ops.Add("Q");
             }
         }
 
@@ -345,13 +311,6 @@ public static class PdfDocumentExporter
         return Encoding.UTF8.GetBytes(string.Join("\n", ops) + "\n");
     }
 
-    /// <summary>
-    /// Recursively emits an item. <paramref name="toDoc"/> maps the item's local
-    /// coordinates into artboard (document) space — the composition of every
-    /// ancestor group transform; <paramref name="opacity"/> is the accumulated
-    /// product of ancestor opacities (reserved: emitted in a later sprint when the
-    /// ExtGState task lands, see project plan M4).
-    /// </summary>
     /// <summary>
     /// Emits the placement operators for one embedded image.
     ///
@@ -392,6 +351,79 @@ public static class PdfDocumentExporter
         ops.Add($"{Num(a)} {Num(b)} {Num(c)} {Num(d)} {Num(topLeft.X)} {Num(topLeft.Y)} cm");
         ops.Add($"/{name} Do");
         ops.Add("Q");
+    }
+
+    /// <summary>
+    /// Recursively emits an item. <paramref name="toDoc"/> maps the item's local
+    /// coordinates into artboard (document) space — the composition of every
+    /// ancestor group transform; <paramref name="opacity"/> is the accumulated
+    /// product of ancestor opacities (reserved: emitted in a later sprint when the
+    /// ExtGState task lands, see project plan M4).
+    ///
+    /// **Text is painted here too**, not by a loop of its own. It used to have one, and the walk returned early for
+    /// a <see cref="TextItem"/> because of it - which meant every group clip this method opens enclosed the paths
+    /// and images inside the group and not the text, while the canvas (which pushes each group's clip as it
+    /// descends) cropped both. Text was written at the identity frame until #164 gave it the group's frame, and
+    /// an ancestor's clip is the half that giving it a frame could not reach: a second loop that re-derives the
+    /// frame is a second place for it to disagree, so the walk is the only one left.
+    /// </summary>
+    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfFontEmbedder embedder, PdfImageObjects? images = null, PdfShadingObjects? shadings = null, CadDocument? document = null, List<string>? notes = null)
+    {
+        if (!item.IsEffectivelyVisible())
+        {
+            return;
+        }
+
+        // A clip is emitted around the item rather than baked into its geometry, because
+        // that is what it is: the item is drawn whole and the outline limits what shows.
+        // Several clips intersect, which is what successive W n operators do.
+        //
+        // One item's clips go through here once, for every kind of item - a text block's own clips included,
+        // which is what #164 fixed separately while text still had its own loop. Nothing else writes them, so
+        // there is no second clip stack to disagree with this one.
+        bool clipped = item.Clips.Count > 0;
+        if (clipped)
+        {
+            ops.Add("q");
+            foreach (ClipSpec clip in item.Clips)
+            {
+                AppendClip(ops, clip, toDoc);
+            }
+        }
+
+        switch (item)
+        {
+            case PathItem path:
+                PaintPath(ops, path, toDoc, opacity, alphaStates, shadings, images, document, notes);
+                break;
+
+            case TextItem text:
+                // Inside the group's q/clips and the block's own, both of which are already open, and in the frame
+                // the block is placed in - the same `toDoc` the paths beside it are painted with.
+                WriteText(ops, text, embedder, alphaStates, toDoc);
+                break;
+
+            case ImageItem image:
+                PaintImage(ops, image, toDoc, images);
+                break;
+
+            case ArtGroup group:
+                // Compose is defined as "apply argument first, then this", which is
+                // exactly local→parent→doc as the walk descends.
+                AffineTransform childToDoc = toDoc.Compose(group.Transform);
+                foreach (LayerItem child in group.Children)
+                {
+                    PaintItem(ops, child, childToDoc, opacity * group.Opacity, alphaStates, embedder, images,
+                        shadings, document, notes);
+                }
+
+                break;
+        }
+
+        if (clipped)
+        {
+            ops.Add("Q");
+        }
     }
 
     /// <summary>
@@ -459,65 +491,6 @@ public static class PdfDocumentExporter
 
                     break;
             }
-        }
-    }
-
-    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfImageObjects? images = null, PdfShadingObjects? shadings = null, CadDocument? document = null, List<string>? notes = null)
-    {
-        if (!item.IsEffectivelyVisible())
-        {
-            return;
-        }
-
-        // Text is written by its own loop, not here. It used to reach this method anyway,
-        // because the clip is emitted before the switch that dispatches on the item's kind —
-        // so every text object opened a q with a clip and closed it again having drawn
-        // nothing, while the text itself was written with no clip at all. Text is clipped in
-        // the loop that writes it.
-        if (item is TextItem)
-        {
-            return;
-        }
-
-        // A clip is emitted around the item rather than baked into its geometry, because
-        // that is what it is: the item is drawn whole and the outline limits what shows.
-        // Several clips intersect, which is what successive W n operators do.
-        bool clipped = item.Clips.Count > 0;
-        if (clipped)
-        {
-            ops.Add("q");
-            foreach (ClipSpec clip in item.Clips)
-            {
-                AppendClip(ops, clip, toDoc);
-            }
-        }
-
-        switch (item)
-        {
-            case PathItem path:
-                PaintPath(ops, path, toDoc, opacity, alphaStates, shadings, images, document, notes);
-                break;
-
-            case ImageItem image:
-                PaintImage(ops, image, toDoc, images);
-                break;
-
-            case ArtGroup group:
-                // Compose is defined as "apply argument first, then this", which is
-                // exactly local→parent→doc as the walk descends.
-                AffineTransform childToDoc = toDoc.Compose(group.Transform);
-                foreach (LayerItem child in group.Children)
-                {
-                    PaintItem(ops, child, childToDoc, opacity * group.Opacity, alphaStates, images, shadings,
-                        document, notes);
-                }
-
-                break;
-        }
-
-        if (clipped)
-        {
-            ops.Add("Q");
         }
     }
 
@@ -971,6 +944,12 @@ public static class PdfDocumentExporter
         }
     }
 
+    /// <summary>
+    /// Every text block on an artboard, for the font scan.
+    ///
+    /// This is the one text walk left that is not <see cref="PaintItem"/>: usage is collected before anything is
+    /// painted, and a font's programme has to be embedded whether or not the block ends up painted.
+    /// </summary>
     private static IEnumerable<TextItem> AllTextItems(Artboard artboard)
     {
         foreach (Layer layer in artboard.Layers)
@@ -982,54 +961,6 @@ public static class PdfDocumentExporter
                     yield return text;
                 }
             }
-        }
-    }
-
-    /// <summary>
-    /// Every text block on an artboard, each with the frame it is placed in: the composition of the transforms of
-    /// every group above it, built exactly as <see cref="PaintItem"/> builds it for a path.
-    ///
-    /// Text used to be walked by <see cref="AllTextItems"/> alone and written at its own local origin, so a group's
-    /// transform reached paths and images and never text. Every SVG import carries a unit-conversion group at its
-    /// root, so that was every imported document with text in it. One composition answers it, for paths and for
-    /// text, so the two cannot land in different frames (issue #164).
-    /// </summary>
-    private static IEnumerable<(TextItem Text, AffineTransform ToDoc)> AllPlacedText(Artboard artboard)
-    {
-        foreach (Layer layer in artboard.Layers)
-        {
-            foreach (LayerItem item in layer.Children)
-            {
-                foreach ((TextItem Text, AffineTransform ToDoc) placed in PlaceText(item, AffineTransform.Identity))
-                {
-                    yield return placed;
-                }
-            }
-        }
-    }
-
-    private static IEnumerable<(TextItem Text, AffineTransform ToDoc)> PlaceText(
-        LayerItem item, AffineTransform toDoc)
-    {
-        switch (item)
-        {
-            case TextItem text:
-                yield return (text, toDoc);
-                break;
-
-            case ArtGroup group:
-                // The same composition PaintItem makes as it descends: "apply the group first, then the frame
-                // above it". A second rule here is what a disagreement would be made of.
-                AffineTransform childToDoc = toDoc.Compose(group.Transform);
-                foreach (LayerItem child in group.Children)
-                {
-                    foreach ((TextItem Text, AffineTransform ToDoc) placed in PlaceText(child, childToDoc))
-                    {
-                        yield return placed;
-                    }
-                }
-
-                break;
         }
     }
 
