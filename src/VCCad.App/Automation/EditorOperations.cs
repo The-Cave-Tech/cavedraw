@@ -2305,6 +2305,25 @@ public static class EditorOperations
                 };
             });
 
+        Add("style.effectParameters",
+            "Every effect a stroke can carry, with the parameters each one takes: name, sort, meaning and defaults. " +
+            "This is the **declaration** an effects panel builds its editors from and an operation validates " +
+            "against, so the two cannot fall out of step about what an effect takes.",
+            "",
+            (ctx, _) => EffectRegistry.All.Select(effect => new
+            {
+                kind = effect.Kind,
+                raster = effect.Raster,
+                meaning = effect.Meaning,
+                parameters = effect.Parameters.Select(p => new
+                {
+                    name = p.Name,
+                    type = p.Kind.ToString().ToLowerInvariant(),
+                    meaning = p.Meaning,
+                    @default = p.Kind == EffectParameterKind.Color ? null : (double?)p.Default,
+                }).ToArray(),
+            }).ToArray());
+
         Add("style.inspectStroke",
             "Which stroke of the selection is being inspected, counted from the bottom - the state the stroke " +
             "inspector and the appearance panel share, so both are describing the same one rather than each holding " +
