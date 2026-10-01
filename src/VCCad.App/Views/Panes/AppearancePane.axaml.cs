@@ -35,7 +35,11 @@ public partial class AppearancePane : UserControl
     }
 
     /// <summary>One row: what a stroke looks like, in a list that is a view of the model.</summary>
-    private sealed record Row(IBrush Swatch, string Label, string Badge);
+    private sealed record Row(IBrush Swatch, string Label, string Badge, int Index, bool IsVisible)
+    {
+        /// <summary>What the row's button says: the action, not the state, so it is unambiguous.</summary>
+        public string Toggle => IsVisible ? "Hide" : "Show";
+    }
 
     /// <summary>Binds the panel to the editor and shows the current selection's strokes.</summary>
     public void Attach(EditorViewModel viewModel)
@@ -98,7 +102,9 @@ public partial class AppearancePane : UserControl
                     rows.Add(new Row(
                         brush,
                         $"{stroke.Width:0.##}pt  #{colour.R * 255:0}{colour.G * 255:0}{colour.B * 255:0}",
-                        string.Join("  ", badges)));
+                        string.Join("  ", badges),
+                        rows.Count,
+                        stroke.IsVisible));
                 }
             }
 
@@ -112,6 +118,27 @@ public partial class AppearancePane : UserControl
         {
             _updating = false;
         }
+    }
+
+    /// <summary>
+    /// Shows or hides the stroke the row is for, through the session - the same call a driver's
+    /// style.setStrokeVisible makes - and then re-reads the list, because the toggle changes what the row says.
+    /// </summary>
+    private void OnToggleVisible(object? sender, RoutedEventArgs e)
+    {
+        if (_session is null || sender is not Control { DataContext: Row row } || row.Index < 0)
+        {
+            return;
+        }
+
+        if (_session.SetStrokeVisible(row.Index, !row.IsVisible) == 0)
+        {
+            return;
+        }
+
+        Refresh();
+        StrokeList.SelectedIndex = Math.Clamp(row.Index, 0, Math.Max(0, StrokeList.ItemCount - 1));
+        Changed();
     }
 
     private void OnSelectionChanged(object? sender, SelectionChangedEventArgs e)

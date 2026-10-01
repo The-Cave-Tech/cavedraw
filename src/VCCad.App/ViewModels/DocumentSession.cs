@@ -1673,6 +1673,38 @@ public sealed class DocumentSession : INotifyPropertyChanged
         return changed;
     }
 
+    /// <summary>
+    /// Shows or hides one stroke of every selected path, which is what a row's toggle does.
+    ///
+    /// A hidden stroke keeps everything else about it - width, caps, joins, miter limit, dash - because it is a
+    /// member somebody is about to switch back on rather than a stroke to throw away. Removing and re-adding it
+    /// would lose exactly the settings they were working on.
+    /// </summary>
+    public int SetStrokeVisible(int? index, bool visible)
+    {
+        int changed = 0;
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            int at = index ?? path.Strokes.Count - 1;
+            if (at < 0 || at >= path.Strokes.Count)
+            {
+                continue;
+            }
+
+            var stack = path.Strokes.ToList();
+            if (stack[at].IsVisible == visible)
+            {
+                continue;
+            }
+
+            stack[at] = stack[at] with { IsVisible = visible };
+            Execute(new SetStrokesCommand(path, stack, visible ? "Show stroke" : "Hide stroke"));
+            changed++;
+        }
+
+        return changed;
+    }
+
     /// <summary>Moves a stroke within the stack, which is how a person changes which one is on top.</summary>
     public int MoveStroke(int from, int to)
     {

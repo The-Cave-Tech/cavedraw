@@ -14,7 +14,7 @@
       <ListBox x:Name="StrokeList" Height="120" Background="Transparent">
         <ListBox.ItemTemplate>
           <DataTemplate>
-            <Grid ColumnDefinitions="Auto,*,Auto" Height="22">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto" Height="22">
               <Border Grid.Column="0" Width="16" Height="16" Margin="0,0,6,0"
                       Background="{Binding Swatch}"
                       BorderBrush="{DynamicResource VcTextDim}" BorderThickness="1"/>
@@ -22,6 +22,9 @@
                          Foreground="{DynamicResource VcText}" FontSize="{DynamicResource VcFontSize}"/>
               <TextBlock Grid.Column="2" Text="{Binding Badge}" VerticalAlignment="Center"
                          Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+              <Button Grid.Column="3" Content="{Binding Toggle}" Click="OnToggleVisible"
+                      Padding="6,0" Margin="6,0,0,0" MinWidth="0" FontSize="{DynamicResource VcFontSize}"
+                      ToolTip.Tip="Show or hide this stroke; it keeps its width, caps, joins and dash"/>
             </Grid>
           </DataTemplate>
         </ListBox.ItemTemplate>

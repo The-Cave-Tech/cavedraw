@@ -2269,6 +2269,21 @@ public static class EditorOperations
                 return new { changed = ctx.Session.RemoveStroke(index) };
             });
 
+        Add("style.setStrokeVisible",
+            "Show or hide one stroke on the selected paths. index counts from the bottom and defaults to the top " +
+            "one. A hidden stroke keeps its width, caps, joins, miter limit and dash: it is a stroke somebody is " +
+            "about to switch back on, not one to throw away. One undo step.",
+            "visible:bool, index?:number",
+            (ctx, p) =>
+            {
+                bool visible = p.GetBool("visible", true);
+                int? index = p.ValueKind == JsonValueKind.Object && p.TryGetProperty("index", out _)
+                    ? (int)p.GetLong("index", 0)
+                    : null;
+
+                return new { changed = ctx.Session.SetStrokeVisible(index, visible), visible };
+            });
+
         Add("style.reorderStroke",
             "Move a stroke within the stack on the selected paths - how a person changes which one is on top. " +
             "from and to count from the bottom; to may be one past the last to put a stroke on top. One undo " +
