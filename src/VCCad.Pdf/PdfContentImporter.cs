@@ -156,6 +156,7 @@ internal sealed class PdfContentImporter
         var stack = new Stack<(AffineTransform Ctm, double LineWidth, int LineCap, int LineJoin,
             double MiterLimit, DashPattern Dash, ColorRgb Stroke, ColorRgb Fill,
             object? StrokeSpace, object? FillSpace, double StrokeAlpha, double FillAlpha,
+            string? FillPattern, string? StrokePattern,
             string FontName, double FontSize, double Leading, double[]? FillCmyk, double[]? StrokeCmyk,
             double CharSpacing, double WordSpacing, double HorizontalScale, double Rise)>();
         AffineTransform current = ctm;
@@ -176,6 +177,13 @@ internal sealed class PdfContentImporter
         object? fillSpace = null;
         double strokeAlpha = 1.0;
         double fillAlpha = 1.0;
+
+        // The pattern a fill or stroke colour space names, when the file paints with one. A text item's
+        // paint is a single ColorRgb and a path fill is a FillSpec of solid colour, gradient or hatch, so
+        // neither can hold a pattern tile; the substitution is reported at the point it is painted rather
+        // than silently standing in for the pattern.
+        string? fillPattern = null;
+        string? strokePattern = null;
 
         // Text state. None of this is decoration: spacing and horizontal scale change how
         // wide the text is, and rise moves it off the baseline, so a run measured without
@@ -276,6 +284,42 @@ internal sealed class PdfContentImporter
         }
 
         /// <summary>
+        /// Reports that a paint the file stated as a pattern is being drawn as a solid colour instead.
+        ///
+        /// A pattern tile is art the model has no place for - a text run's paint is one
+        /// <see cref="ColorRgb"/> - so the fill becomes whatever <see cref="ResolveColor"/> answers for the
+        /// space. Saying so is the difference between an approximation and a silent one; the same note is
+        /// added once, however many times the pattern is painted.
+        /// </summary>
+        void NotePatternLoss(string subject, string pattern, ColorRgb drawn)
+        {
+            string note = PatternLossNote(subject, pattern, drawn, resources);
+            if (!Notes.Contains(note))
+            {
+                Notes.Add(note);
+            }
+        }
+
+        /// <summary>
+        /// The colour a text show operation paints with: the graphics state's fill colour with the
+        /// ExtGState's <c>ca</c> applied, and with a pattern stated as its fill reported because a text
+        /// run's paint is a single <see cref="ColorRgb"/> that cannot hold a tile.
+        ///
+        /// <c>ca</c> is the non-stroking alpha and text is filled, so it applies here exactly as it does to
+        /// a path. The exporter already writes a text colour's alpha back as <c>ca</c>, so holding it on the
+        /// text paint is the whole round trip.
+        /// </summary>
+        ColorRgb TextPaint()
+        {
+            if (fillPattern is not null)
+            {
+                NotePatternLoss("text", fillPattern, fillColor);
+            }
+
+            return fillColor.WithAlpha(fillAlpha);
+        }
+
+        /// <summary>
         /// Paints the path built so far. Geometry is stored exactly as the file draws
         /// it: a tiled PDF's overflow past the page edge is a rendering concern (the
         /// page box clips it), not something to bake into the document.
@@ -310,6 +354,16 @@ internal sealed class PdfContentImporter
 
                 ColorRgb fillRgb = fillColor;
                 ColorRgb penRgb = strokeColor;
+                if (fill && fillPattern is not null)
+                {
+                    NotePatternLoss("a path fill", fillPattern, fillRgb);
+                }
+
+                if (stroke && strokePattern is not null)
+                {
+                    NotePatternLoss("a path stroke", strokePattern, penRgb);
+                }
+
                 item.Fill = fill
                     ? FillSpec.Solid(new ColorRgb(fillRgb.R, fillRgb.G, fillRgb.B, fillAlpha)) with { Rule = rule }
                     : FillSpec.None;
@@ -371,6 +425,7 @@ internal sealed class PdfContentImporter
                     _clipStack.Push(new List<ClipSpec>(_clips));
                     stack.Push((current, lineWidth, lineCap, lineJoin, miterLimit, dash,
                         strokeColor, fillColor, strokeSpace, fillSpace, strokeAlpha, fillAlpha,
+                        fillPattern, strokePattern,
                         fontName, fontSize, leading, fillCmyk, strokeCmyk,
                         charSpacing, wordSpacing, horizontalScale, rise));
                     break;
@@ -387,6 +442,7 @@ internal sealed class PdfContentImporter
                         _clips.AddRange(_clipStack.Pop());
                         (current, lineWidth, lineCap, lineJoin, miterLimit, dash,
                             strokeColor, fillColor, strokeSpace, fillSpace, strokeAlpha, fillAlpha,
+                            fillPattern, strokePattern,
                             fontName, fontSize, leading, fillCmyk, strokeCmyk,
                             charSpacing, wordSpacing, horizontalScale, rise) = stack.Pop();
                     }
@@ -401,14 +457,21 @@ internal sealed class PdfContentImporter
                     break;
                 case "cs" when operands.Count >= 1:
                     fillSpace = operands[0];
+                    fillPattern = null;
                     break;
                 case "CS" when operands.Count >= 1:
                     strokeSpace = operands[0];
+                    strokePattern = null;
                     break;
                 case "sc":
                 case "scn":
                 {
                     var comps = NumericOperands(operands);
+
+                    // Whether the space is a pattern is tracked here rather than read off the colour:
+                    // ResolveColor has no pattern to give and answers the fallback, so the paint site has to
+                    // know a pattern was stated in order to report it.
+                    fillPattern = IsPatternSpace(fillSpace, resources) ? PatternName(operands) : null;
                     if (comps.Count > 0)
                     {
                         fillColor = ResolveColor(fillSpace, comps, resources);
@@ -426,6 +489,7 @@ internal sealed class PdfContentImporter
                 case "SCN":
                 {
                     var comps = NumericOperands(operands);
+                    strokePattern = IsPatternSpace(strokeSpace, resources) ? PatternName(operands) : null;
                     if (comps.Count > 0)
                     {
                         strokeColor = ResolveColor(strokeSpace, comps, resources);
@@ -488,31 +552,37 @@ internal sealed class PdfContentImporter
                     strokeColor = Color3(0);
                     strokeSpace = DeviceRgb;
                     strokeCmyk = null;
+                    strokePattern = null;
                     break;
                 case "rg" when operands.Count >= 3:
                     fillColor = Color3(0);
                     fillSpace = DeviceRgb;
                     fillCmyk = null;
+                    fillPattern = null;
                     break;
                 case "G" when operands.Count >= 1:
                     strokeColor = Gray(0);
                     strokeSpace = DeviceGray;
                     strokeCmyk = null;
+                    strokePattern = null;
                     break;
                 case "g" when operands.Count >= 1:
                     fillColor = Gray(0);
                     fillSpace = DeviceGray;
                     fillCmyk = null;
+                    fillPattern = null;
                     break;
                 case "K" when operands.Count >= 4:
                     strokeColor = Cmyk(0);
                     strokeSpace = DeviceCmyk;
                     strokeCmyk = new[] { Number(0), Number(1), Number(2), Number(3) };
+                    strokePattern = null;
                     break;
                 case "k" when operands.Count >= 4:
                     fillColor = Cmyk(0);
                     fillSpace = DeviceCmyk;
                     fillCmyk = new[] { Number(0), Number(1), Number(2), Number(3) };
+                    fillPattern = null;
                     break;
                 case "m" when operands.Count >= 2:
                     currentPath = new SubPath();
@@ -615,12 +685,12 @@ internal sealed class PdfContentImporter
                 case "'" when operands.Count >= 1 && operands[0] is string sq:
                     lineMatrix = lineMatrix.Compose(AffineTransform.CreateTranslation(0, -leading));
                     textMatrix = lineMatrix;
-                    ShowText(sq, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer, fillCmyk, new TextState(charSpacing, wordSpacing, horizontalScale, rise));
+                    ShowText(sq, resources, fontName, fontSize, current, textMatrix, TextPaint(), items, currentLayer, fillCmyk, new TextState(charSpacing, wordSpacing, horizontalScale, rise));
                     break;
                 case "\"" when operands.Count >= 3 && operands[2] is string dq:
                     lineMatrix = lineMatrix.Compose(AffineTransform.CreateTranslation(0, -leading));
                     textMatrix = lineMatrix;
-                    ShowText(dq, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer, fillCmyk, new TextState(charSpacing, wordSpacing, horizontalScale, rise));
+                    ShowText(dq, resources, fontName, fontSize, current, textMatrix, TextPaint(), items, currentLayer, fillCmyk, new TextState(charSpacing, wordSpacing, horizontalScale, rise));
                     break;
 
                 // Text state. A run measured without these is a run the file did not
@@ -664,7 +734,7 @@ internal sealed class PdfContentImporter
                     textMatrix = lineMatrix;
                     break;
                 case "Tj" when operands.Count >= 1 && operands[0] is string text:
-                    ShowText(text, resources, fontName, fontSize, current, textMatrix, fillColor, items, currentLayer, fillCmyk, new TextState(charSpacing, wordSpacing, horizontalScale, rise));
+                    ShowText(text, resources, fontName, fontSize, current, textMatrix, TextPaint(), items, currentLayer, fillCmyk, new TextState(charSpacing, wordSpacing, horizontalScale, rise));
                     AdvanceTextMatrix(text);
                     break;
                 case "TJ" when operands.Count >= 1 && operands[0] is List<object?> array:
@@ -746,7 +816,7 @@ internal sealed class PdfContentImporter
                             }
 
                             ShowText(part, resources, fontName, fontSize, current, segmentMatrix,
-                                fillColor, items, currentLayer, fillCmyk,
+                                TextPaint(), items, currentLayer, fillCmyk,
                                 new TextState(charSpacing, wordSpacing, horizontalScale, rise),
                                 gap);
                         }
@@ -2495,6 +2565,82 @@ internal sealed class PdfContentImporter
         return _file.Resolve(space);
     }
 
+    /// <summary>
+    /// True when a colour space is a <c>/Pattern</c> space, either the coloured form
+    /// (<c>/Pattern</c>, a single name) or the uncoloured tiling form
+    /// (<c>[/Pattern base]</c>, an array whose first element is the name).
+    /// </summary>
+    private bool IsPatternSpace(object? space, Dictionary<string, object?> resources)
+    {
+        object? resolved = ResolveSpace(space, resources);
+        if (resolved is PdfName name)
+        {
+            return name.Value == "Pattern";
+        }
+
+        return resolved is List<object?> array && array.Count > 0 &&
+               array[0] is PdfName kind && kind.Value == "Pattern";
+    }
+
+    /// <summary>The pattern name in a colour operator's operands: <c>scn</c> puts it last.</summary>
+    private static string PatternName(List<object?> operands)
+    {
+        for (int i = operands.Count - 1; i >= 0; i--)
+        {
+            if (operands[i] is PdfName name)
+            {
+                return name.Value;
+            }
+        }
+
+        return "?";
+    }
+
+    /// <summary>
+    /// The note for a fill or stroke the file stated as a pattern, which the importer cannot read into the
+    /// model's solid paint. It names the pattern, says what kind it is, and says what was drawn instead -
+    /// reported rather than silently substituted, which is the rule for every loss this importer takes.
+    /// </summary>
+    private string PatternLossNote(string subject, string pattern, ColorRgb drawn,
+        Dictionary<string, object?> resources)
+        => $"{subject} is painted with pattern /{pattern} ({PatternKind(pattern, resources)}); " +
+           $"the pattern tile was not read, so it is drawn as the solid {Rgb(drawn)} instead.";
+
+    /// <summary>What a pattern in the page's <c>/Pattern</c> resources actually is.</summary>
+    private string PatternKind(string name, Dictionary<string, object?> resources)
+    {
+        if (_file.ResolveDict(resources.GetValueOrDefault("Pattern")) is not { } patterns ||
+            _file.ResolveDict(patterns.GetValueOrDefault(name)) is not { } pattern)
+        {
+            return "a pattern with no dictionary in the page's resources";
+        }
+
+        int type = (int)(_file.ResolveNumber(pattern.GetValueOrDefault("PatternType")) ?? 0);
+        if (type == 1)
+        {
+            return "a tiling pattern";
+        }
+
+        if (type == 2)
+        {
+            int shading = (int)(_file.ResolveNumber(
+                _file.ResolveDict(pattern.GetValueOrDefault("Shading"))?.GetValueOrDefault("ShadingType")) ?? 0);
+            return shading switch
+            {
+                2 => "a shading pattern whose shading is axial",
+                3 => "a shading pattern whose shading is radial",
+                _ => "a shading pattern",
+            };
+        }
+
+        return "a pattern";
+    }
+
+    /// <summary>Formats a colour for a note, the way the shading notes name their numbers.</summary>
+    private static string Rgb(ColorRgb colour)
+        => $"RGB({PdfDocumentExporter.Num(colour.R)}, {PdfDocumentExporter.Num(colour.G)}, " +
+           $"{PdfDocumentExporter.Num(colour.B)})";
+
     /// <summary>Converts colour components in <paramref name="space"/> to RGB.</summary>
     private ColorRgb ResolveColor(object? space, IReadOnlyList<double> comps,
         Dictionary<string, object?> resources)
@@ -2579,6 +2725,9 @@ internal sealed class PdfContentImporter
                 case "Lab":
                     return LabToRgb(C(0), C(1), C(2));
                 case "Pattern":
+                    // A pattern tile is art the model's solid paints cannot hold. The fallback is the same
+                    // for both forms; which pattern was stated is tracked by the paint site, which reports
+                    // it (see Interpret's NotePatternLoss), so the substitution is never silent.
                     return ColorRgb.Black;
             }
         }
