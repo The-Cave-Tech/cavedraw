@@ -106,7 +106,20 @@ internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, St
     // The raster effects on the stroke. Separate from the outline effects because they are a different kind of
     // thing: one reshapes the outline, the other changes the pixels, and a reader has to treat them differently.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    RasterEffectDto[]? RasterEffects = null);
+    RasterEffectDto[]? RasterEffects = null,
+
+    // The tablet dynamics the stroke was drawn with, in target order. Absent when it responds to nothing.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    DynamicsTargetDto[]? Dynamics = null);
+
+/// <summary>
+/// One dynamics target on the wire: whether it is on, and the two control points of its curve.
+///
+/// An array in target order rather than a member per target, because the target list is an enum and a member per
+/// target would have to be kept in step with it by hand. The order is the enum's, which is why it is not written
+/// down anywhere.
+/// </summary>
+internal sealed record DynamicsTargetDto(bool Enabled, double X1, double Y1, double X2, double Y2);
 
 /// <summary>One outline effect on the wire: its kind, its parameters, and the seed its randomness comes from.</summary>
 internal sealed record OutlineEffectDto(
@@ -500,6 +513,16 @@ internal abstract record ItemDto
                     e.OffsetY,
                     e.Opacity,
                     e.Tint is { } tint ? new ColorDto(tint.R, tint.G, tint.B, tint.A) : null)).ToArray()
+                : null,
+            s.HasDynamics
+                ? Enum.GetValues<DynamicsTarget>()
+                    .Select(target =>
+                    {
+                        DynamicsTargetSpec spec = s.Dynamics!.For(target);
+                        return new DynamicsTargetDto(
+                            spec.Enabled, spec.Curve.X1, spec.Curve.Y1, spec.Curve.X2, spec.Curve.Y2);
+                    })
+                    .ToArray()
                 : null);
 }
 
@@ -901,13 +924,32 @@ internal static class ItemDtoExtensions
                 Dash = new DashPattern(s.Dash ?? Array.Empty<double>(), s.DashOffset),
                 Effects = ToEffects(s.Effects),
                 RasterEffects = ToRasterEffects(s.RasterEffects),
+                Dynamics = ToDynamics(s.Dynamics),
             }
             : new StrokeSpec(s.Visible, new ColorRgb(s.Color.R, s.Color.G, s.Color.B, s.Color.A),
                 s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment,
                 new DashPattern(s.Dash ?? Array.Empty<double>(), s.DashOffset),
                 s.WidthProfile?.ToModel(),
                 ToEffects(s.Effects),
-                ToRasterEffects(s.RasterEffects));
+                ToRasterEffects(s.RasterEffects),
+                ToDynamics(s.Dynamics));
+
+    /// <summary>
+    /// The dynamics on the wire, or null when the stroke responds to nothing.
+    ///
+    /// Read back in target order into a spec whose list is as long as the enum - a short list would silently mean
+    /// "the remaining targets are off", which is a different document.
+    /// </summary>
+    private static DynamicsSpec? ToDynamics(DynamicsTargetDto[]? targets)
+        => targets is { Length: > 0 }
+            ? new DynamicsSpec(Enum.GetValues<DynamicsTarget>().Select((_, index) =>
+                index < targets.Length
+                    ? new DynamicsTargetSpec(
+                        targets[index].Enabled,
+                        new DynamicsCurve(
+                            targets[index].X1, targets[index].Y1, targets[index].X2, targets[index].Y2))
+                    : DynamicsTargetSpec.Off))
+            : null;
 
     /// <summary>
     /// The raster effects on the wire, or null when there are none - the same absent-means-none rule the outline

@@ -1786,6 +1786,71 @@ public static class EditorOperations
                 return new { changed };
             });
 
+        Add("style.setDynamics",
+            "Give the selected paths' strokes a tablet response. target is width (the default), opacity, " +
+            "scatterScale, calligraphicAngle or smoothing. preset is linear, soft, hard or exponential, or pass " +
+            "curve:[x1,y1,x2,y2] for a custom one - the two control points of a curve from (0,0) to (1,1), the " +
+            "same four numbers a curve editor drags. One undo step per path.",
+            "target?:string, preset?:string, curve?:[x1,y1,x2,y2]",
+            (ctx, p) =>
+            {
+                string targetName = p.GetString("target") ?? "width";
+                DynamicsTarget target = targetName.ToLowerInvariant() switch
+                {
+                    "width" => DynamicsTarget.Width,
+                    "opacity" => DynamicsTarget.Opacity,
+                    "scatterscale" or "scatter_scale" => DynamicsTarget.ScatterScale,
+                    "calligraphicangle" or "calligraphic_angle" or "angle" => DynamicsTarget.CalligraphicAngle,
+                    "smoothing" or "speed" => DynamicsTarget.Smoothing,
+                    _ => throw new EditorOperationException(
+                        $"'{targetName}' is not a dynamics target; use width, opacity, scatterScale, " +
+                        "calligraphicAngle or smoothing"),
+                };
+
+                DynamicsCurve curve = ReadDynamicsCurve(p);
+
+                int changed = 0;
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    var stack = path.Strokes.ToList();
+                    for (int i = 0; i < stack.Count; i++)
+                    {
+                        // The other targets keep what they had: setting width dynamics must not switch off opacity
+                        // dynamics, which rebuilding the spec from scratch would quietly do.
+                        StrokeSpec existingStroke = stack[i];
+                        var spec = new DynamicsSpec(Enum.GetValues<DynamicsTarget>().Select(existing =>
+                            existing == target
+                                ? new DynamicsTargetSpec(true, curve)
+                                : existingStroke.Dynamics?.For(existing) ?? DynamicsTargetSpec.Off));
+
+                        stack[i] = existingStroke with { Dynamics = spec };
+                    }
+
+                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Set tablet dynamics"));
+                    changed++;
+                }
+
+                return new { target = target.ToString(), changed };
+            });
+
+        Add("style.clearDynamics", "Remove the tablet response from the selected paths' strokes.", "", (ctx, _) =>
+        {
+            int changed = 0;
+            foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+            {
+                var stack = path.Strokes.ToList();
+                for (int i = 0; i < stack.Count; i++)
+                {
+                    stack[i] = stack[i] with { Dynamics = null };
+                }
+
+                ctx.Session.Execute(new SetStrokesCommand(path, stack, "Clear tablet dynamics"));
+                changed++;
+            }
+
+            return new { changed };
+        });
+
         Add("profile.create",
             "Create a reusable width profile in the document. points is [{position, left, right, interpolation?}], " +
             "the same shape style.setWidthProfile takes. The name has to be free: two profiles with one name would " +
@@ -5325,6 +5390,43 @@ public static class EditorOperations
     }
 
     /// <summary>
+    /// The dynamics curve a caller asked for: their own control points when they gave any, otherwise the preset.
+    ///
+    /// A curve given with the wrong number of numbers is refused rather than padded, because a curve is two points
+    /// and a three-number one is a mistake about which four they are - the same mistake that would silently make
+    /// the curve do something else.
+    /// </summary>
+    private static DynamicsCurve ReadDynamicsCurve(JsonElement p)
+    {
+        if (p.ValueKind == JsonValueKind.Object &&
+            p.TryGetProperty("curve", out JsonElement curve) &&
+            curve.ValueKind == JsonValueKind.Array)
+        {
+            double[] values = curve.EnumerateArray().Select(e => e.GetDouble()).ToArray();
+            if (values.Length != 4)
+            {
+                throw new EditorOperationException(
+                    $"a dynamics curve is four numbers - x1, y1, x2, y2 - and {values.Length} were given");
+            }
+
+            return new DynamicsCurve(values[0], values[1], values[2], values[3]);
+        }
+
+        string presetName = p.GetString("preset") ?? "soft";
+        DynamicsPreset preset = presetName.ToLowerInvariant() switch
+        {
+            "linear" => DynamicsPreset.Linear,
+            "soft" => DynamicsPreset.Soft,
+            "hard" => DynamicsPreset.Hard,
+            "exponential" or "exp" => DynamicsPreset.Exponential,
+            _ => throw new EditorOperationException(
+                $"'{presetName}' is not a dynamics preset; use linear, soft, hard or exponential"),
+        };
+
+        return DynamicsCurve.FromPreset(preset);
+    }
+
+    /// <summary>
     /// The width points a caller sent, or an empty list when they sent none.
     ///
     /// A missing or malformed point is skipped rather than defaulting to a width of zero: a point at position
@@ -5414,6 +5516,21 @@ public static class EditorOperations
                     ? new[] { Math.Round(tint.R, 6), Math.Round(tint.G, 6), Math.Round(tint.B, 6) }
                     : null,
             }).ToArray()
+            : null,
+        dynamics = stroke.HasDynamics
+            ? Enum.GetValues<DynamicsTarget>()
+                .Where(target => stroke.Dynamics!.For(target).Enabled)
+                .Select(target => new
+                {
+                    target = target.ToString(),
+                    curve = new[]
+                    {
+                        stroke.Dynamics!.For(target).Curve.X1,
+                        stroke.Dynamics!.For(target).Curve.Y1,
+                        stroke.Dynamics!.For(target).Curve.X2,
+                        stroke.Dynamics!.For(target).Curve.Y2,
+                    },
+                }).ToArray()
             : null,
     };
 

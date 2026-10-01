@@ -254,7 +254,8 @@ public sealed record StrokeSpec(
     DashPattern Dash = default,
     WidthProfileSpec? WidthProfile = null,
     EffectStack? Effects = null,
-    RasterEffectStack? RasterEffects = null)
+    RasterEffectStack? RasterEffects = null,
+    DynamicsSpec? Dynamics = null)
 {
     /// <summary>Convenience: no visible stroke.</summary>
     public static StrokeSpec None { get; } =
@@ -284,6 +285,15 @@ public sealed record StrokeSpec(
 
     /// <summary>The raster effects in order, or an empty list when there are none.</summary>
     public IReadOnlyList<RasterEffectSpec> AllRasterEffects => RasterEffects ?? RasterEffectStack.Empty;
+
+    /// <summary>
+    /// Whether this stroke responds to the pen.
+    ///
+    /// This is what was **recorded** about how the stroke was drawn, not what it looks like: what it looks like is
+    /// the width profile the pressure produced, which is stored beside it. Keeping both is what lets a drawing made
+    /// with a tablet be exported as geometry and still say how it was made.
+    /// </summary>
+    public bool HasDynamics => Dynamics is { IsEmpty: false };
 
     /// <summary>True when a stroke is visible and has positive width.</summary>
     public bool HasVisibleOutline => IsVisible && Width > 0.0;
