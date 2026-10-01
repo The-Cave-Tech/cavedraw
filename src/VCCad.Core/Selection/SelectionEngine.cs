@@ -55,6 +55,58 @@ public static class SelectionEngine
     public const double PickTolerance = 3.0;
 
     /// <summary>
+    /// The affine map from an item's **placement frame** into its artboard's frame: every enclosing
+    /// group's <see cref="ArtGroup.Transform"/>, composed outermost last.
+    ///
+    /// This is the composition <c>PdfDocumentExporter</c> performs as its walk descends
+    /// (<c>childToDoc = toDoc.Compose(group.Transform)</c>), stated once so that the canvas, the
+    /// selection engine and the exporter cannot come to three different answers about where
+    /// transformed artwork is. A group's transform is a local→parent map, so walking up from an item
+    /// and pre-composing each ancestor gives parent∘…∘innermost, which is the frame the item is
+    /// drawn in once every enclosing group has had its say.
+    ///
+    /// "Placement frame" rather than "own frame" because a group is placed in the space its own
+    /// coordinates are written in while its children are in the space its transform establishes -
+    /// the distinction issue #159 turns on.
+    /// </summary>
+    public static AffineTransform ToArtboard(LayerItem item)
+    {
+        AffineTransform transform = AffineTransform.Identity;
+
+        for (IItemContainer? container = item.Container;
+             container is not null;
+             container = (container as LayerItem)?.Container)
+        {
+            if (container is ArtGroup group)
+            {
+                transform = group.Transform.Compose(transform);
+            }
+        }
+
+        return transform;
+    }
+
+    /// <summary>
+    /// The affine map from an item's placement frame into document/world coordinates - the artboard
+    /// origin composed on the outside of <see cref="ToArtboard"/>, which is where the canvas draws.
+    /// </summary>
+    public static AffineTransform ToWorld(LayerItem item)
+    {
+        Vector2D origin = item.ArtboardOffset();
+        return AffineTransform.CreateTranslation(origin.X, origin.Y).Compose(ToArtboard(item));
+    }
+
+    /// <summary>
+    /// The uniform scale an affine transform applies, √|det|.
+    ///
+    /// Used to move the pick tolerance into whichever frame a point is being tested in: three document
+    /// units is three units of screen, so inside a group that doubles everything it is one and a half
+    /// units of the group's own space.
+    /// </summary>
+    private static double ScaleOf(AffineTransform transform)
+        => Math.Sqrt(Math.Abs(transform.Determinant));
+
+    /// <summary>
     /// How far the pointer may wander and still count as a click rather than a marquee.
     ///
     /// A press and release in the same place is a click; anything further is a drag, whether
@@ -257,13 +309,28 @@ public static class SelectionEngine
             return;
         }
 
+        // A group's children are in the space its own transform establishes, not in the space the group
+        // itself is placed in, so the point is carried into that space once and every child is tested
+        // there. The tolerance travels with it: three document units of reach is smaller inside a group
+        // that enlarges what it holds.
+        if (!group.Transform.IsInvertible)
+        {
+            // The group collapses the plane it holds, so nothing inside it is painted anywhere a pointer
+            // could land. Reported by the hit test as "nothing here" rather than mapped through a
+            // transform that has no inverse.
+            return;
+        }
+
+        Point2D local = group.Transform.Inverted().Transform(point);
+        double tolerance = PickTolerance / ScaleOf(group.Transform);
+
         for (int i = group.Children.Count - 1; i >= 0; i--)
         {
             LayerItem child = group.Children[i];
-            if (Hits(child, point, PickTolerance))
+            if (Hits(child, local, tolerance))
             {
                 chain.Add(child);
-                Descend(child, point, chain);
+                Descend(child, local, chain);
                 return;
             }
         }
@@ -390,23 +457,50 @@ public static class SelectionEngine
     /// only that sliver, so a marquee that encloses the sliver encloses the object and one
     /// that encloses only the cut-away part does not. Non-rectangular clips count - the
     /// intersection is taken against the clip's own outline, not its box.
+    ///
+    /// Clips are recorded in the frame the item they cut is **placed** in (a group's own transform
+    /// maps its children into that space rather than moving the outline out of it), so each item's
+    /// own clips are applied before it is carried up by the groups around it.
     /// </summary>
     public static Polygon VisibleRegion(LayerItem item, Vector2D offset)
     {
-        Polygon region = Flatten(item, offset);
+        Polygon region = Place(item);
 
         if (region.IsEmpty)
         {
             return region;
         }
 
-        foreach (ClipSpec clip in ClipsOn(item))
+        // Up into the artboard, then out to document coordinates - the order the exporter's own
+        // `toDoc` walks in, which is what keeps a marquee and a rendered page about the same picture.
+        AffineTransform toArtboard = ToArtboard(item);
+        if (toArtboard != AffineTransform.Identity)
+        {
+            region = Mapped(region, toArtboard);
+        }
+
+        return offset.X == 0 && offset.Y == 0
+            ? region
+            : Mapped(region, AffineTransform.CreateTranslation(offset.X, offset.Y));
+    }
+
+    /// <summary>An item's painted outline and its own clips, in the frame the item is placed in.</summary>
+    private static Polygon Place(LayerItem item)
+    {
+        Polygon region = Outline(item);
+
+        if (region.IsEmpty)
+        {
+            return region;
+        }
+
+        foreach (ClipSpec clip in item.Clips)
         {
             var rings = new List<IEnumerable<Point2D>>();
 
             foreach (SubPath sub in clip.SubPaths)
             {
-                rings.Add(Flatten(sub, offset).Points);
+                rings.Add(Flatten(sub, default).Points);
             }
 
             // An even-odd clip has holes, so its rings go in together: clipping by each ring
@@ -422,8 +516,11 @@ public static class SelectionEngine
         return region;
     }
 
-    /// <summary>An object's own outline, flattened and moved into document coordinates.</summary>
-    private static Polygon Flatten(LayerItem item, Vector2D offset)
+    /// <summary>
+    /// An object's own outline in the frame it is placed in: its geometry, or - for a group - its
+    /// children's regions carried up by the group's own transform.
+    /// </summary>
+    private static Polygon Outline(LayerItem item)
     {
         var rings = new List<IEnumerable<Point2D>>();
 
@@ -432,26 +529,28 @@ public static class SelectionEngine
             case PathItem path:
                 foreach (SubPath sub in path.SubPaths)
                 {
-                    rings.Add(Flatten(sub, offset).Points);
+                    rings.Add(Flatten(sub, default).Points);
                 }
 
                 break;
 
             case TextItem text:
-                rings.Add(Box(text.BoundingBox(), offset));
+                rings.Add(Box(text.BoundingBox(), default));
                 break;
 
             case ImageItem image:
-                rings.Add(Box(image.Placement, offset));
+                rings.Add(Box(image.Placement, default));
                 break;
 
             case ArtGroup group:
                 foreach (LayerItem child in group.Children)
                 {
-                    Polygon childRegion = VisibleRegion(child, offset);
+                    // The child is placed in the group's own space, so its region is mapped into that
+                    // space - mapped, not offset, because the transform may turn or scale it.
+                    Polygon childRegion = Place(child);
                     if (!childRegion.IsEmpty)
                     {
-                        rings.Add(childRegion.Points);
+                        rings.Add(Mapped(childRegion, group.Transform).Points);
                     }
                 }
 
@@ -460,6 +559,10 @@ public static class SelectionEngine
 
         return new Polygon(rings);
     }
+
+    /// <summary>A polygon with every ring carried through an affine transform.</summary>
+    private static Polygon Mapped(Polygon polygon, AffineTransform transform)
+        => new(polygon.Rings.Select(ring => ring.Select(transform.Transform)));
 
     /// <summary>The four corners of a rectangle, moved by an offset.</summary>
     private static IEnumerable<Point2D> Box(Rect2D box, Vector2D offset) => new[]
@@ -757,7 +860,7 @@ public static class SelectionEngine
 
         foreach (LayerItem item in items)
         {
-            Rect2D box = BoundsOf(item, item.ArtboardOffset());
+            Rect2D box = BoundsOf(item);
 
             if (!any)
             {
@@ -778,8 +881,8 @@ public static class SelectionEngine
         return any ? new Point2D((left + right) / 2, (top + bottom) / 2) : default;
     }
 
-    /// <summary>An object's bounds in document coordinates.</summary>
-    private static Rect2D BoundsOf(LayerItem item, Vector2D offset)
+    /// <summary>An object's bounds in document coordinates, every enclosing group's transform composed in.</summary>
+    private static Rect2D BoundsOf(LayerItem item)
     {
         Rect2D box = item switch
         {
@@ -790,7 +893,13 @@ public static class SelectionEngine
             _ => Rect2D.Empty,
         };
 
-        return new Rect2D(box.X + offset.X, box.Y + offset.Y, box.Width, box.Height);
+        // A group's box is in its own local space, which its own transform carries into the frame it is
+        // placed in; everything else is already in the frame it is placed in.
+        AffineTransform toWorld = item is ArtGroup own
+            ? ToWorld(item).Compose(own.Transform)
+            : ToWorld(item);
+
+        return toWorld.Transform(box);
     }
 
     /// <summary>
@@ -878,6 +987,11 @@ public static class SelectionEngine
     ///
     /// An object clipped by its parent is only there where the clip leaves it: the parts a
     /// parent has cut away are not selectable, however solid the object's own geometry looks.
+    ///
+    /// <paramref name="point"/> is in the frame the item is **placed** in - the frame its own geometry
+    /// is written in for a path, text or image, and the frame a group's coordinates are written in for a
+    /// group. A group's children are in the space its transform establishes, so the point is carried
+    /// into that space before they are tested.
     /// </summary>
     public static bool Hits(LayerItem item, Point2D point, double tolerance)
     {
@@ -896,9 +1010,26 @@ public static class SelectionEngine
             PathItem path => PathHits(path, point, tolerance),
             TextItem text => text.BoundingBox().Inflated(tolerance).Contains(point),
             ImageItem image => image.Placement.Inflated(tolerance).Contains(point),
-            ArtGroup group => group.Children.Any(c => Hits(c, point, tolerance)),
+            ArtGroup group => ChildrenHit(group, point, tolerance),
             _ => false,
         };
+    }
+
+    /// <summary>Whether any child of a group is under a point given in the group's placement frame.</summary>
+    private static bool ChildrenHit(ArtGroup group, Point2D point, double tolerance)
+    {
+        // Nothing inside a group that collapses the plane is painted anywhere a pointer can land, and
+        // its transform has no inverse to carry the point in with. Reported as a miss rather than
+        // guessed at through a matrix that does not exist.
+        if (!group.Transform.IsInvertible)
+        {
+            return false;
+        }
+
+        Point2D local = group.Transform.Inverted().Transform(point);
+        double localTolerance = tolerance / ScaleOf(group.Transform);
+
+        return group.Children.Any(child => Hits(child, local, localTolerance));
     }
 
     /// <summary>
@@ -907,6 +1038,10 @@ public static class SelectionEngine
     /// A clipping mask clips what is inside it, not merely itself, so a shape nested two
     /// groups deep is bounded by both. Without walking up, a child looked unclipped however
     /// tightly its parents held it - which is the other half of the report.
+    ///
+    /// The frames differ: each clip is recorded in the frame its own container is *placed* in, so
+    /// this is the list of clips and not a set of outlines in one space. <see cref="Survives"/>
+    /// carries the point into each frame before asking.
     /// </summary>
     public static IReadOnlyList<ClipSpec> ClipsOn(LayerItem item)
     {
@@ -926,14 +1061,56 @@ public static class SelectionEngine
         return clips;
     }
 
-    /// <summary>Whether a point survives every clip that applies to an object.</summary>
+    /// <summary>
+    /// Whether a point survives every clip that applies to an object.
+    ///
+    /// The item's own clips were recorded in the frame the item is placed in, which is the frame the
+    /// point arrives in. An ancestor's clip was recorded in <em>that ancestor's</em> placement frame, so
+    /// the point is carried up into each ancestor's frame in turn - testing the whole list against one
+    /// point was right only while every group between them had the identity for a transform.
+    /// </summary>
     private static bool Survives(LayerItem item, Point2D point)
     {
-        foreach (ClipSpec clip in ClipsOn(item))
+        foreach (ClipSpec clip in item.Clips)
         {
             if (!clip.Contains(point))
             {
                 return false;
+            }
+        }
+
+        if (item.Container is null)
+        {
+            return true;
+        }
+
+        Point2D inArtboard = ToArtboard(item).Transform(point);
+
+        for (IItemContainer? container = item.Container;
+             container is not null;
+             container = (container as LayerItem)?.Container)
+        {
+            if (container is not LayerItem ancestor || ancestor.Clips.Count == 0)
+            {
+                continue;
+            }
+
+            AffineTransform above = ToArtboard(ancestor);
+            if (!above.IsInvertible)
+            {
+                // The ancestor's own frame is collapsed, so its clip cannot be asked a question with an
+                // answer: nothing of what it holds is anywhere a pointer could land.
+                return false;
+            }
+
+            Point2D inFrame = above.Inverted().Transform(inArtboard);
+
+            foreach (ClipSpec clip in ancestor.Clips)
+            {
+                if (!clip.Contains(inFrame))
+                {
+                    return false;
+                }
             }
         }
 

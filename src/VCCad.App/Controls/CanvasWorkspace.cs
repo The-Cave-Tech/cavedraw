@@ -720,10 +720,19 @@ public sealed class CanvasWorkspace : Control
     /// <summary>Top-most descendant of a group under the point (to enter a group).</summary>
     private LayerItem? HitTestChildOf(ArtGroup group, Point2D model)
     {
-        Vector2D offset = group.OwningLayer()?.Artboard is { } ab
-            ? new Vector2D(ab.X, ab.Y)
-            : default;
-        Point2D local = model - offset;
+        // `model` is in world coordinates and the group's children are in the group's own space: the
+        // artboard origin comes off, then every enclosing transform, then the group's own - the frame
+        // the canvas draws them in, taken from the one place that composition is stated.
+        AffineTransform above = SelectionEngine.ToArtboard(group);
+
+        if (!group.Transform.IsInvertible || !above.IsInvertible)
+        {
+            return null;
+        }
+
+        Vector2D offset = group.ArtboardOffset();
+        Point2D inArtboard = model - offset;
+        Point2D local = group.Transform.Inverted().Transform(above.Inverted().Transform(inArtboard));
 
         LayerItem? topmost = null;
         foreach (LayerItem child in group.Children)
@@ -758,10 +767,17 @@ public sealed class CanvasWorkspace : Control
 
     private static LayerItem? HitTestGroup(ArtGroup group, Point2D model, double tolerance)
     {
+        // The children of a group live in the space its transform establishes.
+        if (!group.Transform.IsInvertible)
+        {
+            return null;
+        }
+
+        Point2D local = group.Transform.Inverted().Transform(model);
         LayerItem? topmost = null;
         foreach (LayerItem child in group.Children)
         {
-            LayerItem? hit = HitTestItem(child, model, tolerance);
+            LayerItem? hit = HitTestItem(child, local, tolerance);
             if (hit is not null)
             {
                 topmost = hit;
@@ -2199,31 +2215,24 @@ public sealed class CanvasWorkspace : Control
 
     private static Rect2D ItemBounds(LayerItem item)
     {
-        Vector2D offset = item.OwningLayer()?.Artboard is { } artboard
-            ? new Vector2D(artboard.X, artboard.Y)
-            : default;
+        // `SelectionEngine.ToWorld` is the one place the composition of ancestor group transforms is
+        // stated, so the chrome lands where the artwork is drawn rather than where the model's raw
+        // numbers are. A group's box is in its own local space, which its own transform carries into
+        // the frame it is placed in.
+        AffineTransform toWorld = item is ArtGroup own
+            ? SelectionEngine.ToWorld(item).Compose(own.Transform)
+            : SelectionEngine.ToWorld(item);
 
-        switch (item)
+        Rect2D box = item switch
         {
-            case PathItem path:
-                Rect2D b = path.BoundingBox();
-                return b.IsEmpty ? b : new Rect2D(b.X + offset.X, b.Y + offset.Y, b.Width, b.Height);
-            case TextItem text:
-                // Marquee selection must see text too, otherwise a drag never
-                // catches a text block even though clicking one selects it.
-                Rect2D t = text.BoundingBox();
-                return t.IsEmpty ? t : new Rect2D(t.X + offset.X, t.Y + offset.Y, t.Width, t.Height);
-            case ArtGroup group:
-                Rect2D g = group.Transform.Transform(group.BoundingBox());
-                return g.IsEmpty ? g : new Rect2D(g.X + offset.X, g.Y + offset.Y, g.Width, g.Height);
-            case ImageItem image:
-                // The placement is the image's box, so selection chrome and the resize
-                // handles land on the picture itself.
-                Rect2D i = image.Placement;
-                return i.IsEmpty ? i : new Rect2D(i.X + offset.X, i.Y + offset.Y, i.Width, i.Height);
-            default:
-                return Rect2D.Empty;
-        }
+            PathItem path => path.BoundingBox(),
+            TextItem text => text.BoundingBox(),
+            ArtGroup group => group.BoundingBox(),
+            ImageItem image => image.Placement,
+            _ => Rect2D.Empty,
+        };
+
+        return box.IsEmpty ? box : toWorld.Transform(box);
     }
 
     // ---- bounding-box resize handles ------------------------------------
@@ -3854,7 +3863,7 @@ public sealed class CanvasWorkspace : Control
             {
                 foreach (LayerItem item in _document.Orphans.Children)
                 {
-                    PaintItem(context, item, _document.Orphans.Opacity);
+                    PaintItem(context, item, _document.Orphans.Opacity, AffineTransform.Identity);
                 }
             }
         }
@@ -3902,12 +3911,22 @@ public sealed class CanvasWorkspace : Control
 
             foreach (LayerItem item in layer.Children)
             {
-                PaintItem(context, item, layer.Opacity);
+                PaintItem(context, item, layer.Opacity,
+                    AffineTransform.CreateTranslation(artboard.X, artboard.Y));
             }
         }
     }
 
-    private void PaintItem(DrawingContext context, LayerItem item, double opacity)
+    /// <summary>
+    /// Paints one item, with <paramref name="toWorld"/> carrying the frame it is **placed** in into
+    /// world coordinates: the artboard origin for a top-level item, and each enclosing group's
+    /// <see cref="ArtGroup.Transform"/> composed on the way down.
+    ///
+    /// The frame is threaded rather than recomputed because a filtered object and the off-screen test
+    /// need the same answer the geometry is drawn with, and two walks that compute it separately are
+    /// how the canvas and the export came to disagree in issue #159.
+    /// </summary>
+    private void PaintItem(DrawingContext context, LayerItem item, double opacity, AffineTransform toWorld)
     {
         if (!item.IsEffectivelyVisible())
         {
@@ -3930,7 +3949,7 @@ public sealed class CanvasWorkspace : Control
                 scopes.Add(context.PushGeometryClip(clip));
             }
 
-            PaintItemCore(context, item, opacity);
+            PaintItemCore(context, item, opacity, toWorld);
         }
         finally
         {
@@ -3991,17 +4010,25 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
-    private void PaintItemCore(DrawingContext context, LayerItem item, double opacity)
+    private void PaintItemCore(DrawingContext context, LayerItem item, double opacity, AffineTransform toWorld)
     {
 
         switch (item)
         {
             case PathItem path when path.IsVisible:
-                Rect2D bounds = path.WorldBounds();
-                if (!bounds.IsEmpty &&
-                    !bounds.Inflated(WidestStroke(path) + 1).Intersects(_worldViewport))
+                // The off-screen test is made in world coordinates, so it goes through the accumulated
+                // frame: a path inside a group that moves it onto the page is on the page, and one whose
+                // group moves it off is not. `WorldBounds` alone ignores every enclosing group, which is
+                // the same defect as drawing at the wrong place - a picture that disappears when it is
+                // scrolled to.
+                Rect2D local = path.BoundingBox();
+                if (!local.IsEmpty)
                 {
-                    return; // culled (off-screen)
+                    Rect2D bounds = toWorld.Transform(local);
+                    if (!bounds.Inflated(WidestStroke(path) + 1).Intersects(_worldViewport))
+                    {
+                        return; // culled (off-screen)
+                    }
                 }
 
                 PaintPath(context, path, opacity * path.Opacity);
@@ -4016,14 +4043,41 @@ public sealed class CanvasWorkspace : Control
                 break;
 
             case ArtGroup group when group.IsVisible:
-                foreach (LayerItem child in group.Children)
+                // **The group's transform is drawn, not ignored.** It is the same composition the
+                // exporters make: `childToDoc = toDoc.Compose(group.Transform)` as the walk descends,
+                // which is outermost-second and innermost-first because a transform is a local→parent
+                // map. Pushing it here puts every child, its clips, its strokes and the groups inside it
+                // in the frame the file says, without baking anything into the model.
+                AffineTransform childToWorld = toWorld.Compose(group.Transform);
+
+                using (context.PushTransform(GroupTransform(group.ArtboardOffset(), group.Transform)))
                 {
-                    PaintItem(context, child, opacity * group.Opacity);
+                    foreach (LayerItem child in group.Children)
+                    {
+                        PaintItem(context, child, opacity * group.Opacity, childToWorld);
+                    }
                 }
 
                 break;
         }
     }
+
+    /// <summary>
+    /// A group's transform as a matrix the canvas can push.
+    ///
+    /// A group's transform maps its own space into the space it is placed in, and the painters below
+    /// draw geometry at <c>artboard origin + local</c>. The two are joined by conjugating the transform
+    /// with that origin - <c>T(origin) ∘ G ∘ T(−origin)</c> - which is the only difference between this
+    /// and the exporter's bare <c>cm</c>: the exporter writes one page per artboard and never carries the
+    /// origin, so its page frame starts where the canvas's world frame is offset.
+    ///
+    /// Successive pushes nest, so a group inside a group composes the way
+    /// <c>PdfDocumentExporter.PaintItem</c> composes its transforms as it descends.
+    /// </summary>
+    private static Avalonia.Matrix GroupTransform(Vector2D origin, AffineTransform transform)
+        => Avalonia.Matrix.CreateTranslation(-origin.X, -origin.Y)
+           * new Avalonia.Matrix(transform.A, transform.B, transform.C, transform.D, transform.E, transform.F)
+           * Avalonia.Matrix.CreateTranslation(origin.X, origin.Y);
 
     /// <summary>
     /// Draws a hatch fill: its line families, in the object's **stroke** colour, clipped to the object.
