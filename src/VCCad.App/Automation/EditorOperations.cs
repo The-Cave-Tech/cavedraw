@@ -1587,7 +1587,9 @@ public static class EditorOperations
             "color:[r,g,b], width:number, cap?:butt|round|square, join?:miter|round|bevel, miterLimit?, alignment?:center|inside|outside, dash?:number[]",
             (ctx, p) =>
             {
-                ColorRgb color = p.ParseColor("color", ColorRgb.Black);
+                // Only when it was actually given: ParseColor reports its fallback for a parameter that is
+                // absent, so "no colour" would arrive as black and overwrite a path's own colour.
+                ColorRgb? color = p.TryGetProperty("color", out _) ? p.ParseColor("color", ColorRgb.Black) : null;
                 StrokeCap cap = ParseEnum(p.GetString("cap"), StrokeCap.Butt);
                 StrokeJoin join = ParseEnum(p.GetString("join"), StrokeJoin.Miter);
                 StrokeAlignment alignment = ParseEnum(p.GetString("alignment"), StrokeAlignment.Center);
@@ -1601,7 +1603,7 @@ public static class EditorOperations
                     }
                 }
 
-                ctx.Session.ApplyStroke(p.GetDouble("width", 1), cap, join, p.GetDouble("miterLimit", 4), alignment, dash);
+                ctx.Session.ApplyStroke(p.GetDouble("width", 1), cap, join, p.GetDouble("miterLimit", 4), alignment, dash, color);
                 return Summary(ctx);
             });
 

@@ -1635,21 +1635,23 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// <summary>Applies stroke geometry (width/cap/join/miter) to selected paths,
     /// keeping each path's existing colour.</summary>
     public void ApplyStroke(double width, StrokeCap cap, StrokeJoin join, double miterLimit,
-        StrokeAlignment alignment, DashPattern? dash = null)
+        StrokeAlignment alignment, DashPattern? dash = null, ColorRgb? color = null)
     {
         // The new spec becomes the "current style" for objects drawn next, even
         // when nothing is selected (so setting a width before drawing works).
-        ColorRgb baseColor = CurrentStroke.IsVisible ? CurrentStroke.Color : ColorRgb.Black;
+        ColorRgb baseColor = color ?? (CurrentStroke.IsVisible ? CurrentStroke.Color : ColorRgb.Black);
         DashPattern currentDash = dash ?? CurrentStroke.Dash;
         CurrentStroke = new StrokeSpec(true, baseColor, Math.Max(0, width), cap, join,
             Math.Max(1, miterLimit), alignment, currentDash);
 
         var edits = SelectedPaths().Select(p =>
         {
-            ColorRgb color = p.Stroke.IsVisible ? p.Stroke.Color : ColorRgb.Black;
+            // The colour asked for, or the path's own when none was: this keeps each path's colour rather
+            // than forcing black over it.
+            ColorRgb existing = color ?? (p.Stroke.IsVisible ? p.Stroke.Color : ColorRgb.Black);
             DashPattern d = dash ?? p.Stroke.Dash;
             return (IUndoableCommand)new SetStrokeCommand(p,
-                new StrokeSpec(true, color, Math.Max(0, width), cap, join, Math.Max(1, miterLimit), alignment, d),
+                new StrokeSpec(true, existing, Math.Max(0, width), cap, join, Math.Max(1, miterLimit), alignment, d),
                 p.Stroke);
         }).ToList();
         ExecuteIfAny(edits, "Stroke");
