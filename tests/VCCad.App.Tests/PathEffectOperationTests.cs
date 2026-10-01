@@ -54,6 +54,58 @@ public class PathEffectOperationTests
         },
     };
 
+    /// <summary>An eight-segment open path in the file's own units, so the powerstroke's knots translate exactly.</summary>
+    private const string Line = "M 0,0 L 10,0 L 20,0 L 30,0 L 40,0 L 50,0 L 60,0 L 70,0 L 80,0";
+
+    /// <summary>
+    /// Inkscape's own powerstroke element, written the way Inkscape writes one: the effect's name, its id and the
+    /// <c>lpeversion</c> first, then the parameters in the tool's own order. The fixture style - and the element -
+    /// is copied from <c>VCCad.Core.Tests.SvgPathEffectTests</c>, which pins the reader's half of issue #155; this
+    /// file pins the half a driver sees.
+    /// </summary>
+    private const string PowerStrokeEffect =
+        "<inkscape:path-effect effect=\"powerstroke\" id=\"path-effect1\" lpeversion=\"1.4\" " +
+        "is_visible=\"true\" offset_points=\"0,2 | 3,5 | 8,1\" not_jump=\"false\" sort_points=\"true\" " +
+        "interpolator_type=\"Linear\" start_linecap_type=\"zerowidth\" linejoin_type=\"extrp_arc\" " +
+        "miter_limit=\"4\" scale_width=\"1\" end_linecap_type=\"zerowidth\" />";
+
+    /// <summary>
+    /// The other entry in the same library, which no path in the file refers to - a named effect a person has not
+    /// applied yet. It is what <c>CadDocument.ForeignPathEffects</c> was added for (issue #155), and it is the one
+    /// thing in <c>document.metadata</c>'s result a driver could not previously see.
+    /// </summary>
+    private const string UnreferencedEffect =
+        "<inkscape:path-effect effect=\"powerstroke\" id=\"path-effect2\" lpeversion=\"1.4\" " +
+        "is_visible=\"true\" offset_points=\"0,1 | 4,6 | 8,2\" not_jump=\"false\" sort_points=\"true\" " +
+        "interpolator_type=\"Linear\" start_linecap_type=\"zerowidth\" linejoin_type=\"extrp_arc\" " +
+        "miter_limit=\"4\" scale_width=\"1\" end_linecap_type=\"zerowidth\" />";
+
+    /// <summary>
+    /// A file shaped like Inkscape's: the effect library in <c>defs</c>, and the path the first effect was applied
+    /// to carrying the reference. <paramref name="effectElements"/> is what the library holds, so the two cases
+    /// below differ in exactly one thing - whether the unreferenced entry is in the file at all.
+    ///
+    /// The namespace is declared on the root and there is no root-level foreign element, so the file's own
+    /// <c>SvgExtras</c> count is zero. That is worth stating because it makes the two counts in the summary
+    /// distinguishable: a reply that swapped them would fail both assertions rather than pass on a fixture where
+    /// the two happened to be equal.
+    /// </summary>
+    private static string InkscapeFile(string effectElements)
+        => "<svg xmlns=\"http://www.w3.org/2000/svg\" " +
+           "xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" " +
+           "width=\"100\" height=\"100\" viewBox=\"0 0 100 100\">" +
+           "<defs>" + effectElements + "</defs>" +
+           "<path id=\"p1\" style=\"fill:none;stroke:#000000;stroke-width:1\" d=\"" + Line + "\" " +
+           "inkscape:original-d=\"" + Line + "\" inkscape:path-effect=\"#path-effect1\" />" +
+           "</svg>";
+
+    /// <summary>Imports an SVG through the registry and returns the <c>document.metadata</c> reply as JSON.</summary>
+    private static JsonElement MetadataAfterImport(AutomationContext context, string svg)
+    {
+        EditorOperations.Invoke(context, "document.importSvg", Params(new { svgBase64 = Base64(svg) }));
+        return JsonSerializer.SerializeToElement(EditorOperations.Invoke(context, "document.metadata", default));
+    }
+
     /// <summary>
     /// **The stroke the operation writes is the effect's own widths at the effect's own positions.** The knots are
     /// stored as a segment index, so on this eight-segment path they sit at 0, 0.375 and 1 - and the widths are
@@ -300,5 +352,57 @@ public class PathEffectOperationTests
         Assert.Empty(result.GetProperty("livePathEffects").EnumerateArray());
         string[] warnings = result.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()!).ToArray();
         Assert.DoesNotContain(warnings, warning => warning.Contains("path-effect1", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// **The unreferenced effect is not only kept, it is counted where a driver can read it.**
+    ///
+    /// The document model has held it since issue #155, and <c>document.metadata</c> is the only operation that
+    /// reports what the file carried and the model has no meaning for - so before this count was in its reply, the
+    /// member kept a person's library and an API driver had no way to learn it was there. A capability the person
+    /// has and the driver does not is the design defect the registry exists to prevent, and this is the assertion
+    /// that catches it coming back.
+    ///
+    /// The two counts are asserted separately and they differ, which is deliberate: one unreferenced effect and no
+    /// root-level extra, so a reply that reported one member's value in the other's field fails here rather than
+    /// passing by coincidence.
+    /// </summary>
+    [Fact]
+    public void MetadataReportsTheUnreferencedPathEffectCount()
+    {
+        (AutomationContext context, _) = Host();
+
+        JsonElement metadata = MetadataAfterImport(
+            context, InkscapeFile(PowerStrokeEffect + UnreferencedEffect));
+
+        // The referenced half travels on the path that points at it, so exactly the other one is kept.
+        Assert.Equal(1, metadata.GetProperty("foreignPathEffects").GetInt32());
+
+        // The file's own truth: this fixture declares its namespace on the root and carries no root-level foreign
+        // element, so there is nothing in the extras list beside the effect.
+        Assert.Equal(0, metadata.GetProperty("extras").GetInt32());
+    }
+
+    /// <summary>
+    /// **A library where everything is referred to reports nothing kept**, which is what keeps the count usable:
+    /// if a referenced effect were also counted, a driver would be told to look for content the file does not have
+    /// and would find none.
+    ///
+    /// The path is asserted to carry the translated profile as well, so the zero means "there was nothing left
+    /// over" rather than "the import read no effect at all" - a reader that dropped the whole library would also
+    /// report a cheerful zero.
+    /// </summary>
+    [Fact]
+    public void MetadataReportsNoUnreferencedPathEffectWhenEveryEffectIsReferenced()
+    {
+        (AutomationContext context, _) = Host();
+
+        JsonElement metadata = MetadataAfterImport(context, InkscapeFile(PowerStrokeEffect));
+
+        Assert.Equal(0, metadata.GetProperty("foreignPathEffects").GetInt32());
+        Assert.Equal(0, metadata.GetProperty("extras").GetInt32());
+
+        Assert.True(context.Document.AllPaths().Single().Stroke.HasWidthProfile,
+            "the referenced effect was translated, so nothing left over is not nothing read");
     }
 }

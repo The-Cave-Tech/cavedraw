@@ -2216,6 +2216,7 @@ public static class EditorOperations
             (ctx, _) => new
             {
                 extras = ctx.Document.SvgExtras.Count,
+                foreignPathEffects = ctx.Document.ForeignPathEffects.Count,
                 namespaces = ctx.Document.SvgNamespaces
                     .Select(entry => new { prefix = entry.Key, uri = entry.Value })
                     .ToArray(),
