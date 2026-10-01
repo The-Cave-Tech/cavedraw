@@ -1889,6 +1889,23 @@ public static class EditorOperations
                 return new { mode = mode.ToSvgName(), items = items.Count };
             });
 
+        Add("document.exportSupport",
+            "What the PDF export carries and what it does not, from the **one** list the exporter and any warning " +
+            "are drawn from. A feature that is not written exports as the artwork without it: a legal file, and not " +
+            "the picture the author drew - which is why it is worth saying before somebody opens the export and " +
+            "finds the effect missing.",
+            "",
+            (ctx, _) => new
+            {
+                carries = PdfExportSupport.All.Select(feature => new
+                {
+                    feature = feature.Name,
+                    written = feature.Written,
+                    note = feature.Note,
+                }).ToArray(),
+                lossy = PdfExportSupport.Lossy.Select(feature => feature.Name).ToArray(),
+            });
+
         Add("document.metadata",
             "The namespaced data the file carried that the model has no meaning for: the root-level elements kept " +
             "verbatim (Inkscape's named view, the RDF), the namespace prefixes declared, and, for the selection, " +
