@@ -1756,6 +1756,86 @@ public sealed class DocumentSession : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// Sets one parameter of one effect, by the name the **registry** declares it under.
+    ///
+    /// The name being the registry's is what lets a panel build its editors from the declaration rather than from a
+    /// switch: the panel asks what an effect takes, shows a control per parameter, and calls this with the name it
+    /// was given. A name the effect does not take is refused rather than guessed at - the alternative is a typo
+    /// silently setting something else.
+    ///
+    /// Colours are not settable here: they are not a number, and a signature that took a string would be guessing
+    /// at what kind of value it was handed. `tint` is on the list of things this does not yet cover.
+    /// </summary>
+    public int SetEffectParameter(bool raster, int index, string name, double value)
+    {
+        int changed = 0;
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            var stack = path.Strokes.ToList();
+            for (int i = 0; i < stack.Count; i++)
+            {
+                if (raster)
+                {
+                    if (stack[i].AllRasterEffects is not { } effects || index < 0 || index >= effects.Count)
+                    {
+                        continue;
+                    }
+
+                    RasterEffectSpec effect = effects[index];
+                    RasterEffectSpec? updated = name switch
+                    {
+                        "radius" => effect with { Radius = value },
+                        "offsetX" => effect with { OffsetX = value },
+                        "offsetY" => effect with { OffsetY = value },
+                        "opacity" => effect with { Opacity = Math.Clamp(value, 0.0, 1.0) },
+                        _ => null,
+                    };
+
+                    if (updated is null)
+                    {
+                        continue;
+                    }
+
+                    var rebuilt = new List<RasterEffectSpec>(effects);
+                    rebuilt[index] = updated;
+                    stack[i] = stack[i] with { RasterEffects = new RasterEffectStack(rebuilt) };
+                }
+                else
+                {
+                    var effects = stack[i].AllEffects.ToList();
+                    if (index < 0 || index >= effects.Count)
+                    {
+                        continue;
+                    }
+
+                    OutlineEffectSpec effect = effects[index];
+                    OutlineEffectSpec? updated = name switch
+                    {
+                        "size" => effect with { Size = value },
+                        "detail" => effect with { Detail = Math.Max(1.0, value) },
+                        "seed" => effect with { Seed = (int)value },
+                        _ => null,
+                    };
+
+                    if (updated is null)
+                    {
+                        continue;
+                    }
+
+                    effects[index] = updated;
+                    stack[i] = stack[i] with { Effects = new EffectStack(effects) };
+                }
+
+                Execute(new SetStrokesCommand(path, stack, "Set effect parameter"));
+                changed++;
+                break;
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>
     /// Removes one **outline** effect from every selected path's strokes, counted from the start of the effect list.
     ///
     /// The two families are separate lists, so the caller says which one rather than this searching both: an index

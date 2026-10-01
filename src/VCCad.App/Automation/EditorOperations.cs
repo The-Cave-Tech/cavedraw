@@ -2299,6 +2299,29 @@ public static class EditorOperations
                 };
             });
 
+        Add("style.setEffectParameter",
+            "Set one parameter of one effect, by the name the registry declares it under. raster says which list " +
+            "the effect is in; index counts from the start of it; name is one of the parameters " +
+            "`style.effectParameters` reports for that kind. A name the effect does not take is refused, because " +
+            "the alternative is a typo quietly setting something else. One undo step per path.",
+            "name:string, value:number, index:number, raster?:bool",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name")
+                    ?? throw new EditorOperationException("Parameter 'name' is required.");
+                int index = (int)p.GetLong("index", 0);
+                double value = p.GetDouble("value", 0.0);
+                bool raster = p.GetBool("raster", false);
+
+                return new
+                {
+                    name,
+                    index,
+                    raster,
+                    changed = ctx.Session.SetEffectParameter(raster, index, name, value),
+                };
+            });
+
         Add("style.removeStrokeEffect",
             "Remove one outline effect from the selected paths' strokes. index counts from the start of the effect " +
             "list, which is the order they apply in. One undo step per path.",
