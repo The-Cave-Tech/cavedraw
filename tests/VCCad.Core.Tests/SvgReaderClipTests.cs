@@ -425,6 +425,37 @@ public class SvgReaderClipTests
             w.Contains("clip-path", StringComparison.Ordinal) && w.Contains("missing", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// **A `clipPath` this reader cannot read an outline out of is reported, not silently empty.**
+    ///
+    /// `use` inside a `clipPath` is a common way to reuse an outline, and it is the one child this reader does not
+    /// turn into geometry. Reading nothing from it would leave a crop that is present on the model and cuts
+    /// everything away - the worst of both answers - so the element is reported by name and the clip is left off
+    /// the item entirely, with the content drawn whole.
+    ///
+    /// **Before:** nothing was read and nothing was said.
+    /// </summary>
+    [Fact]
+    public void AClipPathWhoseOutlineCannotBeReadIsReported()
+    {
+        SvgImportResult result = SvgReader.Read(
+            "<svg width=\"100\" height=\"100\">" +
+            "<defs><rect id=\"r\" width=\"10\" height=\"10\"/>" +
+            "<clipPath id=\"c\"><use href=\"#r\"/></clipPath></defs>" +
+            "<rect width=\"100\" height=\"100\" clip-path=\"url(#c)\"/></svg>");
+
+        PathItem rect = Assert.Single(result.Document.AllPaths());
+
+        Assert.Contains(result.Warnings, w =>
+            w.Contains("clip-path", StringComparison.Ordinal) &&
+            w.Contains("url(#c)", StringComparison.Ordinal) &&
+            w.Contains("use", StringComparison.Ordinal));
+
+        // No clip, rather than an empty one that would hide everything.
+        Assert.Empty(rect.Clips);
+        Assert.False(rect.IsClipped);
+    }
+
     // ---------------------------------------------------------------- the quiet cases
 
     /// <summary>

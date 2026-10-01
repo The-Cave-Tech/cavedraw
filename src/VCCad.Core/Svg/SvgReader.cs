@@ -1297,8 +1297,8 @@ public static partial class SvgReader
                 or "path"))
             {
                 unread.Add(
-                    $"a <clipPath> called '{id}' holds a <{child.Name.LocalName}> that this reader does not read " +
-                    "as an outline");
+                    $"an element states clip-path=\"{value}\", and the <clipPath> called '{id}' holds a " +
+                    $"<{child.Name.LocalName}> that this reader does not read as an outline");
                 continue;
             }
 
@@ -1331,7 +1331,9 @@ public static partial class SvgReader
 
         if (clip.IsEmpty)
         {
-            unread.Add($"the <clipPath> called '{id}' holds no outline this reader can read");
+            unread.Add(
+                $"an element states clip-path=\"{value}\", and the <clipPath> called '{id}' holds no outline this " +
+                "reader can read");
             return new ClipPath(null, unread);
         }
 
