@@ -3829,7 +3829,6 @@ public sealed class CanvasWorkspace : Control
             : 0.0;
 
     /// <summary>
-    /// <summary>
     /// The filter graphs for this path's raster effects, in order, or empty when it has none.
     ///
     /// A raster effect belongs to a **stroke**, and this renders the path as one picture - so the first stroke that
@@ -3842,7 +3841,7 @@ public sealed class CanvasWorkspace : Control
         // geometry is kept in its artboard's own coordinates and drawn at the artboard's offset, so a region built
         // from the stored box lands beside the line on every page that is not at the document origin - the stroke is
         // then rasterised outside its own bitmap, and the painter that reports "handled" drops it from the page.
-        Geometry.Rect2D bounds = path.BoundingBox(); // REVERT-CHECK: temporarily local again
+        Geometry.Rect2D bounds = path.WorldBounds();
 
         foreach (StrokeSpec stroke in path.Strokes)
         {

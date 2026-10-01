@@ -82,10 +82,14 @@ internal static class FilterRenderer
         var target = new RenderTargetBitmap(new PixelSize(width, height), new Vector(96, 96));
         using (DrawingContext context = target.CreateDrawingContext())
         {
-            // The offscreen bitmap's own pixel space, with the canvas world transform shifted so the region's
-            // top-left pixel is its origin. Avalonia composes left to right, so the world transform is applied
-            // first and the shift second.
-            using (context.PushTransform(world * Matrix.CreateTranslation(-regionX, -regionY)))
+            // The bitmap is the artwork on **its own pixel grid**, so the canvas transform's scale is applied and
+            // its translation is not. The region is an absolute box in model units, so a transform that carried the
+            // pan would shift the artwork inside a bitmap that the pan already positions when it is drawn, and the
+            // effect then lands a whole pan away from the line it belongs to. The pan is therefore dropped here and
+            // the region's own model rectangle is subtracted instead.
+            Matrix grid = new(world.M11, world.M12, world.M21, world.M22, 0, 0);
+            using (context.PushTransform(
+                Matrix.CreateTranslation(-(regionX / scale), -(regionY / scale)) * grid))
             {
                 paint(context);
             }
@@ -102,9 +106,11 @@ internal static class FilterRenderer
         }
 
         WriteableBitmap bitmap = ToBitmap(filtered);
+        // The region in model units, which is where the caller draws it: the canvas's own transform is what puts it
+        // on the page, so subtracting the pan here would apply it twice.
         var destination = new Rect(
-            (regionX / scale) - (world.M31 / scale),
-            (regionY / scale) - (world.M32 / scale),
+            regionX / scale,
+            regionY / scale,
             width / scale,
             height / scale);
 

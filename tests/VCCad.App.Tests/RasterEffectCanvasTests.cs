@@ -27,6 +27,12 @@ public class RasterEffectCanvasTests
 {
     private static (Window Window, EditorViewModel ViewModel) Host()
     {
+        (Window window, _, EditorViewModel viewModel) = HostWithWorkspace();
+        return (window, viewModel);
+    }
+
+    private static (Window Window, CanvasWorkspace Workspace, EditorViewModel ViewModel) HostWithWorkspace()
+    {
         var viewModel = new EditorViewModel();
         var workspace = new CanvasWorkspace();
         workspace.AttachEditor(viewModel);
@@ -34,7 +40,7 @@ public class RasterEffectCanvasTests
         var window = new Window { Width = 600, Height = 500, Content = workspace };
         window.Show();
         Settle();
-        return (window, viewModel);
+        return (window, workspace, viewModel);
     }
 
     private static void Settle()
@@ -78,28 +84,14 @@ public class RasterEffectCanvasTests
     /// <summary>What the canvas looks like: how many pixels are dark, how many are part-dark, and the darkest.</summary>
     private static (int Dark, int Mid, double Darkest) Measure(Window window)
     {
-        var target = new RenderTargetBitmap(new PixelSize(600, 500), new Vector(96, 96));
-        target.Render(window);
-
-        const int Width = 600, Height = 500;
-        int stride = Width * 4;
-        byte[] pixels = new byte[stride * Height];
-        System.Runtime.InteropServices.GCHandle handle = System.Runtime.InteropServices.GCHandle.Alloc(
-            pixels, System.Runtime.InteropServices.GCHandleType.Pinned);
-        try
-        {
-            target.CopyPixels(new PixelRect(0, 0, Width, Height), handle.AddrOfPinnedObject(), pixels.Length, stride);
-        }
-        finally
-        {
-            handle.Free();
-        }
+        byte[] pixels = Pixels(window);
 
         int dark = 0, mid = 0;
         double darkest = 0;
         for (int i = 0; i < pixels.Length; i += 4)
         {
-            // Premultiplied BGRA, so black is zero on every channel and the white page is full scale.
+            // Premultiplied BGRA, so a black pixel is zero on every channel and the white page is full scale: the
+            // luminance below is "how much light comes out", which is what a blur redistributes.
             double luminance = ((pixels[i] / 255.0) + (pixels[i + 1] / 255.0) + (pixels[i + 2] / 255.0)) / 3.0;
             if (luminance < 0.5)
             {
@@ -175,11 +167,15 @@ public class RasterEffectCanvasTests
     /// region measured from the stored box lands beside the artwork whenever the page sits anywhere else - which is
     /// every page of a multi-page document. The symptom is not a soft edge in the wrong place: the stroke is drawn
     /// outside its own bitmap, and the painter that returns "handled" leaves the line off the page entirely.
+    ///
+    /// The halo is read **where it has to be** - just above and just below the line, in window coordinates taken from
+    /// the canvas itself - so an effect that is drawn but displaced by the canvas pan fails here too. Counting red
+    /// pixels anywhere does not catch that, and a displaced effect is still a wrong picture.
     /// </summary>
     [AvaloniaFact]
     public void ARasterEffectDrawsOnAPageAwayFromTheOrigin()
     {
-        (Window window, EditorViewModel viewModel) = Host();
+        (Window window, CanvasWorkspace workspace, EditorViewModel viewModel) = HostWithWorkspace();
         Artboard board = viewModel.Document.Artboards[0];
         board.X = 400;
         board.Y = 300;
@@ -187,17 +183,23 @@ public class RasterEffectCanvasTests
 
         PathItem rect = StrokedRectangle(viewModel, x: 60, y: 60, width: 80, height: 60);
 
-        (int darkBefore, _, double darkestBefore) = Measure(window);
-        Assert.True(darkBefore > 100, $"the outline should have drawn: {darkBefore} dark pixels");
-        Assert.Equal(1.0, darkestBefore, 2);
+        // The line's world box: the rectangle is stored in the artboard's coordinates, so the page's origin is added.
+        Assert.Equal(460.0, rect.WorldBounds().X, 1);
+        Assert.Equal(360.0, rect.WorldBounds().Y, 1);
 
-        SetEffects(rect, RasterEffectSpec.Blur(6));
+        byte[] sharp = Pixels(window);
 
-        (int darkAfter, _, double darkestAfter) = Measure(window);
-        Assert.True(darkAfter > 100,
-            $"the stroke should still be on the page away from the origin: {darkBefore} dark before, {darkAfter} after");
-        Assert.True(darkestAfter < darkestBefore - 0.05,
-            $"the blur should soften it away from the origin too: {darkestBefore} before, {darkestAfter} after");
+        SetEffects(rect, RasterEffectSpec.Glow(RasterEffectKind.OuterGlow, 8, new ColorRgb(1, 0, 0)));
+        byte[] lit = Pixels(window);
+
+        int rise = Reddish(lit, 40) - Reddish(sharp, 40);
+        Assert.True(rise > 100, $"the glow should land on the page: the red count rose by {rise}");
+
+        // Five points beyond the top and the bottom edge, midway along: inside the halo's reach, outside the line.
+        Assert.True(IsRed(lit, workspace.ModelToWindow(new Point2D(500, 355)), 25),
+            "the halo should reach above the line");
+        Assert.True(IsRed(lit, workspace.ModelToWindow(new Point2D(500, 425)), 25),
+            "the halo should reach below the line");
     }
 
     /// <summary>
@@ -216,11 +218,11 @@ public class RasterEffectCanvasTests
 
         // The canvas chrome is not red, but it is not all grey either, so the halo is read as a rise rather than
         // from zero.
-        int bare = Reddish(window, 40);
+        int bare = Reddish(Pixels(window), 40);
 
         SetEffects(rect, RasterEffectSpec.Glow(RasterEffectKind.OuterGlow, 8, new ColorRgb(1, 0, 0)));
 
-        int halo = Reddish(window, 40);
+        int halo = Reddish(Pixels(window), 40);
         Assert.True(halo > bare + 200,
             $"an outer glow should lay down a red halo: {bare} reddish pixels before, {halo} after");
 
@@ -230,9 +232,8 @@ public class RasterEffectCanvasTests
         Assert.Equal(1.0, darkestAfter, 2);
     }
 
-    /// <summary>How many pixels carry the red tint - premultiplied BGRA with an opaque page, so red ahead of green
-    /// by <paramref name="margin"/> is ink nothing grey could have put there.</summary>
-    private static int Reddish(Window window, int margin)
+    /// <summary>The window as premultiplied BGRA, which is what the canvas actually put on the screen.</summary>
+    private static byte[] Pixels(Window window)
     {
         var target = new RenderTargetBitmap(new PixelSize(600, 500), new Vector(96, 96));
         target.Render(window);
@@ -251,6 +252,13 @@ public class RasterEffectCanvasTests
             handle.Free();
         }
 
+        return pixels;
+    }
+
+    /// <summary>How many pixels carry the red tint - premultiplied BGRA with an opaque page, so red ahead of green
+    /// by <paramref name="margin"/> is ink nothing grey could have put there.</summary>
+    private static int Reddish(byte[] pixels, int margin)
+    {
         int count = 0;
         for (int i = 0; i < pixels.Length; i += 4)
         {
@@ -262,5 +270,19 @@ public class RasterEffectCanvasTests
         }
 
         return count;
+    }
+
+    /// <summary>Whether one window point carries the red tint, read from an already-captured frame.</summary>
+    private static bool IsRed(byte[] pixels, Point point, int margin)
+    {
+        int x = (int)Math.Round(point.X);
+        int y = (int)Math.Round(point.Y);
+        if (x < 0 || y < 0 || x >= 600 || y >= 500)
+        {
+            return false;
+        }
+
+        int i = ((y * 600) + x) * 4;
+        return pixels[i + 2] - pixels[i + 1] > margin;
     }
 }
