@@ -257,6 +257,25 @@ public static class SvgWriter
                     element.Add(new XAttribute("filterUnits", "userSpaceOnUse"));
                 }
 
+                // `primitiveUnits` is a different question from `filterUnits` - what a step's own lengths mean
+                // rather than where the region is - so it is written from its own member, and only when it is not
+                // SVG's default either.
+                if (filter.PrimitiveUnitsObjectBoundingBox)
+                {
+                    element.Add(new XAttribute("primitiveUnits", "objectBoundingBox"));
+                }
+
+                // The resolution the filter is sampled at, which is part of the picture. One number means both
+                // axes, which is how a file that gives one is written back.
+                if (filter.HasFilterResolution)
+                {
+                    element.Add(new XAttribute(
+                        "filterRes",
+                        filter.FilterResolutionX == filter.FilterResolutionY
+                            ? Number(filter.FilterResolutionX!.Value)
+                            : $"{Number(filter.FilterResolutionX!.Value)} {Number(filter.FilterResolutionY!.Value)}"));
+                }
+
                 foreach ((string name, double value, double expected) in new[]
                          {
                              ("x", filter.X, -0.1),

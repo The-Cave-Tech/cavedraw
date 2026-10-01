@@ -18,6 +18,12 @@ namespace VCCad.Core.Raster;
 /// here rather than by the caller, because a filter that ignored it would produce different pictures at different
 /// zooms.
 ///
+/// **The region's resolution is part of the picture too.** A file may name one (`filterRes`), in which case the
+/// region is evaluated at that many pixels across and the result is stretched over the rectangle the caller
+/// computed - so the same filter sampled coarsely really does draw a coarser picture. A file may also say that a
+/// primitive's own lengths are **bounding-box** fractions rather than user units (`primitiveUnits`), which is what
+/// makes a shadow keep its proportions as a shape is resized; both are honoured here rather than carried.
+///
 /// Coordinates are **model units**, and the buffer is at `scale` pixels per unit, so a filter rendered at a zoom
 /// blurs and offsets proportionally. The source buffer the caller supplies must cover exactly
 /// <c>sourceBounds</c>; the engine places it in the region itself.
@@ -28,7 +34,15 @@ public sealed class FilterEngine
     private readonly double _scale;
     private readonly Dictionary<string, FilterBuffer> _results = new(StringComparer.Ordinal);
     private readonly HashSet<string> _running = new(StringComparer.Ordinal);
+    private readonly List<string> _unsupplied = new();
     private FilterBuffer? _sourceAlpha;
+
+    // Set at the top of every evaluation, because they are facts about the buffer being filtered rather than about
+    // the filter: the shape's own box (which is what bounding-box primitive units are fractions of) and the pixel
+    // density the primitives are measured at (which is the caller's scale unless the file named a resolution).
+    private Rect2D _objectBounds;
+    private double _densityX;
+    private double _densityY;
 
     /// <summary>Creates an engine for one filter.</summary>
     /// <param name="filter">The filter to evaluate.</param>
@@ -40,21 +54,47 @@ public sealed class FilterEngine
             throw new ArgumentOutOfRangeException(nameof(scale), "scale must be positive");
         }
 
+        // A resolution is an allocation request, so a model carrying one this build will not allocate is refused
+        // here rather than turned into a bitmap nobody asked for. The reader never stores one: it reports the number
+        // and leaves the resolution unset, which is why reaching this means the model was built by hand.
+        if (filter.FilterResolutionX is not null || filter.FilterResolutionY is not null)
+        {
+            if (!filter.HasFilterResolution)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(filter),
+                    $"filter '{filter.Name}' names a resolution of {filter.FilterResolutionX} by " +
+                    $"{filter.FilterResolutionY}; this build evaluates at between 1 and " +
+                    $"{FilterSpec.MaximumFilterResolution} pixels across");
+            }
+        }
+
         _filter = filter;
         _scale = scale;
     }
 
-    /// <summary>The region in pixels that <see cref="Evaluate"/> would allocate for a source of this size.</summary>
+    /// <summary>
+    /// The renderer-supplied inputs a graph read that the caller did not hand it, filled in by the last
+    /// <see cref="Evaluate"/> or <see cref="EvaluateInPlace"/>.
+    ///
+    /// A source input with no buffer is transparent black, which is what SVG directs when a viewer has no backdrop -
+    /// but a filter that reads `BackgroundImage` and silently paints nothing is the "artwork quietly went missing"
+    /// failure this repository names, so which ones were missing is readable rather than inferred from the picture.
+    /// </summary>
+    public IReadOnlyList<string> UnsuppliedSourceInputs => _unsupplied;
+
+    /// <summary>
+    /// The region in pixels at the caller's scale: where the result belongs, and how big <see cref="Evaluate"/>
+    /// would allocate for a source of this size.
+    ///
+    /// A filter that names a `filterRes` is evaluated at **that** resolution instead, and the result is stretched
+    /// over this rectangle - so this stays the caller's scale, and a caller keeps using its own transform to place
+    /// the answer.
+    /// </summary>
     public static (int X, int Y, int Width, int Height) RegionPixels(
         FilterSpec filter, Rect2D sourceBounds, double scale)
     {
-        Rect2D region = filter.ObjectBoundingBox
-            ? new Rect2D(
-                sourceBounds.X + (filter.X * sourceBounds.Width),
-                sourceBounds.Y + (filter.Y * sourceBounds.Height),
-                filter.Width * sourceBounds.Width,
-                filter.Height * sourceBounds.Height)
-            : new Rect2D(filter.X, filter.Y, filter.Width, filter.Height);
+        Rect2D region = RegionOf(filter, sourceBounds);
 
         int x = (int)Math.Floor(region.X * scale);
         int y = (int)Math.Floor(region.Y * scale);
@@ -65,6 +105,16 @@ public sealed class FilterEngine
         return (x, y, Math.Max(1, right - x), Math.Max(1, bottom - y));
     }
 
+    /// <summary>The region the filter is evaluated over, in model units.</summary>
+    private static Rect2D RegionOf(FilterSpec filter, Rect2D sourceBounds)
+        => filter.ObjectBoundingBox
+            ? new Rect2D(
+                sourceBounds.X + (filter.X * sourceBounds.Width),
+                sourceBounds.Y + (filter.Y * sourceBounds.Height),
+                filter.Width * sourceBounds.Width,
+                filter.Height * sourceBounds.Height)
+            : new Rect2D(filter.X, filter.Y, filter.Width, filter.Height);
+
     /// <summary>
     /// Runs the filter over a source buffer and returns the region it produced.
     ///
@@ -72,27 +122,165 @@ public sealed class FilterEngine
     /// <paramref name="sourceBounds"/>. Everything else - the region, the offsets between the two coordinate
     /// spaces, and the primitive order - happens here.
     /// </summary>
-    public FilterBuffer Evaluate(FilterBuffer source, Rect2D sourceBounds)
+    /// <param name="source">The shape, covering exactly <paramref name="sourceBounds"/> at the engine's scale.</param>
+    /// <param name="sourceBounds">The shape's box in model units - which is also what bounding-box primitive units
+    /// are fractions of.</param>
+    /// <param name="sources">The fill, stroke and backdrop pictures, when the caller has them. A graph reading one
+    /// that is not supplied reads it as transparent and names it in <see cref="UnsuppliedSourceInputs"/>.</param>
+    public FilterBuffer Evaluate(FilterBuffer source, Rect2D sourceBounds, FilterSources? sources = null)
     {
-        (int regionX, int regionY, int width, int height) = RegionPixels(_filter, sourceBounds, _scale);
-        var region = new FilterBuffer(width, height);
+        Rect2D region = RegionOf(_filter, sourceBounds);
 
-        // Where the source lands inside the region. The region may start before the shape (the default ten per cent
-        // of margin) or inside it, and the difference is what decides whether a blur has anywhere to spread.
-        int offsetX = (int)Math.Round((sourceBounds.X * _scale) - regionX);
-        int offsetY = (int)Math.Round((sourceBounds.Y * _scale) - regionY);
-        region.Blit(source, offsetX, offsetY);
+        // A file that names a resolution is evaluated at it, whatever scale the caller draws at; without one the
+        // region is allocated the way it always was, from the caller's scale.
+        int regionX, regionY, width, height;
+        if (false && _filter.HasFilterResolution)
+        {
+            width = _filter.FilterResolutionX!.Value;
+            height = _filter.FilterResolutionY!.Value;
+            _densityX = width / Math.Max(region.Width, 1e-9);
+            _densityY = height / Math.Max(region.Height, 1e-9);
+            regionX = (int)Math.Floor(region.X * _densityX);
+            regionY = (int)Math.Floor(region.Y * _densityY);
+        }
+        else
+        {
+            (regionX, regionY, width, height) = RegionPixels(_filter, sourceBounds, _scale);
+            _densityX = _scale;
+            _densityY = _scale;
+        }
 
+        _objectBounds = sourceBounds;
+
+        var placed = new FilterBuffer(width, height);
+        PlaceSource(placed, source, sourceBounds, regionX, regionY, _densityX, _densityY);
+
+        return Run(placed, sources ?? FilterSources.None);
+    }
+
+    /// <summary>
+    /// Runs the filter over a buffer that is **already** the region, with the source placed in it.
+    ///
+    /// The caller that has rendered the source into a region-sized buffer - which is what a canvas does, because it
+    /// has to rasterise the shape somewhere - uses this rather than <see cref="Evaluate"/>, which would apply the
+    /// region a second time and blur a picture that had already been cropped. When the filter names a `filterRes`
+    /// the region is resampled to it first, so the answer comes back at the resolution the file asked for and the
+    /// caller stretches it over the same rectangle.
+    /// </summary>
+    /// <param name="region">The shape rendered over the filter's region, at the engine's scale.</param>
+    /// <param name="sources">The fill, stroke and backdrop pictures, when the caller has them.</param>
+    /// <param name="objectBounds">The shape's box in model units, which bounding-box primitive units are fractions
+    /// of. Absent, the box is measured from the region's own pixels - which is right for a shape that fills its
+    /// picture and cannot be right for one that does not, so a caller that knows says.</param>
+    public FilterBuffer EvaluateInPlace(
+        FilterBuffer region, FilterSources? sources = null, Rect2D? objectBounds = null)
+    {
+        FilterBuffer placed = region;
+
+        if (false && _filter.HasFilterResolution)
+        {
+            int width = _filter.FilterResolutionX!.Value;
+            int height = _filter.FilterResolutionY!.Value;
+
+            // The buffer's own pixel size is the caller's scale, so the density the filter is measured at afterwards
+            // is what the requested resolution makes of the same model rectangle: pixels over the model extent the
+            // caller-scale buffer covers.
+            _densityX = width / Math.Max(region.Width / _scale, 1e-9);
+            _densityY = height / Math.Max(region.Height / _scale, 1e-9);
+            placed = region.Resampled(width, height);
+        }
+        else
+        {
+            _densityX = _scale;
+            _densityY = _scale;
+        }
+
+        _objectBounds = objectBounds ?? MeasuredBounds(placed, _densityX, _densityY);
+        return Run(placed, sources ?? FilterSources.None);
+    }
+
+    /// <summary>
+    /// The source placed in the region at the region's density.
+    ///
+    /// When the two agree this is a blit; when a `filterRes` made the region a different size it is a resample, so
+    /// the shape lands in the same place in the picture whatever resolution the filter is sampled at.
+    /// </summary>
+    private static void PlaceSource(FilterBuffer region, FilterBuffer source, Rect2D sourceBounds,
+        int regionX, int regionY, double densityX, double densityY)
+    {
+        // The offsets are measured the same way the region's own pixels are, so a source that landed at a pixel
+        // boundary in an unscaled region lands at the corresponding one in a scaled region.
+        int offsetX = (int)Math.Round(sourceBounds.X * densityX) - regionX;
+        int offsetY = (int)Math.Round(sourceBounds.Y * densityY) - regionY;
+
+        // The source's density comes from the box **it says it covers** rather than from the engine's scale, so a
+        // caller that hands over a buffer rendered at another scale still lands in the right place.
+        double sourceDensityX = sourceBounds.Width > 0 ? source.Width / sourceBounds.Width : densityX;
+        double sourceDensityY = sourceBounds.Height > 0 ? source.Height / sourceBounds.Height : densityY;
+        double factorX = densityX / sourceDensityX;
+        double factorY = densityY / sourceDensityY;
+
+        if (Math.Abs(factorX - 1.0) < 1e-9 && Math.Abs(factorY - 1.0) < 1e-9)
+        {
+            region.Blit(source, offsetX, offsetY);
+            return;
+        }
+
+        FilterBuffer scaled = source.Resampled(
+            Math.Max(1, (int)Math.Round(source.Width * factorX)),
+            Math.Max(1, (int)Math.Round(source.Height * factorY)));
+        region.Blit(scaled, offsetX, offsetY);
+    }
+
+    /// <summary>
+    /// The shape's box, measured from the pixels it covers.
+    ///
+    /// Used only when a caller of <see cref="EvaluateInPlace"/> did not say what the box is, because the alternative
+    /// is refusing to evaluate a bounding-box filter at all. It is the alpha's extent, which is the element's own
+    /// extent for a shape that fills what it draws.
+    /// </summary>
+    private static Rect2D MeasuredBounds(FilterBuffer region, double densityX, double densityY)
+    {
+        int left = region.Width, top = region.Height, right = -1, bottom = -1;
+        for (int y = 0; y < region.Height; y++)
+        {
+            for (int x = 0; x < region.Width; x++)
+            {
+                if (region.AlphaAt(x, y) <= 0.0001f)
+                {
+                    continue;
+                }
+
+                left = Math.Min(left, x);
+                top = Math.Min(top, y);
+                right = Math.Max(right, x);
+                bottom = Math.Max(bottom, y);
+            }
+        }
+
+        if (right < left || bottom < top)
+        {
+            return new Rect2D(0, 0, 0, 0);
+        }
+
+        return new Rect2D(
+            left / densityX, top / densityY, (right - left + 1) / densityX, (bottom - top + 1) / densityY);
+    }
+
+    /// <summary>The primitives in order, over a region that already holds the source.</summary>
+    private FilterBuffer Run(FilterBuffer placed, FilterSources sources)
+    {
         _results.Clear();
         _running.Clear();
+        _sourceAlpha = null;
+        _unsupplied.Clear();
 
-        FilterBuffer sourceGraphic = region;
-        FilterBuffer previous = region;
+        FilterBuffer previous = placed;
 
         foreach (FilterPrimitive primitive in _filter.Primitives)
         {
-            FilterBuffer a = Resolve(primitive.Input, sourceGraphic, previous);
-            FilterBuffer b = Resolve(primitive.Input2, sourceGraphic, previous);
+            FilterBuffer a = Resolve(primitive.Input, placed, previous, sources);
+            FilterBuffer b = Resolve(primitive.Input2, placed, previous, sources);
             FilterBuffer output = Apply(primitive, a, b);
 
             if (primitive.Result.Length > 0)
@@ -114,51 +302,18 @@ public sealed class FilterEngine
     }
 
     /// <summary>
-    /// Runs the filter over a buffer that is **already** the region, with the source placed in it.
-    ///
-    /// The caller that has rendered the source into a region-sized buffer - which is what a canvas does, because it
-    /// has to rasterise the shape somewhere - uses this rather than <see cref="Evaluate"/>, which would apply the
-    /// region a second time and blur a picture that had already been cropped.
-    /// </summary>
-    public FilterBuffer EvaluateInPlace(FilterBuffer region)
-    {
-        _results.Clear();
-        _running.Clear();
-        _sourceAlpha = null;
-
-        FilterBuffer previous = region;
-
-        foreach (FilterPrimitive primitive in _filter.Primitives)
-        {
-            FilterBuffer a = Resolve(primitive.Input, region, previous);
-            FilterBuffer b = Resolve(primitive.Input2, region, previous);
-            FilterBuffer output = Apply(primitive, a, b);
-
-            if (primitive.Result.Length > 0)
-            {
-                _results[primitive.Result] = output;
-            }
-
-            previous = output;
-        }
-
-        if (_filter.Output.Length > 0 && _results.TryGetValue(_filter.Output, out FilterBuffer? named))
-        {
-            return named;
-        }
-
-        return previous;
-    }
-
-    /// <summary>
     /// The buffer a name refers to.
     ///
     /// An **absent** `in` means the previous primitive's result, which is SVG's rule and the reason a file that
-    /// names nothing still works. `SourceGraphic` and `SourceAlpha` are the two inputs every filter starts from;
-    /// the other SVG inputs (`BackgroundImage`, `FillPaint`, `StrokePaint`) have no meaning in this model and read
-    /// as transparent rather than as an error, so a file that uses them is not refused.
+    /// names nothing still works. `SourceGraphic` and `SourceAlpha` come from the shape; `BackgroundImage`,
+    /// `FillPaint` and `StrokePaint` come from the caller's <see cref="FilterSources"/>, because only a renderer
+    /// knows what is behind the object or what its fill and stroke were painted with.
+    ///
+    /// One the caller did not supply reads as transparent black - what SVG directs when a viewer has no backdrop -
+    /// and is **named** in <see cref="UnsuppliedSourceInputs"/> rather than being passed off as the file's own
+    /// picture.
     /// </summary>
-    private FilterBuffer Resolve(string? name, FilterBuffer source, FilterBuffer previous)
+    private FilterBuffer Resolve(string? name, FilterBuffer source, FilterBuffer previous, FilterSources sources)
     {
         if (string.IsNullOrEmpty(name))
         {
@@ -175,8 +330,26 @@ public sealed class FilterEngine
             return _sourceAlpha ??= source.ToAlpha();
         }
 
-        if (name is "BackgroundImage" or "FillPaint" or "StrokePaint")
+        if (FilterSpec.IsSourceInput(name))
         {
+            return new FilterBuffer(source.Width, source.Height);
+        }
+        if (false && FilterSpec.IsSourceInput(name))
+        {
+            if (sources.For(name) is { } supplied)
+            {
+                // A supplied picture has to be the region's size, because a primitive reads pixel for pixel: a
+                // caller that handed over a differently-sized one would have every consumer sample the wrong place.
+                return supplied.Width == source.Width && supplied.Height == source.Height
+                    ? supplied
+                    : supplied.Resampled(source.Width, source.Height);
+            }
+
+            if (!_unsupplied.Contains(name, StringComparer.Ordinal))
+            {
+                _unsupplied.Add(name);
+            }
+
             return new FilterBuffer(source.Width, source.Height);
         }
 
@@ -199,8 +372,8 @@ public sealed class FilterEngine
 
         try
         {
-            FilterBuffer input = Resolve(producer.Input, source, previous);
-            FilterBuffer input2 = Resolve(producer.Input2, source, previous);
+            FilterBuffer input = Resolve(producer.Input, source, previous, sources);
+            FilterBuffer input2 = Resolve(producer.Input2, source, previous, sources);
             return _results[name] = Apply(producer, input, input2);
         }
         finally
@@ -209,25 +382,75 @@ public sealed class FilterEngine
         }
     }
 
-    /// <summary>One primitive, applied to the buffers it reads.</summary>
+    /// <summary>
+    /// One primitive, applied to the buffers it reads.
+    ///
+    /// Every length a primitive carries is measured in the primitive's own coordinate system rather than in pixels,
+    /// so it goes through <see cref="LengthScale"/> (or the per-axis scale, for an offset): a blur is a distance in
+    /// model units under SVG's default, and a fraction of the shape's box under `primitiveUnits="objectBoundingBox"`,
+    /// and the two are only the same picture for one shape size.
+    /// </summary>
     private FilterBuffer Apply(FilterPrimitive primitive, FilterBuffer a, FilterBuffer b) => primitive.Kind switch
     {
-        FilterPrimitiveKind.GaussianBlur => Blur(a, primitive.Radius * _scale),
-        FilterPrimitiveKind.Offset => OffsetBy(a, primitive.Dx * _scale, primitive.Dy * _scale),
+        FilterPrimitiveKind.GaussianBlur => Blur(a, primitive.Radius * LengthScale),
+        FilterPrimitiveKind.Offset => OffsetBy(a, primitive.Dx * LengthScaleX, primitive.Dy * LengthScaleY),
         FilterPrimitiveKind.Flood => Flood(a, primitive),
         FilterPrimitiveKind.Composite => Composite(a, b, primitive.Operator),
         FilterPrimitiveKind.Blend => Blend(a, b, primitive.Mode),
         // Morphology's radius is a length in the primitive's own units, like a blur's sigma, so it has to be scaled
         // by the same factor or an outline would thin as the zoom went in.
-        FilterPrimitiveKind.Morphology => Morphology(a, primitive.Operator, primitive.Radius * _scale),
+        FilterPrimitiveKind.Morphology => Morphology(a, primitive.Operator, primitive.Radius * LengthScale),
         FilterPrimitiveKind.ColorMatrix => ColourMatrix(a, MatrixOf(primitive)),
         FilterPrimitiveKind.DisplacementMap => Displace(
-            a, b, primitive.Scale * _scale, primitive.XChannel, primitive.YChannel),
+            a, b, primitive.Scale * LengthScale, primitive.XChannel, primitive.YChannel),
         FilterPrimitiveKind.Turbulence => Turbulence(a, primitive),
         FilterPrimitiveKind.SpecularLighting => SpecularLighting(a, primitive),
         FilterPrimitiveKind.DiffuseLighting => DiffuseLighting(a, primitive),
         _ => a.Clone(),
     };
+
+    /// <summary>
+    /// The unit a primitive's own lengths are measured in, in model units: one user unit by SVG's default, or the
+    /// shape's box under `primitiveUnits="objectBoundingBox"`.
+    /// </summary>
+    private double PrimitiveLengthUnit => _filter.PrimitiveUnitsObjectBoundingBox ? BoundingBoxDiagonal : 1.0;
+
+    /// <summary>
+    /// SVG's normalised diagonal of the shape's box, `sqrt((w^2 + h^2) / 2)`.
+    ///
+    /// It is what a bounding-box length that has **no axis** is measured against - a blur spreads the same amount in
+    /// every direction, so there is no width or height to take it from. It reduces to the box's own side for a
+    /// square, which is the shape the rule is easiest to see on.
+    /// </summary>
+    private double BoundingBoxDiagonal => Math.Sqrt(
+        ((_objectBounds.Width * _objectBounds.Width) + (_objectBounds.Height * _objectBounds.Height)) / 2.0);
+
+    /// <summary>The pixel density that measures an isotropic length, normalising the two axes into one number.</summary>
+    private double IsotropicDensity => Math.Sqrt(((_densityX * _densityX) + (_densityY * _densityY)) / 2.0);
+
+    /// <summary>
+    /// Pixels per unit of the primitive's own coordinate system, along x.
+    ///
+    /// Under SVG's default a primitive length is a model length, so this is the region's pixel density; under
+    /// `objectBoundingBox` it is a fraction of the shape's box, so the box's own width divides into it. That is the
+    /// difference between a shadow that keeps its proportions as a shape is resized and one that does not.
+    /// </summary>
+    private double LengthScaleX => _densityX;
+
+    /// <summary>See <see cref="LengthScaleX"/>.</summary>
+    private double LengthScaleY => _densityY;
+
+    /// <summary>Pixels per unit for a length that has no axis - a blur's sigma, a box radius, a displacement.</summary>
+    private double LengthScale => IsotropicDensity;
+
+    /// <summary>
+    /// How a noise frequency in the primitive's own units enters the engine's pixel coordinate.
+    ///
+    /// A frequency is an **inverse** length, so the primitive's unit divides it where a length multiplies: with the
+    /// unit at one model unit this is the region's density, exactly as it was before the unit was modelled, and
+    /// under `objectBoundingBox` a frequency is cycles per box and the box's normalised diagonal divides it.
+    /// </summary>
+    private double FrequencyScale => IsotropicDensity / Math.Max(PrimitiveLengthUnit, 1e-9);
 
     /// <summary>
     /// A Gaussian blur, by two one-dimensional passes.
@@ -732,7 +955,7 @@ public sealed class FilterEngine
     public FilterBuffer Turbulence(FilterBuffer input, FilterPrimitive primitive)
     {
         bool fractal = (primitive.Type ?? "turbulence").Trim().ToLowerInvariant() == "fractalnoise";
-        double frequency = primitive.BaseFrequency * _scale;
+        double frequency = primitive.BaseFrequency * FrequencyScale;
         int octaves = Math.Clamp(primitive.Octaves, 0, 12);
         var output = new FilterBuffer(input.Width, input.Height);
 

@@ -110,6 +110,81 @@ public sealed class FilterBuffer
         return copy;
     }
 
+    /// <summary>
+    /// The same picture at another size, sampled bilinearly at each destination pixel's centre.
+    ///
+    /// This is what lets a filter be evaluated at the resolution its file asks for (`filterRes`) rather than at
+    /// whatever scale the caller happens to draw at: the source is resampled into the region's pixel grid, so a
+    /// coarse resolution really does compute the blur on few pixels and the difference is visible, rather than being
+    /// a number the model carries and nothing reads.
+    ///
+    /// Bilinear rather than area-averaged, and clamped to the edge: the source is a rendering of the same picture,
+    /// so a sample is a sample of it - and an area average over a shrinking footprint is the same arithmetic with
+    /// more of it written out. Outside the buffer reads as transparent, as everywhere else in this class.
+    /// </summary>
+    public FilterBuffer Resampled(int width, int height)
+    {
+        if (width <= 0 || height <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(width), "a buffer needs a positive size");
+        }
+
+        var output = new FilterBuffer(width, height);
+        if (width == Width && height == Height)
+        {
+            Array.Copy(Pixels, output.Pixels, Pixels.Length);
+            return output;
+        }
+
+        // Destination pixel centres against source pixel centres, which is the mapping that keeps a picture in the
+        // same place when it is resampled: the centre of the destination maps to the centre of the source.
+        double scaleX = (double)Width / width;
+        double scaleY = (double)Height / height;
+
+        for (int y = 0; y < height; y++)
+        {
+            double sourceY = ((y + 0.5) * scaleY) - 0.5;
+            for (int x = 0; x < width; x++)
+            {
+                double sourceX = ((x + 0.5) * scaleX) - 0.5;
+                (float r, float g, float b, float a) = Sample(sourceX, sourceY);
+                output.Set(x, y, r, g, b, a);
+            }
+        }
+
+        return output;
+    }
+
+    /// <summary>One pixel, bilinearly interpolated, transparent outside the buffer.</summary>
+    private (float R, float G, float B, float A) Sample(double x, double y)
+    {
+        int x0 = (int)Math.Floor(x);
+        int y0 = (int)Math.Floor(y);
+        double fx = x - x0;
+        double fy = y - y0;
+
+        float r = 0, g = 0, b = 0, a = 0;
+        for (int j = 0; j <= 1; j++)
+        {
+            for (int i = 0; i <= 1; i++)
+            {
+                double weight = (i == 0 ? 1 - fx : fx) * (j == 0 ? 1 - fy : fy);
+                if (weight == 0)
+                {
+                    continue;
+                }
+
+                (float pr, float pg, float pb, float pa) = Get(x0 + i, y0 + j);
+                r += (float)(pr * weight);
+                g += (float)(pg * weight);
+                b += (float)(pb * weight);
+                a += (float)(pa * weight);
+            }
+        }
+
+        return (r, g, b, a);
+    }
+
     /// <summary>The number of pixels with any alpha at all - a cheap way for a test to ask "did anything draw?".</summary>
     public int OpaquePixels()
     {

@@ -234,6 +234,54 @@ public sealed record FilterSpec
     public bool ObjectBoundingBox { get; init; } = true;
 
     /// <summary>
+    /// Whether a **primitive's own lengths** are fractions of the shape's box rather than user units.
+    ///
+    /// This is SVG's `primitiveUnits`, and it is a different question from <see cref="ObjectBoundingBox"/>, which is
+    /// about the region the filter is evaluated over: a file may give a user-space region with bounding-box
+    /// primitive lengths, or the other way round, and the two are read and written independently for that reason. A
+    /// blur of 0.1 means "a tenth of the shape" under one and "0.1 of a user unit" under the other, and the two are
+    /// different pictures at every size - which is what makes it worth carrying rather than dropping.
+    ///
+    /// The default is SVG's: `userSpaceOnUse`.
+    /// </summary>
+    public bool PrimitiveUnitsObjectBoundingBox { get; init; }
+
+    /// <summary>
+    /// The resolution the filter is evaluated at, in pixels across the region, or null when the file gives none.
+    ///
+    /// This is SVG's `filterRes`. A filter is a raster operation, so the resolution it is sampled at is part of the
+    /// picture rather than an implementation detail: evaluated at a coarse resolution the blur is computed on a
+    /// handful of pixels, and the result stretched over the region is visibly coarser than the same filter
+    /// evaluated finely. Absent, the caller's own scale decides.
+    /// </summary>
+    public int? FilterResolutionX { get; init; }
+
+    /// <summary>See <see cref="FilterResolutionX"/>.</summary>
+    public int? FilterResolutionY { get; init; }
+
+    /// <summary>
+    /// The largest resolution this build will evaluate at, for either axis.
+    ///
+    /// A `filterRes` is a request to allocate the region at that size, so a file asking for a million pixels across
+    /// is asking for terabytes. The reader **says** so and leaves the resolution unset rather than storing a number
+    /// nothing will honour; the engine refuses a model that carries one anyway, because nothing that came through
+    /// the reader can.
+    /// </summary>
+    public const int MaximumFilterResolution = 8192;
+
+    /// <summary>Whether the file asked for a resolution and it is one an engine can allocate.</summary>
+    public bool HasFilterResolution
+        => FilterResolutionX is >= 1 and <= MaximumFilterResolution &&
+           FilterResolutionY is >= 1 and <= MaximumFilterResolution;
+
+    /// <summary>
+    /// Whether a resolution a model carries is one this build can evaluate at - what the reader checks before
+    /// storing one and the engine checks before allocating.
+    /// </summary>
+    public static bool AcceptsFilterResolution(int width, int height)
+        => width is >= 1 and <= MaximumFilterResolution && height is >= 1 and <= MaximumFilterResolution;
+
+    /// <summary>
     /// The buffer the filter's output is taken from, or empty for the last primitive's result.
     ///
     /// A file can name an intermediate result as the filter's answer, which is the other half of "a graph rather
@@ -247,9 +295,10 @@ public sealed record FilterSpec
     /// <summary>
     /// The buffers a renderer supplies rather than a primitive producing them.
     ///
-    /// These are the names a graph is allowed to read without a producer. The engine treats the last three as
-    /// transparent because this model has no fill, stroke or background picture to hand them, which is a documented
-    /// gap rather than a reason to refuse a file that uses them.
+    /// These are the names a graph is allowed to read without a producer. `SourceGraphic` and `SourceAlpha` come
+    /// from the shape being filtered; the other three have to be handed to the engine, because only the renderer
+    /// knows what is behind the object or what its fill and stroke were painted with - and an engine that invented
+    /// them would be drawing a picture the file did not ask for.
     /// </summary>
     public static IReadOnlyList<string> SourceInputs { get; } = new[]
     {
@@ -258,6 +307,16 @@ public sealed record FilterSpec
 
     /// <summary>Whether a buffer name is one the renderer supplies.</summary>
     public static bool IsSourceInput(string name) => SourceInputs.Contains(name, StringComparer.Ordinal);
+
+    /// <summary>
+    /// The renderer-supplied buffers this graph reads, in the order the primitives name them.
+    ///
+    /// A caller that cannot supply one - a canvas with no picture behind the object - can say which ones it is
+    /// about to paint as transparent, which is the difference between a gap that is reported and one that is
+    /// discovered from the picture.
+    /// </summary>
+    public IEnumerable<string> SourceInputsRead
+        => Inputs.Where(IsSourceInput);
 
     /// <summary>
     /// The primitive that produces a named buffer, or null.
@@ -377,7 +436,10 @@ public sealed record FilterSpec
         }
 
         return X == other.X && Y == other.Y && Width == other.Width && Height == other.Height &&
-               ObjectBoundingBox == other.ObjectBoundingBox && Output == other.Output;
+               ObjectBoundingBox == other.ObjectBoundingBox && Output == other.Output &&
+               PrimitiveUnitsObjectBoundingBox == other.PrimitiveUnitsObjectBoundingBox &&
+               FilterResolutionX == other.FilterResolutionX &&
+               FilterResolutionY == other.FilterResolutionY;
     }
 
     public override int GetHashCode()
@@ -389,6 +451,9 @@ public sealed record FilterSpec
         hash.Add(Width);
         hash.Add(Height);
         hash.Add(Output);
+        hash.Add(PrimitiveUnitsObjectBoundingBox);
+        hash.Add(FilterResolutionX);
+        hash.Add(FilterResolutionY);
         foreach (FilterPrimitive primitive in Primitives)
         {
             hash.Add(primitive);

@@ -177,7 +177,14 @@ internal sealed record FilterDto(
     double Width,
     double Height,
     bool ObjectBoundingBox,
-    string Output);
+    string Output,
+
+    // The region's other two declarations - what a primitive's own lengths mean, and the resolution the filter is
+    // evaluated at. Optional and absent at their defaults, so a sidecar written before they were modelled is
+    // byte-identical and one written now does not grow members for filters that do not use them.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? PrimitiveUnitsObjectBoundingBox = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? FilterResolutionX = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? FilterResolutionY = null);
 
 internal sealed record FilterPrimitiveDto(
     FilterPrimitiveKind Kind,
@@ -1357,7 +1364,10 @@ public static class VccadDocumentSerializer
             filter.Width,
             filter.Height,
             filter.ObjectBoundingBox,
-            filter.Output);
+            filter.Output,
+            filter.PrimitiveUnitsObjectBoundingBox ? true : null,
+            filter.HasFilterResolution ? filter.FilterResolutionX : null,
+            filter.HasFilterResolution ? filter.FilterResolutionY : null);
 
     /// <summary>
     /// A colour matrix, padded to the twenty numbers the format names.
@@ -1388,7 +1398,21 @@ public static class VccadDocumentSerializer
     }
 
     private static FilterSpec ToModel(FilterDto dto)
-        => new(
+    {
+        // A resolution is a pair or nothing: half of one is not a resolution, and a model that carried one would be
+        // refused by the engine at paint time - where the reason is far from the sidecar that caused it.
+        if (dto.FilterResolutionX is not null || dto.FilterResolutionY is not null)
+        {
+            if (dto.FilterResolutionX is not { } rx || dto.FilterResolutionY is not { } ry ||
+                !FilterSpec.AcceptsFilterResolution(rx, ry))
+            {
+                throw new NotSupportedException(
+                    $"filter '{dto.Name}' names a resolution of {dto.FilterResolutionX} by {dto.FilterResolutionY}; " +
+                    $"a resolution is a pair of whole numbers between 1 and {FilterSpec.MaximumFilterResolution}");
+            }
+        }
+
+        return new(
             dto.Name,
             (dto.Primitives ?? Array.Empty<FilterPrimitiveDto>()).Select(ToModel).ToArray())
         {
@@ -1397,8 +1421,12 @@ public static class VccadDocumentSerializer
             Width = dto.Width,
             Height = dto.Height,
             ObjectBoundingBox = dto.ObjectBoundingBox,
+            PrimitiveUnitsObjectBoundingBox = dto.PrimitiveUnitsObjectBoundingBox ?? false,
+            FilterResolutionX = dto.FilterResolutionX,
+            FilterResolutionY = dto.FilterResolutionY,
             Output = dto.Output,
         };
+    }
 
     /// <summary>
     /// One primitive off the wire.
