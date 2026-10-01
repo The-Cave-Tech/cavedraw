@@ -118,6 +118,15 @@ public partial class AppearancePane : UserControl
         {
             _updating = false;
         }
+
+        // Publish the row this panel is showing, **after** the guard is cleared. The index above is set while
+        // `_updating` is true, so the panel's own selection handler ignores it by design - which left the shared
+        // state at `none` while the list highlighted row 0. The stroke inspector reads that state, so it showed
+        // empty fields and the label `none` for a path the appearance panel was plainly describing.
+        if (_viewModel is { } viewModel)
+        {
+            viewModel.InspectedStroke = StrokeList.SelectedIndex;
+        }
     }
 
     /// <summary>
