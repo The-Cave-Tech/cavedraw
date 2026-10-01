@@ -48,7 +48,7 @@ public class ImplicitCloseTests
     }
 
     private static PathItem OnlyPath(CadDocument document)
-        => document.Artboards[0].Layers[0].Children.OfType<PathItem>().Single();
+        => Imported.PathOn(document);
 
     [Fact]
     public void AnOpenContourDrawnByAFillIsClosed()

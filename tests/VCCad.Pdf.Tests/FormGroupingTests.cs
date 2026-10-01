@@ -191,8 +191,8 @@ public class FormGroupingTests
         CadDocument document = PdfImporter.Import(PageWithTightBox());
         ArtGroup group = Assert.IsType<ArtGroup>(Assert.Single(Top(document)));
 
-        Assert.Single(group.Clips);
-        double right = group.Clips[0].SubPaths[0].Nodes.Max(n => n.Anchor.X);
+        Assert.Single(Imported.ClipsOf(group));
+        double right = Imported.ClipsOf(group)[0].SubPaths[0].Nodes.Max(n => n.Anchor.X);
         Assert.Equal(100.0, right, 2);
     }
 }

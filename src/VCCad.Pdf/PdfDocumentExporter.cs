@@ -306,7 +306,8 @@ public static class PdfDocumentExporter
             // because paths and images go through PaintItem and text has its own loop — so a
             // clipped label came out unclipped, showing text the file had hidden. The
             // Transparency Guide clips its page furniture this way.
-            bool clipped = text.IsClipped;
+            // What is written here is this item's own clips; an ancestor's are written by the ancestor's own group.
+            bool clipped = text.Clips.Count > 0;
             if (clipped)
             {
                 ops.Add("q");
@@ -459,7 +460,7 @@ public static class PdfDocumentExporter
         // A clip is emitted around the item rather than baked into its geometry, because
         // that is what it is: the item is drawn whole and the outline limits what shows.
         // Several clips intersect, which is what successive W n operators do.
-        bool clipped = item.IsClipped;
+        bool clipped = item.Clips.Count > 0;
         if (clipped)
         {
             ops.Add("q");

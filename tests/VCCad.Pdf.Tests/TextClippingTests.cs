@@ -51,11 +51,8 @@ public class TextClippingTests
     private static TextItem? ImportSingleText(byte[] pdf)
     {
         CadDocument document = PdfImporter.Import(pdf);
-        return document.Artboards
-            .SelectMany(a => a.Layers)
-            .SelectMany(l => l.Children)
-            .OfType<TextItem>()
-            .FirstOrDefault();
+        // Through the masking groups, which is where a clipped run now lives.
+        return Imported.Everything(document.Artboards[0]).OfType<TextItem>().FirstOrDefault();
     }
 
     [Fact]

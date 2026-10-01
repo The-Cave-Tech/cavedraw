@@ -143,7 +143,7 @@ public class SampledFunctionTests
 
         CadDocument document = PdfImporter.Import(
             System.Text.Encoding.Latin1.GetBytes(Build(bodies)));
-        PathItem path = document.Artboards[0].Layers[0].Children.OfType<PathItem>().Single();
+        PathItem path = Imported.PathOn(document);
 
         // Full tint reads the last sample, which is white.
         Assert.Equal(1.0, path.Fill.Color.R, 2);

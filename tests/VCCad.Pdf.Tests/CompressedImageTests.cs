@@ -81,7 +81,7 @@ public class CompressedImageTests
     public void ACompressedImageIsImportedWithItsCompressor()
     {
         CadDocument document = PdfImporter.Import(JpegPdf(JpegBytes()));
-        ImageItem image = document.Artboards[0].Layers[0].Children.OfType<ImageItem>().Single();
+        ImageItem image = Imported.OneOn<ImageItem>(document);
 
         Assert.Equal("DCTDecode", image.Filter);
 
@@ -104,7 +104,7 @@ public class CompressedImageTests
         CadDocument document = VccadDocumentSerializer.Deserialize(
             VccadDocumentSerializer.SerializeToBytes(PdfImporter.Import(JpegPdf(JpegBytes()))));
 
-        ImageItem image = document.Artboards[0].Layers[0].Children.OfType<ImageItem>().Single();
+        ImageItem image = Imported.OneOn<ImageItem>(document);
         Assert.Equal("DCTDecode", image.Filter);
     }
 
@@ -148,7 +148,7 @@ public class CompressedImageTests
 
         CadDocument document = PdfImporter.Import(
             Encoding.Latin1.GetBytes(builder.ToString()));
-        ImageItem image = document.Artboards[0].Layers[0].Children.OfType<ImageItem>().Single();
+        ImageItem image = Imported.OneOn<ImageItem>(document);
 
         Assert.Null(image.Filter);
 

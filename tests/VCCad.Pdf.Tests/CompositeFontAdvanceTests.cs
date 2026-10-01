@@ -70,7 +70,7 @@ public class CompositeFontAdvanceTests
     private static double? Advance(string wArray, string dw, string hex)
     {
         CadDocument document = PdfImporter.Import(CompositePdf(wArray, dw, hex));
-        TextItem item = document.Artboards[0].Layers[0].Children.OfType<TextItem>().Single();
+        TextItem item = Imported.OneOn<TextItem>(document);
         return item.Runs[0].AdvanceWidth;
     }
 
@@ -121,7 +121,7 @@ public class CompositeFontAdvanceTests
         };
 
         CadDocument document = PdfImporter.Import(Assemble(bodies));
-        TextItem item = document.Artboards[0].Layers[0].Children.OfType<TextItem>().Single();
+        TextItem item = Imported.OneOn<TextItem>(document);
 
         // A (600) plus B (400) at 10pt is 10 points.
         Assert.Equal(10.0, item.Runs[0].AdvanceWidth!.Value, 3);

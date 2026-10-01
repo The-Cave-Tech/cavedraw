@@ -62,10 +62,10 @@ public class ClipPathTests
     public void AClipIsReadAndAttachedToTheItemItLimits()
     {
         CadDocument document = PdfImporter.Import(ClippedSquarePdf());
-        PathItem square = document.Artboards[0].Layers[0].Children.OfType<PathItem>().Single();
+        PathItem square = Imported.PathOn(document);
 
         Assert.True(square.IsClipped);
-        ClipSpec clip = square.Clips.Single();
+        ClipSpec clip = Imported.ClipsOf(square).Single();
 
         // The outline, not the drawn square: 100x100 at the origin.
         Assert.Equal(FillRule.NonZero, clip.Rule);
@@ -82,16 +82,16 @@ public class ClipPathTests
     public void TheRuleTravelsWithTheClip()
     {
         CadDocument document = PdfImporter.Import(ClippedSquarePdf("W*"));
-        PathItem square = document.Artboards[0].Layers[0].Children.OfType<PathItem>().Single();
+        PathItem square = Imported.PathOn(document);
 
-        Assert.Equal(FillRule.EvenOdd, square.Clips.Single().Rule);
+        Assert.Equal(FillRule.EvenOdd, Imported.ClipsOf(square).Single().Rule);
     }
 
     [Fact]
     public void AnUnclippedItemCarriesNoClip()
     {
         CadDocument document = PdfImporter.Import(ClippedSquarePdf("W"));
-        document.Artboards[0].Layers[0].Children.OfType<PathItem>().Single();
+        Imported.PathOn(document);
 
         // A second page with no clip at all.
         var plain = new PathItem { Name = "Plain" };
@@ -107,11 +107,11 @@ public class ClipPathTests
         CadDocument reloaded = VccadDocumentSerializer.Deserialize(
             VccadDocumentSerializer.SerializeToBytes(document));
 
-        PathItem square = reloaded.Artboards[0].Layers[0].Children.OfType<PathItem>().Single();
+        PathItem square = Imported.PathOn(reloaded);
 
         Assert.True(square.IsClipped);
-        Assert.Equal(FillRule.EvenOdd, square.Clips.Single().Rule);
-        Assert.Equal(4, square.Clips.Single().SubPaths[0].Nodes.Count);
+        Assert.Equal(FillRule.EvenOdd, Imported.ClipsOf(square).Single().Rule);
+        Assert.Equal(4, Imported.ClipsOf(square).Single().SubPaths[0].Nodes.Count);
     }
 
     [Fact]
@@ -172,7 +172,7 @@ public class ClipPathTests
         CadDocument twice = VccadDocumentSerializer.Deserialize(
             VccadDocumentSerializer.SerializeToBytes(once));
 
-        PathItem square = twice.Artboards[0].Layers[0].Children.OfType<PathItem>().Single();
+        PathItem square = Imported.PathOn(twice);
         Assert.True(square.IsClipped);
     }
 }

@@ -207,7 +207,7 @@ public class GradientPdfTests
         // The clip is consumed as the shape: it must not also be left attached as a clip,
         // or the same outline would be applied twice and the item would describe a shape
         // it is merely clipped to rather than one it is.
-        Assert.Empty(path.Clips);
+        Assert.Empty(Imported.ClipsOf(path));
     }
 
     // ------------------------------------------------------------------

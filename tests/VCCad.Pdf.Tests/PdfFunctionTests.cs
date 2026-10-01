@@ -53,7 +53,7 @@ public class PdfFunctionTests
     private static ColorRgb Painted(string separation, string tint = "1.0")
     {
         CadDocument document = PdfImporter.Import(SeparationPdf(separation, tint));
-        PathItem path = document.Artboards[0].Layers[0].Children.OfType<PathItem>().Single();
+        PathItem path = Imported.PathOn(document);
         return path.Fill.Color;
     }
 

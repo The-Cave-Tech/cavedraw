@@ -134,7 +134,7 @@ public class LetterSpacingExportTests
         CadDocument reloaded = VccadDocumentSerializer.Deserialize(
             VccadDocumentSerializer.SerializeToBytes(document));
 
-        TextItem item = reloaded.Artboards[0].Layers[0].Children.OfType<TextItem>().Single();
+        TextItem item = Imported.OneOn<TextItem>(reloaded);
         Assert.Equal(4.0, item.Runs[0].GapAfter, 6);
     }
 }

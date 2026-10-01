@@ -63,7 +63,7 @@ public class TextStyleTests
     {
         CadDocument document = PdfImporter.Import(
             Pdf($"BT /F1 10 Tf {textOps} 100 700 Td {show} ET"));
-        return document.Artboards[0].Layers[0].Children.OfType<TextItem>().Single();
+        return Imported.OneOn<TextItem>(document);
     }
 
     [Fact]

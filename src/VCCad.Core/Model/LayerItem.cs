@@ -71,8 +71,32 @@ public abstract class LayerItem : CadObject
     /// </summary>
     public List<ClipSpec> Clips { get; } = new();
 
-    /// <summary>Whether any clip restricts this item.</summary>
-    public bool IsClipped => Clips.Count > 0;
+    /// <summary>
+    /// Whether any clip restricts this item - its own, or one an ancestor carries.
+    ///
+    /// The documented meaning has always been "is this item restricted by a clip", and that used to be the same
+    /// question as "does it carry one", because a clip was only ever written on the object it cut. A clip is
+    /// now a **container**: the importer records it on the group holding what it clips, which is what the file
+    /// means. Asking only an item's own list then answered "not clipped" for the most clipped object on the
+    /// page.
+    ///
+    /// The same shape as <see cref="IsEffectivelyVisible"/>: a property of an item that an ancestor can decide.
+    /// </summary>
+    public bool IsClipped
+    {
+        get
+        {
+            for (LayerItem? item = this; item is not null; item = item.Container as LayerItem)
+            {
+                if (item.Clips.Count > 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
 
     /// <summary>
     /// Effective visibility: true only when this item AND every ancestor

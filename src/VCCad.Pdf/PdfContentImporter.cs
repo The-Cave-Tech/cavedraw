@@ -325,8 +325,7 @@ internal sealed class PdfContentImporter
                 item.SourceStrokeCmyk = stroke ? strokeCmyk : null;
 
                 EndTextLine();
-                Attach(item);
-                items.Add(new PdfImportedItem(currentLayer, item));
+                if (Clipped(item) is { } placed) { items.Add(new PdfImportedItem(currentLayer, placed)); }
             }
 
             subPaths.Clear();
@@ -842,8 +841,7 @@ internal sealed class PdfContentImporter
         IReadOnlyList<GradientStop> stops = gradient.Normalised();
         item.Fill = FillSpec.WithGradient(gradient, shape.Rule, stops[stops.Count / 2].Color);
         item.Stroke = StrokeSpec.None;
-        Attach(item);
-        items.Add(new PdfImportedItem(layer, item));
+        if (Clipped(item) is { } placed) { items.Add(new PdfImportedItem(layer, placed)); }
     }
 
     /// <summary>
@@ -1449,8 +1447,7 @@ internal sealed class PdfContentImporter
             new Point2D(stencil1.X, _pageHeight - stencil1.Y));
 
         EndTextLine();
-        Attach(image);
-        items.Add(new PdfImportedItem(layer, image));
+        if (Clipped(image) is { } placed) { items.Add(new PdfImportedItem(layer, placed)); }
     }
 
     /// <summary>
@@ -1561,8 +1558,7 @@ internal sealed class PdfContentImporter
             new Point2D(corner1.X, _pageHeight - corner1.Y));
 
         EndTextLine();
-        Attach(image);
-        items.Add(new PdfImportedItem(layer, image));
+        if (Clipped(image) is { } placed) { items.Add(new PdfImportedItem(layer, placed)); }
     }
 
     /// <summary>Widens a sub-byte soft mask to one byte per pixel.</summary>
@@ -1775,9 +1771,7 @@ internal sealed class PdfContentImporter
             _lastTextEnd = end;
             return;
         }
-
-        Attach(item);
-        items.Add(new PdfImportedItem(layer, item));
+        if (Clipped(item) is { } placed) { items.Add(new PdfImportedItem(layer, placed)); }
         _lastText = item;
         _lastTextEnd = end;
         _lastTextRotation = rotation;
@@ -2643,6 +2637,11 @@ internal sealed class PdfContentImporter
     /// </summary>
     private bool _clipJustTaken;
 
+    /// <summary>The clipping-mask group currently being filled, and the clips it was opened for.</summary>
+    private ArtGroup? _clipGroup;
+
+    private readonly List<ClipSpec> _clipGroupClips = new();
+
     /// <summary>
     /// The text block the last show operation added, and where it ended in model space.
     ///
@@ -2664,15 +2663,130 @@ internal sealed class PdfContentImporter
     private void EndTextLine() => _lastTextValid = false;
 
     /// <summary>
-    /// Records the clips in force onto an item as it is created. Clipping is applied at
-    /// render and export time; the importer's job is to remember which outline applied.
+    /// Puts an item **inside** the clipping mask that applies to it, rather than putting the mask on the item.
+    ///
+    /// A `W ... n` clip is a container: the file says "everything drawn from here until the state is restored
+    /// is cut to this outline". Recording that as a decoration on each object loses it - the tree then reads
+    /// as a hundred unrelated objects that happen to be clipped, when the file has **one mask with a hundred
+    /// things inside it**, which is the difference between this application's hierarchy and the one it is
+    /// compared against.
+    ///
+    /// Rendering is deliberately unchanged: a clip on a group applies to its children exactly as a clip
+    /// written on each child does, and the clip is still walked up from a child when hit-testing. What changes
+    /// is who is whose parent, which is the point.
+    ///
+    /// **One group per clip, not one per object.** The content a clip applies to is a run - everything drawn
+    /// between the clip and the state that restores it - so those objects are siblings inside one mask. A
+    /// group each would put a mask round every object and leave the file's actual structure no easier to see
+    /// than the flat list did. The run stays contiguous because the clip set can only change where the content
+    /// stream changes it, and a change starts a new group.
+    ///
+    /// Returns the item to place, or **null** when it was added to the group already open.
     /// </summary>
-    private void Attach(LayerItem item)
+    private LayerItem? Clipped(LayerItem item)
     {
+        if (_clips.Count == 0)
+        {
+            _clipGroup = null;
+            _clipGroupClips.Clear();
+            return item;
+        }
+
+        // **A clip that contains what it applies to cuts nothing.** The page box is a clip on every page of
+        // every file that has one, so wrapping on it alone would put a Clipping Mask row on every page -
+        // twelve masks for twelve pages that clip nothing, which is what the form path already refuses to do
+        // for the same reason. Only a clip that actually removes part of this object is worth being its parent.
+        var effective = new List<ClipSpec>();
         foreach (ClipSpec clip in _clips)
         {
-            item.Clips.Add(clip.Clone());
+            if (Cuts(clip, item))
+            {
+                effective.Add(clip);
+            }
         }
+
+        if (effective.Count == 0)
+        {
+            _clipGroup = null;
+            _clipGroupClips.Clear();
+            return item;
+        }
+
+        if (_clipGroup is null || !SameClips(_clipGroupClips, effective))
+        {
+            _clipGroup = new ArtGroup { Name = "Clipping Mask" };
+            _clipGroupClips.Clear();
+            foreach (ClipSpec clip in effective)
+            {
+                _clipGroup.Clips.Add(clip.Clone());
+                _clipGroupClips.Add(clip);
+            }
+
+            _clipGroup.AddItem(item);
+            return _clipGroup;
+        }
+
+        _clipGroup.AddItem(item);
+        return null;
+    }
+
+    /// <summary>
+    /// Whether a clip removes any part of an item - the same question <see cref="Cuts(ClipSpec, ArtGroup)"/>
+    /// asks of a group, asked of one object.
+    /// </summary>
+    private static bool Cuts(ClipSpec clip, LayerItem item)
+    {
+        Rect2D content = item switch
+        {
+            ArtGroup group => group.Transform.Transform(group.BoundingBox()),
+            PathItem path => path.BoundingBox(),
+            TextItem text => text.BoundingBox(),
+            ImageItem image => image.Placement,
+            _ => Rect2D.Empty,
+        };
+
+        if (content.IsEmpty)
+        {
+            return false;
+        }
+
+        foreach (SubPath sub in clip.SubPaths)
+        {
+            Rect2D box = sub.BoundingBox();
+            if (box.IsEmpty)
+            {
+                continue;
+            }
+
+            if (content.Left < box.Left - Tolerance ||
+                content.Top < box.Top - Tolerance ||
+                content.Right > box.Right + Tolerance ||
+                content.Bottom > box.Bottom + Tolerance)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether two clip lists are the same outlines, by identity - the objects the state stack holds.</summary>
+    private static bool SameClips(IReadOnlyList<ClipSpec> a, IReadOnlyList<ClipSpec> b)
+    {
+        if (a.Count != b.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < a.Count; i++)
+        {
+            if (!ReferenceEquals(a[i], b[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private string? StreamCode(object? function)

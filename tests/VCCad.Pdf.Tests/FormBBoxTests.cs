@@ -123,12 +123,12 @@ public class FormBBoxTests
     public void TheBoxBecomesAClipOnTheItemsItBounds()
     {
         CadDocument document = PdfImporter.Import(FormWithBox("0 0 20 40"));
-        PathItem bar = document.Artboards[0].Layers[0].Children.OfType<PathItem>().Single();
+        PathItem bar = Imported.PathOn(document);
 
         Assert.True(bar.IsClipped, "the form's box should be a clip on what it draws");
 
         // The clip is the box: 20 wide, 40 tall, from the origin.
-        ClipSpec clip = bar.Clips[0];
+        ClipSpec clip = Imported.ClipsOf(bar)[0];
         double width = clip.SubPaths[0].Nodes.Max(n => n.Anchor.X);
         Assert.Equal(20.0, width, 2);
     }
@@ -136,12 +136,14 @@ public class FormBBoxTests
     [Fact]
     public void ABoxThatAlreadyFitsItsContentChangesNothingVisible()
     {
-        // The page-sized case, which is what most of the corpus looks like.
+        // The page-sized case, which is what most of the corpus looks like - and the name says what should
+        // happen: a box that already contains the artwork changes nothing. It is not the item's parent and it
+        // contributes no clip, because a clip that removes nothing is not a clip. On a twelve-page document
+        // that used to be twelve "Clipping Mask" rows in the tree for twelve masks that mask nothing.
         CadDocument document = PdfImporter.Import(FormWithBox("0 0 612 792"));
-        PathItem bar = document.Artboards[0].Layers[0].Children.OfType<PathItem>().Single();
+        PathItem bar = Imported.PathOn(document);
 
-        Assert.True(bar.IsClipped);
-        double right = bar.Clips[0].SubPaths[0].Nodes.Max(n => n.Anchor.X);
-        Assert.Equal(612.0, right, 2);
+        Assert.False(bar.IsClipped, "a box that removes nothing does not clip");
+        Assert.Equal(200.0, bar.BoundingBox().Right, 1);
     }
 }
