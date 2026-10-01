@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using VCCad.App.Fonts;
+using VCCad.App.Automation;
 using VCCad.App.ViewModels;
 using VCCad.Core.Text;
 using VCCad.Core.Commands;
@@ -78,6 +79,15 @@ public sealed class CanvasWorkspace : Control
     private FillSpec _gradientBefore;
     private GradientSpec _gradientSpec0 = GradientSpec.Default;
     private bool _gradientMoved;
+
+    // Width-profile mode: the path whose profile is open for editing on the canvas, the grip a press
+    // grabbed, the stroke it belongs to, the profile as it was at the press, and the profile the drag
+    // is previewing. The preview is composed for painting only - the model is written once, on release,
+    // by the operation - so an abandoned or cancelled gesture has nothing to put back.
+    private WidthProfileGrip? _profileGrip;
+    private int _profileDragStroke = -1;
+    private WidthProfileSpec? _profileDragStart;
+    private WidthProfileSpec? _profileDragProfile;
 
     // Marquee (rubber-band) selection.
     private bool _marqueeActive;
@@ -788,6 +798,21 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        // The width-profile mode owns the canvas while it is on. A press on a grip starts the drag; a
+        // press anywhere else is swallowed rather than clearing the selection, because the issue this
+        // mode exists for says the profile being edited must survive a click that misses it.
+        if (IsEditingWidthProfile)
+        {
+            e.Handled = true;
+            if (TryBeginProfileGrip(model))
+            {
+                _leftDown = true;
+                e.Pointer.Capture(this);
+            }
+
+            return;
+        }
+
         // Text editing: clicks inside position the caret / select; outside exits.
         if (_editingText is { } editing)
         {
@@ -955,6 +980,14 @@ public sealed class CanvasWorkspace : Control
 
         if (_leftDown)
         {
+            // The width-profile drag outranks everything else: the press that armed it was taken by
+            // the mode, so the only gesture that can be in flight here is that grip.
+            if (_profileGrip is { } gripped)
+            {
+                ProfileDrag(gripped, model);
+                return;
+            }
+
             // An artboard gesture outranks the tool: the label is a handle in every tool,
             // so a page drag must not depend on which tool happens to be active.
             if (_artboardGesture != ArtboardGesture.None)
@@ -1021,6 +1054,19 @@ public sealed class CanvasWorkspace : Control
     {
         base.OnPointerReleased(e);
         Point2D model = ModelPointAtScreen(e.GetPosition(this));
+
+        // A width-profile grip ends its gesture here, and the profile changes once, through the
+        // operation. Nothing was written to the model while the pointer was down, so a drag that came
+        // back to where it started commits nothing at all.
+        if (_profileGrip is { } releasedGrip)
+        {
+            _profileGrip = null;
+            _leftDown = false;
+            e.Pointer.Capture(null);
+            CommitProfileDrag(releasedGrip);
+            InvalidateVisual();
+            return;
+        }
 
         // Releasing an edit-box handle ends the resize; the width has already been applied.
         if (_frameResizeHandle >= 0)
@@ -1603,6 +1649,218 @@ public sealed class CanvasWorkspace : Control
             context.DrawEllipse(Brushes.White, pen, ModelToScreen(point), radius, radius);
         }
     }
+
+    // ------------------------------------------------------------------
+    // Width-profile mode
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// The path whose width profile the canvas is editing, or null when the mode is off.
+    ///
+    /// The mode is a state of the **canvas**, not of the selection, and it is entered and left through
+    /// <c>profile.editMode</c> - the operation a driver calls and the one the W key calls. While it is
+    /// on the handles take the pointer and a click anywhere else is swallowed rather than starting a
+    /// marquee or reducing the selection: losing the profile being edited to a stray click is worse
+    /// than a click that does nothing at all.
+    /// </summary>
+    public PathItem? WidthProfileTarget { get; private set; }
+
+    /// <summary>Whether the width-profile handles are being shown and dragged on the canvas.</summary>
+    public bool IsEditingWidthProfile => WidthProfileTarget is not null;
+
+    /// <summary>
+    /// Opens the width-profile editor on a path, or closes it when given null.
+    ///
+    /// Both halves of a gesture land here - the operation a driver calls and the W key a person presses
+    /// - because two ways into a mode are two modes the moment one of them changes something the other
+    /// does not.
+    /// </summary>
+    public void EditWidthProfile(PathItem? path)
+    {
+        WidthProfileTarget = path;
+        _profileGrip = null;
+        _profileDragStart = null;
+        _profileDragProfile = null;
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// The handles the mode is showing right now, in world coordinates: one per width point of the
+    /// profile being edited, or none when the target has no profile.
+    ///
+    /// During a drag these are the previewed ones - what is on screen - rather than the model's, so a
+    /// driver reading them sees the same thing a person does.
+    /// </summary>
+    public IReadOnlyList<WidthProfileHandle> WidthProfileHandles()
+        => ProfileEdit() is { } edit
+            ? WidthProfileAnnotators.Handles(edit.Path, _profileDragProfile ?? edit.Profile)
+            : Array.Empty<WidthProfileHandle>();
+
+    /// <summary>
+    /// The profile the mode is editing, with the path and the stroke it came from - or null when the
+    /// target has no profile, or names one the document does not have.
+    ///
+    /// The profile edited is the **document's own asset**, which is the one every stroke that uses it
+    /// draws from. Editing a stroke's private copy would change one stroke while the asset it names
+    /// stayed as it was, so re-applying the asset would undo the gesture - which is what an asset means.
+    /// A name that resolves to nothing is not a profile this can edit, and the handles are simply not
+    /// offered; <c>profile.missing</c> is where that is reported.
+    /// </summary>
+    private (PathItem Path, int StrokeIndex, WidthProfileSpec Profile)? ProfileEdit()
+    {
+        if (WidthProfileTarget is not { } path || _document is null || path.OwningLayer() is null)
+        {
+            return null;
+        }
+
+        for (int i = path.Strokes.Count - 1; i >= 0; i--)
+        {
+            if (path.Strokes[i].WidthProfile is not { IsEmpty: false } named)
+            {
+                continue;
+            }
+
+            // Topmost first: the stroke a person is looking at is the one drawn last.
+            return _document.FindProfile(named.Name) is { } stored
+                ? (path, i, stored)
+                : null;
+        }
+
+        return null;
+    }
+
+    /// <summary>Grabs a width-profile grip if the press is on one. False means "not on a grip".</summary>
+    private bool TryBeginProfileGrip(Point2D model)
+    {
+        if (ProfileEdit() is not { } edit ||
+            WidthProfileAnnotators.HitTest(edit.Path, edit.Profile, model, PickTolerance * 1.6)
+                is not { } grip)
+        {
+            return false;
+        }
+
+        _profileGrip = grip;
+        _profileDragStroke = edit.StrokeIndex;
+        _profileDragStart = edit.Profile;
+        _profileDragProfile = null;
+        return true;
+    }
+
+    /// <summary>Places the profile the pointer is dragging.</summary>
+    private void ProfileDrag(WidthProfileGrip grip, Point2D model)
+    {
+        if (ProfileEdit() is not { } edit || _profileDragStart is not { } start)
+        {
+            return;
+        }
+
+        // Always measured from the profile as it was when the press happened, so the drag is absolute:
+        // accumulating each move's arithmetic makes a slow drag and a fast one to the same place stop
+        // at different widths.
+        _profileDragProfile = WidthProfileAnnotators.Dragged(edit.Path, start, grip, model);
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Commits a width-profile drag as one undo step, through the operation a driver would call.
+    ///
+    /// The canvas never writes the profile itself. It composes a preview while the pointer is down, and
+    /// the model changes once, here, by invoking <c>profile.setPoint</c> - the same entry point the HTTP
+    /// endpoint and the assistant use. A dragged handle and a called operation are therefore one edit
+    /// rather than two that agree until somebody changes one of them.
+    /// </summary>
+    private void CommitProfileDrag(WidthProfileGrip grip)
+    {
+        WidthProfileSpec? dragged = _profileDragProfile;
+        WidthProfileSpec? start = _profileDragStart;
+        _profileDragProfile = null;
+        _profileDragStart = null;
+
+        if (dragged is null || start is null || _vm is null ||
+            grip.Index < 0 || grip.Index >= start.Points.Count || grip.Index >= dragged.Points.Count)
+        {
+            return;
+        }
+
+        WidthPoint before = start.Points[grip.Index];
+        WidthPoint after = dragged.Points[grip.Index];
+        if (after == before)
+        {
+            // A press that never moved is not an edit. Committing it would put an undo step on the
+            // stack that undoes to exactly where it started, which reads as "undo did nothing".
+            return;
+        }
+
+        try
+        {
+            EditorOperations.Invoke(
+                new AutomationContext { ViewModel = _vm },
+                "profile.setPoint",
+                System.Text.Json.JsonSerializer.SerializeToElement(new
+                {
+                    name = start.Name,
+                    index = grip.Index,
+                    left = after.LeftWidth,
+                    right = after.RightWidth,
+                }));
+        }
+        catch (EditorOperationException)
+        {
+            // The profile went out from under the gesture - deleted or renamed while the pointer was
+            // down. The preview is dropped rather than written, so the canvas falls back to the model.
+        }
+    }
+
+    /// <summary>
+    /// The width-profile handles: for every width point, the two edges of the stroke there joined
+    /// across it, over a dashed trace of the path they are measured along.
+    ///
+    /// Drawn in the selection colour, because they are that selection's chrome. The trace is what makes
+    /// a profile on a curve readable: without it the handles are a row of discs floating in space.
+    /// </summary>
+    private void PaintWidthProfileAnnotators(DrawingContext context)
+    {
+        if (ProfileEdit() is not { } edit)
+        {
+            return;
+        }
+
+        IReadOnlyList<WidthProfileHandle> handles =
+            WidthProfileAnnotators.Handles(edit.Path, _profileDragProfile ?? edit.Profile);
+        if (handles.Count == 0)
+        {
+            return;
+        }
+
+        var accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
+        var pen = new Pen(accent, 1.6);
+        var trace = new Pen(new SolidColorBrush(Color.FromArgb(0x80, 0x4C, 0x9A, 0xFF)), 1.0,
+            new DashStyle(new double[] { 3.0, 3.0 }, 0.0));
+
+        context.DrawGeometry(null, trace, BuildScreenGeometry(edit.Path));
+
+        foreach (WidthProfileHandle handle in handles)
+        {
+            Point left = ModelToScreen(handle.Left.Point);
+            Point right = ModelToScreen(handle.Right.Point);
+            context.DrawLine(pen, left, right);
+            context.DrawEllipse(Brushes.White, pen, left, 4, 4);
+            context.DrawEllipse(Brushes.White, pen, right, 4, 4);
+        }
+    }
+
+    /// <summary>Arms the width-profile mode on the primary selection, or disarms it when already armed.</summary>
+    private void ToggleWidthProfileEdit()
+        => EditWidthProfile(IsEditingWidthProfile ? null : _vm?.PrimarySelection as PathItem);
+
+    /// <summary>
+    /// Whether a key selects a tool. Any of them leaves the width-profile mode: a mode that kept the
+    /// pointer while the toolbar said "pen" would swallow the pen's clicks, and the toolbar is what a
+    /// person trusts about what the next click will do.
+    /// </summary>
+    private static bool IsToolKey(Key key)
+        => key is Key.V or Key.A or Key.P or Key.T or Key.O or Key.M or Key.L or Key.Q or Key.C
+            or Key.N or Key.S;
 
     private void SelectDrag(Point2D model)
     {
@@ -3984,8 +4242,9 @@ public sealed class CanvasWorkspace : Control
         // **Every stroke, bottom to top.** Each one states its own width, colour, cap, join, miter limit and
         // dash, because a pen is built per stroke - so the canvas and the exported file agree about a stack
         // rather than each picking the stroke it happened to read.
-        foreach (StrokeSpec stroke in path.Strokes)
+        for (int strokeIndex = 0; strokeIndex < path.Strokes.Count; strokeIndex++)
         {
+            StrokeSpec stroke = StrokeToPaint(path, strokeIndex, path.Strokes[strokeIndex]);
             if (!stroke.HasVisibleOutline)
             {
                 continue;
@@ -4026,6 +4285,22 @@ public sealed class CanvasWorkspace : Control
             }
         }
     }
+
+    /// <summary>
+    /// The stroke to draw: while a width-profile grip is being dragged, the profile the pointer is
+    /// dragging **instead of** the one in the model.
+    ///
+    /// The preview is composed here for painting rather than written into the path, because the model
+    /// is the session's to change and a live drag must not be a second place the state lives. The
+    /// commit happens once, on release, through the operation - so the gesture is one undo step and
+    /// nothing has to be put back if it ends where it began.
+    /// </summary>
+    private StrokeSpec StrokeToPaint(PathItem path, int index, StrokeSpec stroke)
+        => _profileDragProfile is { } preview &&
+           index == _profileDragStroke &&
+           ReferenceEquals(path, WidthProfileTarget)
+            ? stroke with { WidthProfile = preview }
+            : stroke;
 
     /// <summary>
     /// The region a variable-width stroke covers, as geometry ready to draw.
@@ -4705,6 +4980,13 @@ public sealed class CanvasWorkspace : Control
         if (_vm.HasSegmentSelection)
         {
             PaintSegmentHighlights(context);
+        }
+
+        // The width-profile mode's handles go over whatever the tool drew: while the mode is on they
+        // are what the pointer is aimed at, and on a fat stroke they sit outside the selection box.
+        if (IsEditingWidthProfile)
+        {
+            PaintWidthProfileAnnotators(context);
         }
 
         // A selected shape's control points, drawn where their parameters live.
@@ -6083,8 +6365,24 @@ public sealed class CanvasWorkspace : Control
         // Tool keys switch the tool and nothing else. Leaving the pen no longer ends the path it
         // was drawing: that is what closing it or Escape is for, so a look at the node tool and a
         // return carries on from the last point.
+        //
+        // A tool key also leaves the width-profile mode, which is not a tool: while it is on the canvas
+        // ignores clicks that miss a handle, and a mode that kept the pointer while the toolbar said
+        // "pen" would make the pen look broken.
+        if (IsEditingWidthProfile && IsToolKey(e.Key))
+        {
+            EditWidthProfile(null);
+        }
+
         switch (e.Key)
         {
+            case Key.W:
+                // Illustrator's width tool, on the W key: the selected stroke's profile opens on the
+                // canvas, which is what profile.editMode does - one mode, two ways in.
+                ToggleWidthProfileEdit();
+                e.Handled = true;
+                break;
+
             case Key.V:
                 _vm.Tool = EditorTool.Select;
                 e.Handled = true;
@@ -6158,7 +6456,12 @@ public sealed class CanvasWorkspace : Control
                 break;
 
             case Key.Escape or Key.Enter:
-                if (_vm.Tool == EditorTool.Artboard)
+                if (IsEditingWidthProfile)
+                {
+                    // The promise this mode makes: it never traps the pointer, so Escape always leaves.
+                    EditWidthProfile(null);
+                }
+                else if (_vm.Tool == EditorTool.Artboard)
                 {
                     _vm.Tool = EditorTool.Select;
                 }
