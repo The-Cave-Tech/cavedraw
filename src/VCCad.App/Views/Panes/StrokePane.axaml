@@ -45,6 +45,29 @@
         </ComboBox>
       </Grid>
 
+      <TextBlock Text="EFFECTS" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
+                 Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- The order is the picture: roughen inside an offset is not an offset inside a roughen. So the list is a
+           list, bottom of the stack first, and the buttons move the selected row within it. -->
+      <ListBox x:Name="EffectList" Height="90" Background="Transparent">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <Grid ColumnDefinitions="*,Auto" Height="20">
+              <TextBlock Grid.Column="0" Text="{Binding Label}" VerticalAlignment="Center"
+                         Foreground="{DynamicResource VcText}" FontSize="{DynamicResource VcFontSize}"/>
+              <TextBlock Grid.Column="1" Text="{Binding Badge}" VerticalAlignment="Center"
+                         Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+
+      <Grid ColumnDefinitions="*,*" ColumnSpacing="4">
+        <Button x:Name="MoveEffectUpButton" Grid.Column="0" Content="Up" HorizontalAlignment="Stretch"/>
+        <Button x:Name="MoveEffectDownButton" Grid.Column="1" Content="Down" HorizontalAlignment="Stretch"/>
+      </Grid>
+
       <!-- What the PDF export will leave out, from the same list the exporter is checked against. A person should
            learn it here rather than by opening the exported file and finding the effect missing. -->
       <TextBlock x:Name="ExportWarning" IsVisible="False" TextWrapping="Wrap"

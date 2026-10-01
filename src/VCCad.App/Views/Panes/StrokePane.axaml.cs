@@ -35,6 +35,12 @@ public partial class StrokePane : UserControl
             };
             box.LostFocus += (_, _) => ApplyNow();
         }
+
+        // The effects list, ordered because the order is the picture. The two moves go through the session methods
+        // the operations call, so a person and a driver do the same thing - and the list is rebuilt from the model
+        // after each, so it cannot show an order the document does not have.
+        MoveEffectUpButton.Click += (_, _) => MoveEffect(+1);
+        MoveEffectDownButton.Click += (_, _) => MoveEffect(-1);
     }
 
     /// <summary>Applies the current stroke fields to the selection (and current style).</summary>
@@ -91,10 +97,12 @@ public partial class StrokePane : UserControl
             StrokeWidthBox.Text = string.Empty;
             MiterBox.Text = string.Empty;
             ShowExportWarning(null);
+            RefreshEffects(null);
             return;
         }
 
         ShowExportWarning(path);
+        RefreshEffects(path);
 
         _syncing = true;
         if (!StrokeWidthBox.IsFocused)
@@ -168,6 +176,80 @@ public partial class StrokePane : UserControl
 
         ExportWarning.Text = missing.Length == 0 ? string.Empty : "Not in the PDF export: " + string.Join(" ", missing);
         ExportWarning.IsVisible = missing.Length > 0;
+    }
+
+    /// <summary>One row of the effects list: the effect, and whether the export will carry it.</summary>
+    private sealed record EffectRow(string Label, string Badge, int Index, bool Raster);
+
+    /// <summary>The rows last shown, so a button can ask which one is selected without guessing at the control's items.</summary>
+    private List<EffectRow> _effectRows = new();
+
+    /// <summary>
+    /// The stroke's effects, in the order they apply.
+    ///
+    /// Outline effects first and then the raster ones, because those are two lists the model keeps separately and
+    /// pretending otherwise would let a move put an outline effect into the raster list. The row remembers which
+    /// list it came from, which is what makes the move land in the right one.
+    /// </summary>
+    private void RefreshEffects(PathItem? path)
+    {
+        var rows = new List<EffectRow>();
+
+        if (path is not null)
+        {
+            StrokeSpec stroke = path.Stroke;
+            for (int i = 0; i < stroke.AllEffects.Count; i++)
+            {
+                OutlineEffectSpec effect = stroke.AllEffects.ElementAt(i);
+                rows.Add(new EffectRow(effect.Kind.ToString(), string.Empty, i, Raster: false));
+            }
+
+            if (stroke.AllRasterEffects is { } raster)
+            {
+                for (int i = 0; i < raster.Count; i++)
+                {
+                    // Raster effects are the honest case: the export does not carry them, so the row says so
+                    // rather than leaving it to the block below to explain after the fact.
+                    rows.Add(new EffectRow(raster[i].Kind.ToString(), "not exported", i, Raster: true));
+                }
+            }
+        }
+
+        int keep = EffectList.SelectedIndex;
+        _effectRows = rows;
+        EffectList.ItemsSource = rows;
+        EffectList.SelectedIndex = rows.Count == 0 ? -1 : Math.Clamp(keep, 0, rows.Count - 1);
+        MoveEffectUpButton.IsEnabled = rows.Count > 1;
+        MoveEffectDownButton.IsEnabled = rows.Count > 1;
+    }
+
+    /// <summary>
+    /// Moves the selected effect within its own list, through the same session method the operation calls, and then
+    /// re-reads the list so what is shown is the model's order rather than the list's own idea of it.
+    ///
+    /// "+1" is towards the top of the panel, which is later in the list: effects apply from the start, so the bottom
+    /// row is applied first and moving a row up moves it later.
+    /// </summary>
+    private void MoveEffect(int direction)
+    {
+        if (_vm is null || EffectList.SelectedIndex < 0 || EffectList.SelectedIndex >= _effectRows.Count)
+        {
+            return;
+        }
+
+        EffectRow row = _effectRows[EffectList.SelectedIndex];
+
+        int to = row.Index + direction;
+        int changed = row.Raster
+            ? _vm.ActiveSession.MoveStrokeRasterEffect(row.Index, to)
+            : _vm.ActiveSession.MoveStrokeEffect(row.Index, to);
+
+        if (changed == 0)
+        {
+            return;
+        }
+
+        Refresh();
     }
 
 }
