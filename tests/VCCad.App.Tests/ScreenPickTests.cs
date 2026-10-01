@@ -16,6 +16,7 @@ namespace VCCad.App.Tests;
 /// </summary>
 public class ScreenPickTests : IDisposable
 {
+    private readonly ColorRgb? _wasPicked = EditorColorState.Shared.LastPicked;
     /// <summary>A sampler that answers from a table, and can refuse the way an unsupported platform does.</summary>
     private sealed class FakeScreen : IScreenColourSampler
     {
@@ -37,6 +38,7 @@ public class ScreenPickTests : IDisposable
     public void Dispose()
     {
         // Never leak the stand-in into the next test.
+        EditorColorState.Shared.RestorePicked(_wasPicked);
         ScreenColour.ResetSampler();
         GC.SuppressFinalize(this);
     }

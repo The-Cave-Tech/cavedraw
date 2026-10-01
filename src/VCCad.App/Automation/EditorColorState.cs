@@ -53,6 +53,15 @@ public sealed class EditorColorState
     /// </summary>
     public ColorRgb? LastPicked { get; private set; }
 
+    /// <summary>
+    /// Puts the picked colour back as it was.
+    ///
+    /// `LastPicked` is a **result** rather than a selection, so there is no public way to un-pick a colour - a
+    /// person cannot clear a result. This exists so a test that drives a pick can put the shared state back
+    /// instead of leaving its colour behind for whatever runs next.
+    /// </summary>
+    internal void RestorePicked(ColorRgb? colour) => LastPicked = colour;
+
     /// <summary>Records a colour the screen picker chose, and makes it the working colour.</summary>
     public void SetPicked(ColorRgb color)
     {

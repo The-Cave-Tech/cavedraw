@@ -21,6 +21,7 @@ namespace VCCad.App.Tests;
 /// </summary>
 public class ColorsPaneEyedropperTests : IDisposable
 {
+    private readonly ColorRgb? _wasPicked = EditorColorState.Shared.LastPicked;
     private static (ColorsPane Pane, EditorViewModel Vm, PathItem Path) Host()
     {
         var vm = new EditorViewModel();
@@ -46,6 +47,7 @@ public class ColorsPaneEyedropperTests : IDisposable
 
     public void Dispose()
     {
+        EditorColorState.Shared.RestorePicked(_wasPicked);
         ScreenColour.ResetSampler();
         GC.SuppressFinalize(this);
     }
