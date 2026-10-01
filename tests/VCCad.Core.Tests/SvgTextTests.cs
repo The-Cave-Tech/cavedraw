@@ -151,25 +151,35 @@ public class SvgTextTests
     }
 
     /// <summary>
-    /// **A colour change starts a new block, because the model has one colour per block and not per run.** This is
-    /// the same split the PDF importer makes, and it is the honest answer: two runs of different colours cannot be
-    /// one object without one of them being repainted.
+    /// **A colour change stays inside one block, because a run holds its own colour.**
+    ///
+    /// The file wrote one `text` element with two `tspan`s, so it is one object with two colours. This used to be
+    /// two blocks - the reader split per colour because the painter and the exporter painted a block in the block's
+    /// colour, and splitting kept each line looking right at the cost of the structure the file has. Once
+    /// <c>CanvasWorkspace.PaintText</c> and the exporter read <see cref="TextItem.ColourOf"/>, the split is no
+    /// longer needed and the block is the one the file wrote: an edit to the string as a whole is an edit to one
+    /// object again. See #161.
+    ///
+    /// This test was `TwoColouredTspansBecomeTwoBlocksWithTheirOwnColours`, which pinned the split.
     /// </summary>
     [Fact]
-    public void TwoColouredTspansBecomeTwoBlocksWithTheirOwnColours()
+    public void TwoColouredTspansStayOneBlockWithTwoRunColours()
     {
         SvgImportResult result = Read(
             "<text x=\"0\" y=\"40\" font-size=\"20\">" +
             "<tspan fill=\"#ff0000\">red</tspan><tspan fill=\"#0000ff\">blue</tspan></text>");
 
-        TextItem[] blocks = Blocks(result);
-        Assert.Equal(2, blocks.Length);
+        TextItem item = Block(result);
+        Assert.Equal(2, item.Runs.Count);
 
-        Assert.Equal("red", Assert.Single(blocks[0].Runs).Text);
-        Assert.Equal(new ColorRgb(1.0, 0.0, 0.0), blocks[0].Color);
+        Assert.Equal("red", item.Runs[0].Text);
+        Assert.Equal("blue", item.Runs[1].Text);
 
-        Assert.Equal("blue", Assert.Single(blocks[1].Runs).Text);
-        Assert.Equal(new ColorRgb(0.0, 0.0, 1.0), blocks[1].Color);
+        // The block's own colour is the first run's, and the second run carries the colour the file gave it - so
+        // `ColourOf` answers with the file's paint for both.
+        Assert.Equal(new ColorRgb(1.0, 0.0, 0.0), item.Color);
+        Assert.Equal(new ColorRgb(1.0, 0.0, 0.0), item.ColourOf(item.Runs[0]));
+        Assert.Equal(new ColorRgb(0.0, 0.0, 1.0), item.ColourOf(item.Runs[1]));
     }
 
     /// <summary>
@@ -462,8 +472,9 @@ public class SvgTextTests
     ///
     /// Four of these used to be in the list and are not any more: `letter-spacing`, `word-spacing`, `font-stretch`
     /// and `font-variant` have fields on the run as of #147 and are resolved onto it instead. Their half of this
-    /// test lives in `SvgTextModelExtensionTests`, where the value that arrives on the model is asserted rather
-    /// than the warning that is no longer there.
+    /// test lives in `SvgTextModelExtensionTests`, where the value that arrives on the model is asserted. The
+    /// width and the variant are still *named* in a warning, as of #161, but for a different fact: the value is
+    /// kept and no face is chosen by it, so the run draws in the family's own face.
     /// </summary>
     [Fact]
     public void PropertiesTheModelCannotHoldAreReported()
@@ -504,11 +515,20 @@ public class SvgTextTests
                 $"expected a warning naming {wanted}; got: {string.Join(" | ", result.Warnings)}");
         }
 
-        // And the four that are kept are not reported as losses.
-        foreach (string gone in new[] { "letter-spacing", "word-spacing", "font-stretch", "font-variant" })
+        // And the two the model keeps are not reported as *losses*. They are reported for a different reason as of
+        // #161 - the face is chosen by family, weight and slant only, so the width and the variant are held and not
+        // drawn - which is asserted on its own below and in `SvgTextModelExtensionTests`.
+        foreach (string gone in new[] { "letter-spacing", "word-spacing" })
         {
             Assert.DoesNotContain(result.Warnings, w => w.Contains(gone, StringComparison.Ordinal));
         }
+
+        Assert.Contains(result.Warnings, w =>
+            w.Contains("font-stretch=\"condensed\"", StringComparison.Ordinal) &&
+            w.Contains("no face is selected by width", StringComparison.Ordinal));
+        Assert.Contains(result.Warnings, w =>
+            w.Contains("font-variant=\"small-caps\"", StringComparison.Ordinal) &&
+            w.Contains("no face is selected by variant", StringComparison.Ordinal));
     }
 
     /// <summary>

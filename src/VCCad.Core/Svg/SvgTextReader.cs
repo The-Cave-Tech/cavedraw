@@ -14,15 +14,16 @@ namespace VCCad.Core.Svg;
 /// model places a block at one origin and lays its runs out in sequence. So a piece of the file becomes a run in the
 /// block it continues, and starts a new block when it cannot:
 ///
-/// <list type="bullet">
+/// /// <list type="bullet">
 /// <item>A piece on the same baseline, in the same colour, starting where the model's own layout would have put it -
 /// or positioned, in which case the room the file left is kept as the advance of the run before it - joins the
 /// block as another run.</item>
-/// <item>A piece on another baseline, in another colour, or anchored differently starts a block of its own. The
-/// baseline and the anchor are the model's shape. The colour is not - a run holds its own colour - but the split is
-/// kept because the painter and the PDF exporter still paint a block with the block's colour, and splitting keeps
-/// each visual line exactly the colour the file gave it until they read the run's own. This is the same split the
-/// PDF importer makes.</item>
+/// <item>A piece on another baseline, or anchored differently, starts a block of its own: the baseline and the
+/// anchor are the model's shape.</item>
+/// <item>A piece in another colour is another **run** of the same block, not another block. A run holds its own
+/// colour and the painter and the exporter both read it, so the file's one `text` element with two coloured
+/// `tspan`s is one object with two colours - which is also what keeps an edit to the string as a whole an edit to
+/// one thing. It used to start a block per colour, because nothing painted a run's own; see #161.</item>
 /// </list>
 ///
 /// **Nothing is measured into the document that the file did not say, except the advance the model needs.** A gap
@@ -176,9 +177,10 @@ public static partial class SvgReader
                 // a 10pt word beside a 24pt one lands on the line rather than below it.
                 PlacedAscentEm = (chunk.Y - current.Item.Origin.Y) / chunk.Style.FontSize,
 
-                // The colour of a run that states one of its own. Written only when it differs from the block's,
-                // which the split above makes the usual case of "it does not": the file's own paint is kept either
-                // way, and a block of one colour grows no member it does not need.
+                // The colour of a run that states one of its own, written only when it differs from the block's.
+                // The block's colour is the first piece's, so a one-colour block grows no member it does not need
+                // while a `tspan` that changes the fill - which no longer starts a block - carries its colour here,
+                // and `ColourOf` answers with the file's paint for every run either way.
                 Color = chunk.Paint.Fill.Color == current.Item.Color ? null : chunk.Paint.Fill.Color,
             };
 
@@ -194,17 +196,18 @@ public static partial class SvgReader
     }
 
     /// <summary>
-    /// Whether a piece belongs in the block in hand: one origin and one colour serve a whole block.
+    /// Whether a piece belongs in the block in hand: one origin, one anchor and one leading serve a whole block.
     ///
-    /// The colour is kept as a reason to start a block even though a run may hold its own, because the painter and
-    /// the PDF exporter still paint a block in the block's colour. Splitting is exact and costs nothing; keeping
-    /// the file's one line as one object would cost the colour until those two read the run's own.
+    /// **The colour is deliberately not a reason to start a block any more.** A run holds its own colour, and the
+    /// canvas and the PDF exporter both read <see cref="TextItem.ColourOf"/> as of #161, so a piece in another
+    /// colour stays a run of the block the file wrote - which is what makes the two-coloured line one object to
+    /// edit. A *gradient* still is a reason: the model fills a run with one colour, so a change of paint server is
+    /// a change the block cannot hold run by run, and `Place` resolves it once for the block.
     /// </summary>
     private static bool Holds(TextBlock block, TextChunk chunk)
         => Math.Abs(chunk.Y - block.First.Y) < 1e-9 &&
            block.Item.Alignment == chunk.Style.Anchor &&
            Math.Abs(block.Item.LineSpacing - chunk.Style.LineSpacing) < 1e-9 &&
-           Equals(block.First.Paint.Fill, chunk.Paint.Fill) &&
            block.First.Paint.FillGradientId == chunk.Paint.FillGradientId;
 
     /// <summary>

@@ -409,6 +409,16 @@ public static class PdfDocumentExporter
         return $"{Num(color.R)} {Num(color.G)} {Num(color.B)} " + (stroke ? "RG" : "rg");
     }
 
+    /// <summary>
+    /// The DeviceCMYK to write a run's fill with: the block's original ink values, but only for a run that draws
+    /// in the block's own colour.
+    ///
+    /// The model records the CMYK the file painted the block with, on the block. A run carrying a colour of its
+    /// own has no recorded ink, so writing the block's would paint it a colour the file never named - and the RGB
+    /// the run states is written instead.
+    /// </summary>
+    private static double[]? RunCmyk(TextItem text, TextRun run) => run.Color is null ? text.SourceCmyk : null;
+
     /// <summary>Every embedded image in the document, in a stable order.</summary>
     private static IEnumerable<ImageItem> AllImages(CadDocument document)
     {
@@ -936,7 +946,17 @@ public static class PdfDocumentExporter
                 alphas.Add(path.Stroke.Color.A * opacity * path.Opacity);
                 break;
             case TextItem text:
+                // Every colour the block draws with, not only the block's own: a run may carry its own, and a
+                // semi-transparent one needs its alpha state to exist even when the block's colour is opaque.
                 alphas.Add(text.Color.A * opacity);
+                foreach (TextRun run in text.Runs)
+                {
+                    if (run.Color is { } colour && colour.A != text.Color.A)
+                    {
+                        alphas.Add(colour.A * opacity);
+                    }
+                }
+
                 break;
             case ArtGroup group:
                 foreach (LayerItem child in group.Children)
@@ -1064,10 +1084,13 @@ public static class PdfDocumentExporter
         double ox = text.Origin.X - (sin * depth);
         double oy = text.Origin.Y + (cos * depth);
 
-        ops.Add(ColorOperator(text.Color, text.SourceCmyk, stroke: false));
+        // The fill the first run draws with. Setting it before `BT` keeps a block of one colour byte-for-byte
+        // what it was; a run that states another colour changes it inside the object below.
+        ColorRgb colour = text.ColourOf(first);
+        ops.Add(ColorOperator(colour, RunCmyk(text, first), stroke: false));
         if (alphaStates.HasTransparency)
         {
-            ops.Add($"{alphaStates.NameFor(text.Color.A)} gs");
+            ops.Add($"{alphaStates.NameFor(colour.A)} gs");
         }
 
         ops.Add("BT");
@@ -1078,6 +1101,22 @@ public static class PdfDocumentExporter
 
         foreach (TextRun run in text.Runs)
         {
+            // A run may carry its own colour, and this path deliberately writes the whole block as ONE text
+            // object - so the change has to be written *inside* it, between the runs. Splitting here instead
+            // would undo the reason the path exists: one object is what makes an extractor read a
+            // letter-spaced heading as one word.
+            ColorRgb runColour = text.ColourOf(run);
+            if (runColour != colour)
+            {
+                ops.Add(ColorOperator(runColour, RunCmyk(text, run), stroke: false));
+                if (alphaStates.HasTransparency)
+                {
+                    ops.Add($"{alphaStates.NameFor(runColour.A)} gs");
+                }
+
+                colour = runColour;
+            }
+
             string resource = embedder.NameForEmbedded(run.EmbeddedFont!);
             if (resource != current || Math.Abs(run.FontSize - currentSize) > 1e-9)
             {
@@ -1190,10 +1229,13 @@ public static class PdfDocumentExporter
                 double ox = text.Origin.X - (sin * depth) + (cos * pen);
                 double oy = text.Origin.Y + (cos * depth) + (sin * pen);
 
-                ops.Add(ColorOperator(text.Color, text.SourceCmyk, stroke: false));
+                // The run's own colour, through the one member that answers it. A block may hold several
+                // colours, and setting the block's for every run is what painted a two-coloured line in one.
+                ColorRgb runColour = text.ColourOf(run);
+                ops.Add(ColorOperator(runColour, RunCmyk(text, run), stroke: false));
                 if (alphaStates.HasTransparency)
                 {
-                    ops.Add($"{alphaStates.NameFor(text.Color.A)} gs");
+                    ops.Add($"{alphaStates.NameFor(runColour.A)} gs");
                 }
 
                 ops.Add("BT");

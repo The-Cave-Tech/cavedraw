@@ -4546,7 +4546,6 @@ public sealed class CanvasWorkspace : Control
     private void PaintText(DrawingContext context, TextItem text, double opacity)
     {
         Vector2D offset = text.ArtboardOffset();
-        IBrush brush = ToBrush(text.Color, opacity);
         TextMetrics metrics = MeasureText(text);
 
         // The block's own space, mapped to the page: mirror first, then turn. The mirror is on the
@@ -4626,6 +4625,14 @@ public sealed class CanvasWorkspace : Control
             TextRun run = text.Runs[box.Run];
             TextLine line = metrics.Layout.Lines[box.Line];
             int pieceStart = box.Start - runOffset[box.Run];
+
+            // **The run's own colour, through the one member that answers it.** A block may hold several
+            // colours - what SVG states with a `<tspan fill=...>` and a PDF content stream states by setting
+            // a colour partway through a text object - and this brush used to be taken once, before the loop,
+            // from the block's colour, so every run of a multi-coloured line drew in the block's. The export
+            // takes the same answer from `ColourOf`, which is what keeps the canvas and the page agreeing
+            // about the same text.
+            IBrush brush = ToBrush(text.ColourOf(run), opacity);
 
             // Placed by its baseline, never by the line's top edge.
             Point2D origin = text.Origin + offset

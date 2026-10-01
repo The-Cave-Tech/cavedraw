@@ -198,6 +198,7 @@ internal sealed record SvgTextStyle(
         }
 
         ReportUnkeptProperties(Value, warn);
+        ReportUnselectedFace(stretch, variant, warn);
 
         return new SvgTextStyle(
             family, size, weight >= 600, italic, anchor, preserve, lineSpacing,
@@ -317,6 +318,46 @@ internal sealed record SvgTextStyle(
                 "common-ligatures" or "no-common-ligatures" or "discretionary-ligatures" or
                 "no-discretionary-ligatures" or "historical-ligatures" or "no-historical-ligatures" or
                 "contextual" or "no-contextual");
+
+    /// <summary>
+    /// Reports a width or a variant the model holds and this build does not draw.
+    ///
+    /// A run names **one family**, and the face is chosen from it by weight and slant, so `semi-condensed` and
+    /// `small-caps` are kept faithfully and then drawn in the family's own face. Saying so is the whole of what #161
+    /// asks for here: a value the model holds, the sidecar round-trips and the painter ignores is the one gap a
+    /// reader of the document cannot see - the document looks as though the width were in force and only the page
+    /// disagrees.
+    ///
+    /// Selecting such a face is not something this build can do half-way. The canvas and the export have to agree
+    /// about the same text - that is the invariant #159 and #162 exist for - and the export supplies a face from the
+    /// standard-font chain, which has no width-selected programme to embed. So both draw the family's own face, and
+    /// both are told. Choosing the values to keep is still the reader's job, which is why this is reported here and
+    /// not inferred from a number somewhere downstream.
+    ///
+    /// Both are reported only when the file says something: `normal` is the initial value and is stored as absence,
+    /// so a document Inkscape wrote states neither and is not buried in noise.
+    /// </summary>
+    private static void ReportUnselectedFace(string? stretch, string? variant, Action<string>? warn)
+    {
+        if (warn is null)
+        {
+            return;
+        }
+
+        if (stretch is { Length: > 0 })
+        {
+            warn(
+                $"font-stretch=\"{stretch}\" is kept on the run, and no face is selected by width: " +
+                "the face is chosen by family, weight and slant, so the run draws in the family's own face");
+        }
+
+        if (variant is { Length: > 0 })
+        {
+            warn(
+                $"font-variant=\"{variant}\" is kept on the run, and no face is selected by variant: " +
+                "the face is chosen by family, weight and slant, so the run draws in the family's own face");
+        }
+    }
 
     /// <summary>
     /// The properties that carry real layout and that the model has no field for.

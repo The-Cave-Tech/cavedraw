@@ -18,6 +18,11 @@ namespace VCCad.Core.Tests;
 /// spelling of the face's width and variant is kept so a value the model does not act on is not quietly dropped
 /// either.
 ///
+/// The width and the variant are the one pair the model still cannot *draw*: a face is chosen by family, weight and
+/// slant, so as of #161 the reader names that limitation in a warning as well as keeping the value. The tests below
+/// assert both halves - the value on the run, and the fact that it is said out loud - because "kept" and "drawn"
+/// are not the same statement and the gap between them is what #161 is about.
+///
 /// Every case is written as the file's value and the model's value, because "a warning appeared" cannot tell a
 /// property that was kept from one that was merely mentioned.
 /// </summary>
@@ -200,19 +205,24 @@ public class SvgTextModelExtensionTests
     // ---------------------------------------------------------------- the face's width and variant
 
     /// <summary>
-    /// **The width axis the file asks for is kept, and no longer reported as unkeepable.** The model names one
-    /// family per run and does not pick a face by width, so what is kept is the file's own word - but it is kept,
-    /// which is the difference between a gap somebody can act on and a heading that quietly lost its width.
+    /// **The width axis the file asks for is kept, and it is reported that no face is chosen by it.** The model
+    /// names one family per run and this build selects a face from it by weight and slant only, so the file's own
+    /// word is what is kept - and the run draws in the family's own face. That second half is said out loud as of
+    /// #161: a value that is held, round-tripped and never drawn is the one gap a reader of the document cannot
+    /// see, and a heading that quietly lost its width looks deliberate.
     /// </summary>
     [Fact]
-    public void TheFontStretchTheFileAsksForIsKeptOnTheRun()
+    public void TheFontStretchTheFileAsksForIsKeptAndReportedAsUnselected()
     {
         SvgImportResult result = Read(
             "<text x=\"0\" y=\"20\" font-size=\"10\" font-stretch=\"semi-condensed\">hi</text>");
 
         TextRun run = Assert.Single(Block(result).Runs);
         Assert.Equal("semi-condensed", run.FontStretch);
-        Assert.DoesNotContain(result.Warnings, w => w.Contains("font-stretch", StringComparison.Ordinal));
+
+        Assert.Contains(result.Warnings, w =>
+            w.Contains("font-stretch=\"semi-condensed\"", StringComparison.Ordinal) &&
+            w.Contains("no face is selected by width", StringComparison.Ordinal));
     }
 
     /// <summary>A percentage width is the same fact in another unit, and it survives the same way.</summary>
@@ -223,23 +233,29 @@ public class SvgTextModelExtensionTests
             "<text x=\"0\" y=\"20\" font-size=\"10\" font-stretch=\"110%\">hi</text>");
 
         Assert.Equal("110%", Assert.Single(Block(result).Runs).FontStretch);
-        Assert.DoesNotContain(result.Warnings, w => w.Contains("font-stretch", StringComparison.Ordinal));
+        Assert.Contains(result.Warnings, w =>
+            w.Contains("font-stretch=\"110%\"", StringComparison.Ordinal) &&
+            w.Contains("no face is selected by width", StringComparison.Ordinal));
     }
 
     /// <summary>
-    /// **The variant the file asks for is kept, and small caps is not silently dropped.** A run now says the face
-    /// is wanted in small caps even though nothing yet selects such a face, which is the honest half: the value
-    /// survives a save and a round trip instead of vanishing.
+    /// **The variant the file asks for is kept, and it is reported that no face is chosen by it.** A run says the
+    /// face is wanted in small caps even though nothing selects such a face, which is the honest half: the value
+    /// survives a save and a round trip instead of vanishing, and the drawing limitation is named rather than left
+    /// for the person to notice on the page. See #161.
     /// </summary>
     [Fact]
-    public void TheFontVariantTheFileAsksForIsKeptOnTheRun()
+    public void TheFontVariantTheFileAsksForIsKeptAndReportedAsUnselected()
     {
         SvgImportResult result = Read(
             "<text x=\"0\" y=\"20\" font-size=\"10\" font-variant=\"small-caps\">hi</text>");
 
         TextRun run = Assert.Single(Block(result).Runs);
         Assert.Equal("small-caps", run.FontVariant);
-        Assert.DoesNotContain(result.Warnings, w => w.Contains("font-variant", StringComparison.Ordinal));
+
+        Assert.Contains(result.Warnings, w =>
+            w.Contains("font-variant=\"small-caps\"", StringComparison.Ordinal) &&
+            w.Contains("no face is selected by variant", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -316,26 +332,26 @@ public class SvgTextModelExtensionTests
     // ---------------------------------------------------------------- per-run colour
 
     /// <summary>
-    /// **A colour change still splits the block, and each block carries the file's colour exactly.** The run field
-    /// is on the model, but the user agent's painter and the PDF exporter paint a block in the block's colour, so a
-    /// two-coloured line is still two objects - and the colour of each is the colour the file named, which is the
-    /// half that has to be right. The split is the same one the PDF importer makes.
+    /// **A colour change no longer splits the block, and each run keeps the file's colour exactly.** The run field
+    /// is on the model, and as of #161 the painter and the PDF exporter read it, so the two-coloured line the file
+    /// wrote as one element is one object with two colours - which is also what makes it one thing to edit. This
+    /// test used to pin the opposite: two blocks, one per colour, because nothing painted a run's own.
     /// </summary>
     [Fact]
-    public void TwoColouredTspansBecomeTwoBlocksWithTheirOwnColours()
+    public void TwoColouredTspansStayOneBlockWithTwoRunColours()
     {
         SvgImportResult result = Read(
             "<text x=\"0\" y=\"40\" font-size=\"20\">" +
             "<tspan fill=\"#ff0000\">red</tspan><tspan fill=\"#0000ff\">blue</tspan></text>");
 
-        TextItem[] blocks = result.Document.AllItems().OfType<TextItem>().ToArray();
-        Assert.Equal(2, blocks.Length);
+        TextItem item = Assert.Single(result.Document.AllItems().OfType<TextItem>());
+        Assert.Equal(2, item.Runs.Count);
 
-        Assert.Equal("red", Assert.Single(blocks[0].Runs).Text);
-        Assert.Equal(new ColorRgb(1.0, 0.0, 0.0), blocks[0].Color);
+        Assert.Equal("red", item.Runs[0].Text);
+        Assert.Equal(new ColorRgb(1.0, 0.0, 0.0), item.ColourOf(item.Runs[0]));
 
-        Assert.Equal("blue", Assert.Single(blocks[1].Runs).Text);
-        Assert.Equal(new ColorRgb(0.0, 0.0, 1.0), blocks[1].Color);
+        Assert.Equal("blue", item.Runs[1].Text);
+        Assert.Equal(new ColorRgb(0.0, 0.0, 1.0), item.ColourOf(item.Runs[1]));
     }
 
     /// <summary>
