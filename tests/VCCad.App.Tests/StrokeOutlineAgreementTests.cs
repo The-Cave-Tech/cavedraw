@@ -39,6 +39,11 @@ public class StrokeOutlineAgreementTests
     /// artboard, so on an artboard at (0,0) the canvas's artboard offset is zero and the two coordinate systems
     /// are the same one - which is the only way this test can be a point-for-point comparison rather than a
     /// comparison that quietly tolerates a translation.
+    ///
+    /// The dash is part of the stroke, so it is part of what the outline is: the shared builder cuts the path
+    /// into the dashes before it becomes a region, and both renderers have to draw every one of them in the same
+    /// place. Comparing them on a solid band - which is what this test used to do, and what made it pass while
+    /// the dash was missing - would prove nothing about the dashes.
     /// </summary>
     [Fact]
     public void TheCanvasAndThePdfPlotTheSameOutlineForAnEffectedDashedProfile()
@@ -60,31 +65,40 @@ public class StrokeOutlineAgreementTests
             new EffectStack(new[] { OutlineEffectSpec.Roughen(3, seed: 5) }));
 
         IReadOnlyList<IReadOnlyList<Point2D>> canvas = CanvasWorkspace.ProfileLoops(path, path.Stroke);
-        IReadOnlyList<Point2D> loop = Assert.Single(canvas);
+
+        // A 6-on/3-off pattern offset by one on a 100-long line leaves twelve dashes, each a loop of its own.
+        Assert.Equal(12, canvas.Count);
+
+        IReadOnlyList<Point2D> drawn = canvas.SelectMany(loop => loop).ToArray();
 
         string content = Inflate(PdfDocumentExporter.Export(document));
         (double X, double Y)[] written = WrittenPoints(content).ToArray();
 
-        // A roughen of three on a twenty-wide band: four points, and the two renderers have to put every one of
-        // them in the same place. Asserting the count as well as the coordinates matters - a writer that dropped
-        // the loop's last point would otherwise pass on the points it did keep.
-        Assert.Equal(loop.Count, written.Length);
-        for (int i = 0; i < loop.Count; i++)
+        // A roughen of three on a twenty-wide band: every point, and the two renderers have to put each of them
+        // in the same place. Asserting the count as well as the coordinates matters - a writer that dropped a
+        // loop's last point would otherwise pass on the points it did keep.
+        Assert.Equal(drawn.Count, written.Length);
+        for (int i = 0; i < drawn.Count; i++)
         {
-            Assert.Equal(loop[i].X, written[i].X, 6);
-            Assert.Equal(loop[i].Y, written[i].Y, 6);
+            Assert.Equal(drawn[i].X, written[i].X, 6);
+            Assert.Equal(drawn[i].Y, written[i].Y, 6);
         }
 
         // And the effect reached the geometry rather than being carried and ignored: an unroughened 20-wide band
         // on this line is flat at y = -10 and y = +10, so a point away from both proves the roughen is in the
         // coordinates the canvas draws and the file records.
-        Assert.Contains(loop, p => Math.Abs(Math.Abs(p.Y) - 10.0) > 1e-6);
+        Assert.Contains(drawn, p => Math.Abs(Math.Abs(p.Y) - 10.0) > 1e-6);
 
-        // The dash is deliberately part of the stroke and deliberately not part of the geometry. Once a stroke is
-        // an outline it is a **region**, and dashing a region is not dashing the line it came from - both renderers
-        // ignore it, which is why the two still agree. No dash operator reaches the file, and the area above is
-        // the same with the dash as without it.
+        // No dash operator reaches the file: the dash is ink now, not a region, and a `d` operator would dash the
+        // fill's own outline - a different picture again.
         Assert.DoesNotContain(" d\n", content);
+
+        // **And the dash changed the picture.** The same stroke without its dash exports different geometry, so
+        // this test cannot pass by ignoring the dash on both sides of the comparison.
+        path.Stroke = path.Stroke with { Dash = DashPattern.None };
+        (double X, double Y)[] solid = WrittenPoints(Inflate(PdfDocumentExporter.Export(document))).ToArray();
+
+        Assert.NotEqual(written.Length, solid.Length);
     }
 
     /// <summary>The points a content stream draws, in order, as (x, y).</summary>
