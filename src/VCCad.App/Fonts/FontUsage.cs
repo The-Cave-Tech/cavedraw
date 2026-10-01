@@ -64,20 +64,85 @@ public static class FontUsage
     /// faces nor a metric-compatible platform clone can supply, or null when everything
     /// is covered. A PDF that simply does not embed Helvetica is not a problem — every
     /// viewer supplies it — so only a genuine gap is worth interrupting the person for.
+    ///
+    /// **Every part of this is news the person has to get.** The status bar appends this
+    /// string to whatever it is showing, so a fact that reaches only an operation reply
+    /// reaches only half the audience — the parity rule backwards. A width or variant the
+    /// file states is the same kind of fact as a substitution: the run is drawn in the
+    /// family's own face and not the one the file asked for, and the person looking at the
+    /// page is the one who has to know.
     /// </summary>
     public static string? Warning(CadDocument document)
     {
+        var parts = new List<string>();
+
         IReadOnlyList<string> missing = StandardFontResolver.Missing(document);
         if (missing.Count > 0)
         {
-            return $"⚠ no font for {string.Join(", ", missing)} — install the URW base-35 fonts " +
-                   "(fonts-urw-base35, or Ghostscript)";
+            parts.Add($"⚠ no font for {string.Join(", ", missing)} — install the URW base-35 fonts " +
+                      "(fonts-urw-base35, or Ghostscript)");
         }
 
         IReadOnlyList<string> unresolved = Unresolved(document);
-        return unresolved.Count == 0
-            ? null
-            : $"⚠ embedded font failed to load: {string.Join(", ", unresolved)}";
+        if (unresolved.Count > 0)
+        {
+            parts.Add($"⚠ embedded font failed to load: {string.Join(", ", unresolved)}");
+        }
+
+        // A face request that was not honoured follows the two font checks, because a font
+        // that could not be supplied at all is the more urgent of the two.
+        parts.AddRange(UnselectedFaceRequests(document).Select(sentence => "⚠ " + sentence));
+
+        return parts.Count == 0 ? null : string.Join("   ", parts);
+    }
+
+    /// <summary>
+    /// The widths and variants the document states that this build draws in the family's own face.
+    ///
+    /// A run names one family and the face is chosen from it by weight and slant, so a
+    /// <c>font-stretch</c> or <c>font-variant</c> the file wrote is kept faithfully and then not
+    /// selected by. That is the one loss a reader of the document cannot see — the sidecar holds
+    /// the value and the drawing ignores it — so it is said out loud. This is the person-facing
+    /// half of the sentence the SVG reader puts in its own warnings: the reader's copy is what
+    /// <c>document.importSvg</c> returns to a driver, and this is what the status bar shows, so
+    /// the two audiences are told the same thing. Only a value the file actually states is
+    /// reported — <c>normal</c> is stored as absence — so an ordinary import carries nothing.
+    /// </summary>
+    /// <remarks>
+    /// The wording is deliberately the reader's, word for word, because two sentences about one
+    /// fact would be two reports. The reader's copy is the canonical one (#161 tests it); the
+    /// App test that pins this surface reads that copy and demands it here, so a change to either
+    /// wording fails rather than drifting into two reports of the same thing.
+    ///
+    /// Reached through <see cref="CadDocument.AllItems"/>, so a run inside a group is found: Inkscape
+    /// wraps its text in groups, and a width written inside a `g` is exactly the case this must catch.
+    /// </remarks>
+    public static IReadOnlyList<string> UnselectedFaceRequests(CadDocument document)
+    {
+        var said = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (TextItem text in document.AllItems().OfType<TextItem>())
+        {
+            foreach (TextRun run in text.Runs)
+            {
+                if (run.FontStretch is { Length: > 0 } stretch && seen.Add("font-stretch=" + stretch))
+                {
+                    said.Add(
+                        $"font-stretch=\"{stretch}\" is kept on the run, and no face is selected by width: " +
+                        "the face is chosen by family, weight and slant, so the run draws in the family's own face");
+                }
+
+                if (run.FontVariant is { Length: > 0 } variant && seen.Add("font-variant=" + variant))
+                {
+                    said.Add(
+                        $"font-variant=\"{variant}\" is kept on the run, and no face is selected by variant: " +
+                        "the face is chosen by family, weight and slant, so the run draws in the family's own face");
+                }
+            }
+        }
+
+        return said;
     }
 
     /// <summary>
