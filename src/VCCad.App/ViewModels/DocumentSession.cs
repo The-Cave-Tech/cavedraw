@@ -1686,6 +1686,9 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// translate by <paramref name="translation"/>, scale by sx/sy about the pivot,
     /// then rotate by <paramref name="rotationDegrees"/> about the pivot.
     /// </summary>
+    /// <summary>What travels with an object when it is scaled. See <see cref="ScaleWithObject"/>.</summary>
+    public ScaleWithObject ScaleOptions { get; } = new();
+
     public void ApplyTransform(
         Point2D pivot, Vector2D translation, double scaleX, double scaleY, double rotationDegrees,
         bool ownOnly = false)
@@ -1716,9 +1719,22 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 path.TranslateGeometryBy(translation);
             }
 
+            double? strokeBefore = null;
             if (anyScale)
             {
                 path.ScaleGeometryAbout(localPivot, scaleX, scaleY);
+
+                // A stroke width is a distance in the document, so leaving it fixed makes a scaled drawing
+                // disagree with its own geometry: a piece scaled up keeps a hairline, one scaled down turns
+                // into a smear. The undo is the same step as the geometry, because a person who scales
+                // something twice and undoes once means both halves of it.
+                double measurement = ScaleWithObject.MeasurementFactor(scaleX, scaleY);
+                if (ScaleOptions.LineWeights && path.Stroke.HasVisibleOutline &&
+                    Math.Abs(measurement - 1.0) > 1e-9 && path.Stroke.Width > 0)
+                {
+                    strokeBefore = path.Stroke.Width;
+                    edits.Add(new SetStrokeWidthCommand(path, strokeBefore.Value, strokeBefore.Value * measurement));
+                }
             }
 
             if (anyRotation)
@@ -1727,6 +1743,30 @@ public sealed class DocumentSession : INotifyPropertyChanged
             }
 
             edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot()));
+        }
+
+        // **Text has no outline of its own**, so it was not transformed here at all: its geometry is where
+        // its origin is and how big its type is. A scale moves the origin, and - when the option is on -
+        // takes the type with it, which is the difference between enlarging a label and reflowing a frame.
+        foreach (TextItem text in _selectedObjects.OfType<TextItem>())
+        {
+            Point2D localPivot = pivot - text.ArtboardOffset();
+            Point2D origin = text.Origin;
+            var moved = new Point2D(
+                localPivot.X + ((origin.X - localPivot.X) * scaleX) + translation.X,
+                localPivot.Y + ((origin.Y - localPivot.Y) * scaleY) + translation.Y);
+
+            if (anyTranslation || anyScale)
+            {
+                edits.Add(new SetTextOriginCommand(text, origin, moved));
+            }
+
+            double measurement = ScaleWithObject.MeasurementFactor(scaleX, scaleY);
+            if (anyScale && ScaleOptions.TextFrameContents && text.Runs.Count > 0 &&
+                Math.Abs(measurement - 1.0) > 1e-9)
+            {
+                edits.Add(new ScaleTextFontCommand(text, measurement));
+            }
         }
 
         if (anyRotation)

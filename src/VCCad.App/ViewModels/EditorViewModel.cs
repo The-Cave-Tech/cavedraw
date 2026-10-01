@@ -480,6 +480,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public void ApplyStroke(double width, StrokeCap cap, StrokeJoin join, double miter, StrokeAlignment align,
         DashPattern? dash = null)
         => _active.ApplyStroke(width, cap, join, miter, align, dash);
+    /// <summary>What travels with an object when it is scaled, for the Transform pane and the API.</summary>
+    public VCCad.Core.Commands.ScaleWithObject ScaleOptions => _active.ScaleOptions;
+
     public void ApplyTransform(Point2D pivot, Vector2D translation, double sx, double sy, double rotationDegrees)
         => _active.ApplyTransform(pivot, translation, sx, sy, rotationDegrees);
 

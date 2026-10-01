@@ -1,0 +1,108 @@
+using VCCad.Core.Model;
+
+namespace VCCad.Core.Commands;
+
+/// <summary>
+/// What travels with an object when it is scaled.
+///
+/// These are the four entries of a vector editor's "scale with object" panel, and they are one group because
+/// they answer one question: when a shape gets bigger, which of the measurements attached to it get bigger
+/// too? A stroke width, a corner radius and a font size are all distances or sizes in the document, and
+/// leaving them behind is what makes a scaled drawing disagree with its own geometry.
+///
+/// Defaults are all on, which is what the editors this imitates do: a person who scales a shape and finds a
+/// hairline outline where there was a drawn one has been surprised by the wrong default.
+/// </summary>
+public sealed class ScaleWithObject
+{
+    /// <summary>Stroke widths scale with the object.</summary>
+    public bool LineWeights { get; set; } = true;
+
+    /// <summary>
+    /// Corner radii scale with the object.
+    ///
+    /// This one is satisfied by the geometry itself in this application: a rounded corner is baked into the
+    /// outline when it is rounded, so scaling the outline scales the corner with it. The flag exists so the
+    /// panel matches the others, and a test pins the behaviour it describes rather than leaving the claim
+    /// unbacked.
+    /// </summary>
+    public bool ShapeCorners { get; set; } = true;
+
+    /// <summary>Layer effect radii scale with the object. No effect carries one yet, so this does nothing.</summary>
+    public bool LayerEffectRadii { get; set; }
+
+    /// <summary>Type inside a text frame scales with the frame.</summary>
+    public bool TextFrameContents { get; set; } = true;
+
+    /// <summary>
+    /// The factor a scale applies to measurements that are not geometry.
+    ///
+    /// The **geometric mean** of the two axis factors, which is what makes an anisotropic scale behave: a
+    /// shape stretched twice as wide and left the same height has no single factor, and the mean is the one
+    /// that neither doubles a stroke nor leaves it alone. A uniform scale returns that factor exactly.
+    /// </summary>
+    public static double MeasurementFactor(double scaleX, double scaleY)
+    {
+        double product = Math.Abs(scaleX * scaleY);
+        return product <= 0 ? 1.0 : Math.Sqrt(product);
+    }
+}
+
+/// <summary>Changes a path's stroke width, keeping the rest of the stroke as it was.</summary>
+public sealed class SetStrokeWidthCommand : IUndoableCommand
+{
+    private readonly PathItem _path;
+    private readonly double _before;
+    private readonly double _after;
+
+    public SetStrokeWidthCommand(PathItem path, double before, double after)
+    {
+        _path = path;
+        _before = before;
+        _after = after;
+    }
+
+    public string Description => "Scale line weight";
+
+    public void Do() => _path.Stroke = _path.Stroke with { Width = _after };
+
+    public void Undo() => _path.Stroke = _path.Stroke with { Width = _before };
+}
+
+/// <summary>
+/// Scales every run of a text item's type by a factor, as one undo step.
+///
+/// Per-run rather than one size for the whole block: a heading and a caption in the same frame have different
+/// sizes, and scaling them to a single value would flatten the block's typography instead of enlarging it.
+/// </summary>
+public sealed class ScaleTextFontCommand : IUndoableCommand
+{
+    private readonly TextItem _item;
+    private readonly double[] _before;
+    private readonly double _factor;
+
+    public ScaleTextFontCommand(TextItem item, double factor)
+    {
+        _item = item;
+        _factor = factor;
+        _before = item.Runs.Select(r => r.FontSize).ToArray();
+    }
+
+    public string Description => "Scale type with the frame";
+
+    public void Do()
+    {
+        for (int i = 0; i < _item.Runs.Count && i < _before.Length; i++)
+        {
+            _item.Runs[i].FontSize = _before[i] * _factor;
+        }
+    }
+
+    public void Undo()
+    {
+        for (int i = 0; i < _item.Runs.Count && i < _before.Length; i++)
+        {
+            _item.Runs[i].FontSize = _before[i];
+        }
+    }
+}

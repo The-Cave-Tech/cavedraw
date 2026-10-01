@@ -3086,6 +3086,43 @@ public static class EditorOperations
             "",
             (ctx, p) => VCCad.App.Capture.CanvasRecording.Status());
 
+        Add("transform.scaleOptions",
+            "What is scaled when an object is scaled: its line weights, its shape corners, the radii of any " +
+            "layer effect, and the type inside a text frame. These are document preferences rather than " +
+            "properties of one object - they decide what a scale means.",
+            "lineWeights?:bool, shapeCorners?:bool, layerEffectRadii?:bool, textFrameContents?:bool",
+            (ctx, p) =>
+            {
+                VCCad.Core.Commands.ScaleWithObject o = ctx.Session.ScaleOptions;
+                if (p.TryGetProperty("lineWeights", out JsonElement lw) && lw.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    o.LineWeights = lw.GetBoolean();
+                }
+
+                if (p.TryGetProperty("shapeCorners", out JsonElement sc) && sc.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    o.ShapeCorners = sc.GetBoolean();
+                }
+
+                if (p.TryGetProperty("layerEffectRadii", out JsonElement le) && le.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    o.LayerEffectRadii = le.GetBoolean();
+                }
+
+                if (p.TryGetProperty("textFrameContents", out JsonElement tf) && tf.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    o.TextFrameContents = tf.GetBoolean();
+                }
+
+                return new
+                {
+                    lineWeights = o.LineWeights,
+                    shapeCorners = o.ShapeCorners,
+                    layerEffectRadii = o.LayerEffectRadii,
+                    textFrameContents = o.TextFrameContents,
+                };
+            });
+
         Add("view.zoomIn", "Zoom in one step (the toolbar's + button).", "",
             (ctx, _) =>
             {
