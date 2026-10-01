@@ -569,8 +569,8 @@ internal sealed class SvgFilters
 
         if (!userSpace)
         {
-            // A tenth per cent of the box is a tenth per cent of the **box**, which the model stores as the
-            // fraction it is: the shape is supplied where the filter is evaluated, not where it is read.
+            // Under the box's own units a percentage is already the fraction the model stores: the shape is
+            // supplied where the filter is evaluated, so no box is needed to resolve it here.
             return percent / 100.0;
         }
 

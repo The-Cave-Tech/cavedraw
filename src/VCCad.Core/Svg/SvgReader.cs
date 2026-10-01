@@ -620,8 +620,13 @@ public static partial class SvgReader
             case "g":
             case "a":
             case "switch":
-            case "svg":
                 ReadGroup(element, context, style, text);
+                return;
+
+            // A nested `svg` establishes a viewport of its own, which is a second view box transform laid on the
+            // enclosing one rather than a plain group - see ReadNestedSvg.
+            case "svg":
+                ReadNestedSvg(element, context, style, text);
                 return;
 
             case "text":
@@ -781,6 +786,145 @@ public static partial class SvgReader
         // transform, and a later element referring to it would refer to nothing.
         context.Add(group);
         context.Counts[element.Name.LocalName] = context.Counts.GetValueOrDefault(element.Name.LocalName) + 1;
+    }
+
+    /// <summary>
+    /// A nested `svg`: a viewport of its own, and with it a second `viewBox` transform one level in.
+    ///
+    /// **The enclosing transform is composed with, not replaced.** The root's group already carries the file's user
+    /// units into the model's points, so the transform established here is written in the file's units and stays
+    /// there; measuring the nested fit in points would apply the 72/96 factor a second time and draw everything
+    /// inside it three quarters of the size the file asks for.
+    ///
+    /// `x` and `y` place the new port in the containing space and `width` and `height` size it - and per SVG 1.1
+    /// §5.1.2 an `svg` that declares neither is `100%` of the viewport around it, which is a containing block a
+    /// nested element has and the outermost one does not. A `viewBox` then fits the content into that port exactly
+    /// as it does at the root. What cannot be established honestly is **reported and skipped** rather than drawn at
+    /// the outer scale, because drawing it at the outer scale is precisely the defect this closes: a plausible
+    /// wrong answer is harder to notice than a refusal.
+    /// </summary>
+    private static void ReadNestedSvg(XElement element, Context context, PresentationStyle style, SvgTextStyle text)
+    {
+        double x = context.Length(element.Attribute("x")?.Value, SvgAxis.X, "x") ?? 0.0;
+        double y = context.Length(element.Attribute("y")?.Value, SvgAxis.Y, "y") ?? 0.0;
+
+        if (NestedPort(element, "width", SvgAxis.X, context) is not { } portWidth ||
+            NestedPort(element, "height", SvgAxis.Y, context) is not { } portHeight)
+        {
+            return;
+        }
+
+        if (portWidth <= 0 || portHeight <= 0)
+        {
+            // SVG draws nothing into a viewport with no area. Reported rather than quietly skipped, because a
+            // drawing that is simply missing a piece says nothing about why it is missing.
+            context.Warnings.Add(
+                $"a nested <svg> is {portWidth} by {portHeight}, and SVG draws nothing into a viewport with no area");
+            return;
+        }
+
+        double[]? box = Numbers(element.Attribute("viewBox")?.Value);
+        AffineTransform fit = AffineTransform.Identity;
+
+        // What a percentage inside resolves against is measured **in the user coordinate system the content is
+        // written in**: SVG 1.1 §7.10 makes actual-width the viewport dimension "within the user coordinate system
+        // for the viewport element", and the view box is what establishes that system. So a `50%` inside a 50-unit
+        // box is 25 units - half the drawing - and not 50, which is the box doubled and would fill the port.
+        var viewport = box is { Length: 4 } ? new SvgViewport(box[2], box[3]) : new SvgViewport(portWidth, portHeight);
+
+        if (box is { Length: 4 })
+        {
+            if (box[2] <= 0 || box[3] <= 0)
+            {
+                context.Warnings.Add($"a nested <svg> has a viewBox with no area: {box[2]} by {box[3]}");
+                return;
+            }
+
+            // The port and the box are both in the file's units here, so the fit between them is a pure ratio and
+            // carries no points of its own - the enclosing group is what converts the result.
+            (double scaleX, double scaleY, double offsetX, double offsetY) = Fit(
+                portWidth, portHeight, box[2], box[3], element.Attribute("preserveAspectRatio")?.Value);
+
+            fit = AffineTransform.CreateTranslation(offsetX, offsetY)
+                .Compose(AffineTransform.CreateScale(scaleX, scaleY))
+                .Compose(AffineTransform.CreateTranslation(-box[0], -box[1]));
+        }
+
+        // The element's own `transform` applies to its `x` and `y` as it does to any other of its attributes
+        // (§7.4), so it sits outside them; the placement and the fit are inner, where the new viewport is
+        // established.
+        var group = new ArtGroup
+        {
+            Name = element.Attribute("id")?.Value ?? string.Empty,
+            Transform = Transform(element.Attribute("transform")?.Value)
+                .Compose(AffineTransform.CreateTranslation(x, y))
+                .Compose(fit),
+        };
+        group.BlendMode = style.Blend;
+        CaptureForeign(element, group);
+
+        var inside = new Context
+        {
+            Layer = context.Layer,
+            Group = group,
+            Style = style,
+            Counts = context.Counts,
+            Ids = context.Ids,
+            Resolving = context.Resolving,
+            Missing = context.Missing,
+            Sheet = context.Sheet,
+            Gradients = context.Gradients,
+            Warnings = context.Warnings,
+            Viewport = viewport,
+            BaseDirectory = context.BaseDirectory,
+            Text = text,
+        };
+
+        foreach (XElement child in element.Elements())
+        {
+            ReadElement(child, inside);
+        }
+
+        // Kept even when empty, the way a group is: the file has the element, and the transform and the name are
+        // the element's own.
+        context.Add(group);
+        context.Counts["svg"] = context.Counts.GetValueOrDefault("svg") + 1;
+    }
+
+    /// <summary>
+    /// One dimension of a nested viewport, in the containing space, or null when it cannot be established.
+    ///
+    /// An attribute the file does not write takes SVG 1.1 §5.1.2's `100%` of the containing viewport, because that
+    /// is the value the specification gives it and a nested viewport has one to be a percentage of. An attribute
+    /// the file *does* write is never replaced by that default: a stated value swapped for one the file did not
+    /// write is the silent-loss family this repository keeps filing, and here it would draw the content at a scale
+    /// nobody asked for. The caller reports the gap and leaves the subtree undrawn rather than drawn wrongly.
+    /// </summary>
+    private static double? NestedPort(XElement element, string attribute, SvgAxis axis, Context context)
+    {
+        string? text = element.Attribute(attribute)?.Value;
+        if (text is null)
+        {
+            if (context.Viewport is { } containing)
+            {
+                return axis == SvgAxis.X ? containing.Width : containing.Height;
+            }
+
+            context.Warnings.Add(
+                $"a nested <svg> states no {attribute}, and there is no containing viewport for SVG's default of " +
+                "100% to be a percentage of - so its content is not drawn");
+            return null;
+        }
+
+        if (context.Length(text, axis, attribute) is { } stated)
+        {
+            return stated;
+        }
+
+        context.Warnings.Add(
+            $"a nested <svg> states {attribute}=\"{text}\", which this reader cannot resolve, so its viewport is " +
+            "not established and its content is not drawn rather than drawn at the outer scale");
+        return null;
     }
 
     // ------------------------------------------------------------------ shapes
