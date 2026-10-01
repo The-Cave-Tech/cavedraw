@@ -97,6 +97,38 @@ public static class SelectionEngine
     }
 
     /// <summary>
+    /// The affine map from world coordinates back into an item's **placement frame** - the frame its
+    /// own geometry is stored in. The exact inverse of <see cref="ToWorld"/>, or null when the frame
+    /// collapses the plane and so has none.
+    ///
+    /// This is the same composition <see cref="ToWorld"/> states, written the other way round, and it
+    /// exists because an **editing gesture happens in world coordinates while the geometry it changes is
+    /// stored here**. A drag of d screen points has to become d carried into this frame, or a group with
+    /// `scale(2)` moves its contents twice as far as the pointer and a rotated group moves them the wrong
+    /// way - the picture, the hit test and the edit disagreeing about a frame (#165).
+    ///
+    /// Null rather than an identity: a group that collapses the plane paints nothing and picks nothing,
+    /// so there is no honest answer to "where does this go" and guessing one would invent a position.
+    /// </summary>
+    public static AffineTransform? FromWorld(LayerItem item)
+    {
+        AffineTransform toWorld = ToWorld(item);
+        return toWorld.IsInvertible ? toWorld.Inverted() : null;
+    }
+
+    /// <summary>
+    /// A displacement in an item's own placement frame that appears as <paramref name="worldDelta"/>
+    /// in world coordinates, or zero when the frame collapses the plane.
+    ///
+    /// A displacement is carried by the linear part alone, so the artboard origin - which only shifts
+    /// the frame - drops out of the answer. This is the whole conversion an editing gesture needs: the
+    /// pointer moved <paramref name="worldDelta"/>, and the stored geometry must move by this, not by
+    /// the world delta itself.
+    /// </summary>
+    public static Vector2D DeltaInItem(LayerItem item, Vector2D worldDelta)
+        => FromWorld(item) is { } fromWorld ? fromWorld.Transform(worldDelta) : default;
+
+    /// <summary>
     /// The uniform scale an affine transform applies, √|det|.
     ///
     /// Used to move the pick tolerance into whichever frame a point is being tested in: three document

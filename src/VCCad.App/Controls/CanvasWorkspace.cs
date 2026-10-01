@@ -588,8 +588,13 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
-    /// <summary>Nearest anchor across the document within snap tolerance, in world
-    /// space (or null). <paramref name="exclude"/> skips the path being edited.</summary>
+    /// <summary>Nearest anchor across the document within snap tolerance, in **world**
+    /// coordinates (or null). <paramref name="exclude"/> skips the path being edited.
+    ///
+    /// World, not the artboard frame: an anchor inside `translate(50,50) scale(2)` is drawn at
+    /// `ToWorld ∘ anchor`, so a snap answer measured without that composition is a point the artwork is
+    /// nowhere near - and it is compared against a pointer that is in world coordinates (#165).
+    /// <see cref="SelectionEngine.ToWorld"/> is the one place the composition is stated.</summary>
     private Point2D? FindSnapAnchor(Point2D world, PathItem? exclude)
     {
         Point2D? best = null;
@@ -602,12 +607,12 @@ public sealed class CanvasWorkspace : Control
                 continue;
             }
 
-            Vector2D offset = path.ArtboardOffset();
+            AffineTransform toWorld = SelectionEngine.ToWorld(path);
             foreach (SubPath sub in path.SubPaths)
             {
                 foreach (PathNode node in sub.Nodes)
                 {
-                    Point2D candidate = node.Anchor + offset;
+                    Point2D candidate = toWorld.Transform(node.Anchor);
                     double distance = candidate.DistanceTo(world);
                     if (distance < bestDistance)
                     {
@@ -1299,25 +1304,36 @@ public sealed class CanvasWorkspace : Control
 
         foreach (TextItem text in _vm.SelectedTextItems())
         {
-            Rect2D b = text.WorldBounds();
-            if (!b.IsEmpty)
+            // The block's own box, carried into world coordinates by every group around it - the same frame
+            // the artwork is drawn in, which is the only frame the box can be drawn in and be on the artwork.
+            AffineTransform toWorld = SelectionEngine.ToWorld(text);
+            Rect2D box = text.BoundingBox();
+            if (!box.IsEmpty)
             {
-                Include(b.Left, b.Top);
-                Include(b.Right, b.Bottom);
+                foreach (Point2D corner in Corners(box))
+                {
+                    Point2D p = toWorld.Transform(corner);
+                    Include(p.X * u.X + p.Y * u.Y, p.X * v.X + p.Y * v.Y);
+                }
             }
         }
 
         foreach (PathItem path in _vm.SelectedPaths())
         {
-            Vector2D offset = path.ArtboardOffset();
+            // **World**, through the one composition, and not "the stored geometry plus the artboard origin".
+            // The chrome is where the handles are, so building it in the untransformed frame put the
+            // selection box - and every handle on it - somewhere the artwork is not, which is what made a
+            // rotate or a resize inside a transformed group impossible to aim at all (#165).
+            AffineTransform toWorld = SelectionEngine.ToWorld(path);
+
             foreach (SubPath sub in path.SubPaths)
             {
                 foreach (CubicBezier segment in sub.Segments())
                 {
-                    // Project the curve (shifted into world space) onto the frame.
+                    // Project the curve (carried into world space) onto the frame.
                     CubicBezier world = new(
-                        segment.P0 + offset, segment.P1 + offset,
-                        segment.P2 + offset, segment.P3 + offset);
+                        toWorld.Transform(segment.P0), toWorld.Transform(segment.P1),
+                        toWorld.Transform(segment.P2), toWorld.Transform(segment.P3));
                     (double sMinU, double sMaxU, double sMinV, double sMaxV) = world.ExtentsAlong(u, v);
                     Include(sMinU, sMinV);
                     Include(sMaxU, sMaxV);
@@ -1325,7 +1341,7 @@ public sealed class CanvasWorkspace : Control
 
                 if (sub.Nodes.Count == 1)
                 {
-                    Point2D p = sub.Nodes[0].Anchor + offset;
+                    Point2D p = toWorld.Transform(sub.Nodes[0].Anchor);
                     Include(p.X * u.X + p.Y * u.Y, p.X * v.X + p.Y * v.Y);
                 }
             }
@@ -1920,15 +1936,20 @@ public sealed class CanvasWorkspace : Control
         }
 
         _selectMoved = true;
+
+        // `delta` is what the pointer travelled in **world** coordinates, and the geometry it moves is
+        // stored in each item's own placement frame. Carrying the delta into that frame per item is what
+        // makes the artwork follow the pointer inside a transformed group; applying the world delta
+        // straight to the stored geometry moved it by G∘delta instead (#165).
         foreach (PathItem path in _dragPaths)
         {
             path.RestoreGeometryFrom(_dragOriginals[path]);
-            path.TranslateGeometryBy(delta);
+            path.TranslateGeometryBy(SelectionEngine.DeltaInItem(path, delta));
         }
 
         foreach (TextItem text in _dragTexts)
         {
-            text.Origin = _dragTextOrigins[text] + delta;
+            text.Origin = _dragTextOrigins[text] + SelectionEngine.DeltaInItem(text, delta);
         }
 
         // An image's geometry is its placement, so dragging shifts the box and the
@@ -1936,8 +1957,9 @@ public sealed class CanvasWorkspace : Control
         foreach (ImageItem image in _dragImages)
         {
             Rect2D start = _dragImageOrigins[image];
+            Vector2D moved = SelectionEngine.DeltaInItem(image, delta);
             image.Placement = new Rect2D(
-                start.X + delta.X, start.Y + delta.Y, start.Width, start.Height);
+                start.X + moved.X, start.Y + moved.Y, start.Width, start.Height);
         }
 
         if (!_chromeRect0.IsEmpty)
@@ -2235,6 +2257,110 @@ public sealed class CanvasWorkspace : Control
         return box.IsEmpty ? box : toWorld.Transform(box);
     }
 
+    // ---- a world gesture, expressed in the frame the geometry is stored in -----
+    //
+    // Every editing gesture happens in **world** coordinates, because that is where the pointer is and
+    // where the selection chrome is drawn. The geometry it changes is stored in the item's own
+    // **placement frame**: a path inside `translate(50,50) scale(2)` keeps the coordinates the file gave
+    // it, and the group's transform carries them out. So the gesture's own transform has to be conjugated
+    // into that frame before it is applied, or a drag moves the artwork by G∘delta instead of delta -
+    // twice as far as the pointer, and in a rotated group in a different direction (#165).
+    //
+    // `SelectionEngine.ToWorld` is the one place that composition is stated (#159), so the conversion is
+    // its inverse and nothing else.
+
+    /// <summary>
+    /// A world-space affine as it acts on an item whose geometry is stored in its own placement frame:
+    /// <c>ToWorld⁻¹ ∘ world ∘ ToWorld</c>.
+    ///
+    /// The conjugation is exact for any invertible frame - scale, rotation, flip and shear alike - and it
+    /// reduces to the plain world operation when there is no group above the item, which is why the
+    /// ungrouped behaviour is unchanged. Null when the frame collapses the plane: the item is not painted
+    /// anywhere a pointer could reach, so there is nothing honest to move.
+    /// </summary>
+    private static AffineTransform? InItemFrame(LayerItem item, AffineTransform world)
+        => SelectionEngine.FromWorld(item) is { } fromWorld
+            ? fromWorld.Compose(world).Compose(SelectionEngine.ToWorld(item))
+            : null;
+
+    /// <summary>
+    /// A world-space affine as it acts on an item whose geometry is stored in the item's own placement
+    /// frame, or the identity when that frame collapses the plane - for callers that have a fixed shape to
+    /// apply rather than a point list to walk.
+    /// </summary>
+    private static AffineTransform InItemFrameOrIdentity(LayerItem item, AffineTransform world)
+        => InItemFrame(item, world) ?? AffineTransform.Identity;
+
+    /// <summary>The four corners of a rectangle, which is how a box is carried through a transform that may
+    /// turn or shear it.</summary>
+    private static IEnumerable<Point2D> Corners(Rect2D box) => new[]
+    {
+        new Point2D(box.Left, box.Top),
+        new Point2D(box.Right, box.Top),
+        new Point2D(box.Right, box.Bottom),
+        new Point2D(box.Left, box.Bottom),
+    };
+
+    /// <summary>Maps every anchor and both handles of a path through an affine transform.</summary>
+    private static void TransformGeometry(PathItem path, AffineTransform transform)
+    {
+        foreach (SubPath sub in path.SubPaths)
+        {
+            foreach (PathNode node in sub.Nodes)
+            {
+                node.Anchor = transform.Transform(node.Anchor);
+                node.InHandle = transform.Transform(node.InHandle);
+                node.OutHandle = transform.Transform(node.OutHandle);
+            }
+        }
+
+        path.GeometryChanged();
+    }
+
+    /// <summary>
+    /// Applies an affine map, already expressed in a text block's own frame, to that block.
+    ///
+    /// A block is an origin, one rotation angle and a font size, so it stores a **similarity** and no
+    /// other map. The origin takes the map exactly; the angle is the map's linear part read as a
+    /// rotation; the size is its area's square root, which is the uniform scale of a similarity. All
+    /// three are exact when the frame around the block is a similarity - a group that scales, turns or
+    /// flips - and are the nearest thing the model can store when it is sheared or scaled unevenly. That
+    /// limit is stated on #165 rather than hidden here.
+    /// </summary>
+    private static void TransformTextIn(TextItem text, TextItem before, AffineTransform local)
+    {
+        text.Origin = local.Transform(before.Origin);
+        text.RotationRadians = before.RotationRadians + Math.Atan2(local.B, local.A);
+
+        double scale = Math.Sqrt(Math.Abs(local.Determinant));
+        foreach (TextRun run in text.Runs)
+        {
+            run.FontSize *= scale;
+        }
+    }
+
+    /// <summary>
+    /// Applies an affine map, already expressed in an image's own frame, to its placement box by mapping
+    /// the box's four corners and taking their bounds.
+    ///
+    /// Exact whenever the map is axis-aligned - a translation, or a scale - which is every frame but a
+    /// rotated or sheared one. A rotated group would need a placement the model does not have (the box is
+    /// an axis-aligned rectangle), so the corners' bounds are the honest answer there; stated on #165.
+    /// </summary>
+    private static Rect2D TransformPlacement(Rect2D placement, AffineTransform local)
+    {
+        Point2D a = local.Transform(new Point2D(placement.Left, placement.Top));
+        Point2D b = local.Transform(new Point2D(placement.Right, placement.Top));
+        Point2D c = local.Transform(new Point2D(placement.Right, placement.Bottom));
+        Point2D d = local.Transform(new Point2D(placement.Left, placement.Bottom));
+
+        double left = Math.Min(Math.Min(a.X, b.X), Math.Min(c.X, d.X));
+        double top = Math.Min(Math.Min(a.Y, b.Y), Math.Min(c.Y, d.Y));
+        double right = Math.Max(Math.Max(a.X, b.X), Math.Max(c.X, d.X));
+        double bottom = Math.Max(Math.Max(a.Y, b.Y), Math.Max(c.Y, d.Y));
+        return new Rect2D(left, top, right - left, bottom - top);
+    }
+
     // ---- bounding-box resize handles ------------------------------------
 
     /// <summary>Reference point for a 3×3 cell (row-major 0..8).</summary>
@@ -2362,20 +2488,19 @@ public sealed class CanvasWorkspace : Control
             sy = sx; // Shift + corner drag keeps the aspect ratio
         }
 
+        // The resize as one world-space affine: into the box's own axes, an axis scale about the fixed
+        // pivot, and back out. Stating it once lets each item's own frame be conjugated into it below,
+        // which is what makes a resize inside a transformed group land where the handles are (#165).
+        AffineTransform resizeWorld =
+            AffineTransform.CreateRotationAround(_resizeCenter0, _resizeAngle0)
+                .Compose(AffineTransform.CreateScaleAround(_resizePivot, sx, sy))
+                .Compose(AffineTransform.CreateRotationAround(_resizeCenter0, -_resizeAngle0));
+
         foreach (TextItem text in _resizeTexts)
         {
             TextItem before = _resizeTextBefore[text];
             text.CopyFrom(before);
-            Vector2D offset = text.ArtboardOffset();
-            Point2D pivotLocal = _resizePivot - offset;
-            text.Origin = pivotLocal + new Vector2D(
-                (text.Origin.X - pivotLocal.X) * sx,
-                (text.Origin.Y - pivotLocal.Y) * sy);
-            double fontScale = Math.Sqrt(Math.Abs(sx * sy));
-            foreach (TextRun run in text.Runs)
-            {
-                run.FontSize *= fontScale;
-            }
+            TransformTextIn(text, before, InItemFrameOrIdentity(text, resizeWorld));
         }
 
         // An image scales by moving and resizing its placement box. Scaling is not
@@ -2384,27 +2509,9 @@ public sealed class CanvasWorkspace : Control
         foreach (ImageItem image in _resizeImages)
         {
             Rect2D start = _resizeImageBefore[image];
-            Vector2D offset = image.ArtboardOffset();
-            Point2D pivotLocal = _resizePivot - offset;
-
-            double x = pivotLocal.X + ((start.X - pivotLocal.X) * sx);
-            double y = pivotLocal.Y + ((start.Y - pivotLocal.Y) * sy);
-            double w = start.Width * Math.Abs(sx);
-            double h = start.Height * Math.Abs(sy);
-
-            // A negative scale mirrors the image; the placement box stays positive and the
-            // origin moves to the far corner.
-            if (sx < 0)
-            {
-                x -= w;
-            }
-
-            if (sy < 0)
-            {
-                y -= h;
-            }
-
-            image.Placement = new Rect2D(x, y, Math.Max(0.5, w), Math.Max(0.5, h));
+            Rect2D scaled = TransformPlacement(start, InItemFrameOrIdentity(image, resizeWorld));
+            image.Placement = new Rect2D(
+                scaled.X, scaled.Y, Math.Max(0.5, scaled.Width), Math.Max(0.5, scaled.Height));
         }
 
         // Shift + a group selection scales each object in place (about its own
@@ -2412,16 +2519,18 @@ public sealed class CanvasWorkspace : Control
         bool groupInPlace = _shiftHeld && _vm!.SelectedObjects.Any(o => o is ArtGroup);
         foreach (PathItem path in _resizePaths)
         {
-            Vector2D offset = path.ArtboardOffset();
             path.RestoreGeometryFrom(_resizeOriginals[path]);
-            if (groupInPlace)
+
+            // In place means about the object's own centre, which is a world point as surely as the
+            // selection's pivot is: it is mapped into the path's frame by the same conjugation.
+            AffineTransform world = groupInPlace
+                ? AffineTransform.CreateScaleAround(
+                    SelectionEngine.ToWorld(path).Transform(path.BoundingBox().Center), sx, sx)
+                : resizeWorld;
+
+            if (InItemFrame(path, world) is { } inFrameLocal)
             {
-                Point2D center = path.BoundingBox().Center;
-                path.ScaleGeometryAbout(center, sx, sx);
-            }
-            else
-            {
-                ApplyRotatedScale(path, _resizeCenter0 - offset, _resizeAngle0, _resizePivot - offset, sx, sy);
+                TransformGeometry(path, inFrameLocal);
             }
         }
 
@@ -2476,32 +2585,6 @@ public sealed class CanvasWorkspace : Control
         if (edits.Count > 0)
         {
             _vm.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand(label, edits));
-        }
-    }
-
-    /// <summary>Scales a path about <paramref name="pivotLocal"/> along axes rotated
-    /// by <paramref name="angle"/> around <paramref name="center"/> (used when the
-    /// selection box is oriented).</summary>
-    private static void ApplyRotatedScale(PathItem path, Point2D center, double angle,
-        Point2D pivotLocal, double sx, double sy)
-    {
-        Point2D Map(Point2D p)
-        {
-            Point2D local = RotatePoint(p, center, -angle);
-            var scaled = new Point2D(
-                pivotLocal.X + (local.X - pivotLocal.X) * sx,
-                pivotLocal.Y + (local.Y - pivotLocal.Y) * sy);
-            return RotatePoint(scaled, center, angle);
-        }
-
-        foreach (SubPath sub in path.SubPaths)
-        {
-            foreach (PathNode node in sub.Nodes)
-            {
-                node.Anchor = Map(node.Anchor);
-                node.InHandle = Map(node.InHandle);
-                node.OutHandle = Map(node.OutHandle);
-            }
         }
     }
 
@@ -2589,24 +2672,28 @@ public sealed class CanvasWorkspace : Control
 
         Vector2D fromCenter = model - _rotateCenter;
         double angle = Math.Atan2(fromCenter.Y, fromCenter.X) - _rotateStartAngle;
+
+        // The turn is a world-space one, about the world centre of the selection; each item's geometry is
+        // stored in its own frame, so the turn is conjugated into that frame before it is applied. The old
+        // code subtracted only the artboard origin, which is the right frame only when no group has a
+        // transform - inside a rotated group it turned the artwork about a point that was not the one the
+        // handle was drawn at (#165).
+        AffineTransform turn = AffineTransform.CreateRotationAround(_rotateCenter, angle);
+
         foreach (PathItem path in _rotatePaths)
         {
             path.RestoreGeometryFrom(_rotateOriginals[path]);
-            path.RotateGeometryAbout(_rotateCenter - path.ArtboardOffset(), angle);
+            if (InItemFrame(path, turn) is { } inFrameTurn)
+            {
+                TransformGeometry(path, inFrameTurn);
+            }
         }
 
         foreach (TextItem text in _rotateTexts)
         {
             TextItem before = _rotateTextBefore[text];
             text.CopyFrom(before);
-            Vector2D offset = text.ArtboardOffset();
-            Point2D localCenter = _rotateCenter - offset;
-            double cos = Math.Cos(angle);
-            double sin = Math.Sin(angle);
-            double dx = text.Origin.X - localCenter.X;
-            double dy = text.Origin.Y - localCenter.Y;
-            text.Origin = new Point2D(localCenter.X + dx * cos - dy * sin, localCenter.Y + dx * sin + dy * cos);
-            text.RotationRadians = before.RotationRadians + angle;
+            TransformTextIn(text, before, InItemFrameOrIdentity(text, turn));
         }
 
         _chromeAngle = _rotateAngle0 + angle; // selection box rotates with the objects
@@ -3302,18 +3389,22 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        Vector2D offset = _nodePath.ArtboardOffset();
-        Point2D world = _nodeSub.Nodes[_nodeIndex].Anchor + offset;
+        // The node's own geometry is in the path's frame; the anchor is compared, and the snap offset
+        // applied, in world coordinates. Both halves therefore go through the one composition - the old
+        // code added the artboard origin alone, which is a world point only when no group transforms the
+        // path, so a node inside a group snapped to a place the artwork was not (#165).
+        AffineTransform toWorld = SelectionEngine.ToWorld(_nodePath);
+        Point2D world = toWorld.Transform(_nodeSub.Nodes[_nodeIndex].Anchor);
 
         // 1) Dragging one end onto the other closes the path.
         if (!_nodeSub.IsClosed && (_nodeIndex == 0 || _nodeIndex == _nodeSub.Nodes.Count - 1))
         {
             int otherIndex = _nodeIndex == 0 ? _nodeSub.Nodes.Count - 1 : 0;
-            Point2D otherWorld = _nodeSub.Nodes[otherIndex].Anchor + offset;
+            Point2D otherWorld = toWorld.Transform(_nodeSub.Nodes[otherIndex].Anchor);
             if (world.DistanceTo(otherWorld) <= PickTolerance * 1.5)
             {
                 PathNode node = _nodeSub.Nodes[_nodeIndex];
-                Vector2D delta = otherWorld - world;
+                Vector2D delta = SelectionEngine.DeltaInItem(_nodePath, otherWorld - world);
                 node.Anchor += delta;
                 node.InHandle += delta;
                 node.OutHandle += delta;
@@ -3327,7 +3418,7 @@ public sealed class CanvasWorkspace : Control
         if (FindSnapAnchor(world, _nodePath) is { } snap)
         {
             PathNode node = _nodeSub.Nodes[_nodeIndex];
-            Vector2D delta = snap - world;
+            Vector2D delta = SelectionEngine.DeltaInItem(_nodePath, snap - world);
             node.Anchor += delta;
             node.InHandle += delta;
             node.OutHandle += delta;
@@ -4031,7 +4122,7 @@ public sealed class CanvasWorkspace : Control
                     }
                 }
 
-                PaintPath(context, path, opacity * path.Opacity);
+                PaintPath(context, path, opacity * path.Opacity, toWorld);
                 break;
 
             case TextItem text when text.IsVisible:
@@ -4181,18 +4272,18 @@ public sealed class CanvasWorkspace : Control
     /// bitmap is drawn in its place. When there is no filter - or the region is too large to be worth allocating -
     /// this is the plain path, so an unfiltered document is untouched.
     /// </summary>
-    private void PaintPath(DrawingContext context, PathItem path, double opacity)
+    private void PaintPath(DrawingContext context, PathItem path, double opacity, AffineTransform toWorld)
     {
         // A stroke's raster effects are pixel operations - a blur, a shadow, a glow - so the path is rendered
         // offscreen and the effects run over those pixels, the same route an SVG filter takes.
         if (RasterFiltersFor(path) is { Count: > 0 } raster &&
-            PaintFilteredPath(context, path, opacity, raster))
+            PaintFilteredPath(context, path, opacity, raster, toWorld))
         {
             return;
         }
 
         if (_document?.FindFilter(path.FilterId) is { } filter &&
-            PaintFilteredPath(context, path, opacity, new[] { filter }))
+            PaintFilteredPath(context, path, opacity, new[] { filter }, toWorld))
         {
             return;
         }
@@ -4202,7 +4293,8 @@ public sealed class CanvasWorkspace : Control
 
     /// <summary>The path as it is drawn without a filter.</summary>
     private bool PaintFilteredPath(
-        DrawingContext context, PathItem path, double opacity, IReadOnlyList<FilterSpec> filters)
+        DrawingContext context, PathItem path, double opacity, IReadOnlyList<FilterSpec> filters,
+        AffineTransform toWorld)
     {
         if (_paintWorld is not { } world)
         {
@@ -4216,6 +4308,12 @@ public sealed class CanvasWorkspace : Control
         {
             return false;
         }
+
+        // ...and the canvas is not the only thing scaling what is drawn: this item's own frame is pushed on
+        // the context as well, so the raster has to be sampled that much more finely or it is stretched on
+        // its way to the screen. `toWorld` is the frame the painter is drawing in, the same one the culling
+        // above uses - `ToWorld`'s composition, asked once and used for both (#165).
+        double frameScale = Math.Sqrt(Math.Abs(toWorld.Determinant));
 
         StreamGeometry geometry = GetGeometry(path);
         Rect bounds = geometry.Bounds;
@@ -4239,7 +4337,8 @@ public sealed class CanvasWorkspace : Control
             // The shape's own box, which is what an `objectBoundingBox` primitive length is a fraction of. It is the
             // geometry's box rather than the alpha's extent: SVG's bounding box is the shape's, and for a stroked
             // path the two differ by exactly the stroke width the blur would otherwise be measured against.
-            bounds);
+            bounds,
+            frameScale);
 
         if (result is not { } painted)
         {

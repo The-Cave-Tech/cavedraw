@@ -40,8 +40,9 @@ internal static class FilterRenderer
         Rect bounds,
         Matrix world,
         double scale,
-        Action<DrawingContext> paint)
-        => Render(new[] { filter }, bounds, world, scale, paint);
+        Action<DrawingContext> paint,
+        double frameScale = 1.0)
+        => Render(new[] { filter }, bounds, world, scale, paint, frameScale: frameScale);
 
     /// <summary>
     /// The same, for a **chain** of filters applied in order.
@@ -61,6 +62,14 @@ internal static class FilterRenderer
     /// <paramref name="objectBounds"/> is the shape's own box in model units, which is what an
     /// `objectBoundingBox` primitive length is a fraction of. Left out, the engine measures the alpha's extent
     /// instead - right for a shape that fills what it draws and wrong for one that does not.
+    ///
+    /// <paramref name="frameScale"/> is how much the frame around the object magnifies what is rasterised here.
+    /// The canvas pushes a group's transform before painting what is inside it, so a bitmap produced at the
+    /// canvas's own scale is stretched on its way to the screen: a filtered path inside a group that doubles
+    /// everything was drawn from a bitmap of half the needed resolution, soft at 2x and unusable at 8x (#165).
+    /// Folding that magnification back into the sampling density is what keeps a filtered object as sharp as an
+    /// unfiltered one, and a blur measured against the right frame. One for an object no transformed group
+    /// encloses, which is why an ungrouped document is untouched.
     /// </summary>
     public static Result? Render(
         IReadOnlyList<FilterSpec> filters,
@@ -70,7 +79,8 @@ internal static class FilterRenderer
         Action<DrawingContext> paint,
         Action<DrawingContext>? fillPaint = null,
         Action<DrawingContext>? strokePaint = null,
-        Rect? objectBounds = null)
+        Rect? objectBounds = null,
+        double frameScale = 1.0)
     {
         if (filters.Count == 0)
         {
@@ -84,9 +94,13 @@ internal static class FilterRenderer
             return null;
         }
 
+        // Device pixels per model unit **in the frame the region's numbers are written in**: `scale` is the
+        // canvas's own zoom, and the frame is whatever the canvas has already pushed on top of it.
+        double sampling = scale * Math.Max(frameScale, 1e-6);
+
         Geometry.Rect2D sourceBounds = new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
         (int regionX, int regionY, int width, int height) = FilterEngine.RegionPixels(
-            filter, sourceBounds, scale);
+            filter, sourceBounds, sampling);
 
         // A region larger than anyone would want to allocate is a file with a wild filter region rather than a
         // request to draw it; falling back to unfiltered keeps the artwork visible.
@@ -100,15 +114,20 @@ internal static class FilterRenderer
         // its translation is not. The region is an absolute box in model units, so a transform that carried the
         // pan would shift the artwork inside a bitmap that the pan already positions when it is drawn, and the
         // effect then lands a whole pan away from the line it belongs to. The pan is therefore dropped here and
-        // the region's own model rectangle is subtracted instead.
+        // the region's own model rectangle - which the frame's magnification does not change - is subtracted
+        // instead.
         Matrix grid = new(world.M11, world.M12, world.M21, world.M22, 0, 0);
+        if (Math.Abs(frameScale - 1.0) > 1e-9)
+        {
+            grid = Matrix.CreateScale(frameScale, frameScale) * grid;
+        }
 
         FilterBuffer Rasterise(Action<DrawingContext> draw)
         {
             var target = new RenderTargetBitmap(new PixelSize(width, height), new Vector(96, 96));
             using (DrawingContext context = target.CreateDrawingContext())
             using (context.PushTransform(
-                Matrix.CreateTranslation(-(regionX / scale), -(regionY / scale)) * grid))
+                Matrix.CreateTranslation(-(regionX / sampling), -(regionY / sampling)) * grid))
             {
                 draw(context);
             }
@@ -137,7 +156,7 @@ internal static class FilterRenderer
         var unsupplied = new List<string>();
         foreach (FilterSpec step in filters)
         {
-            var engine = new FilterEngine(step, scale);
+            var engine = new FilterEngine(step, sampling);
             filtered = engine.EvaluateInPlace(filtered, sources, objectBounds is { } box
                 ? new Geometry.Rect2D(box.X, box.Y, box.Width, box.Height)
                 : null);
@@ -152,13 +171,15 @@ internal static class FilterRenderer
         }
 
         WriteableBitmap bitmap = ToBitmap(filtered);
-        // The region in model units, which is where the caller draws it: the canvas's own transform is what puts it
-        // on the page, so subtracting the pan here would apply it twice.
+        // The region in model units, which is where the caller draws it: the canvas's own transform - and the
+        // group frames it has pushed - is what puts it on the page, so the frame's magnification must not be
+        // applied here as well. Dividing by the **sampling** density is what leaves the rectangle the same
+        // model box while the bitmap behind it holds more pixels.
         var destination = new Rect(
-            regionX / scale,
-            regionY / scale,
-            width / scale,
-            height / scale);
+            regionX / sampling,
+            regionY / sampling,
+            width / sampling,
+            height / sampling);
 
         return new Result(bitmap, destination, unsupplied);
     }

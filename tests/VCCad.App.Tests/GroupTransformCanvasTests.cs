@@ -59,6 +59,11 @@ public class GroupTransformCanvasTests
     private const string Flipped = Header +
         "<g transform=\"translate(60,10) scale(-1,1)\"><rect width=\"10\" height=\"10\" fill=\"#000000\"/></g></svg>";
 
+    /// <summary>A ten-unit square scaled eight times under the root's own 0.75: 0..80 user units, 0..60 pt.
+    /// Enlarged enough that a raster stretched to fit it is a visibly different picture from a sharp one.</summary>
+    private const string LargeGroup = Header +
+        "<g transform=\"scale(8)\"><rect width=\"10\" height=\"10\" fill=\"#000000\"/></g></svg>";
+
     private static (Window Window, CanvasWorkspace Workspace, EditorViewModel ViewModel, CadDocument Document)
         Host(string svg)
     {
@@ -95,10 +100,78 @@ public class GroupTransformCanvasTests
     }
 
     /// <summary>
+    /// Drag through the real pointer path, between two **world** points.
+    ///
+    /// The points are converted by the canvas's own mapping, so what the pointer travels is exactly the
+    /// model distance between them; the gesture under test is the one a person makes, not a call to an
+    /// internal method.
+    /// </summary>
+    private static void Drag(Window window, CanvasWorkspace workspace, Point2D from, Point2D to)
+    {
+        Point a = workspace.ModelToWindow(from);
+        Point b = workspace.ModelToWindow(to);
+        InputInjection.Press(window, a.X, a.Y, shift: false);
+        InputInjection.Move(window, (a.X + b.X) / 2.0, (a.Y + b.Y) / 2.0, leftDown: true);
+        InputInjection.Move(window, b.X, b.Y, leftDown: true);
+        InputInjection.Release(window, b.X, b.Y);
+        Settle();
+    }
+
+    /// <summary>
+    /// An item's box in document/world coordinates - the frame the pointer and <c>ModelToWindow</c> are in.
+    ///
+    /// Written out here rather than asked of the code under test, so "the model moved by the pointer's
+    /// delta" is measured against arithmetic this test states itself.
+    /// </summary>
+    private static Rect2D InWorld(LayerItem item)
+    {
+        Rect2D box = item switch
+        {
+            PathItem path => path.BoundingBox(),
+            TextItem text => text.BoundingBox(),
+            _ => Rect2D.Empty,
+        };
+
+        if (box.IsEmpty)
+        {
+            return box;
+        }
+
+        AffineTransform transform = AffineTransform.Identity;
+        for (IItemContainer? container = item.Container;
+             container is not null;
+             container = (container as LayerItem)?.Container)
+        {
+            if (container is ArtGroup group)
+            {
+                transform = group.Transform.Compose(transform);
+            }
+        }
+
+        Rect2D mapped = transform.Transform(box);
+        Vector2D origin = item.ArtboardOffset();
+        return new Rect2D(mapped.X + origin.X, mapped.Y + origin.Y, mapped.Width, mapped.Height);
+    }
+
+    /// <summary>
     /// The bounding box of the ink the canvas actually drew, in points, by rendering page 0 at one pixel per
     /// point - the renderer the editor shows is the renderer under test, not a second one.
     /// </summary>
     private static (int Left, int Top, int Right, int Bottom) Drawn(CadDocument document, CanvasWorkspace workspace)
+    {
+        (int left, int top, int right, int bottom, _) = Ink(document, workspace);
+        return (left, top, right, bottom);
+    }
+
+    /// <summary>
+    /// The drawn ink's box **and how many pixels are in it**, in points, at one pixel per point.
+    ///
+    /// The count is the second half because a filtered object is a **raster** drawn from an offscreen bitmap:
+    /// a frame that rasterises at the wrong density leaves the box roughly where it belongs and the pixels
+    /// obviously wrong - a hard edge spread over as many pixels as the picture was stretched.
+    /// </summary>
+    private static (int Left, int Top, int Right, int Bottom, int Count) Ink(
+        CadDocument document, CanvasWorkspace workspace)
     {
         workspace.InvalidateVisual();
         PageRenderer.Workspace = workspace;
@@ -112,6 +185,7 @@ public class GroupTransformCanvasTests
         int height = bitmap.PixelSize.Height;
 
         int left = width, top = height, right = -1, bottom = -1;
+        int count = 0;
         for (int y = 0; y < height; y++)
         {
             for (int x = 0; x < width; x++)
@@ -122,12 +196,13 @@ public class GroupTransformCanvasTests
                     top = Math.Min(top, y);
                     right = Math.Max(right, x);
                     bottom = Math.Max(bottom, y);
+                    count++;
                 }
             }
         }
 
         Assert.True(right >= 0, "nothing was drawn at all");
-        return (left, top, right, bottom);
+        return (left, top, right, bottom, count);
     }
 
     private static byte[] Read(Bitmap bitmap, out int stride)
@@ -353,6 +428,244 @@ public class GroupTransformCanvasTests
                 Math.Abs(right - pdfBox.Right) <= 2 && Math.Abs(bottom - pdfBox.Bottom) <= 2,
                 $"the canvas drew {left},{top} to {right},{bottom} and the PDF holds " +
                 $"{pdfBox.Left},{pdfBox.Top} to {pdfBox.Right},{pdfBox.Bottom}");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// Asserts the box moved by a vector, reporting **both** components when it did not.
+    ///
+    /// The pointer round trip is exact to well under a device pixel and no better, so the tolerance is
+    /// half a point - far smaller than the 15-point error the un-converted frame produces.
+    /// </summary>
+    private static void AssertMovedBy(Vector2D expected, Rect2D before, Rect2D after)
+    {
+        var moved = new Vector2D(after.Left - before.Left, after.Top - before.Top);
+        Assert.True(
+            Math.Abs(moved.X - expected.X) <= 0.5 && Math.Abs(moved.Y - expected.Y) <= 0.5,
+            $"the model should have moved {expected.X},{expected.Y} but moved {moved.X},{moved.Y}");
+    }
+
+    /// <summary>
+    /// A drag inside a **scaled** group moves the stored geometry by the distance the pointer moved
+    /// (issue #165).
+    ///
+    /// `translate(50,50) scale(2)` under the root's own 0.75 puts the 10-unit square at 37.5..52.5 pt, so a
+    /// point of pointer travel is two thirds of a unit of the square's own coordinates. Applying the
+    /// pointer's world delta straight to the stored geometry - which is what the gesture did - moves the
+    /// square **1.5x as far as the pointer**, and the person sees the artwork slide out from under the
+    /// cursor. The assertion is on the **model**, because the numbers a drag produces are what the document
+    /// stores: a wrong delta is a wrong file, not just a wrong animation.
+    /// </summary>
+    [AvaloniaFact]
+    public void ADraggedObjectInsideAScaledGroupMovesByThePointerDelta()
+    {
+        (Window window, CanvasWorkspace workspace, EditorViewModel viewModel, CadDocument document) =
+            Host(TranslatedAndScaled);
+        try
+        {
+            PathItem rect = Assert.Single(document.AllPaths());
+            viewModel.SelectObject(rect);
+            Settle();
+
+            Rect2D before = InWorld(rect);
+            Assert.Equal(37.5, before.Left, 3);
+            Assert.Equal(37.5, before.Top, 3);
+
+            // The middle of the drawn square, dragged 30 pt to the right.
+            Drag(window, workspace, new Point2D(45, 45), new Point2D(75, 45));
+
+            Rect2D after = InWorld(rect);
+            AssertMovedBy(new Vector2D(30, 0), before, after);
+            Assert.Equal(15.0, after.Width, 3);
+            Assert.Equal(15.0, after.Height, 3);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// A drag inside a **rotated** group moves in the direction the pointer moved, as well as the distance.
+    ///
+    /// Distance alone would pass for a fix that divided by the frame's scale: `translate(40,40) rotate(90)`
+    /// has a unit scale, and applying the world delta to the stored geometry would send the square 22.5 pt
+    /// **down the page** for a pointer that moved 30 pt to the right. Both components are asserted, so the
+    /// frame has to be turned as well as scaled.
+    /// </summary>
+    [AvaloniaFact]
+    public void ADraggedObjectInsideARotatedGroupMovesInTheDirectionThePointerMoved()
+    {
+        (Window window, CanvasWorkspace workspace, EditorViewModel viewModel, CadDocument document) =
+            Host(Rotated);
+        try
+        {
+            PathItem rect = Assert.Single(document.AllPaths());
+            viewModel.SelectObject(rect);
+            Settle();
+
+            Rect2D before = InWorld(rect);
+            Assert.Equal(22.5, before.Left, 3);
+            Assert.Equal(30.0, before.Top, 3);
+
+            // 35,45 user units is 26.25,33.75 pt: the middle of the rotated square.
+            Drag(window, workspace, new Point2D(26.25, 33.75), new Point2D(56.25, 33.75));
+
+            Rect2D after = InWorld(rect);
+            AssertMovedBy(new Vector2D(30, 0), before, after);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// A filter that replaces a shape with a solid black copy of its own coverage.
+    ///
+    /// Chosen because it is a filter that cannot be drawn without one - the pixels come out of the same
+    /// offscreen rasterise-and-composite path a blur takes - while leaving edges **hard**, so the drawn
+    /// pixels can be compared with the unfiltered picture pixel for pixel.
+    /// </summary>
+    private static void BlackCopyFilter(CadDocument document, string id)
+    {
+        document.AddFilter(new FilterSpec(id, new[]
+        {
+            FilterPrimitive.Solid(ColorRgb.Black, 1.0, "black"),
+            FilterPrimitive.Combine("in", "black", "SourceAlpha", "out"),
+        })
+        {
+            Output = "out",
+        });
+    }
+
+    /// <summary>
+    /// A **filtered** path inside a transformed group is drawn where the file puts it - issue #165's second
+    /// lead, tested rather than assumed.
+    ///
+    /// A filtered object cannot be drawn with `DrawGeometry`: it is rasterised offscreen and the bitmap is
+    /// drawn in its place. The lead says that bitmap goes through the canvas's zoom/pan rather than the pushed
+    /// group frame, which would put the picture somewhere else or at the wrong size. The filter used here
+    /// leaves a hard-edged black copy of the shape, so the ink can be measured exactly.
+    ///
+    /// Measured against the unfiltered picture, this is what the lead actually turns out to be: the **box** is
+    /// right - the pushed frame does place the bitmap - but the raster behind it was sampled at the canvas's own
+    /// zoom, so an eightfold frame magnifies an eight-times-too-small bitmap and every edge is a ramp that wide.
+    /// </summary>
+    [AvaloniaFact]
+    public void AFilteredPathInsideATransformedGroupIsDrawnWhereTheFilePutsIt()
+    {
+        (Window window, CanvasWorkspace workspace, _, CadDocument document) = Host(LargeGroup);
+        try
+        {
+            (int left, int top, int right, int bottom, int count) = Ink(document, workspace);
+            AssertDrawnAt((left, top, right, bottom), new Rect2D(0, 0, 60, 60), "the unfiltered rect");
+
+            BlackCopyFilter(document, "copy");
+            Assert.Single(document.AllPaths()).FilterId = "copy";
+
+            (left, top, right, bottom, int filtered) = Ink(document, workspace);
+
+            // The same shape, so the same ink - to within the antialiasing of one edge. A bitmap stretched
+            // to cover the group's eightfold enlargement lays a ramp eight pixels wide along every edge, and
+            // an ink threshold of 60 (below) throws the outer half of it away, so the drawn shape shrinks.
+            Assert.True(filtered > count * 0.9,
+                $"the filtered copy should cover the shape it copied: {filtered} ink pixels against {count}, " +
+                $"drawn {left},{top} to {right},{bottom}");
+
+            AssertDrawnAt((left, top, right, bottom), new Rect2D(0, 0, 60, 60), "the filtered rect");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>A node of a path, in world coordinates, by the test's own arithmetic.</summary>
+    private static Point2D AnchorInWorld(PathItem path, int index)
+    {
+        AffineTransform transform = AffineTransform.Identity;
+        for (IItemContainer? container = path.Container;
+             container is not null;
+             container = (container as LayerItem)?.Container)
+        {
+            if (container is ArtGroup group)
+            {
+                transform = group.Transform.Compose(transform);
+            }
+        }
+
+        return transform.Transform(path.SubPaths[0].Nodes[index].Anchor) + path.ArtboardOffset();
+    }
+
+    /// <summary>
+    /// A **rotation** inside a scaled group turns about the centre the handle was drawn at.
+    ///
+    /// The square is turned a quarter turn about the middle of the selection, which leaves its box exactly
+    /// where it was - so the box cannot tell right from wrong here and the assertion is on a **node's** world
+    /// position: the bottom-left corner (37.5,37.5) becomes (52.5,37.5). The old code turned the stored
+    /// geometry about the world centre unchanged, which inside a frame of 1.5 lands that node at (172.5,37.5).
+    /// </summary>
+    [AvaloniaFact]
+    public void ARotatedObjectInsideAScaledGroupTurnsAboutTheHandleItWasGiven()
+    {
+        (Window window, CanvasWorkspace workspace, EditorViewModel viewModel, CadDocument document) =
+            Host(TranslatedAndScaled);
+        try
+        {
+            PathItem rect = Assert.Single(document.AllPaths());
+            viewModel.SelectObject(rect);
+            Settle();
+
+            // The rotation knob sits `lift` above the top edge of the chrome box, which is the rect's own
+            // world box: 37.5..52.5 either way, so the knob is directly above (45,37.5).
+            double lift = Math.Max(22.0 / workspace.Zoom, 4.0);
+            double radius = 7.5 + lift;
+            Drag(window, workspace, new Point2D(45, 45 - radius), new Point2D(45 + radius, 45));
+
+            Point2D corner = AnchorInWorld(rect, 0);
+            Assert.True(
+                Math.Abs(corner.X - 52.5) <= 0.5 && Math.Abs(corner.Y - 37.5) <= 0.5,
+                $"the quarter turn should carry the corner to 52.5,37.5 but it landed at {corner.X},{corner.Y}");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// A **resize** inside a scaled group scales about the handle opposite the one being pulled, in world
+    /// coordinates.
+    ///
+    /// The bottom-right corner of the chrome box is dragged from (52.5,52.5) to (67.5,52.5): doubling the box's
+    /// width and leaving its height alone, with the top-left corner (37.5,37.5) fixed. So the model is
+    /// 37.5..67.5 by 37.5..52.5. The old code scaled the stored geometry about the world pivot directly, which
+    /// put the square at -18.75..-3.75 - off the page entirely.
+    /// </summary>
+    [AvaloniaFact]
+    public void AResizedObjectInsideAScaledGroupScalesAboutTheHandleOpposite()
+    {
+        (Window window, CanvasWorkspace workspace, EditorViewModel viewModel, CadDocument document) =
+            Host(TranslatedAndScaled);
+        try
+        {
+            PathItem rect = Assert.Single(document.AllPaths());
+            viewModel.SelectObject(rect);
+            Settle();
+
+            Drag(window, workspace, new Point2D(52.5, 52.5), new Point2D(67.5, 52.5));
+
+            Rect2D after = InWorld(rect);
+            Assert.True(
+                Math.Abs(after.Left - 37.5) <= 0.5 && Math.Abs(after.Top - 37.5) <= 0.5 &&
+                Math.Abs(after.Right - 67.5) <= 0.5 && Math.Abs(after.Bottom - 52.5) <= 0.5,
+                $"the resize should leave the box at 37.5,37.5 to 67.5,52.5 but left it at " +
+                $"{after.Left},{after.Top} to {after.Right},{after.Bottom}");
         }
         finally
         {
