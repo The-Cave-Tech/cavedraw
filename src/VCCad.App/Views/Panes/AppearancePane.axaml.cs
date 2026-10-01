@@ -141,9 +141,19 @@ public partial class AppearancePane : UserControl
         Changed();
     }
 
+    /// <summary>
+    /// Tells the shared state which stroke is now being inspected, so the stroke inspector and this panel are
+    /// always looking at the same one. Guarded against the refresh's own selection changes, which would otherwise
+    /// write the state back while it is being rebuilt.
+    /// </summary>
     private void OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
-        _ = _updating;
+        if (_updating || _viewModel is null || StrokeList.SelectedIndex < 0)
+        {
+            return;
+        }
+
+        _viewModel.InspectedStroke = StrokeList.SelectedIndex;
     }
 
     /// <summary>

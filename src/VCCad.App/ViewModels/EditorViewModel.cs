@@ -245,6 +245,65 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// </summary>
     public string ExportSvg(int? page = null) => VCCad.Core.Svg.SvgWriter.Write(ActiveSession.Document, page);
 
+    /// <summary>
+    /// Which stroke of the selected path's stack is being inspected, counted from the bottom, or -1 for none.
+    ///
+    /// **View state, shared.** With the appearance stack there is no such thing as "the stroke" on a selection -
+    /// there may be several - so the inspector and the appearance panel have to agree about which one is being
+    /// edited. Holding it in one place rather than in each panel is what stops a person setting a width in one and
+    /// believing it, while the other is showing a different stroke. `EditorColorState` is the same pattern for
+    /// colour.
+    ///
+    /// Clamped to the selection's own stack, so a selection change cannot leave it pointing past the end of a
+    /// shorter stack - which would make the panels disagree about a stroke that no longer exists.
+    /// </summary>
+    public int InspectedStroke
+    {
+        // Clamped on **read**, not only when it is set: the selection can change without anybody assigning to this
+        // property, and an index that outlives the stack it pointed into is exactly how the inspector and the
+        // appearance panel end up describing different strokes.
+        get
+        {
+            int count = ActiveSession.SelectedPaths().FirstOrDefault()?.Strokes.Count ?? 0;
+            if (count == 0)
+            {
+                return -1;
+            }
+
+            return _inspectedStroke < 0 ? -1 : Math.Min(_inspectedStroke, count - 1);
+        }
+
+        set
+        {
+            int clamped = value < 0 ? -1 : value;
+            int count = ActiveSession.SelectedPaths().FirstOrDefault()?.Strokes.Count ?? 0;
+            if (count == 0)
+            {
+                clamped = -1;
+            }
+            else if (clamped >= count)
+            {
+                clamped = count - 1;
+            }
+
+            if (clamped == _inspectedStroke)
+            {
+                return;
+            }
+
+            _inspectedStroke = clamped;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(InspectedStrokeLabel));
+        }
+    }
+
+    private int _inspectedStroke = -1;
+
+    /// <summary>What to show for the inspected stroke, so both panels can say the same thing.</summary>
+    public string InspectedStrokeLabel => InspectedStroke < 0
+        ? "none"
+        : $"stroke {InspectedStroke + 1} of {ActiveSession.SelectedPaths().FirstOrDefault()?.Strokes.Count ?? 0}";
+
     /// <summary>Whether the active document has changes that are not on disk.</summary>
     public bool IsActiveModified => _active.IsModified;
 

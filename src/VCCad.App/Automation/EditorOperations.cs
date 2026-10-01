@@ -2269,6 +2269,27 @@ public static class EditorOperations
                 return new { changed = ctx.Session.RemoveStroke(index) };
             });
 
+        Add("style.inspectStroke",
+            "Which stroke of the selection is being inspected, counted from the bottom - the state the stroke " +
+            "inspector and the appearance panel share, so both are describing the same one rather than each holding " +
+            "its own idea. Without index it reports what is being inspected. Index is clamped to the stack, so a " +
+            "selection change cannot leave it pointing at a stroke that does not exist.",
+            "index?:number",
+            (ctx, p) =>
+            {
+                if (p.ValueKind == JsonValueKind.Object && p.TryGetProperty("index", out _))
+                {
+                    ctx.ViewModel.InspectedStroke = (int)p.GetLong("index", -1);
+                }
+
+                return new
+                {
+                    index = ctx.ViewModel.InspectedStroke,
+                    label = ctx.ViewModel.InspectedStrokeLabel,
+                    strokes = ctx.Session.SelectedPaths().FirstOrDefault()?.Strokes.Count ?? 0,
+                };
+            });
+
         Add("style.setStrokeVisible",
             "Show or hide one stroke on the selected paths. index counts from the bottom and defaults to the top " +
             "one. A hidden stroke keeps its width, caps, joins, miter limit and dash: it is a stroke somebody is " +
