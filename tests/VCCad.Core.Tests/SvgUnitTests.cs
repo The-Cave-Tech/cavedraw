@@ -368,4 +368,126 @@ public class SvgUnitTests
         Assert.Equal(600.0, InArtboard(rect, 2).X, 9);
         Assert.Equal(450.0, InArtboard(rect, 2).Y, 9);
     }
+
+    // ---------------------------------------------------------------- the root percentage reference
+
+    /// <summary>
+    /// **A percentage at the root resolves against the root `viewBox`, not against the port.**
+    ///
+    /// SVG 1.1 §7.10 defines *actual-width* and *actual-height* as the viewport dimension **within the user
+    /// coordinate system for the viewport element**, and a `viewBox` is what establishes that system. The
+    /// specification's own units example is decisive: `<svg width="400px" height="200px" viewBox="0 0 4000 2000">`
+    /// resolves a percentage against **4000**, not 400.
+    ///
+    /// So a 100x100 port holding a 50x50 box is a drawing at twice its size inside the port, and `50%` of it is
+    /// 25 units - half the drawing - rather than 50 units, which is the box doubled and fills the port. The nested
+    /// `svg` path has read it this way since the nested viewport work; the root read it the other way, which is the
+    /// same specification answered two ways in one reader and neither of them visible in the output.
+    ///
+    /// Before: the 25-unit square was 50 units, so 75 pt across instead of 37.5 - twice its authored size, on a
+    /// page of the right size.
+    /// </summary>
+    [Fact]
+    public void ARootPercentageResolvesAgainstTheRootViewBox()
+    {
+        SvgImportResult result = ReadRoot(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\" viewBox=\"0 0 50 50\">" +
+            "<rect width=\"50%\" height=\"50%\"/></svg>");
+
+        Assert.Empty(result.Warnings);
+
+        PathItem rect = FirstPath(result);
+        SubPath sub = Assert.Single(rect.SubPaths);
+
+        // The file's own space: half of a fifty-unit box is twenty-five user units.
+        Assert.Equal(25.0, sub.Nodes[2].Anchor.X, 9);
+        Assert.Equal(25.0, sub.Nodes[2].Anchor.Y, 9);
+
+        // And in the model: 25 units fitted at 2x into the 75 pt port is 37.5 pt.
+        Assert.Equal(0.0, InArtboard(rect).X, 9);
+        Assert.Equal(0.0, InArtboard(rect).Y, 9);
+        Assert.Equal(37.5, InArtboard(rect, 2).X, 9);
+        Assert.Equal(37.5, InArtboard(rect, 2).Y, 9);
+
+        // The port is the wrong reference, and it is the one this used to use: it gives a 75 pt square.
+        Assert.NotEqual(75.0, InArtboard(rect, 2).X, 6);
+    }
+
+    /// <summary>
+    /// **A root with no `viewBox` has no user coordinate system of its own, so the port is the reference** - and the
+    /// file's stated size is what establishes it. This is the other half of the rule above: the box wins where there
+    /// is one, and the page still resolves a percentage where there is not.
+    /// </summary>
+    [Fact]
+    public void ARootPercentageWithNoViewBoxResolvesAgainstThePort()
+    {
+        SvgImportResult result = ReadRoot(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\">" +
+            "<rect width=\"50%\" height=\"50%\"/></svg>");
+
+        Assert.Empty(result.Warnings);
+
+        PathItem rect = FirstPath(result);
+        Assert.Equal(50.0, Assert.Single(rect.SubPaths).Nodes[2].Anchor.X, 9);
+
+        // Half of a 100-user-unit page is 37.5 pt of the 75 pt artboard.
+        Assert.Equal(75.0, result.Document.Artboards[0].Width, 9);
+        Assert.Equal(37.5, InArtboard(rect, 2).X, 9);
+        Assert.Equal(37.5, InArtboard(rect, 2).Y, 9);
+    }
+
+    /// <summary>
+    /// **A vertical percentage follows the same rule on its own axis.** `y` and `height` are fractions of
+    /// *actual-height* - the box's height - exactly as `x` and `width` are fractions of its width, so the same
+    /// 100x100 port holding a 50x50 box gives 25 units down, not 50.
+    ///
+    /// Before: 75 pt down the page instead of 37.5, with the square's far edge at 150 pt - off the bottom of a page
+    /// whose own height is 75.
+    /// </summary>
+    [Fact]
+    public void ARootVerticalPercentageResolvesAgainstTheRootViewBox()
+    {
+        SvgImportResult result = ReadRoot(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\" viewBox=\"0 0 50 50\">" +
+            "<rect x=\"0\" y=\"50%\" width=\"50%\" height=\"50%\"/></svg>");
+
+        Assert.Empty(result.Warnings);
+
+        PathItem rect = FirstPath(result);
+        SubPath sub = Assert.Single(rect.SubPaths);
+
+        Assert.Equal(25.0, sub.Nodes[0].Anchor.Y, 9);
+        Assert.Equal(25.0, sub.Nodes[2].Anchor.Y - sub.Nodes[0].Anchor.Y, 9);
+
+        Assert.Equal(37.5, InArtboard(rect).Y, 9);
+        Assert.Equal(75.0, InArtboard(rect, 2).Y, 9);
+        Assert.NotEqual(150.0, InArtboard(rect, 2).Y, 6);
+    }
+
+    /// <summary>
+    /// **A percentage with no reference at all is reported, never accepted and ignored.**
+    ///
+    /// A root that states neither a `viewBox` nor a size still imports - CSS gives a standalone replaced element a
+    /// default object size, and the corpus needs those files to come in - but that size is the viewer's assumption
+    /// rather than the file's statement. A percentage measured against it is a length nobody wrote, so there is no
+    /// answer to give and the reader says so. The page still stands at the default; only the unresolvable length is
+    /// refused.
+    /// </summary>
+    [Fact]
+    public void ARootPercentageWithNoSizeAndNoViewBoxIsReported()
+    {
+        SvgImportResult result = ReadRoot(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"50%\" height=\"50%\"/></svg>");
+
+        // The default viewport is still the page, as it always was - the gap is the percentage, not the file.
+        Assert.Equal(225.0, result.Document.Artboards[0].Width, 9);
+        Assert.Equal(225.0, result.Document.Artboards[0].Height, 9);
+
+        Assert.Contains(result.Warnings, w =>
+            w.Contains("width=\"50%\"", StringComparison.Ordinal) &&
+            w.Contains("percentage", StringComparison.OrdinalIgnoreCase));
+
+        // The rect's own size is the unresolvable one, so it is not drawn at some other size instead.
+        Assert.Empty(result.Document.AllPaths());
+    }
 }

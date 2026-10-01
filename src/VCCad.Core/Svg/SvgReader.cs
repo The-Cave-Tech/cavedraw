@@ -81,7 +81,7 @@ public static partial class SvgReader
         // (AGENTS.md §8), so the artboard is three quarters of the number the file writes and the transform below
         // carries the content from the file's units into the model's. Doing it here, once, is what keeps one
         // physical length from being two different numbers depending on where it was written.
-        (double width, double height, SvgViewport viewport, AffineTransform viewBox) =
+        (double width, double height, SvgViewport? viewport, AffineTransform viewBox) =
             ReadViewBox(root, warning => warnings.Add(warning));
         if (width <= 0 || height <= 0)
         {
@@ -357,12 +357,24 @@ public static partial class SvgReader
     /// The viewport a percentage resolves against stays in the file's units, because that is the space the geometry
     /// it is measuring sits in until the transform is applied.
     ///
+    /// **That reference is the view box where the file states one, and the port only where it does not.** SVG 1.1
+    /// §7.10 defines *actual-width* and *actual-height* as the viewport dimension "within the user coordinate system
+    /// for the viewport element", and a view box is what establishes that system: the specification's own units
+    /// example is `<svg width="400px" height="200px" viewBox="0 0 4000 2000">`, where a percentage resolves against
+    /// **4000** rather than 400. Resolving it against the port instead doubles the geometry of every file whose box
+    /// differs from its page, and it does so while agreeing with the nested `svg` path about nothing - the same
+    /// specification answered two ways in one reader.
+    ///
     /// `preserveAspectRatio` is honoured in its two common forms: **meet** fits the whole view box inside the view
     /// port and leaves space, **slice** fills the view port and crops, and **none** stretches - the one that
     /// changes an object's shape. Reading it wrong scales the artwork by the wrong factor in one axis, which looks
     /// like a font problem and is not one.
+    ///
+    /// The reference is **nullable**, because a file that states neither a view box nor a size has none: the
+    /// viewport it imports at is then CSS's default object size rather than the file's own statement, and a
+    /// percentage measured against it is a length nobody wrote. Null says exactly that and the caller reports it.
     /// </summary>
-    private static (double Width, double Height, SvgViewport Viewport, AffineTransform Transform) ReadViewBox(
+    private static (double Width, double Height, SvgViewport? Viewport, AffineTransform Transform) ReadViewBox(
         XElement root, Action<string> warn)
     {
         double? width = RootLength(root.Attribute("width")?.Value, "width", warn);
@@ -383,9 +395,16 @@ public static partial class SvgReader
 
             // With no box to fit there is nothing to place but the unit itself: the page is the declared size in
             // points, and the content's own space is that size in user units.
+            //
+            // A percentage inside resolves against the size **the file states**. Where it states none the size above
+            // is the CSS default rather than the file's, so there is no reference at all and the caller reports the
+            // percentage instead of measuring it against a number nobody wrote. This mirrors `SvgFilters`' view of
+            // the same document, which has answered the question this way since the filter region work.
+            SvgViewport? declared = new SvgViewport(fallbackWidth, fallbackHeight);
+
             return (fallbackWidth * SvgLength.UserUnitsToPoints,
                 fallbackHeight * SvgLength.UserUnitsToPoints,
-                new SvgViewport(fallbackWidth, fallbackHeight),
+                declared,
                 AffineTransform.CreateScale(SvgLength.UserUnitsToPoints, SvgLength.UserUnitsToPoints));
         }
 
