@@ -13,8 +13,9 @@ and to a program. The artwork below was drawn entirely through that API, with no
 | --- | --- |
 | ![Bag End at dusk: a round green door in a hill, lit windows, trees and a winding path](docs/images/bag-end.png) | ![A night scene: a house, a yellow bulldozer, a hovering ship, the number 42 and a Guide device reading DON'T PANIC](docs/images/hhgttg.png) |
 
-Both are in **one document**, as two A4 artboards. The recording of the session that made them — including the
-parts that went wrong and were fixed — is in [`artifacts/`](artifacts).
+Both are in **one document**, as two A4 artboards.
+[The recording of the session that made them](docs/media/making-two-artboards.mp4) — four minutes, every stroke
+of it drawn through the API — shows the work as it happened, including the parts that went wrong and were fixed.
 
 ---
 
