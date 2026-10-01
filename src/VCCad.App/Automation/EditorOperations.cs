@@ -1646,6 +1646,72 @@ public static class EditorOperations
                 return new { changed, points = points.Count };
             });
 
+        Add("style.addStrokeEffect",
+            "Add an outline effect to the selected paths' strokes, on top of the ones they have. kind is one of " +
+            "offsetPath, roughen, zigZag or scribble. size is how far a point may move (or how far an offset path " +
+            "moves the edges), detail is how many passes a scribble draws, and seed is what makes a random-looking " +
+            "effect the same every time it is drawn - the same document must render and export identically. One " +
+            "undo step per path.",
+            "kind:string, size?:number, detail?:number, seed?:number",
+            (ctx, p) =>
+            {
+                string kind = p.GetString("kind") ?? string.Empty;
+                OutlineEffectKind parsed = kind.ToLowerInvariant() switch
+                {
+                    "offsetpath" or "offset_path" or "offset" => OutlineEffectKind.OffsetPath,
+                    "roughen" => OutlineEffectKind.Roughen,
+                    "zigzag" or "zig_zag" => OutlineEffectKind.ZigZag,
+                    "scribble" => OutlineEffectKind.Scribble,
+                    _ => throw new EditorOperationException(
+                        $"'{kind}' is not an outline effect; use offsetPath, roughen, zigZag or scribble"),
+                };
+
+                var effect = new OutlineEffectSpec(
+                    parsed,
+                    p.GetDouble("size", 2.0),
+                    p.GetDouble("detail", 1.0),
+                    (int)p.GetLong("seed", 1));
+
+                int changed = 0;
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    var stack = path.Strokes.ToList();
+                    for (int i = 0; i < stack.Count; i++)
+                    {
+                        stack[i] = stack[i] with
+                        {
+                            Effects = new EffectStack(stack[i].AllEffects.Concat(new[] { effect })),
+                        };
+                    }
+
+                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Add stroke effect"));
+                    changed++;
+                }
+
+                return new { effect = parsed.ToString(), changed };
+            });
+
+        Add("style.clearStrokeEffects",
+            "Remove every outline effect from the selected paths' strokes. One undo step per path.",
+            "",
+            (ctx, _) =>
+            {
+                int changed = 0;
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    var stack = path.Strokes.ToList();
+                    for (int i = 0; i < stack.Count; i++)
+                    {
+                        stack[i] = stack[i] with { Effects = null };
+                    }
+
+                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Clear stroke effects"));
+                    changed++;
+                }
+
+                return new { changed };
+            });
+
         Add("profile.create",
             "Create a reusable width profile in the document. points is [{position, left, right, interpolation?}], " +
             "the same shape style.setWidthProfile takes. The name has to be free: two profiles with one name would " +
@@ -5252,6 +5318,15 @@ public static class EditorOperations
                     interpolation = point.Interpolation.ToString().ToLowerInvariant(),
                 }).ToArray(),
             }
+            : null,
+        effects = stroke.HasEffects
+            ? stroke.AllEffects.Select(effect => new
+            {
+                kind = effect.Kind.ToString(),
+                size = Math.Round(effect.Size, 4),
+                detail = Math.Round(effect.Detail, 4),
+                seed = effect.Seed,
+            }).ToArray()
             : null,
     };
 

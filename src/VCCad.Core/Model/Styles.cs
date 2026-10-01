@@ -252,7 +252,8 @@ public sealed record StrokeSpec(
     double MiterLimit,
     StrokeAlignment Alignment = StrokeAlignment.Center,
     DashPattern Dash = default,
-    WidthProfileSpec? WidthProfile = null)
+    WidthProfileSpec? WidthProfile = null,
+    EffectStack? Effects = null)
 {
     /// <summary>Convenience: no visible stroke.</summary>
     public static StrokeSpec None { get; } =
@@ -270,6 +271,12 @@ public sealed record StrokeSpec(
     /// outline route to draw exactly what it drew before.
     /// </summary>
     public bool HasWidthProfile => WidthProfile is { IsEmpty: false };
+
+    /// <summary>Whether any outline effect reshapes this stroke.</summary>
+    public bool HasEffects => Effects is { Count: > 0 };
+
+    /// <summary>The effects in order, or an empty list when there are none.</summary>
+    public IReadOnlyList<OutlineEffectSpec> AllEffects => Effects ?? EffectStack.Empty;
 
     /// <summary>True when a stroke is visible and has positive width.</summary>
     public bool HasVisibleOutline => IsVisible && Width > 0.0;

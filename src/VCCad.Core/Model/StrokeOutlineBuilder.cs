@@ -55,10 +55,11 @@ public static class StrokeOutlineBuilder
     {
         double width = Math.Max(0.0, stroke.Width * scale);
 
-        if (!stroke.HasWidthProfile)
+        if (!stroke.HasWidthProfile && !stroke.HasEffects)
         {
-            // A constant-width stroke stays a stroke. Turning it into an outline would change what it looks
-            // like, because a stroked path's caps and joins are the renderer's, not a filled region's.
+            // A constant-width stroke with nothing done to its outline stays a stroke. Turning it into an outline
+            // would change what it looks like, because a stroked path's caps and joins are the renderer's, not a
+            // filled region's.
             return StrokeRenderPlan.Stroked(width);
         }
 
@@ -85,10 +86,15 @@ public static class StrokeOutlineBuilder
                     point.Interpolation)));
         }
 
-        return PathOffset.Outline(
+        IReadOnlyList<IReadOnlyList<Point2D>> outlines = PathOffset.Outline(
             PathFlattener.FlattenForStroke(path),
             profile,
             stroke.Width * scale,
             stroke.MiterLimit);
+
+        // The effects come **after** the outline exists, because that is what they reshape. Applying them to the
+        // path instead would mean each effect having to know about widths and joins, and two renderers could then
+        // apply them in different orders.
+        return stroke.HasEffects ? OutlineEffects.Apply(outlines, stroke.AllEffects) : outlines;
     }
 }

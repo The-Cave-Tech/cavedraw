@@ -97,7 +97,15 @@ internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, St
     // A width profile on the stroke, when it has one. Absent for an ordinary stroke, so nothing that has one
     // changes on the way out - the same rule the stroke stack and the gradients follow.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    WidthProfileDto? WidthProfile = null);
+    WidthProfileDto? WidthProfile = null,
+
+    // The outline effects on the stroke, in the order they are applied. Absent when there are none.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    OutlineEffectDto[]? Effects = null);
+
+/// <summary>One outline effect on the wire: its kind, its parameters, and the seed its randomness comes from.</summary>
+internal sealed record OutlineEffectDto(
+    OutlineEffectKind Kind, double Size, double Detail, int Seed);
 
 /// <summary>
 /// A width profile on the wire: its name and its width points, in order.
@@ -466,6 +474,9 @@ internal abstract record ItemDto
                     s.WidthProfile!.Name,
                     s.WidthProfile.Points.Select(p => new WidthPointDto(
                         p.Position, p.LeftWidth, p.RightWidth, p.Interpolation)).ToArray())
+                : null,
+            s.HasEffects
+                ? s.AllEffects.Select(e => new OutlineEffectDto(e.Kind, e.Size, e.Detail, e.Seed)).ToArray()
                 : null);
 }
 
@@ -865,11 +876,24 @@ internal static class ItemDtoExtensions
                 MiterLimit = s.MiterLimit,
                 Alignment = s.Alignment,
                 Dash = new DashPattern(s.Dash ?? Array.Empty<double>(), s.DashOffset),
+                Effects = ToEffects(s.Effects),
             }
             : new StrokeSpec(s.Visible, new ColorRgb(s.Color.R, s.Color.G, s.Color.B, s.Color.A),
                 s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment,
                 new DashPattern(s.Dash ?? Array.Empty<double>(), s.DashOffset),
-                s.WidthProfile?.ToModel());
+                s.WidthProfile?.ToModel(),
+                ToEffects(s.Effects));
+
+    /// <summary>
+    /// The effects on the wire, or null when there are none.
+    ///
+    /// Null rather than an empty stack, so "no effects" and "a stroke that once had effects and has none now" are
+    /// one state - the same reason an empty width profile is not a width profile.
+    /// </summary>
+    private static EffectStack? ToEffects(OutlineEffectDto[]? effects)
+        => effects is { Length: > 0 }
+            ? new EffectStack(effects.Select(e => new OutlineEffectSpec(e.Kind, e.Size, e.Detail, e.Seed)))
+            : null;
 
     private static WidthProfileSpec? ToModel(this WidthProfileDto? dto)
         => dto is null
