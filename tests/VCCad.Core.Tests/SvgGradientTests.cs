@@ -25,6 +25,44 @@ public class SvgGradientTests
         => result.Document.AllPaths().Single(p => p.Name == pathId).Fill.Gradient!;
 
     /// <summary>
+    /// **A percentage stop offset is a fraction of the ramp, not a length.** `SvgReader.Length` returns null for
+    /// anything ending in `%`, so reading it as a length first and defaulting to zero made `offset="25%"` land at
+    /// **0**: every stop but the last sat at the start of the ramp, and nothing reported it - a gradient authored
+    /// with percentage offsets imported as a hard two-colour edge.
+    ///
+    /// The filter region has the same defect and is still open (#144); this is the gradient half.
+    /// </summary>
+    [Fact]
+    public void APercentageOffsetIsItsFractionOfTheRamp()
+    {
+        SvgImportResult result = Read(
+            "<defs><linearGradient id=\"g\"><stop offset=\"25%\" stop-color=\"#ff0000\"/>" +
+            "<stop offset=\"100%\" stop-color=\"#0000ff\"/></linearGradient></defs>" +
+            "<rect id=\"shape\" x=\"0\" y=\"0\" width=\"100\" height=\"100\" fill=\"url(#g)\"/>");
+
+        GradientSpec gradient = Gradient(result);
+
+        Assert.Equal(0.25, gradient.Stops[0].Position, 9);
+        Assert.Equal(1.0, gradient.Stops[1].Position, 9);
+    }
+
+    /// <summary>
+    /// And a bare number means the same fraction, unchanged: the two spellings state the same thing, so a fix that
+    /// made one right at the other's expense would be no fix.
+    /// </summary>
+    [Fact]
+    public void AnOffsetWithoutAPercentIsTheSameFraction()
+    {
+        SvgImportResult result = Read(
+            "<defs><linearGradient id=\"g\"><stop offset=\"0.25\" stop-color=\"#ff0000\"/>" +
+            "<stop offset=\"1\" stop-color=\"#0000ff\"/></linearGradient></defs>" +
+            "<rect id=\"shape\" x=\"0\" y=\"0\" width=\"100\" height=\"100\" fill=\"url(#g)\"/>");
+
+        Assert.Equal(0.25, Gradient(result).Stops[0].Position, 9);
+        Assert.Equal(1.0, Gradient(result).Stops[1].Position, 9);
+    }
+
+    /// <summary>
     /// The same gradient, compared field by field at the precision the writer keeps.
     ///
     /// The record's own equality would compare the stop list by reference, so it would report two identical

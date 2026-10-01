@@ -171,10 +171,24 @@ internal sealed class SvgGradients
         }
 
         string? rawOffset = Value("offset");
-        double offset = SvgReader.Length(rawOffset) ?? 0.0;
-        if (rawOffset?.Trim().EndsWith('%') == true)
+        string offsetText = rawOffset?.Trim() ?? string.Empty;
+
+        // A percentage offset is a **number**, not a length: `SvgReader.Length` returns null for anything ending in
+        // `%`, so reading it as a length first and defaulting to zero made `offset="25%"` collapse to 0 - every stop
+        // but the last landed at the start of the ramp, and nothing said so. The number is read here and divided by
+        // a hundred, which is what the percentage means for a stop.
+        double offset;
+        if (offsetText.EndsWith('%'))
         {
-            offset /= 100.0;
+            offset = double.TryParse(
+                offsetText[..^1], System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double percent)
+                ? percent / 100.0
+                : 0.0;
+        }
+        else
+        {
+            offset = SvgReader.Length(offsetText) ?? 0.0;
         }
 
         ColorRgb colour = SvgColour.Parse(Value("stop-color") ?? "black") ?? ColorRgb.Black;
