@@ -373,7 +373,9 @@ public class SvgTextTests
         SvgImportResult result = Read(
             "<text id=\"label\" transform=\"scale(2,3)\" x=\"0\" y=\"10\">hi</text>");
 
-        ArtGroup group = Assert.Single(result.Document.AllItems().OfType<ArtGroup>());
+        // The file's own group is the one inside the reader's root transform, which carries the file's own units
+        // into the model's points.
+        ArtGroup group = result.Document.AllItems().OfType<ArtGroup>().Last();
         Assert.Equal("label", group.Name);
         Assert.Equal(2.0, group.Transform.A, 9);
         Assert.Equal(3.0, group.Transform.D, 9);
@@ -388,7 +390,9 @@ public class SvgTextTests
             "<text id=\"lines\" x=\"10\" y=\"20\" font-size=\"10\">" +
             "<tspan x=\"10\" y=\"20\">first</tspan><tspan x=\"10\" y=\"30\">second</tspan></text>");
 
-        ArtGroup group = Assert.Single(result.Document.AllItems().OfType<ArtGroup>());
+        // The file's own group is the one inside the reader's root transform, which carries the file's own units
+        // into the model's points.
+        ArtGroup group = result.Document.AllItems().OfType<ArtGroup>().Last();
         Assert.Equal(2, group.Children.OfType<TextItem>().Count());
 
         // One text element, counted once however many baselines it holds.

@@ -36,8 +36,11 @@ public class SvgUseTests
         PathItem path = Assert.Single(result.Document.AllPaths());
         Assert.Equal(new Point2D(0, 0), path.SubPaths[0].Nodes[0].Anchor);
 
-        ArtGroup instance = result.Document.Artboards[0].Layers[0].Children.OfType<ArtGroup>().Single();
+        ArtGroup instance = result.Document.AllGroups().Single(g => g.SourceId is not null);
         Assert.Equal("box", instance.SourceId);
+
+        // The position is in the file's own units, which is the space the instance's transform lives in - the group
+        // above the whole file is what carries them into the model's points.
         Assert.Equal(new Point2D(50, 30), instance.Transform.Transform(new Point2D(0, 0)));
     }
 
@@ -77,7 +80,7 @@ public class SvgUseTests
             "<defs><rect id=\"box\" width=\"4\" height=\"4\"/></defs>" +
             "<use xlink:href=\"#box\"/><use href=\"#box\"/>");
 
-        Assert.Equal(2, result.Document.Artboards[0].Layers[0].Children.OfType<ArtGroup>().Count());
+        Assert.Equal(2, result.Document.AllGroups().Count(g => g.SourceId is not null));
         Assert.Empty(result.Missing);
     }
 
@@ -140,8 +143,9 @@ public class SvgUseTests
             + "<use id=\"first\" xlink:href=\"#box\" x=\"7\"/></defs>"
             + "<use xlink:href=\"#first\" x=\"100\"/>");
 
-        // Two instance groups: the outer one, and the one nested inside it for the first use.
-        Assert.Equal(2, result.Document.AllGroups().Count());
+        // Two instance groups: the outer one, and the one nested inside it for the first use. (A third group wraps
+        // the whole file, carrying its units into the model's, which is why this counts instances rather than groups.)
+        Assert.Equal(2, result.Document.AllGroups().Count(g => g.SourceId is not null));
         Assert.Equal("first", result.Document.AllGroups().First(g => g.SourceId is not null).SourceId);
     }
 
