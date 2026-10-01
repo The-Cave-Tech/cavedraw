@@ -1614,7 +1614,10 @@ public static class EditorOperations
         });
 
         // ---- text --------------------------------------------------------
-        Add("text.create", "Create a text object at (x, y).", "x:number, y:number, text:string, family?, fontSize?, color?:[r,g,b]",
+        Add("text.create",
+            "Create a text object at (x, y). With no layerId it goes on the active artboard, as typing does; " +
+            "with one it goes on that layer, which is how a scene puts its words on a second page.",
+            "x:number, y:number, text:string, family?, fontSize?, color?:[r,g,b], layerId?:guid",
             (ctx, p) =>
             {
                 var point = new Point2D(p.GetDouble("x"), p.GetDouble("y"));
@@ -1624,6 +1627,15 @@ public static class EditorOperations
                 if (p.TryGetColorArray("color", out ColorRgb color))
                 {
                     item.Color = color;
+                }
+
+                if (p.TryGetGuid("layerId", out Guid targetLayer))
+                {
+                    // The same thing object.create does with its layerId, so the two create operations place
+                    // an object the same way: coordinates are in the document's own space and the move re-bases
+                    // them onto the page.
+                    Layer layer = RequireLayer(ctx.Document, targetLayer);
+                    ctx.ViewModel.MoveItems(new[] { (LayerItem)item }, layer, layer.Children.Count);
                 }
 
                 ctx.ViewModel.NotifyDocumentChanged();
@@ -2053,12 +2065,28 @@ public static class EditorOperations
                 items = a.Layers.Sum(l => l.Children.Count),
             }).ToArray());
 
-        Add("artboard.add", "Add an artboard.", "width?, height?, x?, y?, name?",
+        Add("artboard.add",
+            "Add an artboard. With no x, the new page is placed clear of the right-hand edge of the pages " +
+            "already there, so a second page is beside the first rather than on top of it.",
+            "width?, height?, x?, y?, name?",
             (ctx, p) =>
             {
                 double width = p.GetDouble("width", PageSizes.A4Landscape.Width);
                 double height = p.GetDouble("height", PageSizes.A4Landscape.Height);
-                var rect = new Rect2D(p.GetDouble("x", 0), p.GetDouble("y", 0), width, height);
+
+                // **Beside the pages already there, not on top of them.** A page added at the origin lands
+                // exactly over the last one, and since `view.fit` then fits what it can see, the page that
+                // disappears is the one that was there first. The gap is a tenth of a page, which reads as two
+                // pages at any zoom rather than as one wide one.
+                double suggestedX = ctx.Document.Artboards.Count == 0
+                    ? 0
+                    : ctx.Document.Artboards.Max(a => a.Bounds.Right) + (width * 0.1);
+
+                var rect = new Rect2D(
+                    p.GetDouble("x", suggestedX),
+                    p.GetDouble("y", 0),
+                    width,
+                    height);
                 Artboard artboard = ctx.Document.AddArtboard(new Size2D(width, height),
                     p.GetString("name"), new Point2D(rect.X, rect.Y));
                 artboard.AddLayer("Layer 1");
