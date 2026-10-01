@@ -24,7 +24,7 @@ namespace VCCad.App.Views.Panes;
 ///
 /// Face members (family, size, weight, slant) are read **at the inspected run**, because the model holds them per
 /// run. Content, colour, alignment and paragraph style are read from the block, because the model holds one of each
-/// per block - a per-run colour is one of the things issue #147 records the model as not having.
+/// per block. A run can carry its own colour (TextRun.Color, #161), so a colour change inside one block is expressible and the canvas and the exporter both read it; this summary reports the colour the blocks agree on.
 /// </summary>
 public sealed record TextSummary(
     int Blocks,
