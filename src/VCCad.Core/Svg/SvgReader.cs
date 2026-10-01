@@ -811,18 +811,23 @@ public static partial class SvgReader
 
         SvgTextStyle text = SvgTextStyle.From(element, context.Text, declarations, context.Warn);
 
+        // `clip-path` is read once here and handed to whichever reader below builds the item, because it is a
+        // property of every element that can be drawn rather than of one kind of element. Reading it per element
+        // kind would eventually answer "which frame" differently in two places - see ClipPathFor.
+        ClipPath? clip = ClipPathFor(element, context, declarations);
+
         switch (name)
         {
             case "g":
             case "a":
             case "switch":
-                ReadGroup(element, context, style, text);
+                ReadGroup(element, context, style, text, clip);
                 return;
 
             // A nested `svg` establishes a viewport of its own, which is a second view box transform laid on the
             // enclosing one rather than a plain group - see ReadNestedSvg.
             case "svg":
-                ReadNestedSvg(element, context, style, text);
+                ReadNestedSvg(element, context, style, text, clip);
                 return;
 
             case "text":
@@ -850,8 +855,22 @@ public static partial class SvgReader
             case "use":
                 foreach (LayerItem used in ReadUse(element, context, style))
                 {
+                    // `clip-path` is in force on the `use` element itself, so it clips the instance the same way
+                    // any ancestor clips what it holds. `ReadUse` keeps the element's own transform on the group,
+                    // and the clip belongs in that group's frame - which is the frame it is written in - so the
+                    // outline goes on unaltered.
+                    if (clip is { } useClipPath && useClipPath.Spec is { } useClip)
+                    {
+                        used.Clips.Add(useClip);
+                    }
+
                     context.Add(used);
                     context.Counts["use"] = context.Counts.GetValueOrDefault("use") + 1;
+                }
+
+                if (clip is { } refusedUseClip)
+                {
+                    context.Warnings.UnionWith(refusedUseClip.Warnings);
                 }
 
                 return;
@@ -933,6 +952,23 @@ public static partial class SvgReader
                 // own paint and cascade already decided - and so the profile is read on the path as it will be
                 // drawn, after its own transform is baked into the points.
                 ApplyPathEffect(shape, context);
+
+                // **The crop, in the same frame the shape's points ended up in.** SVG applies `clip-path` in the
+                // user space the element's own `transform` establishes, and the points above were carried out of
+                // that space by exactly that transform, so the outline is carried by it too rather than being left
+                // at coordinates the file wrote for a space the shape no longer occupies. The model records a
+                // shape's clip where the shape is, so both halves move together.
+                if (clip is { } shapeClipPath)
+                {
+                    if (shapeClipPath.Spec is { } shapeClip)
+                    {
+                        shape.Clips.Add(ApplyTransform(shapeClip, own));
+                    }
+
+                    // Said whether or not there was a clip to attach: a `clip-path` this reader could not honour
+                    // is the report this whole change exists for, and an item that was drawn is where it belongs.
+                    context.Warnings.UnionWith(shapeClipPath.Warnings);
+                }
             }
 
             context.Add(item);
@@ -956,7 +992,8 @@ public static partial class SvgReader
            Math.Abs(transform.E) < 1e-12 &&
            Math.Abs(transform.F) < 1e-12;
 
-    private static void ReadGroup(XElement element, Context context, PresentationStyle style, SvgTextStyle text)
+    private static void ReadGroup(
+        XElement element, Context context, PresentationStyle style, SvgTextStyle text, ClipPath? clip = null)
     {
         // A group keeps its transform on the group, where the model can apply it to everything inside at once and
         // where a later edit can change it. Baking it into the children would make the group's transform
@@ -966,6 +1003,19 @@ public static partial class SvgReader
         group.Transform = transform;
         group.BlendMode = style.Blend;
         CaptureForeign(element, group);
+
+        // The file's own crop of everything this group holds. SVG applies `clip-path` in the user space the
+        // element's own `transform` establishes, so the outline is carried into the containing space - the frame
+        // the model records a group's clip in, and the same one a viewport port is recorded in.
+        if (clip is { } groupClipPath)
+        {
+            if (groupClipPath.Spec is { } groupClip)
+            {
+                group.Clips.Add(ApplyTransform(groupClip, transform));
+            }
+
+            context.Warnings.UnionWith(groupClipPath.Warnings);
+        }
 
         var inside = new Context
         {
@@ -1016,7 +1066,8 @@ public static partial class SvgReader
     /// value on an `svg` element is `hidden`, and a nested viewport is usually there to crop. See below for the
     /// outline's frame and for why a port that cuts nothing is not recorded.
     /// </summary>
-    private static void ReadNestedSvg(XElement element, Context context, PresentationStyle style, SvgTextStyle text)
+    private static void ReadNestedSvg(
+        XElement element, Context context, PresentationStyle style, SvgTextStyle text, ClipPath? clip = null)
     {
         if (NestedOrigin(element, "x", SvgAxis.X, context) is not { } x ||
             NestedOrigin(element, "y", SvgAxis.Y, context) is not { } y)
@@ -1133,11 +1184,243 @@ public static partial class SvgReader
             }
         }
 
+        // **The element's own `clip-path` composes with the port rather than replacing it.** They are two
+        // outlines in the same frame - the one the enclosing element's numbers are written in - and a second clip
+        // on the way down means "and also inside this", so both belong on the element's own group. A reader that
+        // let one overwrite the other would show content the file hides while the survivor appeared to work,
+        // which is the harder failure to notice.
+        //
+        // Placed **after** the port so the order a person reads the model matches the order the file nests them,
+        // and attached whether or not the port cut anything: a port that removes nothing is not a clip, and the
+        // `clip-path` is unaffected by that decision.
+        if (clip is { } viewportClipPath)
+        {
+            if (viewportClipPath.Spec is { } viewportClip)
+            {
+                group.Clips.Add(ApplyTransform(viewportClip, Transform(element.Attribute("transform")?.Value)));
+            }
+
+            context.Warnings.UnionWith(viewportClipPath.Warnings);
+        }
+
         // Kept even when empty, the way a group is: the file has the element, and the transform and the name are
         // the element's own.
         context.Add(group);
         context.Counts["svg"] = context.Counts.GetValueOrDefault("svg") + 1;
     }
+
+    // ------------------------------------------------------------------ `clip-path`
+
+    /// <summary>
+    /// An element's `clip-path`, resolved into the model's <see cref="ClipSpec"/> - or the reason it could not be.
+    ///
+    /// <paramref name="Spec"/> is the outline **in the user space the element's own `transform` establishes**, which
+    /// is the space SVG 1.1 §14.3 evaluates the property in; the caller carries it into the item's frame with
+    /// <see cref="ApplyTransform(ClipSpec, AffineTransform)"/>, exactly as a viewport port is carried by the same
+    /// transform. <paramref name="Warnings"/> holds what was said about a value this reader could not honour: those
+    /// are **returned rather than added to the context** so that an element with no paint server somewhere it could
+    /// not be drawn from - a `clipPath`'s own definition, a shape skipped for having no area - does not produce a
+    /// report about a crop that was never going to be applied anyway.
+    ///
+    /// A value that is neither `none` nor a reference is reported rather than guessed at, and one that resolves to
+    /// something which is not a `clipPath` is reported too: a CSS shape (`circle()`, `inset()`, `path()`) and an
+    /// external reference are both SVG the model can hold but this reader does not read, and drawing the content
+    /// *unclipped in silence* is the defect this whole rule exists to close. The content is still drawn, because a
+    /// crop the reader cannot compute is no reason to lose the artwork underneath it.
+    /// </summary>
+    private static ClipPath? ClipPathFor(
+        XElement element,
+        Context context,
+        IReadOnlyDictionary<string, (string Value, bool Important)>? declarations)
+    {
+        string? stated = SvgProperties.Value(element, declarations, "clip-path");
+        if (stated is null)
+        {
+            return null;
+        }
+
+        string value = stated.Trim();
+        if (value.Length == 0 || value.Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            // `none` is the property's initial value, so it states the absence of a crop rather than one this
+            // reader failed to read. Reporting it would make every file that spells out its default look broken.
+            return null;
+        }
+
+        // A refusal names the value and the reason, in one message, because a person reading the report has to be
+        // able to find the attribute in the file and know why it was not honoured.
+        ClipPath Refuse(string reason)
+        {
+            string named = element.Attribute("id")?.Value is { Length: > 0 } name
+                ? $"the element '{name}' states clip-path=\"{value}\""
+                : $"an element states clip-path=\"{value}\"";
+
+            return new ClipPath(null, new[] { $"{named}, and {reason}" });
+        }
+
+        // `url(#id)` is the only form this reader can honour, and the id has to name a `clipPath` element.
+        string? id = LocalReference(value);
+        if (id is null)
+        {
+            return Refuse(
+                "it is not a reference to a <clipPath>, and this reader does not read CSS clip shapes or a " +
+                "reference into another document");
+        }
+
+        if (!context.Ids.TryGetValue(id, out XElement? target) || !IsClipPath(target))
+        {
+            return Refuse($"the document defines no <clipPath> called '{id}', so there is no outline to clip to");
+        }
+
+        string? units = target.Attribute("clipPathUnits")?.Value?.Trim();
+        if (units is not null && !units.Equals("userSpaceOnUse", StringComparison.OrdinalIgnoreCase))
+        {
+            // **A different coordinate system, not a different number.** `objectBoundingBox` means the outline's
+            // coordinates are fractions of the element's own bounding box, so `0 0 1 1` is the whole element rather
+            // than a one-unit square at its origin. Reading those numbers as user space would clip to a shape
+            // nobody wrote - a plausible wrong answer, which is worse than a reported gap.
+            return Refuse(
+                $"it refers to a <clipPath> in clipPathUnits=\"{units}\", a different coordinate system this " +
+                "reader does not convert, so the outline's numbers are not user space");
+        }
+
+        var clip = new ClipSpec { Rule = ClipRuleFor(target, context) };
+        var unread = new List<string>();
+        bool ruleStated = false;
+
+        // The outline is read by the same shape reader the artwork is, so a `clipPath` holding a `rect`, a `circle`
+        // or a `path` cannot mean one thing here and another there - and one spelling of "what shape is this"
+        // means a clip cannot drift away from the geometry it was written beside.
+        foreach (XElement child in target.Elements())
+        {
+            if (child.Name.LocalName is not ("rect" or "circle" or "ellipse" or "line" or "polyline" or "polygon"
+                or "path"))
+            {
+                unread.Add(
+                    $"a <clipPath> called '{id}' holds a <{child.Name.LocalName}> that this reader does not read " +
+                    "as an outline");
+                continue;
+            }
+
+            // `clip-rule` is a property of the outline's own shapes, so the first shape that states one decides the
+            // rule for the clip - a shape is a whole region here, not a layer to be combined, so there is no
+            // per-shape rule to keep. The `clipPath` element's own value is the inherited default read above.
+            if (!ruleStated &&
+                SvgProperties.Value(
+                    child,
+                    context.Sheet.DeclarationsFor(child, child.Ancestors().ToArray()),
+                    "clip-rule") is { } childRule)
+            {
+                clip.Rule = childRule.Trim().Equals("evenodd", StringComparison.OrdinalIgnoreCase)
+                    ? FillRule.EvenOdd
+                    : FillRule.NonZero;
+                ruleStated = true;
+            }
+
+            foreach (LayerItem item in ReadShape(child, context, PresentationStyle.Default))
+            {
+                if (item is PathItem outline)
+                {
+                    foreach (SubPath sub in outline.SubPaths)
+                    {
+                        clip.SubPaths.Add(sub.Clone());
+                    }
+                }
+            }
+        }
+
+        if (clip.IsEmpty)
+        {
+            unread.Add($"the <clipPath> called '{id}' holds no outline this reader can read");
+            return new ClipPath(null, unread);
+        }
+
+        return new ClipPath(clip, unread);
+    }
+
+    /// <summary>
+    /// The id a `url(...)` reference names, or null when the value is not a local fragment reference.
+    ///
+    /// A quoted URL and a whitespace-padded one are both valid CSS, and the check for the fragment is what keeps an
+    /// external reference (`url(sprite.svg#c)`) out: this reader opens one file, so a reference into another one is
+    /// a value it cannot honour and must report rather than treat as user space.
+    /// </summary>
+    private static string? LocalReference(string value)
+    {
+        if (!value.StartsWith("url(", StringComparison.OrdinalIgnoreCase) || !value.EndsWith(')'))
+        {
+            return null;
+        }
+
+        string inner = value[4..^1].Trim().Trim('"', '\'');
+        return inner.Length > 1 && inner[0] == '#' ? inner[1..] : null;
+    }
+
+    private static bool IsClipPath(XElement element)
+        => element.Name.LocalName == "clipPath" &&
+           (string.IsNullOrEmpty(element.Name.NamespaceName) || element.Name.Namespace == Svg);
+
+    /// <summary>
+    /// Which side of a `clipPath`'s outline is inside.
+    ///
+    /// `clip-rule` decides it and it is a property on the outline's shapes, so the default is inherited from the
+    /// `clipPath` element itself - where Inkscape writes it. Ignoring it turns a ring into a disc with identical
+    /// coordinates, which no assertion about geometry would catch.
+    /// </summary>
+    private static FillRule ClipRuleFor(XElement clipPath, Context context)
+    {
+        string? stated = SvgProperties.Value(
+            clipPath,
+            context.Sheet.DeclarationsFor(clipPath, clipPath.Ancestors().ToArray()),
+            "clip-rule");
+
+        return stated is not null && stated.Trim().Equals("evenodd", StringComparison.OrdinalIgnoreCase)
+            ? FillRule.EvenOdd
+            : FillRule.NonZero;
+    }
+
+    /// <summary>
+    /// A clip outline carried into another space by an affine transform.
+    ///
+    /// All three points of a node move together, for the same reason a path's do: transforming only the anchor
+    /// leaves a curve whose handles no longer describe it, which shows up as a crop that is subtly the wrong shape
+    /// rather than one that is visibly missing.
+    /// </summary>
+    private static ClipSpec ApplyTransform(ClipSpec clip, AffineTransform transform)
+    {
+        if (IsIdentity(transform))
+        {
+            // A clip with no transform is already where the model wants it, and the common case is worth not
+            // rebuilding - it is also the case a mistake here would be invisible in.
+            return clip;
+        }
+
+        var moved = new ClipSpec { Rule = clip.Rule };
+        foreach (SubPath sub in clip.SubPaths)
+        {
+            SubPath copy = sub.Clone();
+            for (int i = 0; i < copy.Nodes.Count; i++)
+            {
+                PathNode node = copy.Nodes[i];
+                node.Anchor = transform.Transform(node.Anchor);
+                node.InHandle = transform.Transform(node.InHandle);
+                node.OutHandle = transform.Transform(node.OutHandle);
+            }
+
+            moved.SubPaths.Add(copy);
+        }
+
+        return moved;
+    }
+
+    /// <summary>
+    /// An element's `clip-path` as this reader resolved it.
+    ///
+    /// <paramref name="Spec"/> is null when the value could not be honoured, and <paramref name="Warnings"/> then
+    /// says why. Keeping the two together is what stops a caller attaching a clip it did not resolve, and what lets
+    /// a caller that never draws the element stay quiet about it.
+    /// </summary>
+    private readonly record struct ClipPath(ClipSpec? Spec, IReadOnlyList<string> Warnings);
 
     /// <summary>
     /// Whether a viewport cuts its content at the port.
