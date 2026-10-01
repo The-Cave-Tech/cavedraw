@@ -1,4 +1,7 @@
+using System.Globalization;
+using System.IO.Compression;
 using System.Text;
+using System.Text.RegularExpressions;
 using VCCad.Core.Model;
 using VCCad.Geometry;
 using VCCad.Pdf;
@@ -316,6 +319,177 @@ public class GradientPdfTests
     }
 
     // ------------------------------------------------------------------
+    // Radial focal point: the second circle in /Coords
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// A radial's focus is the inner circle of a type 3 shading. `/Coords` is
+    /// <c>[x0 y0 r0 x1 y1 r1]</c>, the ramp runs from circle 0 to circle 1, so a focal point
+    /// is circle 0 with a radius of ZERO at the focus and circle 1 left as the unit circle
+    /// the CTM turns into the object's ellipse.
+    ///
+    /// The square is 20,30..220,130 and the shading's own space is the unit circle, so the
+    /// focus sits at (focus − centre) measured in radii: ((0.25 − 0.5)/0.5, (0.5 − 0.5)/0.5).
+    /// A test that only asked whether a focus was *present* would pass on a concentric
+    /// shading that happened to write two circles, which is the defect this pins.
+    /// </summary>
+    [Fact]
+    public void AFocusedRadialKeepsItsFocusInTheShadingCoords()
+    {
+        var gradient = new GradientSpec
+        {
+            Kind = GradientKind.Radial,
+            Stops = new[]
+            {
+                new GradientStop(0.0, new ColorRgb(1, 1, 1)),
+                new GradientStop(1.0, new ColorRgb(0, 0, 0)),
+            },
+            Center = new Point2D(0.5, 0.5),
+            RadiusX = 0.5,
+            RadiusY = 0.5,
+            FocalPoint = new Point2D(0.25, 0.5),
+        };
+
+        CadDocument document = DocumentWithSquare(gradient);
+        byte[] pdf = PdfDocumentExporter.Export(document);
+        double[] coords = Coords(FindShading(pdf, 3)!);
+
+        // Circle 0 is the focus as a point, and it is NOT the outer circle's centre.
+        Assert.Equal(-0.5, coords[0], 6);
+        Assert.Equal(0.0, coords[1], 6);
+        Assert.Equal(0.0, coords[2], 6);
+
+        // Circle 1 is untouched: the unit circle the matrix maps to the object's ellipse.
+        Assert.Equal(0.0, coords[3], 6);
+        Assert.Equal(0.0, coords[4], 6);
+        Assert.Equal(1.0, coords[5], 6);
+
+        // And the offset is real geometry, not just a number in a box: read the shading's
+        // placement out of the content stream and the focus lands on the model's own point.
+        AssertPoint(new Point2D(0.25, 0.5), ShadingPointInBounds(pdf, document, coords[0], coords[1]));
+    }
+
+    /// <summary>
+    /// The focus is placed through the same circle-to-ellipse matrix as the centre, so it
+    /// follows a rotated, anisotropic radial instead of being computed in a frame of its own.
+    /// The mistake ruled out here is a focus converted from the model's numbers without the
+    /// ellipse's rotation or its two different radii: it lands somewhere else in the box and
+    /// still satisfies a naive "is the focus present" assertion. Because the point is read
+    /// back into the artboard's own frame, a focus written in the page's y-up numbers instead
+    /// would come back mirrored and fail here too.
+    /// </summary>
+    [Fact]
+    public void AFocusedRadialFollowsItsCentreThroughRotationAndThePageFlip()
+    {
+        var gradient = new GradientSpec
+        {
+            Kind = GradientKind.Radial,
+            Stops = new[]
+            {
+                new GradientStop(0.0, new ColorRgb(1, 1, 1)),
+                new GradientStop(1.0, new ColorRgb(0, 0, 0)),
+            },
+            Center = new Point2D(0.45, 0.55),
+            RadiusX = 0.40,
+            RadiusY = 0.20,
+            Rotation = 30.0,
+            FocalPoint = new Point2D(0.30, 0.30),
+        };
+
+        CadDocument document = DocumentWithSquare(gradient);
+        byte[] pdf = PdfDocumentExporter.Export(document);
+        double[] coords = Coords(FindShading(pdf, 3)!);
+
+        AssertPoint(new Point2D(0.45, 0.55), ShadingPointInBounds(pdf, document, coords[3], coords[4]));
+        AssertPoint(new Point2D(0.30, 0.30), ShadingPointInBounds(pdf, document, coords[0], coords[1]));
+
+        // The matrix's two columns are the model's radii in artboard units: 0.40 and 0.20 of
+        // a 200x100 box, with the rotation carried in the columns rather than in a length.
+        double[] matrix = ShadingMatrix(pdf);
+        Assert.Equal(80.0, Math.Sqrt((matrix[0] * matrix[0]) + (matrix[1] * matrix[1])), 4);
+        Assert.Equal(20.0, Math.Sqrt((matrix[2] * matrix[2]) + (matrix[3] * matrix[3])), 4);
+    }
+
+    /// <summary>
+    /// A gradient that names no focus - and one that names its own centre - both write the
+    /// degenerate concentric form, which is what every document exported before the model
+    /// had a focal point wrote. The two centres are asserted EQUAL: "two circles are present"
+    /// is exactly what the focused form also satisfies.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0.5)]
+    public void ARadialWithNoFocusOrACentredOneWritesTheConcentricForm(double? focusX)
+    {
+        var gradient = new GradientSpec
+        {
+            Kind = GradientKind.Radial,
+            Center = new Point2D(0.5, 0.5),
+            RadiusX = 0.5,
+            RadiusY = 0.5,
+            FocalPoint = focusX is { } x ? new Point2D(x, 0.5) : null,
+        };
+
+        byte[] pdf = PdfDocumentExporter.Export(DocumentWithSquare(gradient));
+        double[] coords = Coords(FindShading(pdf, 3)!);
+
+        Assert.Equal(coords[0], coords[3], 6);
+        Assert.Equal(coords[1], coords[4], 6);
+        Assert.Equal(0.0, coords[2], 6);
+        Assert.Equal(1.0, coords[5], 6);
+
+        // Concentric AND centred, which is the exact form the exporter wrote before this:
+        // an existing document's shading bytes do not change.
+        Assert.Equal(0.0, coords[0], 6);
+        Assert.Equal(0.0, coords[1], 6);
+    }
+
+    /// <summary>
+    /// PDF requires the inner circle to be strictly inside the outer one. A focus exactly on
+    /// the edge - which is what the model holds for a file that put its focus outside, since
+    /// the SVG reader clamps it there - is the degenerate case readers are entitled to
+    /// misrender, and a focus beyond the edge is worse. It is scaled about the outer circle's
+    /// centre until it is inside, along its own ray, so the highlight keeps its direction.
+    /// </summary>
+    [Theory]
+    [InlineData(1.0, 0.5)] // on the outer circle's edge
+    [InlineData(2.0, 0.9)] // well outside it, and not on an axis
+    public void AFocusNotStrictlyInsideIsScaledInsideAlongItsOwnRay(double focusX, double focusY)
+    {
+        var gradient = new GradientSpec
+        {
+            Kind = GradientKind.Radial,
+            Center = new Point2D(0.5, 0.5),
+            RadiusX = 0.5,
+            RadiusY = 0.5,
+            FocalPoint = new Point2D(focusX, focusY),
+        };
+
+        byte[] pdf = PdfDocumentExporter.Export(
+            DocumentWithSquare(gradient), out IReadOnlyList<string> notes);
+        double[] coords = Coords(FindShading(pdf, 3)!);
+
+        double sx = coords[0];
+        double sy = coords[1];
+        double length = Math.Sqrt((sx * sx) + (sy * sy));
+        Assert.True(length < 1.0, $"inner circle at {length} is not strictly inside the outer circle");
+        Assert.True(length > 0.99, $"inner circle at {length} was recentred instead of scaled to the edge");
+
+        // Still on the ray from the centre through where the file put it. Four places: the
+        // coordinates in the file are rounded to a millionth, which is the floor on how
+        // precisely a direction can be read back out of them.
+        double ex = (focusX - 0.5) / 0.5;
+        double ey = (focusY - 0.5) / 0.5;
+        double expected = Math.Sqrt((ex * ex) + (ey * ey));
+        Assert.Equal(ex / expected, sx / length, 4);
+        Assert.Equal(ey / expected, sy / length, 4);
+
+        // And the file says what it did rather than leaving a reader to notice.
+        Assert.Contains(notes, n => n.Contains("focal point", StringComparison.OrdinalIgnoreCase)
+                                    && n.Contains("outer circle", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 
@@ -480,6 +654,99 @@ public class GradientPdfTests
         }
 
         return null;
+    }
+
+    /// <summary>The six numbers of a shading's <c>/Coords</c>.</summary>
+    private static double[] Coords(Dictionary<string, object?> shading)
+        => (shading.GetValueOrDefault("Coords") as List<object?> ?? new List<object?>())
+            .Select(Convert.ToDouble).ToArray();
+
+    /// <summary>
+    /// A point of the shading's own space, recovered into the model's normalised box from the
+    /// bytes: through the <c>cm</c> the content stream set for the shading, and normalised
+    /// against the shape's bounds.
+    ///
+    /// The numbers in a content stream are artboard coordinates, because the page's y-flip is
+    /// one outer transform applied to all of them; reading the placement back this way makes
+    /// the assertion about where the highlight lands rather than about the arithmetic the
+    /// writer happened to use - a focus computed in a frame of its own is what this catches.
+    /// </summary>
+    private static Point2D ShadingPointInBounds(byte[] pdf, CadDocument document, double sx, double sy)
+    {
+        double[] m = ShadingMatrix(pdf);
+        Point2D artboard = new(
+            (sx * m[0]) + (sy * m[2]) + m[4],
+            (sx * m[1]) + (sy * m[3]) + m[5]);
+
+        Rect2D box = document.AllPaths().Single().BoundingBox();
+        return new Point2D(
+            (artboard.X - box.Left) / box.Width,
+            (artboard.Y - box.Top) / box.Height);
+    }
+
+    /// <summary>
+    /// The <c>cm</c> the content stream sets immediately before it paints the shading. The
+    /// page's y-flip is a separate, earlier <c>cm</c>, so the nearest preceding one is the
+    /// shading's own placement.
+    /// </summary>
+    private static double[] ShadingMatrix(byte[] pdf)
+    {
+        foreach (string content in InflatedStreams(pdf))
+        {
+            string[] lines = content.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (!lines[i].Trim().EndsWith(" sh", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                for (int j = i - 1; j >= 0; j--)
+                {
+                    string line = lines[j].Trim();
+                    if (line.EndsWith(" cm", StringComparison.Ordinal))
+                    {
+                        return line.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                            .Take(6)
+                            .Select(v => double.Parse(v, CultureInfo.InvariantCulture))
+                            .ToArray();
+                    }
+                }
+            }
+        }
+
+        throw new InvalidOperationException("the file paints no shading, so it has no placement matrix.");
+    }
+
+    /// <summary>Every FlateDecode stream's plain text, which is where the operators are.</summary>
+    private static IEnumerable<string> InflatedStreams(byte[] pdf)
+    {
+        string latin = Encoding.Latin1.GetString(pdf);
+
+        foreach (Match match in Regex.Matches(latin, @"(?<!end)stream\r?\n"))
+        {
+            int start = match.Index + match.Length;
+            int end = latin.IndexOf("endstream", start, StringComparison.Ordinal);
+            if (end < 0)
+            {
+                break;
+            }
+
+            string text;
+            try
+            {
+                using var input = new MemoryStream(pdf, start, end - start);
+                using var zlib = new ZLibStream(input, CompressionMode.Decompress, leaveOpen: false);
+                using var reader = new StreamReader(zlib, Encoding.Latin1);
+                text = reader.ReadToEnd();
+            }
+            catch (Exception exception) when (exception is InvalidDataException or IOException)
+            {
+                continue;
+            }
+
+            yield return text;
+        }
     }
 
     private static Dictionary<string, object?> Resolve(byte[] pdf, object? reference)

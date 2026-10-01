@@ -29,7 +29,9 @@ internal readonly record struct ShadingPaint(string ResourceName, string? Matrix
 /// Linear geometry is an axial shading (<c>ShadingType 2</c>); radial is a
 /// <c>ShadingType 3</c>. Each usage gets its own shading object because the geometry is
 /// per-item; the ramp function is per-usage too, which keeps the code simple at the cost
-/// of some duplication in the file.
+/// of some duplication in the file. A radial's focus rides in the same <c>/Coords</c> as
+/// the second circle - see <see cref="FocusInShadingSpace"/> - so an off-centre highlight
+/// stays off centre in the file rather than being recentred.
 ///
 /// <para>
 /// Known gaps, reported through <paramref name="notes"/> rather than silently dropped:
@@ -46,6 +48,15 @@ internal sealed class PdfShadingObjects
     private readonly List<string> _notes;
     private readonly List<(string Name, int Object)> _shadings = new();
     private int _next;
+
+    /// <summary>
+    /// How far inside the outer circle a focus that sits on its edge is pulled. A focus
+    /// exactly on the circle is the degenerate case - the cone collapses into the circle's
+    /// own plane, and readers are documented to misrender it - so the inner circle is scaled
+    /// to just inside. The distance is a millionth of the unit radius, far below anything a
+    /// device can resolve, and the direction is kept.
+    /// </summary>
+    private const double InsideMargin = 1e-6;
 
     public PdfShadingObjects(PdfAssembler assembler, List<string> notes)
     {
@@ -119,10 +130,19 @@ internal sealed class PdfShadingObjects
             Vector2D v = toDoc.Transform(new Vector2D(-ry * sin, ry * cos));
             Point2D mappedCentre = toDoc.Transform(centre);
 
+            // A type 3 shading's /Coords are [x0 y0 r0 x1 y1 r1] and the ramp runs from
+            // circle 0 to circle 1, so a focal point is circle 0 - the focus with radius
+            // zero, which is exactly what SVG's fx/fy means. A gradient with no focus (or
+            // one that names its own centre) keeps the concentric form, unchanged.
+            Vector2D focus = FocusInShadingSpace(gradient, localBounds, toDoc, mappedCentre, u, v);
+            string coords = focus.LengthSquared > 0
+                ? $"[{PdfDocumentExporter.Num(focus.X)} {PdfDocumentExporter.Num(focus.Y)} 0 0 0 1]"
+                : "[0 0 0 0 0 1]";
+
             shading = _assembler.Allocate();
             _assembler.SetBody(
                 shading,
-                $"<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [0 0 0 0 0 1] " +
+                $"<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords {coords} " +
                 $"/Function {function} 0 R /Extend [true true] >>");
             matrix = $"{PdfDocumentExporter.Num(u.X)} {PdfDocumentExporter.Num(u.Y)} " +
                      $"{PdfDocumentExporter.Num(v.X)} {PdfDocumentExporter.Num(v.Y)} " +
@@ -228,6 +248,64 @@ internal sealed class PdfShadingObjects
         }
 
         return segments;
+    }
+
+    /// <summary>
+    /// The focal point in the shading's own space - the space in which the outer circle is
+    /// the unit circle at the origin - or the zero vector for a gradient that is concentric.
+    ///
+    /// The offset is solved against the same two basis vectors the placement matrix is built
+    /// from, rather than re-deriving the ellipse's frame here: a flip or a rotation in
+    /// <paramref name="toDoc"/> then moves the focus with the centre by construction, which is
+    /// the one mistake that would put the highlight on the wrong side of the shape.
+    ///
+    /// A focus that is not strictly inside the outer circle is scaled about the outer circle's
+    /// centre until it is, along its own ray. PDF's rule is that the inner circle must be
+    /// inside the outer one: a focus ON the edge - which is what the model holds for a file
+    /// that named one outside, since the SVG reader clamps it there - is the degenerate case
+    /// readers are entitled to misrender, and a focus beyond the edge is not a cone at all.
+    /// </summary>
+    private Vector2D FocusInShadingSpace(GradientSpec gradient, Rect2D localBounds,
+        AffineTransform toDoc, Point2D mappedCentre, Vector2D u, Vector2D v)
+    {
+        // Null is a real state, not a zero: a gradient that named no focus paints exactly
+        // what a gradient naming the centre does, so the concentric form is right for both.
+        if (gradient.FocalPoint is not { } focal)
+        {
+            return Vector2D.Zero;
+        }
+
+        Point2D focus = toDoc.Transform(new Point2D(
+            localBounds.Left + (focal.X * localBounds.Width),
+            localBounds.Top + (focal.Y * localBounds.Height)));
+
+        double determinant = (u.X * v.Y) - (u.Y * v.X);
+        if (Math.Abs(determinant) <= 1e-12)
+        {
+            _notes.Add("radial gradient has a degenerate ellipse; the shading is exported concentric.");
+            return Vector2D.Zero;
+        }
+
+        Vector2D offset = focus - mappedCentre;
+        var solved = new Vector2D(
+            ((offset.X * v.Y) - (offset.Y * v.X)) / determinant,
+            ((u.X * offset.Y) - (u.Y * offset.X)) / determinant);
+
+        if (!double.IsFinite(solved.X) || !double.IsFinite(solved.Y))
+        {
+            _notes.Add("radial gradient focal point is not finite; the shading is exported concentric.");
+            return Vector2D.Zero;
+        }
+
+        double length = solved.Length;
+        if (length >= 1.0)
+        {
+            solved *= (1.0 - InsideMargin) / length;
+            _notes.Add("radial gradient focal point is not strictly inside the outer circle; " +
+                       "the inner circle is scaled to just inside, which PDF requires.");
+        }
+
+        return solved;
     }
 
     /// <summary>
