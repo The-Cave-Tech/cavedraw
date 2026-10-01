@@ -82,21 +82,35 @@ public class TextTrackingPaintTests
                 double plainGlyph = plain.Groups[i].End - plain.Groups[i].Start + 1;
                 double trackedGlyph = tracked.Groups[i].End - tracked.Groups[i].Start + 1;
                 Assert.True(Math.Abs(trackedGlyph - plainGlyph) <= 1.5,
-                    $"glyph {i} changed shape: {trackedGlyph}px with tracking, {plainGlyph}px without");
+                    $"glyph {i} changed shape: {trackedGlyph}px with tracking, {plainGlyph}px without.\n" +
+                    $"  tracked: {tracked.Summary()}\n" +
+                    $"    plain: {plain.Summary()}");
             }
 
             // 2. **The gaps grew, and by exactly the tracking.** Both renders put a glyph one advance
             //    after the last; the tracked one adds the tracking to that advance.
-            Assert.Equal((plain.FaceAdvance + Tracking) * Zoom, tracked.Spacing(), 1.5);
-            Assert.Equal(plain.FaceAdvance * Zoom, plain.Spacing(), 1.5);
+            Assert.True(Math.Abs(tracked.Spacing() - ((plain.FaceAdvance + Tracking) * Zoom)) <= 1.5,
+                $"the pen should advance by the face plus the tracking.\n" +
+                $"  tracked: {tracked.Summary()}\n" +
+                $"    plain: {plain.Summary()}");
+            Assert.True(Math.Abs(plain.Spacing() - (plain.FaceAdvance * Zoom)) <= 1.5,
+                $"an untracked pen advances by the face's own advance.\n" +
+                $"    plain: {plain.Summary()}");
 
             // 3. **The drawn run is the face's own width plus the tracking.** First glyph to last: the
             //    three gaps each grew by the tracking, the glyphs did not.
-            Assert.Equal(3 * Tracking * Zoom, tracked.InkWidth() - plain.InkWidth(), 2.0);
+            Assert.True(Math.Abs((tracked.InkWidth() - plain.InkWidth()) - (3 * Tracking * Zoom)) <= 2.0,
+                $"the drawn width should grow by the tracking between the glyphs " +
+                $"(+{3 * Tracking * Zoom:F0}px).\n" +
+                $"  tracked: {tracked.Summary()}\n" +
+                $"    plain: {plain.Summary()}");
 
             // 4. And the first glyph starts where the face puts it. Stretching moves it away from the
             //    pen in proportion — the one glyph that is not moved by any extra room between glyphs.
-            Assert.Equal(plain.OffsetFromPen(0), tracked.OffsetFromPen(0), 1.0);
+            Assert.True(Math.Abs(tracked.OffsetFromPen(0) - plain.OffsetFromPen(0)) <= 1.0,
+                $"the first glyph should start where the face puts it.\n" +
+                $"  tracked: {tracked.Summary()}\n" +
+                $"    plain: {plain.Summary()}");
         });
     }
 
@@ -125,11 +139,13 @@ public class TextTrackingPaintTests
             // Every glyph lands on its own caret: same left side bearing at each of the four.
             for (int i = 1; i < 4; i++)
             {
-                Assert.Equal(plain.OffsetFromPen(0), plain.OffsetFromPen(i), 1.5 / Zoom);
+                Assert.True(Math.Abs(plain.OffsetFromPen(i) - plain.OffsetFromPen(0)) <= 1.5 / Zoom,
+                    $"glyph {i} is not where the model put its character.\n    plain: {plain.Summary()}");
             }
 
             // And the pen advance between two of them is the face's own, with nothing added.
-            Assert.Equal(plain.FaceAdvance * Zoom, plain.Spacing(), 1.5);
+            Assert.True(Math.Abs(plain.Spacing() - (plain.FaceAdvance * Zoom)) <= 1.5,
+                $"an untracked pen advances by the face's own advance.\n    plain: {plain.Summary()}");
         });
     }
 

@@ -82,12 +82,20 @@ public class TextToolbarCaretRunTests
         }
     }
 
-    /// <summary>Double-clicks into the tail of the block, which is inside the second run.</summary>
+    /// <summary>
+    /// Double-clicks into the tail of the block, which is inside the second run.
+    ///
+    /// Deliberately **not** settled: the toolbar mirrors the caret synchronously when the edit is
+    /// announced, and settling lets the layout pass call `ZoomToFit` - which raises `ViewChanged`, which
+    /// re-syncs the toolbar - so a settle here would re-read the caret a second time and hide whether the
+    /// announcement itself read it. That is exactly what happened while this test was being written: with
+    /// the caret published *after* the announcement the toolbar still ended up right, by accident, and
+    /// only the panel was left naming the wrong run.
+    /// </summary>
     private static void ClickIntoTheSecondRun(CanvasWorkspace workspace, TextItem block)
     {
         Rect2D box = block.BoundingBox();
         workspace.EditAt(new Point2D(box.Right - 4, box.Top + (box.Height / 2)));
-        Settle();
     }
 
     /// <summary>
