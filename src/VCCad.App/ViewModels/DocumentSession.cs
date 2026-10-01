@@ -1706,6 +1706,56 @@ public sealed class DocumentSession : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// Adds an outline effect to every stroke of every selected path, and reports how many paths changed.
+    ///
+    /// Here rather than inside the operation, so the stroke pane and a driver run the **same** code - the shape
+    /// `AddStroke` already has. A capability that exists only inside a control's event handler is a defect in this
+    /// repository, and the way to avoid one is for the panel to call this rather than to reimplement it.
+    /// </summary>
+    public int AddOutlineEffect(OutlineEffectSpec effect)
+    {
+        int changed = 0;
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            var stack = path.Strokes.ToList();
+            for (int i = 0; i < stack.Count; i++)
+            {
+                stack[i] = stack[i] with
+                {
+                    Effects = new EffectStack(stack[i].AllEffects.Concat(new[] { effect })),
+                };
+            }
+
+            Execute(new SetStrokesCommand(path, stack, "Add stroke effect"));
+            changed++;
+        }
+
+        return changed;
+    }
+
+    /// <summary>The same for a raster effect, which is a separate list on the same stroke.</summary>
+    public int AddRasterEffect(RasterEffectSpec effect)
+    {
+        int changed = 0;
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            var stack = path.Strokes.ToList();
+            for (int i = 0; i < stack.Count; i++)
+            {
+                stack[i] = stack[i] with
+                {
+                    RasterEffects = new RasterEffectStack(stack[i].AllRasterEffects.Concat(new[] { effect })),
+                };
+            }
+
+            Execute(new SetStrokesCommand(path, stack, "Add raster effect"));
+            changed++;
+        }
+
+        return changed;
+    }
+
+    /// <summary>
     /// Moves an outline effect within a stroke's list, which is how a person changes the order they apply in.
     ///
     /// **The order is the picture.** Effects compose in order, so roughen inside an offset does not look like an

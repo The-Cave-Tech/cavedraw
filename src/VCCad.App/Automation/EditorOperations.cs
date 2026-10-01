@@ -1683,23 +1683,8 @@ public static class EditorOperations
                     p.GetDouble("detail", 1.0),
                     (int)p.GetLong("seed", 1));
 
-                int changed = 0;
-                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
-                {
-                    var stack = path.Strokes.ToList();
-                    for (int i = 0; i < stack.Count; i++)
-                    {
-                        stack[i] = stack[i] with
-                        {
-                            Effects = new EffectStack(stack[i].AllEffects.Concat(new[] { effect })),
-                        };
-                    }
-
-                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Add stroke effect"));
-                    changed++;
-                }
-
-                return new { effect = parsed.ToString(), changed };
+                // Through the session, so the stroke pane's Add button and this run one implementation.
+                return new { effect = parsed.ToString(), changed = ctx.Session.AddOutlineEffect(effect) };
             });
 
         Add("style.clearStrokeEffects",
@@ -1757,24 +1742,13 @@ public static class EditorOperations
                     p.GetDouble("opacity", 1.0),
                     tint);
 
-                int changed = 0;
-                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                // Through the session, for the same reason: one implementation, called by the pane and by this.
+                return new
                 {
-                    var stack = path.Strokes.ToList();
-                    for (int i = 0; i < stack.Count; i++)
-                    {
-                        stack[i] = stack[i] with
-                        {
-                            RasterEffects = new RasterEffectStack(
-                                stack[i].AllRasterEffects.Concat(new[] { effect })),
-                        };
-                    }
-
-                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Add raster effect"));
-                    changed++;
-                }
-
-                return new { effect = parsed.ToString(), tinted = tint is not null, changed };
+                    effect = parsed.ToString(),
+                    tinted = tint is not null,
+                    changed = ctx.Session.AddRasterEffect(effect),
+                };
             });
 
         Add("style.clearRasterEffects",
