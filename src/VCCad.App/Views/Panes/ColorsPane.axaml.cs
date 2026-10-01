@@ -52,6 +52,17 @@ public partial class ColorsPane : UserControl
         Hatch45.Click += (_, _) => ApplyHatch("""{"angle":45,"spacing":4,"width":0.5}""");
         HatchCross.Click += (_, _) => ApplyHatch("""{"cross":true,"spacing":4,"width":0.5}""");
         HatchNone.Click += (_, _) => ApplyHatch("""{"clear":true}""");
+
+        Eyedropper.Click += async (_, _) => await PickFromScreenAsync();
+
+        // The circle does exactly what a recent swatch does, through the same call, so the two cannot drift.
+        PickedSwatch.Click += (_, _) =>
+        {
+            if (Colors.LastPicked is { } picked)
+            {
+                PickSwatch(picked);
+            }
+        };
         HexBox.KeyDown += (_, e) =>
         {
             if (e.Key == Key.Enter)
@@ -181,10 +192,28 @@ public partial class ColorsPane : UserControl
             ? (path.Fill, path.Stroke)
             : (_vm?.CurrentFill ?? FillSpec.None, _vm?.CurrentStroke ?? StrokeSpec.Hairline(ColorRgb.Black));
 
-    private void Refresh()
+    /// <summary>Rebuilds the pane from the shared colour state. Internal so a test can drive it.</summary>
+    internal void Refresh()
     {
         ResetBefore();
         SyncFromCurrent();
+
+        // The circle beside the eyedropper shows what the picker last chose, and is dimmed when there is
+        // nothing to show: an empty circle that looks enabled would be a button that does nothing.
+        if (Colors.LastPicked is { } picked)
+        {
+            PickedSwatch.Background = new SolidColorBrush(Avalonia.Media.Color.FromArgb(
+                (byte)Math.Clamp(picked.A * 255, 0, 255),
+                (byte)Math.Clamp(picked.R * 255, 0, 255),
+                (byte)Math.Clamp(picked.G * 255, 0, 255),
+                (byte)Math.Clamp(picked.B * 255, 0, 255)));
+            PickedSwatch.Opacity = 1.0;
+        }
+        else
+        {
+            PickedSwatch.Background = Brushes.Transparent;
+            PickedSwatch.Opacity = 0.4;
+        }
     }
 
     /// <summary>
@@ -325,6 +354,39 @@ public partial class ColorsPane : UserControl
         {
             // Nothing selected, or nothing hatchable. A button that does nothing is better than an exception
             // thrown out of a click handler, which surfaces as a crash rather than as a refusal.
+            return;
+        }
+
+        Refresh();
+    }
+
+    /// <summary>
+    /// Runs the screen eyedropper through the operation registry, the same way a driver would.
+    ///
+    /// The registry owns the overlay, the sampling and the recording, so a colour picked by this button and one
+    /// picked by <c>color.pickScreen</c> are the same code doing the same thing - and the refusal, when the
+    /// platform cannot do it, comes back with its reason rather than as a colour from nowhere.
+    /// </summary>
+    private async Task PickFromScreenAsync()
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await EditorOperations.InvokeAsync(
+                new AutomationContext
+                {
+                    ViewModel = _vm,
+                    PickFromScreenAsync = () => Picking.ScreenPickOverlay.PickFor(this),
+                },
+                "color.pickScreen",
+                default);
+        }
+        catch (EditorOperationException)
+        {
             return;
         }
 

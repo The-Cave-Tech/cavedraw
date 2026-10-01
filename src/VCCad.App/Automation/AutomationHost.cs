@@ -43,6 +43,8 @@ public sealed class AutomationHost
             Chat = async (prompt, withScreenshot) => Summarise(await ChatAsync(prompt, withScreenshot)),
             Cancellation = CurrentToken,
             Cancel = CancelCurrent,
+            // The overlay needs a window to be modal to; the shell is the layer that has one.
+            PickFromScreenAsync = () => VCCad.App.Picking.ScreenPickOverlay.PickFor(inputRoot()),
         };
         Agent = new EditorAgent(Context, Client, history);
 

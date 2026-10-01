@@ -13,6 +13,17 @@
                                    Width="56" Height="56" VerticalAlignment="Top"/>
       <controls:ColorWheel x:Name="Wheel" Grid.Column="2" Width="106" Height="106"/>
       <StackPanel Grid.Column="4" Spacing="2">
+        <!-- The eyedropper, and the small circle showing what it last chose. The circle sits right beside it
+             and clicking it does what clicking a recent swatch does, because it is the same call. -->
+        <StackPanel Orientation="Horizontal" Spacing="3">
+          <Button x:Name="Eyedropper" Content="&#x2318;" Width="24" Height="24" Padding="0"
+                  FontSize="{DynamicResource VcFontSize}"
+                  ToolTip.Tip="Pick a colour from anywhere on the screen"/>
+          <Button x:Name="PickedSwatch" Width="24" Height="24" Padding="0" CornerRadius="12"
+                  BorderThickness="1" BorderBrush="#808080"
+                  ToolTip.Tip="Use the colour the eyedropper last picked"/>
+        </StackPanel>
+
         <TextBlock Text="RECENT" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
                    Foreground="{DynamicResource VcTextDim}"/>
         <WrapPanel x:Name="SwatchPad" Width="44" ItemWidth="22" ItemHeight="22"/>

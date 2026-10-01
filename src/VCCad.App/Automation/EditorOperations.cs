@@ -66,6 +66,13 @@ public sealed class AutomationContext
     public ViewportActions? Viewport { get; init; }
 
     /// <summary>
+    /// Runs the screen eyedropper: shows the full-screen overlay, waits for the click, and returns what it
+    /// picked, or null for a cancel. Wired by the shell, which is the layer that can own a window; null in a
+    /// headless host, where <c>color.pickAt</c> is the way in.
+    /// </summary>
+    public Func<Task<(ColorRgb? Colour, string? Refusal)>>? PickFromScreenAsync { get; init; }
+
+    /// <summary>
     /// The root control of the running window (null in headless hosts). Used by the
     /// point-and-click operations, because the menus, toolbar and panes are part of
     /// the product surface and must be automatable too.
@@ -2842,6 +2849,47 @@ public static class EditorOperations
                     r = picked is { } rc ? Math.Round(rc.R, 6) : (double?)null,
                     g = picked is { } gc ? Math.Round(gc.G, 6) : (double?)null,
                     b = picked is { } bc ? Math.Round(bc.B, 6) : (double?)null,
+                };
+            });
+
+        AddAsync("color.pickScreen",
+            "Start the screen eyedropper: click anywhere on the screen and the colour under the cursor is " +
+            "chosen, Escape cancels. What is sampled is the screen pixel, not this application's rendering of " +
+            "it, so a colour in another window is picked correctly. Refused with its reason where the platform " +
+            "cannot do it; a headless host has no window to pick with and should use color.pickAt.",
+            "",
+            async (ctx, _, ct) =>
+            {
+                if (ctx.PickFromScreenAsync is null)
+                {
+                    return new
+                    {
+                        picked = false,
+                        supported = Picking.ScreenColour.Sampler.IsSupported,
+                        reason = "no window to pick with - use color.pickAt",
+                    };
+                }
+
+                (ColorRgb? colour, string? refusal) = await ctx.PickFromScreenAsync().ConfigureAwait(false);
+
+                if (refusal is { } why)
+                {
+                    return new { picked = false, supported = false, reason = why };
+                }
+
+                if (colour is not { } chosen)
+                {
+                    return new { picked = false, cancelled = true };
+                }
+
+                EditorColorState.Shared.SetPicked(chosen);
+                return new
+                {
+                    picked = true,
+                    r = Math.Round(chosen.R, 6),
+                    g = Math.Round(chosen.G, 6),
+                    b = Math.Round(chosen.B, 6),
+                    hex = HexColor.Format(chosen),
                 };
             });
 
