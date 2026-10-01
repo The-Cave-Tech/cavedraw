@@ -14,8 +14,14 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Emscripten (from the wasm-tools workload) requires python on PATH.
+#
+# The URW base-35 faces come in for the tests, not for the build: sixteen text-export tests embed one of the
+# fourteen standard PDF fonts, which a PDF is entitled to name while embedding nothing at all. Those faces are
+# located on the machine rather than shipped with this project, so an image without them fails nine Pdf tests
+# on a missing font key rather than on anything to do with the code. `ci.yml` has installed them for a while;
+# the image did not, and the container build is how that surfaced.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 \
+ && apt-get install -y --no-install-recommends python3 fonts-urw-base35 \
  && ln -sf /usr/bin/python3 /usr/local/bin/python \
  && rm -rf /var/lib/apt/lists/*
 
@@ -41,6 +47,14 @@ RUN dotnet workload install wasm-tools \
 # Full source for build + test.
 COPY . .
 RUN dotnet build VCCad.sln -c Release --no-restore
+
+# Gate: run every test project before producing images.
+# The standard PDF faces. Sixteen text-export tests embed a URW base-35 face - "Nimbus Sans" and friends -
+# because a PDF is entitled to name one of the fourteen standard fonts and embed nothing at all. The faces are
+# located on the machine rather than shipped with this project, so a runner without them fails on a missing
+# font key rather than on anything to do with the code. ci.yml has installed them for a while; the image did
+# not, and the container build failed on nine Pdf tests for exactly that reason.
+ENV VCCAD_URW_FONTS=/usr/share/fonts/opentype/urw-base35
 
 # Gate: run every test project before producing images.
 RUN dotnet test tests/VCCad.Geometry.Tests -c Release --no-build --no-restore --logger "console;verbosity=minimal" \
