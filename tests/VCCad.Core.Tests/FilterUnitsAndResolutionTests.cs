@@ -267,6 +267,46 @@ public class FilterUnitsAndResolutionTests
         Assert.DoesNotContain("FilterResolutionY", plainJson, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// **A model that carries a resolution this build will not allocate is refused by the engine**, not evaluated
+    /// at some other resolution in silence.
+    ///
+    /// The reader never stores one - it reports the number and leaves the resolution unset - so reaching this means
+    /// the model was built by hand or came off a sidecar, and either way an engine that quietly drew it at the
+    /// caller's scale would make "filterRes" a field nothing honours.
+    /// </summary>
+    [Theory]
+    [InlineData(100000, 100000)]
+    [InlineData(0, 0)]
+    [InlineData(-4, -4)]
+    [InlineData(12, null)]
+    public void AModelCarryingAResolutionThisBuildWillNotEvaluateAtIsRefused(int? width, int? height)
+    {
+        var filter = new FilterSpec("bad", new[] { FilterPrimitive.Blur(1.0) })
+        {
+            FilterResolutionX = width,
+            FilterResolutionY = height,
+        };
+
+        ArgumentOutOfRangeException thrown = Assert.Throws<ArgumentOutOfRangeException>(() => new FilterEngine(filter));
+
+        Assert.Contains("resolution", thrown.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>The same member at a size this build does allocate is taken, so the refusal is about the number.</summary>
+    [Fact]
+    public void AModelCarryingAResolutionThisBuildWillEvaluateAtIsAccepted()
+    {
+        var filter = new FilterSpec("fine", new[] { FilterPrimitive.Blur(1.0) })
+        {
+            FilterResolutionX = FilterSpec.MaximumFilterResolution,
+            FilterResolutionY = FilterSpec.MaximumFilterResolution,
+        };
+
+        Assert.True(filter.HasFilterResolution);
+        Assert.NotNull(new FilterEngine(filter));
+    }
+
     // ---------------------------------------------------------------- the pixels
 
     /// <summary>
