@@ -132,6 +132,121 @@ public static class FilterPrimitiveRegistry
         "How the source is blended into the backdrop.",
         Default: "normal", Choices: new[] { "normal", "multiply", "screen", "darken", "lighten" });
 
+    /// <summary>
+    /// `radius` again, but for morphology rather than a blur, and therefore a different declaration: the two are
+    /// both "how far the effect reaches" and they are not the same parameter, so they are not the same record.
+    /// </summary>
+    private static readonly FilterParameter MorphologyRadius = new(
+        "radius", FilterParameterKind.Number,
+        "How far the box grows (dilate) or shrinks (erode) the picture, in the primitive's own units. The box is " +
+        "square - SVG's own default - so the effect is the same in every direction.",
+        Required: true, Default: "0", Minimum: 0);
+
+    private static readonly FilterParameter MorphologyOperator = new(
+        "operator", FilterParameterKind.Choice,
+        "`dilate` grows the picture by the box; `erode` shrinks it. An eroded shape eventually disappears, which is " +
+        "what makes erode the harder of the two to reason about.",
+        Default: "erode", Choices: new[] { "erode", "dilate" });
+
+    private static readonly FilterParameter MatrixType = new(
+        "type", FilterParameterKind.Choice,
+        "How `values` is read: twenty numbers, or one of the shorthands SVG defines for the three common " +
+        "transforms. `saturate` and `hueRotate` are expanded to their matrices as they are read, so a filter that " +
+        "used a shorthand and one that spelled the matrix out draw the same pixels.",
+        Default: "matrix", Choices: new[] { "matrix", "saturate", "hueRotate", "luminanceToAlpha" });
+
+    private static readonly FilterParameter MatrixValues = new(
+        "values", FilterParameterKind.Number,
+        "The twenty numbers of the 4x5 matrix in row-major order - four colour rows of five, then the alpha row - " +
+        "or the single number a shorthand takes. The fifth column of each row is the constant added to that " +
+        "channel, which is why a matrix is twenty numbers and not sixteen.",
+        Required: true);
+
+    private static readonly FilterParameter MapScale = new(
+        "scale", FilterParameterKind.Number,
+        "How far a full channel swing (from 0 to 1) displaces the first input, in the primitive's own units. A " +
+        "displacement reads a channel of the second input, subtracts a half, and moves the picture by that much " +
+        "times this.",
+        Required: true, Default: "0");
+
+    private static readonly FilterParameter XChannel = new(
+        "xChannel", FilterParameterKind.Choice,
+        "Which channel of the second input moves the picture along x: `A`, `R`, `G` or `B`. `A` is the usual " +
+        "choice, because the other picture is usually a shape rather than a colour.",
+        Default: "A", Choices: new[] { "A", "R", "G", "B" });
+
+    private static readonly FilterParameter YChannel = new(
+        "yChannel", FilterParameterKind.Choice,
+        "Which channel of the second input moves the picture along y. See `xChannel`.",
+        Default: "A", Choices: new[] { "A", "R", "G", "B" });
+
+    private static readonly FilterParameter NoiseType = new(
+        "type", FilterParameterKind.Choice,
+        "`turbulence` sums the absolute value of each octave, which is the billowy look; `fractalNoise` sums the " +
+        "octaves themselves, which is the cloudy one. `fePerlinNoise` is the same element under its old name.",
+        Default: "turbulence", Choices: new[] { "turbulence", "fractalNoise" });
+
+    private static readonly FilterParameter BaseFrequency = new(
+        "baseFrequency", FilterParameterKind.Number,
+        "How many noise cycles fit in one unit, so a larger number is finer grain. A file may give two values, one " +
+        "per axis, and the model has one: the first is read and the second is reported rather than averaged in.",
+        Required: true, Default: "0", Minimum: 0);
+
+    private static readonly FilterParameter Octaves = new(
+        "numOctaves", FilterParameterKind.Number,
+        "How many noise frequencies are stacked, each twice the last and half as loud. One octave is smooth; the " +
+        "grain is what the later ones add.",
+        Default: "1", Minimum: 0, Maximum: 12);
+
+    private static readonly FilterParameter NoiseSeed = new(
+        "seed", FilterParameterKind.Number,
+        "The number the noise is drawn from, so the same document always renders the same texture. It is a whole " +
+        "number, and it is **not** the clock: a filter that looked different on every render would make the canvas " +
+        "and the export disagree for no visible reason.",
+        Default: "0", Minimum: 0);
+
+    private static readonly FilterParameter SurfaceScale = new(
+        "surfaceScale",
+        FilterParameterKind.Number,
+        "How tall the input's alpha is taken to be, in the primitive's own units. A flat surface lit head-on gives " +
+        "one value everywhere; the scale is what turns a soft edge into a rounded one.",
+        Default: "1");
+
+    private static readonly FilterParameter DiffuseConstant = new(
+        "diffuseConstant", FilterParameterKind.Number,
+        "How much light the surface reflects. The diffuse result is this times the angle between the surface and " +
+        "the light, so a head-on flat surface gives exactly this.",
+        Default: "1", Minimum: 0);
+
+    private static readonly FilterParameter SpecularConstant = new(
+        "specularConstant", FilterParameterKind.Number,
+        "How bright the highlight is. The specular result is this times the highlight term raised to the " +
+        "exponent, so a head-on flat surface gives exactly this.",
+        Default: "1", Minimum: 0);
+
+    private static readonly FilterParameter SpecularExponent = new(
+        "specularExponent", FilterParameterKind.Number,
+        "How tight the highlight is. One is broad and soft; large values give the small hard glint a bevel has.",
+        Default: "1", Minimum: 0, Maximum: 128);
+
+    private static readonly FilterParameter LightingColor = new(
+        "lightingColor", FilterParameterKind.Color,
+        "The colour of the light, as [r,g,b] with components 0-255 - and the colour of the result, because the " +
+        "surface contributes a height rather than a colour of its own.",
+        Default: "white");
+
+    private static readonly FilterParameter Azimuth = new(
+        "azimuth", FilterParameterKind.Number,
+        "Which way round a distant light sits, in degrees: zero is along +x and the angle grows toward +y, which " +
+        "in this model is downward.",
+        Default: "0");
+
+    private static readonly FilterParameter Elevation = new(
+        "elevation", FilterParameterKind.Number,
+        "How high a distant light sits, in degrees above the surface: ninety is directly overhead, and zero is on " +
+        "the horizon.",
+        Default: "0");
+
     /// <summary>Every primitive, in the order a panel offers them - the one every file uses first.</summary>
     public static IReadOnlyList<FilterPrimitiveDefinition> All { get; } = new[]
     {
@@ -163,6 +278,49 @@ public static class FilterPrimitiveRegistry
             "blend", "feBlend", FilterPrimitiveKind.Blend,
             "The source is blended into the backdrop by one of the separable blend modes, then composited over it.",
             new[] { In, In2, Mode, Result }),
+
+        new FilterPrimitiveDefinition(
+            "morphology", "feMorphology", FilterPrimitiveKind.Morphology,
+            "The picture is grown or shrunk by a box. `dilate` thickens an edge and is how a soft outline is built " +
+            "up; `erode` thins it, and eroding far enough leaves nothing at all.",
+            new[] { In, MorphologyOperator, MorphologyRadius, Result },
+            new[] { "morph" }),
+
+        new FilterPrimitiveDefinition(
+            "colorMatrix", "feColorMatrix", FilterPrimitiveKind.ColorMatrix,
+            "The colours are transformed by a 4x5 matrix. The shorthands - desaturate, rotate the hue, take " +
+            "luminance as alpha - are the same matrices under names, and are expanded as they are read.",
+            new[] { In, MatrixType, MatrixValues, Result },
+            new[] { "colourMatrix" }),
+
+        new FilterPrimitiveDefinition(
+            "displacementMap", "feDisplacementMap", FilterPrimitiveKind.DisplacementMap,
+            "One buffer pushes another around: a channel of `in2` displaces `in` by up to half the scale in each " +
+            "direction. The two inputs are the picture and the thing that distorts it.",
+            new[] { In, In2, MapScale, XChannel, YChannel, Result },
+            new[] { "displacement" }),
+
+        new FilterPrimitiveDefinition(
+            "turbulence", "feTurbulence", FilterPrimitiveKind.Turbulence,
+            "Seeded noise - the paper grain, the cloud, the water. The seed fixes it, so the same document renders " +
+            "and exports identically; a file that asked for another seed gets another texture.",
+            new[] { In, NoiseType, BaseFrequency, Octaves, NoiseSeed, Result },
+            new[] { "perlinNoise", "fePerlinNoise" }),
+
+        new FilterPrimitiveDefinition(
+            "specularLighting", "feSpecularLighting", FilterPrimitiveKind.SpecularLighting,
+            "The input's alpha is treated as a height field and lit to a highlight. The light is a " +
+            "`feDistantLight`: a point or spot light is refused rather than approximated, because a bevel lit by " +
+            "the wrong kind of light is a different bevel.",
+            new[] { In, SurfaceScale, SpecularConstant, SpecularExponent, LightingColor, Azimuth, Elevation, Result },
+            new[] { "specular" }),
+
+        new FilterPrimitiveDefinition(
+            "diffuseLighting", "feDiffuseLighting", FilterPrimitiveKind.DiffuseLighting,
+            "The input's alpha is treated as a height field and lit diffusely - the matte half of the bevel pair. " +
+            "The light is a `feDistantLight`, as for the specular one.",
+            new[] { In, SurfaceScale, DiffuseConstant, LightingColor, Azimuth, Elevation, Result },
+            new[] { "diffuse" }),
     };
 
     /// <summary>The declaration for a kind, or null when this build has no such primitive.</summary>

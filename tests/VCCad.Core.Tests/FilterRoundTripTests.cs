@@ -51,7 +51,9 @@ public class FilterRoundTripTests
     /// Every primitive the engine can apply has exactly one declaration, and an unknown word is not one.
     ///
     /// This is the list the operations validate against, so a primitive the engine grew without a declaration
-    /// would be one no operation could reach - reachable only by writing the model by hand.
+    /// would be one no operation could reach - reachable only by writing the model by hand. The count and the
+    /// one-per-kind rule are what keep the enum, the declarations and the engine's switch in step: adding a kind
+    /// without a declaration fails here, and declaring one twice fails as well.
     /// </summary>
     [Fact]
     public void EveryPrimitiveTheEngineHasIsDeclaredOnce()
@@ -69,9 +71,58 @@ public class FilterRoundTripTests
             Assert.Same(declared, FilterPrimitiveRegistry.Find(declared.Element.ToUpperInvariant()));
         }
 
-        Assert.Null(FilterPrimitiveRegistry.Find("feTurbulence"));
-        Assert.False(FilterPrimitiveRegistry.IsKnown("feTurbulence"));
         Assert.Same(FilterPrimitiveRegistry.Find("gaussianBlur"), FilterPrimitiveRegistry.Find("blur"));
+
+        // `feTurbulence` was the primitive this build did **not** have, and now it is one - so the assertion that
+        // pinned its absence has become the positive one, which is what this file exists to keep honest.
+        Assert.Same(FilterPrimitiveRegistry.Find("turbulence"), FilterPrimitiveRegistry.Find("feTurbulence"));
+        Assert.Same(FilterPrimitiveRegistry.Find("turbulence"), FilterPrimitiveRegistry.Find("fePerlinNoise"));
+        Assert.Same(FilterPrimitiveRegistry.Find("morphology"), FilterPrimitiveRegistry.Find("morph"));
+        Assert.Same(FilterPrimitiveRegistry.Find("colorMatrix"), FilterPrimitiveRegistry.Find("feColorMatrix"));
+        Assert.True(FilterPrimitiveRegistry.IsKnown("displacementMap"));
+        Assert.True(FilterPrimitiveRegistry.IsKnown("specularLighting"));
+        Assert.True(FilterPrimitiveRegistry.IsKnown("diffuseLighting"));
+
+        // A word that names nothing is still not a primitive.
+        Assert.Null(FilterPrimitiveRegistry.Find("feNonsense"));
+        Assert.False(FilterPrimitiveRegistry.IsKnown("feNonsense"));
+    }
+
+    /// <summary>
+    /// **Every primitive the engine's switch evaluates is reachable through the operations.**
+    ///
+    /// This is the other half of the parity rule: a kind declared but missing from the engine's switch draws
+    /// nothing, and a kind in the switch but not declared is one no operation can set. The engine's own
+    /// declaration of what it applies is the enumeration order, and this checks the count and the round trip
+    /// through the registry for each.
+    /// </summary>
+    [Fact]
+    public void EveryDeclaredKindHasParametersThatTheRegistryCanAnswerFor()
+    {
+        foreach (FilterPrimitiveDefinition definition in FilterPrimitiveRegistry.All)
+        {
+            Assert.NotEmpty(definition.Parameters);
+            Assert.False(string.IsNullOrWhiteSpace(definition.Meaning));
+            Assert.StartsWith("fe", definition.Element, StringComparison.Ordinal);
+
+            // The wiring parameters are the same three everywhere, so a caller can connect any primitive.
+            if (definition.Parameter("in") is { } input)
+            {
+                Assert.Equal(FilterParameterKind.Buffer, input.Kind);
+                Assert.False(input.Required);
+            }
+
+            foreach (FilterParameter parameter in definition.Parameters)
+            {
+                // A choice without choices is a parameter nothing can validate.
+                if (parameter.Kind == FilterParameterKind.Choice)
+                {
+                    Assert.NotEmpty(parameter.Choices!);
+                }
+
+                Assert.False(string.IsNullOrWhiteSpace(parameter.Meaning));
+            }
+        }
     }
 
     /// <summary>A required parameter is one a kind cannot be evaluated without - and it is declared, not implied.</summary>
@@ -286,6 +337,126 @@ public class FilterRoundTripTests
         // refuse to make one: nothing about the output says the graph is the reason.
         FilterBuffer result = new FilterEngine(direct).Evaluate(Block(), Bounds);
         Assert.Equal(0, result.OpaquePixels());
+    }
+
+    // ---------------------------------------------------------------- the new primitives
+
+    /// <summary>
+    /// **Every primitive the engine gained renders the same picture after a round trip**, which is the claim that
+    /// matters rather than "the attribute was written". Each one carries a different kind of parameter - a box
+    /// radius, a twenty-number matrix, a channel selector, a seed, a light - so a writer that dropped any of them
+    /// would draw something else here, and the structural assertion is what says which one.
+    /// </summary>
+    [Fact]
+    public void EveryNewPrimitiveSurvivesTheRoundTripAndStillDrawsTheSamePixels()
+    {
+        FilterPrimitive[] primitives =
+        {
+            // The things each new primitive reads, produced where they are needed.
+            FilterPrimitive.Solid(new ColorRgb(0, 0, 0), 1.0, "sheet"),
+            FilterPrimitive.Noise("turbulence", 0.25, 2, 5, "sheet", "grain"),
+            FilterPrimitive.Morph("dilate", 1.0, "grain", "grown"),
+            // The shorthand as the model keeps it: the one number, which is what the reader stores and what the
+            // writer writes back. A caller who hands over the expanded matrix gets the same picture - there is a
+            // test for that below - but the two are not the same *model*, so the structural assertion uses this one.
+            FilterPrimitive.ColourMatrix(new[] { 0.35 }, "saturate", "grown", "grey"),
+            FilterPrimitive.Displace(3.0, "R", "G", "grey", "grain", "warped"),
+            FilterPrimitive.Specular(2.0, 0.6, 12.0, ColorRgb.White, 40, 35, "warped", "gloss"),
+            FilterPrimitive.Diffuse(2.0, 0.8, ColorRgb.White, 40, 35, "warped", "matte"),
+            FilterPrimitive.Blended("screen", "gloss", "matte", "lit"),
+            FilterPrimitive.Combine("over", "lit", "grey", "answer"),
+        };
+
+        var original = new FilterSpec("mixed", primitives)
+        {
+            X = -0.1,
+            Y = -0.1,
+            Width = 1.2,
+            Height = 1.2,
+            Output = "answer",
+        };
+
+        FilterSpec back = RoundTrip(original);
+
+        Assert.Equal(original, back);
+        Assert.Equal(primitives.Length, back.Primitives.Count);
+
+        // And the same drawing, which is the point: the parameters are not decoration.
+        Assert.True(
+            new FilterEngine(original).Evaluate(Block(), Bounds)
+                .Matches(new FilterEngine(back).Evaluate(Block(), Bounds), 0f),
+            "the graph read back must draw the same pixels as the one that was written");
+    }
+
+    /// <summary>
+    /// **A colour matrix shorthand and the matrix it stands for draw the same pixels, and the shorthand survives
+    /// as a shorthand.**
+    ///
+    /// A file that writes `type="saturate" values="0.35"` and one that writes the twenty numbers out are the same
+    /// picture by SVG's definition. What the model keeps is the **one number**, so the writer can write the
+    /// shorthand back the way it was read rather than expanding a person's file into a wall of twenty - and a
+    /// primitive a caller built from the expanded matrix still comes out as the shorthand, because the writer
+    /// recognises the matrix the shorthand stands for.
+    /// </summary>
+    [Fact]
+    public void AColourMatrixShorthandAndItsMatrixAreTheSameModel()
+    {
+        FilterPrimitive shorthand = FilterPrimitive.ColourMatrix(new[] { 0.35 }, "saturate");
+        FilterPrimitive spelledOut = FilterPrimitive.ColourMatrix(FilterEngine.Saturate(0.35), "saturate");
+
+        Assert.Equal(FilterEngine.Saturate(0.35), FilterEngine.MatrixOf(shorthand));
+        Assert.Equal(FilterEngine.Saturate(0.35), FilterEngine.MatrixOf(spelledOut));
+
+        // The two draw identically, which is what makes the shorthand a spelling rather than a different filter.
+        FilterBuffer source = Block();
+        var byShortHand = new FilterSpec("a", new[] { shorthand });
+        var byMatrix = new FilterSpec("b", new[] { spelledOut });
+        Assert.True(
+            new FilterEngine(byShortHand).Evaluate(source, Bounds)
+                .Matches(new FilterEngine(byMatrix).Evaluate(source, Bounds), 0f));
+        Assert.True(
+            new FilterEngine(byShortHand).Evaluate(source, Bounds)
+                .Matches(new FilterEngine(RoundTrip(byShortHand)).Evaluate(source, Bounds), 0f),
+            "the expanded matrix a caller handed over must still draw the same picture after the round trip");
+
+        // And the shorthand survives as a shorthand, with the amount that describes it.
+        FilterSpec back = RoundTrip(new FilterSpec("sat", new[] { shorthand }));
+        FilterPrimitive read = Assert.Single(back.Primitives);
+        Assert.Equal("saturate", read.Type);
+        Assert.Equal(1, read.Matrix!.Length);
+        Assert.Equal(0.35, read.Matrix[0], 6);
+    }
+
+    /// <summary>
+    /// **A lighting primitive is written as a distant light and read back as one.**
+    ///
+    /// The element has to carry its light source or a viewer has nothing to light it with, and the reader refuses
+    /// the other two kinds rather than approximating them - so this pins both the writing and the positive half of
+    /// that refusal.
+    /// </summary>
+    [Fact]
+    public void ALightingPrimitiveCarriesItsDistantLight()
+    {
+        var filter = new FilterSpec("gloss", new[]
+        {
+            FilterPrimitive.Specular(2.5, 0.7, 14.0, ColorRgb.White, 35, 55),
+        });
+
+        string svg = SvgWriter.Write(Document(filter));
+        XElement written = XDocument.Parse(svg).Descendants()
+            .First(element => element.Name.LocalName == "feSpecularLighting");
+
+        XElement light = Assert.Single(written.Elements());
+        Assert.Equal("feDistantLight", light.Name.LocalName);
+        Assert.Equal("35", (string?)light.Attribute("azimuth"));
+        Assert.Equal("55", (string?)light.Attribute("elevation"));
+        Assert.Equal("2.5", (string?)written.Attribute("surfaceScale"));
+        Assert.Equal("14", (string?)written.Attribute("specularExponent"));
+
+        FilterPrimitive read = Assert.Single(RoundTrip(filter).Primitives);
+        Assert.Equal(35, read.Azimuth, 6);
+        Assert.Equal(55, read.Elevation, 6);
+        Assert.Equal(FilterPrimitiveKind.SpecularLighting, read.Kind);
     }
 
     private static CadDocument Document(FilterSpec filter)

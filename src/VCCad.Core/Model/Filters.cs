@@ -17,6 +17,24 @@ public enum FilterPrimitiveKind
 
     /// <summary>`feBlend` - the colour blend modes.</summary>
     Blend,
+
+    /// <summary>`feMorphology` - a shape grown or shrunk by a box, which is how real files thicken an edge.</summary>
+    Morphology,
+
+    /// <summary>`feColorMatrix` - a colour transform, most often a desaturation or a tint.</summary>
+    ColorMatrix,
+
+    /// <summary>`feDisplacementMap` - a picture pushed around by another picture's channels.</summary>
+    DisplacementMap,
+
+    /// <summary>`feTurbulence` (and its alias `fePerlinNoise`) - the seeded noise behind every paper texture.</summary>
+    Turbulence,
+
+    /// <summary>`feSpecularLighting` - a height field lit to a highlight, the glossy half of the bevel pair.</summary>
+    SpecularLighting,
+
+    /// <summary>`feDiffuseLighting` - a height field lit diffusely, the matte half of the bevel pair.</summary>
+    DiffuseLighting,
 }
 
 /// <summary>
@@ -31,6 +49,11 @@ public enum FilterPrimitiveKind
 /// The parameters are carried on one record with a kind rather than a type per primitive, for the same reason the
 /// outline effects are: the alternative is a discriminated union hand-written for JSON, for the sidecar and for
 /// every reader.
+///
+/// **The members are a superset, and each kind reads the ones it declares.** A blur reads `Radius`, a colour matrix
+/// reads `Matrix`, a lighting primitive reads `SurfaceScale`; nothing reads a member its kind does not declare, and
+/// <see cref="FilterPrimitiveRegistry"/> is where "what this kind reads" is written down rather than being inferred
+/// from which fields happen to be set.
 /// </summary>
 public sealed record FilterPrimitive(
     FilterPrimitiveKind Kind,
@@ -43,7 +66,22 @@ public sealed record FilterPrimitive(
     ColorRgb? FloodColor = null,
     double FloodOpacity = 1.0,
     string Operator = "over",
-    string Mode = "normal")
+    string Mode = "normal",
+    double Scale = 0.0,
+    string XChannel = "A",
+    string YChannel = "A",
+    string Type = "turbulence",
+    double BaseFrequency = 0.0,
+    int Octaves = 1,
+    int Seed = 0,
+    double[]? Matrix = null,
+    double SurfaceScale = 1.0,
+    double SpecularConstant = 1.0,
+    double SpecularExponent = 1.0,
+    double DiffuseConstant = 1.0,
+    ColorRgb? LightingColor = null,
+    double Azimuth = 0.0,
+    double Elevation = 0.0)
 {
     /// <summary>`feGaussianBlur`, which reads one buffer and blurs it.</summary>
     public static FilterPrimitive Blur(double radius, string? input = null, string result = "")
@@ -64,6 +102,88 @@ public sealed record FilterPrimitive(
     /// <summary>`feBlend`, which combines two buffers by a blend mode.</summary>
     public static FilterPrimitive Blended(string mode, string input, string input2, string result = "")
         => new(FilterPrimitiveKind.Blend, input, input2, result, Mode: mode);
+
+    /// <summary>`feMorphology`, which grows (`dilate`) or shrinks (`erode`) the picture by a box of this radius.</summary>
+    public static FilterPrimitive Morph(string op, double radius, string? input = null, string result = "")
+        => new(FilterPrimitiveKind.Morphology, input, null, result, Radius: radius, Operator: op);
+
+    /// <summary>
+    /// `feColorMatrix`, whose values are the twenty numbers of the matrix in row-major order - including the fifth
+    /// column, which is the constant added to each channel.
+    ///
+    /// The shorthand forms (`saturate`, `hueRotate`, `luminanceToAlpha`) arrive here already expanded into the
+    /// matrix they are defined as, so there is one evaluation and one thing to compare: a filter that used the
+    /// shorthand and one that spelled the matrix out draw the same pixels, which is exactly what SVG says they are.
+    /// </summary>
+    public static FilterPrimitive ColourMatrix(
+        double[] values, string type = "matrix", string? input = null, string result = "")
+        => new(
+            FilterPrimitiveKind.ColorMatrix, input, null, result,
+            Matrix: (double[])values.Clone(), Type: type);
+
+    /// <summary>`feDisplacementMap`, which displaces the first input by the second input's channel.</summary>
+    public static FilterPrimitive Displace(
+        double scale, string xChannel, string yChannel, string input, string input2, string result = "")
+        => new(
+            FilterPrimitiveKind.DisplacementMap, input, input2, result,
+            Scale: scale, XChannel: xChannel, YChannel: yChannel);
+
+    /// <summary>`feTurbulence`, whose noise is fixed by its seed rather than by the clock.</summary>
+    public static FilterPrimitive Noise(
+        string type = "turbulence",
+        double baseFrequency = 0.05,
+        int octaves = 1,
+        int seed = 0,
+        string? input = null,
+        string result = "")
+        => new(
+            FilterPrimitiveKind.Turbulence, input, null, result,
+            Type: type, BaseFrequency: baseFrequency, Octaves: octaves, Seed: seed);
+
+    /// <summary>`feSpecularLighting`, lit by a distant light.</summary>
+    public static FilterPrimitive Specular(
+        double surfaceScale,
+        double specularConstant,
+        double specularExponent,
+        ColorRgb lightingColor,
+        double azimuth = 0.0,
+        double elevation = 0.0,
+        string? input = null,
+        string result = "")
+        => new(
+            FilterPrimitiveKind.SpecularLighting, input, null, result,
+            SurfaceScale: surfaceScale, SpecularConstant: specularConstant,
+            SpecularExponent: specularExponent, LightingColor: lightingColor,
+            Azimuth: azimuth, Elevation: elevation);
+
+    /// <summary>`feDiffuseLighting`, lit by a distant light.</summary>
+    public static FilterPrimitive Diffuse(
+        double surfaceScale,
+        double diffuseConstant,
+        ColorRgb lightingColor,
+        double azimuth = 0.0,
+        double elevation = 0.0,
+        string? input = null,
+        string result = "")
+        => new(
+            FilterPrimitiveKind.DiffuseLighting, input, null, result,
+            SurfaceScale: surfaceScale, DiffuseConstant: diffuseConstant,
+            LightingColor: lightingColor, Azimuth: azimuth, Elevation: elevation);
+
+    /// <summary>
+    /// The identity colour matrix: the twenty numbers that change nothing.
+    ///
+    /// Here rather than in the engine because it is a fact about the **format** - a colour matrix with no `values`
+    /// leaves its input alone - and both the reader (which needs a matrix when a file gives none) and the writer
+    /// (which needs one when a model holds none) have to agree on it.
+    /// </summary>
+    public static double[] IdentityMatrix { get; } = new double[]
+    {
+        1, 0, 0, 0, 0,
+        0, 1, 0, 0, 0,
+        0, 0, 1, 0, 0,
+        0, 0, 0, 1, 0,
+    };
 }
 
 /// <summary>
@@ -250,7 +370,7 @@ public sealed record FilterSpec
 
         for (int i = 0; i < Primitives.Count; i++)
         {
-            if (Primitives[i] != other.Primitives[i])
+            if (!PrimitiveEquals(Primitives[i], other.Primitives[i]))
             {
                 return false;
             }
@@ -275,5 +395,54 @@ public sealed record FilterSpec
         }
 
         return hash.ToHashCode();
+    }
+
+    /// <summary>
+    /// Whether two primitives are the same step.
+    ///
+    /// The compiler's own record equality compares <see cref="FilterPrimitive.Matrix"/> **by reference**, and a
+    /// twenty-number array read from a file is never the same reference as the one it is compared with - so a
+    /// round trip that preserved every number would still report two different filters. Comparing the numbers is
+    /// what makes "the graph that went out is the graph that came back" a claim a test can make, and it is also what
+    /// the cycle walk and the JSON round trip need: two steps that look alike must compare alike everywhere.
+    /// </summary>
+    internal static bool PrimitiveEquals(FilterPrimitive a, FilterPrimitive b)
+    {
+        if (a == b)
+        {
+            return true;
+        }
+
+        if (a.Kind != b.Kind)
+        {
+            return false;
+        }
+
+        // Everything but the matrix is a value or a string, and the compiler's equality is right for those. The
+        // matrix is the only array on the record, so it is the only member that has to be compared by content.
+        return a with { Matrix = null } == b with { Matrix = null } && SequenceEquals(a.Matrix, b.Matrix);
+    }
+
+    private static bool SequenceEquals(double[]? a, double[]? b)
+    {
+        if (ReferenceEquals(a, b))
+        {
+            return true;
+        }
+
+        if (a is null || b is null || a.Length != b.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < a.Length; i++)
+        {
+            if (a[i] != b[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

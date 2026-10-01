@@ -303,7 +303,13 @@ public static class SvgWriter
                 FilterPrimitiveKind.Offset => "feOffset",
                 FilterPrimitiveKind.Flood => "feFlood",
                 FilterPrimitiveKind.Composite => "feComposite",
-                _ => "feBlend",
+                FilterPrimitiveKind.Blend => "feBlend",
+                FilterPrimitiveKind.Morphology => "feMorphology",
+                FilterPrimitiveKind.ColorMatrix => "feColorMatrix",
+                FilterPrimitiveKind.DisplacementMap => "feDisplacementMap",
+                FilterPrimitiveKind.Turbulence => "feTurbulence",
+                FilterPrimitiveKind.SpecularLighting => "feSpecularLighting",
+                _ => "feDiffuseLighting",
             });
 
             if (!string.IsNullOrEmpty(primitive.Input))
@@ -345,13 +351,133 @@ public static class SvgWriter
                     element.Add(new XAttribute("operator", primitive.Operator));
                     break;
 
-                default:
+                case FilterPrimitiveKind.Blend:
                     element.Add(new XAttribute("mode", primitive.Mode));
+                    break;
+
+                case FilterPrimitiveKind.Morphology:
+                    element.Add(new XAttribute("operator", primitive.Operator));
+                    element.Add(new XAttribute("radius", Number(primitive.Radius)));
+                    break;
+
+                case FilterPrimitiveKind.ColorMatrix:
+                    WriteColourMatrix(element, primitive);
+                    break;
+
+                case FilterPrimitiveKind.DisplacementMap:
+                    element.Add(new XAttribute("scale", Number(primitive.Scale)));
+                    element.Add(new XAttribute("xChannelSelector", primitive.XChannel));
+                    element.Add(new XAttribute("yChannelSelector", primitive.YChannel));
+                    break;
+
+                case FilterPrimitiveKind.Turbulence:
+                    element.Add(new XAttribute("type", primitive.Type));
+                    element.Add(new XAttribute("baseFrequency", Number(primitive.BaseFrequency)));
+                    element.Add(new XAttribute("numOctaves", primitive.Octaves));
+                    element.Add(new XAttribute("seed", primitive.Seed));
+                    break;
+
+                case FilterPrimitiveKind.SpecularLighting:
+                    element.Add(new XAttribute("surfaceScale", Number(primitive.SurfaceScale)));
+                    element.Add(new XAttribute("specularConstant", Number(primitive.SpecularConstant)));
+                    element.Add(new XAttribute("specularExponent", Number(primitive.SpecularExponent)));
+                    element.Add(new XAttribute("lighting-color", Hex(primitive.LightingColor ?? ColorRgb.White)));
+                    LightSource(element, primitive);
+                    break;
+
+                default:
+                    element.Add(new XAttribute("surfaceScale", Number(primitive.SurfaceScale)));
+                    element.Add(new XAttribute("diffuseConstant", Number(primitive.DiffuseConstant)));
+                    element.Add(new XAttribute("lighting-color", Hex(primitive.LightingColor ?? ColorRgb.White)));
+                    LightSource(element, primitive);
                     break;
             }
 
             return element;
         }
+
+        /// <summary>
+        /// A colour matrix, written back in the spelling it was read in.
+        ///
+        /// A shorthand is written as the shorthand and its single number - `type="saturate" values="0"` - rather
+        /// than as the twenty-number matrix it was expanded into, because the two spellings draw the same picture
+        /// and the one that was in the file is the one a person will recognise. Anything else is written as the
+        /// matrix it is.
+        /// </summary>
+        private static void WriteColourMatrix(XElement element, FilterPrimitive primitive)
+        {
+            string type = (primitive.Type ?? "matrix").Trim();
+            string lower = type.ToLowerInvariant();
+
+            if (lower == "saturate" || lower == "huerotate")
+            {
+                element.Add(new XAttribute("type", type));
+                element.Add(new XAttribute("values", Number(SingleValue(primitive))));
+                return;
+            }
+
+            if (lower == "luminancetoalpha")
+            {
+                element.Add(new XAttribute("type", "luminanceToAlpha"));
+                return;
+            }
+
+            element.Add(new XAttribute("type", "matrix"));
+            element.Add(new XAttribute(
+                "values",
+                string.Join(" ", (primitive.Matrix ?? FilterPrimitive.IdentityMatrix).Select(Number))));
+        }
+
+        /// <summary>
+        /// The one number a colour matrix shorthand carries: the saturation, or the angle.
+        ///
+        /// A primitive built through the model's factory may hold either the one number or the twenty it stands
+        /// for - the reader keeps the number, a caller may hand over the matrix - so this recognises the expansion
+        /// and recovers the number from it. That is what makes `saturate` written by a caller and `saturate` read
+        /// from a file come out of here spelled the same way, and it is why the twenty numbers are inverted rather
+        /// than the shorthand being written out as a matrix.
+        /// </summary>
+        private static double SingleValue(FilterPrimitive primitive)
+        {
+            if (primitive.Matrix is { Length: 1 } only)
+            {
+                return only[0];
+            }
+
+            string type = (primitive.Type ?? string.Empty).Trim().ToLowerInvariant();
+            if (primitive.Matrix is { Length: 20 } full)
+            {
+                // SVG's saturate matrix is `(1 - s) * L + s * I`, so the first cell is `s + (1 - s) * 0.2125`.
+                if (type == "saturate")
+                {
+                    return (full[0] - 0.2125) / 0.7875;
+                }
+
+                // And the hue-rotation matrix's first two cells are `cos * 0.787 - sin * 0.213` and
+                // `0.715 - cos * 0.715 - sin * 0.715`, which recover the angle.
+                if (type == "huerotate")
+                {
+                    double cosine = (full[0] - 0.2125) / 0.787;
+                    double sine = -(full[1] - 0.7154) / 0.7154;
+                    return Math.Atan2(sine, Math.Abs(cosine) < 1e-12 ? 1.0 : cosine) * 180.0 / Math.PI;
+                }
+            }
+
+            return type == "saturate" ? 1.0 : 0.0;
+        }
+
+        /// <summary>
+        /// The light a lighting primitive is lit by.
+        ///
+        /// Always a `feDistantLight`, because that is the only one the reader accepts - a primitive in the model can
+        /// only have come from a distant light, so writing any other kind would be inventing a file this build
+        /// cannot read back.
+        /// </summary>
+        private static void LightSource(XElement element, FilterPrimitive primitive)
+            => element.Add(new XElement(
+                Svg + "feDistantLight",
+                new XAttribute("azimuth", Number(primitive.Azimuth)),
+                new XAttribute("elevation", Number(primitive.Elevation))));
 
         private string WriteGradient(XElement defs, GradientSpec gradient)
         {
