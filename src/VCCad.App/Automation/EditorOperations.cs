@@ -8085,11 +8085,23 @@ public static class EditorOperations
         var blocks = ctx.Session.SelectedTextItems().ToList();
         TextSummary summary = TextSummary.Of(blocks, runIndex);
 
+        // `runs` is the number of runs the reported value is **common to**, and that is deliberately not the
+        // same thing as `summary.Runs`. The summary counts the runs the members were *read from*: a block with
+        // no run at the inspected index is a gap and is skipped rather than counted as disagreeing, so that
+        // count stays non-zero even when the runs that are there disagree with each other. This field answers
+        // the other question a driver has - is there a value to act on, and how many runs hold it - so a genuine
+        // disagreement reports zero and a run the selection agrees on reports one per agreeing block. The
+        // `*Mixed` flags above say *that* a member disagrees; `runs` says whether anything common came out of it.
+        int commonRuns = summary.FamilyMixed || summary.FontSizeMixed || summary.BoldMixed
+            || summary.ItalicMixed || summary.ColorMixed
+                ? 0
+                : summary.Runs;
+
         return new
         {
             changed,
             blocks = summary.Blocks,
-            runs = summary.Runs,
+            runs = commonRuns,
             runIndex,
             empty = summary.IsEmpty,
             mixed = summary.IsMixed,
@@ -8108,13 +8120,13 @@ public static class EditorOperations
             alignment = summary.Alignment?.ToString(),
             alignmentMixed = summary.AlignmentMixed,
             leading = summary.LineSpacing,
-            leadingMixed = summary.LineSpacingMixed,
+            lineSpacingMixed = summary.LineSpacingMixed,
             space = summary.ParagraphSpacing,
-            spaceMixed = summary.ParagraphSpacingMixed,
+            paragraphSpacingMixed = summary.ParagraphSpacingMixed,
             turn = summary.RotationDegrees,
-            turnMixed = summary.RotationMixed,
+            rotationMixed = summary.RotationMixed,
             frame = summary.FrameWidth,
-            frameMixed = summary.FrameWidthMixed,
+            frameWidthMixed = summary.FrameWidthMixed,
         };
     }
 

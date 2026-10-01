@@ -301,10 +301,10 @@ public class TextOperationParityTests
                      ("sizeMixed", summary.FontSizeMixed),
                      ("boldMixed", summary.BoldMixed),
                      ("italicMixed", summary.ItalicMixed),
-                     ("leadingMixed", summary.LineSpacingMixed),
-                     ("spaceMixed", summary.ParagraphSpacingMixed),
-                     ("turnMixed", summary.RotationMixed),
-                     ("frameMixed", summary.FrameWidthMixed),
+                     ("lineSpacingMixed", summary.LineSpacingMixed),
+                     ("paragraphSpacingMixed", summary.ParagraphSpacingMixed),
+                     ("rotationMixed", summary.RotationMixed),
+                     ("frameWidthMixed", summary.FrameWidthMixed),
                  })
         {
             Assert.Equal(mixed, reported.GetProperty(name).GetBoolean());
@@ -324,7 +324,7 @@ public class TextOperationParityTests
         Assert.Equal(JsonValueKind.Null, reported.GetProperty("frame").ValueKind);
 
         // And the faces the blocks agree on are still reported - here none do, which the flags say.
-        Assert.Equal(summary.Runs, reported.GetProperty("runs").GetInt32());
+        Assert.Equal(0, reported.GetProperty("runs").GetInt32());
     }
 
     /// <summary>
