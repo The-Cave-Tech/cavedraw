@@ -62,9 +62,12 @@ public class TextPaintImportTests
         Assert.Equal("tiled", Assert.Single(text.Runs).Text);
 
         // The pattern tile is not in the model, so the text is a solid colour - and the note is the whole
-        // difference between an approximation and a silent one.
+        // difference between an approximation and a silent one. It must also name what the pattern *is*:
+        // a tiling pattern is a stream in the file, and the report has to read its dictionary through that
+        // rather than fall back to "no dictionary" and name the wrong thing.
         Assert.Contains(notes, note =>
             note.Contains("pattern /P1", StringComparison.Ordinal) &&
+            note.Contains("tiling pattern", StringComparison.OrdinalIgnoreCase) &&
             note.Contains("solid", StringComparison.OrdinalIgnoreCase));
         _out.WriteLine($"note: {Assert.Single(notes)}");
     }

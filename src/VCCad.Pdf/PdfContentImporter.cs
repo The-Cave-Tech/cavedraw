@@ -2609,8 +2609,8 @@ internal sealed class PdfContentImporter
     /// <summary>What a pattern in the page's <c>/Pattern</c> resources actually is.</summary>
     private string PatternKind(string name, Dictionary<string, object?> resources)
     {
-        if (_file.ResolveDict(resources.GetValueOrDefault("Pattern")) is not { } patterns ||
-            _file.ResolveDict(patterns.GetValueOrDefault(name)) is not { } pattern)
+        if (DictionaryOf(resources.GetValueOrDefault("Pattern")) is not { } patterns ||
+            DictionaryOf(patterns.GetValueOrDefault(name)) is not { } pattern)
         {
             return "a pattern with no dictionary in the page's resources";
         }
@@ -2624,7 +2624,7 @@ internal sealed class PdfContentImporter
         if (type == 2)
         {
             int shading = (int)(_file.ResolveNumber(
-                _file.ResolveDict(pattern.GetValueOrDefault("Shading"))?.GetValueOrDefault("ShadingType")) ?? 0);
+                DictionaryOf(pattern.GetValueOrDefault("Shading"))?.GetValueOrDefault("ShadingType")) ?? 0);
             return shading switch
             {
                 2 => "a shading pattern whose shading is axial",
@@ -2634,6 +2634,19 @@ internal sealed class PdfContentImporter
         }
 
         return "a pattern";
+    }
+
+    /// <summary>
+    /// The dictionary behind a value that may be one directly or may be a stream carrying one - a tiling
+    /// pattern and a mesh shading are both streams, so <see cref="Parsing.PdfFile.ResolveDict"/> alone
+    /// cannot see their <c>/PatternType</c>.
+    /// </summary>
+    private Dictionary<string, object?>? DictionaryOf(object? value)
+    {
+        object? resolved = _file.Resolve(value);
+        return resolved is PdfStream stream
+            ? _file.ResolveDict(stream.Dict)
+            : _file.ResolveDict(resolved);
     }
 
     /// <summary>Formats a colour for a note, the way the shading notes name their numbers.</summary>
