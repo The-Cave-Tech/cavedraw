@@ -1,4 +1,6 @@
+using System.Text.RegularExpressions;
 using VCCad.Core.Model;
+using VCCad.Core.Svg;
 using VCCad.Geometry;
 using Xunit;
 
@@ -288,5 +290,35 @@ public class StrokeDashOutlineTests
         Assert.False(plan.IsOutline);
         Assert.Equal(8.0, plan.Width, 6);
         Assert.Empty(plan.Outlines);
+    }
+
+    /// <summary>
+    /// **The dash reaches the exported file, not only the plan.** The SVG writer turns a stroke SVG cannot carry
+    /// into geometry, and being an outline is not enough: the file has to hold the dashes. Both strokes below are
+    /// outlines, so the only difference is in the `d` attribute - one filled band against twelve filled dashes.
+    /// </summary>
+    [Fact]
+    public void ADashedProfileExportsAsTheDashes()
+    {
+        var solid = Spec(8, profile: WidthProfileSpec.Constant(8));
+        var dashed = solid with { Dash = new DashPattern(new[] { 6.0, 3.0 }) };
+
+        string inked = Svg(Line(100), dashed);
+
+        Assert.DoesNotContain("stroke-width", inked, StringComparison.Ordinal);
+
+        // Every loop starts with an "M", so the subpath count is the dash count: one band undashed, twelve
+        // dashes under the 6-on/3-off pattern of a 100-long line.
+        Assert.Equal(1, Regex.Matches(Svg(Line(100), solid), "M ").Count);
+        Assert.Equal(12, Regex.Matches(inked, "M ").Count);
+    }
+
+    /// <summary>One path in a document on an origin artboard, as SVG.</summary>
+    private static string Svg(PathItem path, StrokeSpec stroke)
+    {
+        path.Stroke = stroke;
+        CadDocument document = CadDocument.CreateDefault();
+        document.Artboards[0].Layers[0].AddItem(path);
+        return SvgWriter.Write(document);
     }
 }
