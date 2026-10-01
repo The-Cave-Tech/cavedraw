@@ -1,4 +1,5 @@
 using VCCad.Core.Model;
+using VCCad.Core.Samples;
 using Xunit;
 
 namespace VCCad.Pdf.Tests;
@@ -20,7 +21,7 @@ public class SampleImageTests
     {
         for (DirectoryInfo? dir = new(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
         {
-            string candidate = Path.Combine(dir.FullName, "samples", fileName);
+            string? candidate = SampleLibrary.Find(fileName);
             if (File.Exists(candidate))
             {
                 return candidate;

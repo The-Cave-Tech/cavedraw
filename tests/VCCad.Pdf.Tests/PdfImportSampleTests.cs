@@ -1,28 +1,18 @@
 using VCCad.Core.Model;
+using VCCad.Core.Samples;
 using Xunit;
 
 namespace VCCad.Pdf.Tests;
 
 /// <summary>Imports the bundled real-world Illustrator sewing pattern to guard the
-/// PDF object/content parser against regressions.</summary>
+/// PDF object/content parser against regressions.
+///
+/// The sample is copyrighted, so it is not in this repository: it is checked out beside it and located through
+/// <see cref="SampleLibrary"/>. A checkout without it skips this test rather than failing.</summary>
 public class PdfImportSampleTests
 {
     private static string? SamplePath()
-    {
-        DirectoryInfo? dir = new(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            string candidate = Path.Combine(dir.FullName, "samples", "A0-Temi-Bow-Bustier-sewing-pattern.pdf");
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            dir = dir.Parent;
-        }
-
-        return null;
-    }
+        => SampleLibrary.Find("A0-Temi-Bow-Bustier-sewing-pattern.pdf");
 
     [Fact]
     public void ImportsIllustratorA0PatternWithVectorContent()

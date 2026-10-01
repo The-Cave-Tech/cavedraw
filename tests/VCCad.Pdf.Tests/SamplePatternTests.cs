@@ -1,4 +1,5 @@
 using VCCad.Core.Model;
+using VCCad.Core.Samples;
 using VCCad.Geometry;
 using VCCad.Pdf;
 using Xunit;
@@ -6,10 +7,12 @@ using Xunit;
 namespace VCCad.Pdf.Tests;
 
 /// <summary>
-/// The shipped real-world fixtures in <c>samples/</c>.
+/// The real-world fixtures: third-party sewing patterns, which a person actually opens and therefore the
+/// strongest regression guard the project has for import behaviour.
 ///
-/// These are the documents a person actually opens, so they are the strongest
-/// regression guard for import behaviour.
+/// They are **copyrighted**, so they are not in this repository - they are checked out beside it, in
+/// <c>../samples</c>, and located through <see cref="SampleLibrary"/>. A checkout without them skips these
+/// tests rather than failing: they add coverage, they are not a prerequisite for a green suite.
 ///
 /// The A4 pattern is a *tiled* export: the artwork is drawn at full size on every
 /// sheet it touches and the page edge does the cutting. Import must store that
@@ -23,19 +26,7 @@ public class SamplePatternTests
     private const string A4 = "A4 Temi Bow Bustier sewing pattern .pdf";
     private const string A0 = "A0-Temi-Bow-Bustier-sewing-pattern.pdf";
 
-    private static string? SamplePath(string fileName)
-    {
-        for (DirectoryInfo? dir = new(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
-        {
-            string candidate = Path.Combine(dir.FullName, "samples", fileName);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        return null;
-    }
+    private static string? SamplePath(string fileName) => SampleLibrary.Find(fileName);
 
     private static CadDocument? ImportOnce(string fileName)
     {

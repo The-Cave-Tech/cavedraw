@@ -1,4 +1,5 @@
 using Avalonia.Headless.XUnit;
+using VCCad.Core.Samples;
 using Avalonia.Media;
 using VCCad.App.Fonts;
 using VCCad.Core.Model;
@@ -14,7 +15,7 @@ public class EmbeddedFontCanvasTests
         DirectoryInfo? dir = new(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            string candidate = Path.Combine(dir.FullName, "samples", "A0-Temi-Bow-Bustier-sewing-pattern.pdf");
+            string? candidate = SampleLibrary.Find("A0-Temi-Bow-Bustier-sewing-pattern.pdf");
             if (File.Exists(candidate)) return candidate;
             dir = dir.Parent;
         }

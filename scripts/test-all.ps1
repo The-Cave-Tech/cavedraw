@@ -84,6 +84,22 @@ try {
             Write-Host "    VCCAD_GS_CORPUS=$($env:VCCAD_GS_CORPUS)"
             Write-Host "    VCCAD_AI_CORPUS=$($env:VCCAD_AI_CORPUS)"
         }
+
+        # The copyrighted sample patterns are not in this repository: it is public and they cannot be
+        # redistributed. They live in a private checkout beside it, or wherever VCCAD_SAMPLES points. Their
+        # absence skips the sample tests rather than failing anything - the samples add coverage, they are not
+        # a prerequisite for a green run.
+        if (-not $env:VCCAD_SAMPLES) {
+            $beside = Join-Path (Split-Path $PSScriptRoot -Parent) '..\samples'
+            if (Test-Path $beside) { $env:VCCAD_SAMPLES = (Resolve-Path $beside).Path }
+        }
+
+        if ($env:VCCAD_SAMPLES) {
+            Write-Host "    VCCAD_SAMPLES=$($env:VCCAD_SAMPLES)"
+        }
+        else {
+            Write-Host "    VCCAD_SAMPLES=(not checked out - the sample pattern tests will skip)"
+        }
         else {
             Write-Host '==> no corpus cache found; corpus sweeps will skip (still green)'
         }

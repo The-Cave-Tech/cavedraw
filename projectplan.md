@@ -218,7 +218,7 @@ depends on Avalonia, ASP.NET, or the UI; everything testable headless.
 /tools/qwen-corpus-tracker/  vision-model render-fidelity tracker
 /tools/ai-private-data/      independent .ai private-data decoder + golden manifest
 /docs/                       format/design notes (ai-private-data.md)
-/samples/              real-world Illustrator PDF fixture
+/samples/              real-world PDF fixtures (copyrighted: private checkout, not tracked here)
 /src/
   VCCad.Geometry/      pure math primitives + Bézier algebra
   VCCad.Core/          document model, commands/undo, sidecar serializer

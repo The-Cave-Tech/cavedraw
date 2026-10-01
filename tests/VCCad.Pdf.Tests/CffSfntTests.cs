@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using VCCad.Core.Samples;
 using System.Text;
 using VCCad.Core.Model;
 using VCCad.Pdf;
@@ -25,7 +26,7 @@ public class CffSfntTests
         DirectoryInfo? dir = new(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            string candidate = Path.Combine(dir.FullName, "samples", "A0-Temi-Bow-Bustier-sewing-pattern.pdf");
+            string? candidate = SampleLibrary.Find("A0-Temi-Bow-Bustier-sewing-pattern.pdf");
             if (File.Exists(candidate))
             {
                 return candidate;

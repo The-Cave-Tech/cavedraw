@@ -1,4 +1,5 @@
 using VCCad.Core.Model;
+using VCCad.Core.Samples;
 using VCCad.Core.Serialization;
 using Xunit;
 
@@ -22,7 +23,7 @@ public class RoundTripDumpTests
     {
         for (DirectoryInfo? dir = new(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
         {
-            string candidate = Path.Combine(dir.FullName, "samples", fileName);
+            string? candidate = SampleLibrary.Find(fileName);
             if (File.Exists(candidate))
             {
                 return candidate;

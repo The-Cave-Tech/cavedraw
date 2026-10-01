@@ -1,4 +1,5 @@
 using VCCad.Core.Model;
+using VCCad.Core.Samples;
 using Xunit;
 
 namespace VCCad.Pdf.Tests;
@@ -26,7 +27,7 @@ public class ImportedStructureTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            string candidate = Path.Combine(dir.FullName, "samples", fileName);
+            string? candidate = SampleLibrary.Find(fileName);
             if (File.Exists(candidate))
             {
                 return candidate;

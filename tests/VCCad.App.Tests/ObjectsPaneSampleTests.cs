@@ -1,4 +1,5 @@
 using VCCad.App.Views.Panes;
+using VCCad.Core.Samples;
 using VCCad.Core.Model;
 using VCCad.Pdf;
 using Xunit;
@@ -26,8 +27,7 @@ public class ObjectsPaneSampleTests
         var candidate = new DirectoryInfo(AppContext.BaseDirectory);
         while (candidate is not null)
         {
-            string path = Path.Combine(candidate.FullName, "samples",
-                "3464_LILLIE_View_A_Sides_color.pdf");
+            string? path = SampleLibrary.Find("3464_LILLIE_View_A_Sides_color.pdf");
             if (File.Exists(path))
             {
                 return path;

@@ -20,7 +20,7 @@ antialiasing. On these pages most of every number is the second.
   file that says clearly what it means.
 
 ```bash
-python tools/fonts-compare/render_floor.py samples/3464_LILLIE_View_A_Sides_color.pdf \
+python tools/fonts-compare/render_floor.py ../samples/3464_LILLIE_View_A_Sides_color.pdf \
     artifacts/catalogue/ours.pdf 12 150
 ```
 

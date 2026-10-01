@@ -4513,46 +4513,16 @@ public static class EditorOperations
         }
 
         // Let a caller name a file the way a person would ("the sample A0 Temi Bow
-        // …pdf") instead of requiring an absolute path.
-        string wanted = Normalize(Path.GetFileNameWithoutExtension(path));
-        foreach (string root in CandidateRoots())
+        // …pdf") instead of requiring an absolute path. The samples are copyrighted and live in a private
+        // checkout, so the search is SampleLibrary's rather than a directory guess made here.
+        if (VCCad.Core.Samples.SampleLibrary.FindLoose(path) is { } sample)
         {
-            string samples = Path.Combine(root, "samples");
-            if (!Directory.Exists(samples))
-            {
-                continue;
-            }
-
-            string? match = Directory.EnumerateFiles(samples, "*.pdf")
-                .FirstOrDefault(f => Normalize(Path.GetFileNameWithoutExtension(f)) == wanted)
-                ?? Directory.EnumerateFiles(samples, "*.pdf")
-                    .FirstOrDefault(f => Normalize(Path.GetFileNameWithoutExtension(f)).Contains(wanted, StringComparison.Ordinal));
-            if (match is not null)
-            {
-                return match;
-            }
+            return sample;
         }
 
         throw new EditorOperationException(
             $"File not found: {path} (also searched the samples folder for \"{Path.GetFileName(path)}\").");
     }
-
-    /// <summary>Directories to search for bundled files: app base and its ancestors.</summary>
-    private static IEnumerable<string> CandidateRoots()
-    {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        for (DirectoryInfo? dir = new(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
-        {
-            if (seen.Add(dir.FullName))
-            {
-                yield return dir.FullName;
-            }
-        }
-    }
-
-    /// <summary>Lower-cases and strips separators so "A0 Temi Bow.pdf" matches the file name.</summary>
-    private static string Normalize(string value)
-        => new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 
     private static object ViewStatus(AutomationContext ctx) => ctx.Viewport is null
         ? new { available = false }

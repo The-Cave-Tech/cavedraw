@@ -56,3 +56,7 @@ Thumbs.db
 *.pfx
 *.key
 secrets/
+
+# The copyrighted sample PDFs live in a private repository and are checked out beside this one.
+# Ignored here so they cannot be added back by accident.
+samples/

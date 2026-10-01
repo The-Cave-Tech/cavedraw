@@ -1,4 +1,5 @@
 using Avalonia.Headless.XUnit;
+using VCCad.Core.Samples;
 using Avalonia.Media;
 using VCCad.App.Fonts;
 using VCCad.Core.Model;
@@ -18,7 +19,7 @@ public class EmbeddedFontUsageTests
     {
         for (DirectoryInfo? dir = new(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
         {
-            string candidate = Path.Combine(dir.FullName, "samples", fileName);
+            string? candidate = SampleLibrary.Find(fileName);
             if (File.Exists(candidate))
             {
                 return candidate;

@@ -611,7 +611,7 @@ docker/Dockerfile      multi-stage: restore → build → test → publish api +
 scripts/               dev.sh, deploy-remote.sh, bootstrap-dev.sh, fetch-corpora.sh,
                        publish-desktop.sh, publish-desktop.ps1 (Windows-native),
                        test-all.ps1 (Windows-native), stage-apply.sh, replace-text.py
-samples/               real-world fixtures, tracked: A0-Temi-Bow-Bustier, A4 Temi Bow Bustier,
+samples/               real-world fixtures, NOT tracked (copyrighted): checked out in a private
                        3464_LILLIE_View_A_Sides_color (12 pages, the import-structure case),
                        A0_V_SCULPT_LEGGINGS, PRIYANKA SKIRT/TOP. Several tests import these
                        and skip cleanly when a checkout does not have them.
