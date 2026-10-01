@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 using Avalonia;
 using Avalonia.VisualTree;
 using Avalonia.Threading;
@@ -2211,12 +2212,19 @@ public static class EditorOperations
             "The namespaced data the file carried that the model has no meaning for: the root-level elements kept " +
             "verbatim (Inkscape's named view, the RDF), the namespace prefixes declared, and, for the selection, " +
             "the foreign attributes and child elements on its items. Read-only - the model carries these rather " +
-            "than interpreting them, and they go back out with the same names they came in with.",
+            "than interpreting them, and they go back out with the same names they came in with. The foreign " +
+            "path effects no path refers to are listed by the id and the effect name the stored element " +
+            "carries, beside the count - so a driver can tell which entry survived and not only how many.",
             "",
             (ctx, _) => new
             {
                 extras = ctx.Document.SvgExtras.Count,
                 foreignPathEffects = ctx.Document.ForeignPathEffects.Count,
+
+                // The count's names beside it, in the shape `namespaces` uses, so a driver can tell **which**
+                // library entry survived rather than only that one did (issue #163). The count is kept as it was:
+                // it is not wrong, only thin, and a reply a test already pins does not move.
+                foreignPathEffectNames = KeptForeignPathEffects(ctx.Document).Names,
                 namespaces = ctx.Document.SvgNamespaces
                     .Select(entry => new { prefix = entry.Key, uri = entry.Value })
                     .ToArray(),
@@ -4784,6 +4792,11 @@ public static class EditorOperations
                 }
 
                 ctx.ViewModel.ImportDocument(result.Document);
+
+                // What the import leaves behind is said here rather than only on a later document.metadata call:
+                // the reply's warning surface is where a person and a driver both look (issue #163).
+                string[] keptWarnings = KeptForeignPathEffects(result.Document).Warnings;
+
                 return new
                 {
                     document = result.Document.Name,
@@ -4793,6 +4806,7 @@ public static class EditorOperations
                     missing = result.Missing,
                     warnings = result.Warnings
                         .Concat(UnreadLivePathEffects(result.Document).Warnings)
+                        .Concat(keptWarnings)
                         .ToArray(),
                     livePathEffects = UnreadLivePathEffects(result.Document).Effects,
                 };
@@ -4807,6 +4821,10 @@ public static class EditorOperations
                 result.Document.Name = Path.GetFileNameWithoutExtension(path);
 
                 ctx.ViewModel.ImportDocument(result.Document);
+
+                // The same report on the file half of the import (issue #163).
+                string[] keptWarnings = KeptForeignPathEffects(result.Document).Warnings;
+
                 return new
                 {
                     opened = path,
@@ -4816,6 +4834,7 @@ public static class EditorOperations
                     missing = result.Missing,
                     warnings = result.Warnings
                         .Concat(UnreadLivePathEffects(result.Document).Warnings)
+                        .Concat(keptWarnings)
                         .ToArray(),
                     livePathEffects = UnreadLivePathEffects(result.Document).Effects,
                 };
@@ -7291,6 +7310,93 @@ public static class EditorOperations
             "pathEffect.list names them and pathEffect.apply converts one that is handed over.",
         });
     }
+
+    /// <summary>
+    /// The foreign definitions the document keeps that no path refers to, as a reply can name them, and what an
+    /// import has to say about them.
+    ///
+    /// The stored text is the element **verbatim**, so the name is read from the XML the way the reader read it:
+    /// the <c>id</c> the file gave it and the <c>effect</c> name the element carries. That is the half issue #163
+    /// says a count cannot supply - <c>foreignPathEffects: 1</c> says something survived and not what, while the
+    /// referenced effects have been identifiable by id through <c>pathEffect.list</c> all along.
+    ///
+    /// **What cannot be read is left out, never invented.** A definition with no <c>id</c>, an element with an
+    /// <c>id</c> and no <c>effect</c> attribute, and text that does not parse at all (a prefix it never declared)
+    /// each appear as an entry with the half that could not be read left null, so the list still matches the count
+    /// beside it and a driver is told the document holds something whose name it cannot be given. The effect name
+    /// is never defaulted from the id and the id is never defaulted from the effect name - the rule that produced
+    /// #140, #143, #144, #150, #151, #152, #155, #158, #160 and #162.
+    ///
+    /// The **warning** is the same report on the import reply's existing surface, which is where a person and a
+    /// driver both look: an import that leaves foreign definitions in the document says so at the time rather than
+    /// leaving it to be found by a later <c>document.metadata</c> call. It names what it can and never announces a
+    /// referenced effect, which travels on the path that points at it.
+    /// </summary>
+    private static (object[] Names, string[] Warnings) KeptForeignPathEffects(CadDocument document)
+    {
+        var names = new List<object>();
+        var described = new List<string>();
+        int unnameable = 0;
+
+        foreach (string xml in document.ForeignPathEffects)
+        {
+            string? id = null;
+            string? effect = null;
+
+            if (!string.IsNullOrWhiteSpace(xml))
+            {
+                try
+                {
+                    XElement element = XElement.Parse(xml);
+                    id = NonEmpty(element.Attribute("id")?.Value);
+                    effect = NonEmpty(element.Attribute("effect")?.Value);
+                }
+                catch (System.Xml.XmlException)
+                {
+                    // Not an element this build can read. The entry is still listed - dropping it would make the
+                    // list disagree with the count - with neither half claimed.
+                }
+            }
+
+            names.Add(new { id, effect });
+            described.Add(
+                id is null
+                    ? effect is null
+                        ? "a definition with no readable id or effect name"
+                        : $"an effect named '{effect}' with no id"
+                    : effect is null
+                        ? $"'{id}'"
+                        : $"'{id}' (effect '{effect}')");
+
+            if (id is null)
+            {
+                unnameable++;
+            }
+        }
+
+        if (names.Count == 0)
+        {
+            return (Array.Empty<object>(), Array.Empty<string>());
+        }
+
+        string warning =
+            $"{names.Count} foreign path effect{(names.Count == 1 ? "" : "s")} that no path refers to " +
+            $"({string.Join("; ", described)}) {(names.Count == 1 ? "is" : "are")} kept on the document, so an " +
+            $"export writes {(names.Count == 1 ? "it" : "them")} back into defs. document.metadata names " +
+            $"{(names.Count == 1 ? "it" : "them")}.";
+
+        if (unnameable > 0)
+        {
+            warning +=
+                $" {unnameable} of them could not be named: the stored element carries no readable id, so none is " +
+                "reported for it.";
+        }
+
+        return (names.ToArray(), new[] { warning });
+    }
+
+    /// <summary>A string that says something, or null - the rule that keeps an unread half out of a reply.</summary>
+    private static string? NonEmpty(string? value) => string.IsNullOrEmpty(value) ? null : value;
 
     /// <summary>
     /// A live path effect as a request spells it.

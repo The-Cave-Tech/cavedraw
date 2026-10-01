@@ -323,6 +323,218 @@ public class PathEffectOperationTests
         Assert.Empty(result.GetProperty("livePathEffects").EnumerateArray());
     }
 
+    /// <summary>An import's reply as JSON, so a test reads it the way a driver receives it.</summary>
+    private static JsonElement Import(AutomationContext context, string svg)
+        => JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "document.importSvg", Params(new { svgBase64 = Base64(svg) })));
+
+    /// <summary>An import reply's warnings, as the text a person reads and a driver greps.</summary>
+    private static string[] Warnings(JsonElement result)
+        => result.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()!).ToArray();
+
+    /// <summary>The phrase the kept-effects warning always carries, so a test can find it without pinning the prose.</summary>
+    private const string KeptPhrase = "no path refers to";
+
+    /// <summary>
+    /// **The documentary reply names the kept effect, not only its number.**
+    ///
+    /// Issue #163's first half. `document.metadata` has reported `foreignPathEffects` as a count since #155, and a
+    /// count answers "did something survive" rather than "what": the state is kept, written back into `defs` and
+    /// carried in the sidecar, and a driver that asks about it is handed `1`. Its siblings on the same reply are
+    /// richer - `namespaces` gives prefix/uri pairs and `selection` gives per-item names - so the kept entries are
+    /// named the same way, each by the `id` the file gave it and the `effect` name the element carries.
+    ///
+    /// The two halves of the library are asserted separately: the kept entry is named, and the **referenced** one is
+    /// not in this list, because it travels on the path that points at it and is already identifiable through
+    /// `pathEffect.list`. A list that named both would send a driver looking for a definition with no user that the
+    /// document does not have.
+    /// </summary>
+    [Fact]
+    public void MetadataNamesTheKeptPathEffect()
+    {
+        (AutomationContext context, _) = Host();
+
+        JsonElement metadata = MetadataAfterImport(
+            context, InkscapeFile(PowerStrokeEffect + UnreferencedEffect));
+
+        JsonElement kept = Assert.Single(metadata.GetProperty("foreignPathEffectNames").EnumerateArray());
+        Assert.Equal("path-effect2", kept.GetProperty("id").GetString());
+        Assert.Equal("powerstroke", kept.GetProperty("effect").GetString());
+
+        // The count it sits beside is unchanged, so a reply that reported one and not the other still fails.
+        Assert.Equal(1, metadata.GetProperty("foreignPathEffects").GetInt32());
+    }
+
+    /// <summary>
+    /// **The import reply says the document now carries an unreferenced effect.**
+    ///
+    /// Issue #163's second half. Before this, an import that left a foreign definition in the document said nothing
+    /// about it: `livePathEffects` covers the opposite case - an effect a path names that this build could not read
+    /// - so a person comparing the file with the drawing had nothing, and a driver had to make a later
+    /// `document.metadata` call to find out. Reported on the reply's existing warning surface, which is where the
+    /// person and the driver both look, and it names the entry rather than only counting it.
+    ///
+    /// The referenced effect is deliberately **not** named by this warning: it was translated and travels on the
+    /// path, and announcing it as kept would be the same confusion the unread report already guards against.
+    /// </summary>
+    [Fact]
+    public void ImportingAFileWithAnUnreferencedEffectReportsItInTheWarnings()
+    {
+        (AutomationContext context, _) = Host();
+
+        JsonElement result = Import(context, InkscapeFile(PowerStrokeEffect + UnreferencedEffect));
+        string[] warnings = Warnings(result);
+
+        Assert.Contains(warnings, warning =>
+            warning.Contains(KeptPhrase, StringComparison.Ordinal) &&
+            warning.Contains("path-effect2", StringComparison.Ordinal) &&
+            warning.Contains("powerstroke", StringComparison.Ordinal));
+
+        Assert.DoesNotContain(warnings, warning =>
+            warning.Contains(KeptPhrase, StringComparison.Ordinal) &&
+            warning.Contains("path-effect1", StringComparison.Ordinal));
+
+        // And the opposite case is still reported as its own, not merged into this one.
+        Assert.Empty(result.GetProperty("livePathEffects").EnumerateArray());
+    }
+
+    /// <summary>
+    /// **An effect whose own name cannot be read is named by its id alone - the name is not invented.**
+    ///
+    /// The rule this campaign has paid for repeatedly (#140, #143, #144, #150, #151, #152, #155, #158, #160,
+    /// #162): a report says what it can read and never fills a gap with a plausible value. An element the reader
+    /// keeps can carry an `id` and no `effect` attribute at all, so both surfaces report the `id` and leave the
+    /// effect name out rather than inventing one from the id or defaulting it to something that reads like a fact.
+    /// The entry still appears, so the count and the list still agree.
+    /// </summary>
+    [Fact]
+    public void AKeptEffectWhoseNameCannotBeReadIsReportedByIdAlone()
+    {
+        const string NoEffectAttribute =
+            "<inkscape:path-effect id=\"path-effect3\" lpeversion=\"1.4\" is_visible=\"true\" />";
+
+        (AutomationContext context, _) = Host();
+
+        JsonElement result = Import(context, InkscapeFile(NoEffectAttribute));
+
+        JsonElement kept = Assert.Single(
+            JsonSerializer.SerializeToElement(EditorOperations.Invoke(context, "document.metadata", default))
+                .GetProperty("foreignPathEffectNames").EnumerateArray());
+
+        Assert.Equal("path-effect3", kept.GetProperty("id").GetString());
+        Assert.Null(kept.GetProperty("effect").GetString());
+
+        // The warning names the id, which is the whole of what the element says it is.
+        Assert.Contains(Warnings(result), warning =>
+            warning.Contains(KeptPhrase, StringComparison.Ordinal) &&
+            warning.Contains("path-effect3", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// **A kept definition the reply cannot name at all is still reported, with neither half invented.**
+    ///
+    /// The reader only keeps elements it found by `id`, so an import always names what it keeps - but the stored
+    /// text is carried verbatim in the sidecar, and a document can therefore hold a definition with no `id`, or one
+    /// whose stored text does not even parse (an `ns0:` prefix the text never declared). Both are reported as an
+    /// entry of the list with the half that could not be read left **null**, so the length of the list still equals
+    /// the count beside it and a driver can see that something is there without being told a name that is not.
+    ///
+    /// The count is asserted too: a reply that dropped the unnameable entry would quietly make the two fields
+    /// disagree, which is exactly the sort of half-answer this issue is about.
+    /// </summary>
+    [Fact]
+    public void AKeptEffectThatCannotBeNamedIsNotInvented()
+    {
+        (AutomationContext context, _) = Host();
+
+        context.Document.SetForeignPathEffects(new[]
+        {
+            // An element with an effect name and no id, and one whose prefix is declared nowhere, so it cannot be
+            // read as XML at all. The second is the namespace surprise the rule names.
+            "<inkscape:path-effect effect=\"bend_path\" lpeversion=\"1.4\" " +
+            "xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" />",
+            "<ns0:path-effect effect=\"powerstroke\" id=\"path-effect9\" />",
+        });
+
+        JsonElement metadata = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "document.metadata", default));
+
+        JsonElement[] kept = metadata.GetProperty("foreignPathEffectNames").EnumerateArray().ToArray();
+        Assert.Equal(2, kept.Length);
+
+        Assert.Null(kept[0].GetProperty("id").GetString());
+        Assert.Equal("bend_path", kept[0].GetProperty("effect").GetString());
+
+        Assert.Null(kept[1].GetProperty("id").GetString());
+        Assert.Null(kept[1].GetProperty("effect").GetString());
+
+        Assert.Equal(2, metadata.GetProperty("foreignPathEffects").GetInt32());
+    }
+
+    /// <summary>
+    /// **A file with no unreferenced effect says nothing about one, in either reply.**
+    ///
+    /// The negative half of both surfaces, and the reason they stay usable: a document that keeps no foreign
+    /// definition must leave `foreignPathEffectNames` empty and must not raise the import warning, so "nothing was
+    /// said" means "there is nothing" rather than "nobody is looking". The file here declares its namespace on the
+    /// root and carries no path-effect at all, which is the plainest file there is.
+    /// </summary>
+    [Fact]
+    public void AFileWithNoForeignPathEffectReportsNothingInEitherReply()
+    {
+        (AutomationContext context, _) = Host();
+
+        JsonElement result = Import(
+            context,
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">" +
+            "<path d=\"M0 0 L5 5\"/></svg>");
+
+        Assert.DoesNotContain(Warnings(result), warning =>
+            warning.Contains(KeptPhrase, StringComparison.Ordinal));
+
+        JsonElement metadata = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "document.metadata", default));
+
+        Assert.Empty(metadata.GetProperty("foreignPathEffectNames").EnumerateArray());
+        Assert.Equal(0, metadata.GetProperty("foreignPathEffects").GetInt32());
+    }
+
+    /// <summary>
+    /// **The file half of the import says it too, and the two replies agree.**
+    ///
+    /// `document.importSvg` and `document.importSvgFile` are separate handlers, so the report is asserted on both
+    /// rather than assumed to have travelled: a driver that opens a file by path is told exactly what a driver that
+    /// handed the bytes over is told. The metadata reply is read afterwards as well, so the import's warning and
+    /// the documentary list cannot drift apart - they are two surfaces of one fact.
+    /// </summary>
+    [Fact]
+    public void ImportingAnSvgFileWithAnUnreferencedEffectReportsItInTheWarnings()
+    {
+        (AutomationContext context, _) = Host();
+        string path = Path.Combine(Path.GetTempPath(), $"vccad-kept-effect-{Guid.NewGuid():N}.svg");
+        File.WriteAllText(path, InkscapeFile(PowerStrokeEffect + UnreferencedEffect));
+
+        try
+        {
+            JsonElement result = JsonSerializer.SerializeToElement(
+                EditorOperations.Invoke(context, "document.importSvgFile", Params(new { path })));
+
+            Assert.Contains(Warnings(result), warning =>
+                warning.Contains(KeptPhrase, StringComparison.Ordinal) &&
+                warning.Contains("path-effect2", StringComparison.Ordinal));
+
+            JsonElement kept = Assert.Single(
+                JsonSerializer.SerializeToElement(EditorOperations.Invoke(context, "document.metadata", default))
+                    .GetProperty("foreignPathEffectNames").EnumerateArray());
+
+            Assert.Equal("path-effect2", kept.GetProperty("id").GetString());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private static string Base64(string text) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
     /// <summary>
     /// **A powerstroke the reader translated is not reported as unread.** This is the half the first draft of that
@@ -401,6 +613,10 @@ public class PathEffectOperationTests
 
         Assert.Equal(0, metadata.GetProperty("foreignPathEffects").GetInt32());
         Assert.Equal(0, metadata.GetProperty("extras").GetInt32());
+
+        // And the list beside the count names nothing, so a driver is not sent looking for an entry that is not
+        // there - the negative half of issue #163's naming.
+        Assert.Empty(metadata.GetProperty("foreignPathEffectNames").EnumerateArray());
 
         Assert.True(context.Document.AllPaths().Single().Stroke.HasWidthProfile,
             "the referenced effect was translated, so nothing left over is not nothing read");
