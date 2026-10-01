@@ -114,6 +114,43 @@ public sealed class FilterEngine
     }
 
     /// <summary>
+    /// Runs the filter over a buffer that is **already** the region, with the source placed in it.
+    ///
+    /// The caller that has rendered the source into a region-sized buffer - which is what a canvas does, because it
+    /// has to rasterise the shape somewhere - uses this rather than <see cref="Evaluate"/>, which would apply the
+    /// region a second time and blur a picture that had already been cropped.
+    /// </summary>
+    public FilterBuffer EvaluateInPlace(FilterBuffer region)
+    {
+        _results.Clear();
+        _running.Clear();
+        _sourceAlpha = null;
+
+        FilterBuffer previous = region;
+
+        foreach (FilterPrimitive primitive in _filter.Primitives)
+        {
+            FilterBuffer a = Resolve(primitive.Input, region, previous);
+            FilterBuffer b = Resolve(primitive.Input2, region, previous);
+            FilterBuffer output = Apply(primitive, a, b);
+
+            if (primitive.Result.Length > 0)
+            {
+                _results[primitive.Result] = output;
+            }
+
+            previous = output;
+        }
+
+        if (_filter.Output.Length > 0 && _results.TryGetValue(_filter.Output, out FilterBuffer? named))
+        {
+            return named;
+        }
+
+        return previous;
+    }
+
+    /// <summary>
     /// The buffer a name refers to.
     ///
     /// An **absent** `in` means the previous primitive's result, which is SVG's rule and the reason a file that

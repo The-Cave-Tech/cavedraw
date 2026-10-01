@@ -45,6 +45,10 @@ namespace VCCad.App.Controls;
 public sealed class CanvasWorkspace : Control
 {
     private CadDocument? _document;
+
+    /// <summary>The canvas transform in force during a paint pass, used by a filtered object to render itself
+    /// offscreen in the same space. Set at the start of every pass, so it always describes the pass in progress.</summary>
+    private Avalonia.Matrix? _paintWorld;
     private PasteboardLayout _layout = new(Rect2D.Empty);
     private Vector2D _offset;
     private bool _isPanning;
@@ -3571,6 +3575,11 @@ public sealed class CanvasWorkspace : Control
             ModelPointAtScreen(new Point(Bounds.Width, Bounds.Height)));
 
         Rect2D extent = _layout.Extent;
+
+        // Kept for the duration of the pass so a filtered object can rasterise itself in the same coordinate
+        // space the canvas is drawing in, which is what makes the offscreen render line up pixel for pixel.
+        _paintWorld = world;
+
         using (context.PushTransform(world))
         {
             context.FillRectangle(PasteboardBrush, new Rect(extent.Left, extent.Top, extent.Width, extent.Height));
@@ -3819,7 +3828,62 @@ public sealed class CanvasWorkspace : Control
             ? path.Strokes.Where(s => s.HasVisibleOutline).Max(s => s.Width)
             : 0.0;
 
+    /// <summary>
+    /// Draws a path, through its filter when the document has one.
+    ///
+    /// A filter is a raster operation, so an object that has one cannot be drawn with the same draw calls as one
+    /// that does not: it is rendered offscreen over the filter's region, the engine runs over those pixels, and the
+    /// bitmap is drawn in its place. When there is no filter - or the region is too large to be worth allocating -
+    /// this is the plain path, so an unfiltered document is untouched.
+    /// </summary>
     private void PaintPath(DrawingContext context, PathItem path, double opacity)
+    {
+        if (_document?.FindFilter(path.FilterId) is { } filter &&
+            PaintFilteredPath(context, path, opacity, filter))
+        {
+            return;
+        }
+
+        PaintPathDirect(context, path, opacity);
+    }
+
+    /// <summary>The path as it is drawn without a filter.</summary>
+    private bool PaintFilteredPath(
+        DrawingContext context, PathItem path, double opacity, FilterSpec filter)
+    {
+        if (_paintWorld is not { } world)
+        {
+            return false;
+        }
+
+        // The canvas transform's scale, which is how many device pixels one model unit takes. The filter is
+        // measured in model units, so this is what turns a blur radius into a number of pixels.
+        double scale = Math.Sqrt(Math.Abs((world.M11 * world.M22) - (world.M12 * world.M21)));
+        if (scale <= 0.01)
+        {
+            return false;
+        }
+
+        StreamGeometry geometry = GetGeometry(path);
+        Rect bounds = geometry.Bounds;
+        if (bounds.Width <= 0 || bounds.Height <= 0)
+        {
+            return false;
+        }
+
+        FilterRenderer.Result? result = FilterRenderer.Render(
+            filter, bounds, world, scale, ctx => PaintPathDirect(ctx, path, opacity));
+
+        if (result is not { } painted)
+        {
+            return false;
+        }
+
+        context.DrawImage(painted.Bitmap, painted.Destination);
+        return true;
+    }
+
+    private void PaintPathDirect(DrawingContext context, PathItem path, double opacity)
     {
         bool anyClosed = path.SubPaths.Any(sp => sp.IsClosed);
         // PDF fills implicitly close open subpaths, so honour Fill.IsVisible
