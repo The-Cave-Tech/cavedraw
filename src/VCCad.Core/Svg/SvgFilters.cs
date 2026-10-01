@@ -23,7 +23,7 @@ internal sealed class SvgFilters
     /// <summary>The filters in the document, by id - which is the name an element refers to them by.</summary>
     public IReadOnlyDictionary<string, FilterSpec> All => _filters;
 
-    public static SvgFilters Collect(XElement root)
+    public static SvgFilters Collect(XElement root, Action<string>? warn = null)
     {
         var filters = new SvgFilters();
 
@@ -56,14 +56,29 @@ internal sealed class SvgFilters
                 continue;
             }
 
+            bool userSpace = string.Equals(
+                element.Attribute("filterUnits")?.Value?.Trim(), "userSpaceOnUse", StringComparison.OrdinalIgnoreCase);
+
+            // A percentage in user-space units is a percentage **of the viewport**, and the reader has no viewport
+            // here - it is a property of the document, not of the filter. Reading `-10%` as a tenth of a user unit
+            // is wrong, so it is **said** rather than done quietly: the region is read as a fraction, and the
+            // caller is told that is an approximation it should not treat as exact.
+            if (userSpace &&
+                new[] { "x", "y", "width", "height" }.Any(name =>
+                    element.Attribute(name)?.Value?.Trim().EndsWith('%') == true))
+            {
+                warn?.Invoke(
+                    $"filter '{id}' gives a percentage region with userSpaceOnUse units, which resolve against the " +
+                    "viewport; read as a fraction of the object instead");
+            }
+
             filters._filters[id] = new FilterSpec(id, primitives)
             {
                 X = Fraction(element, "x", -0.1),
                 Y = Fraction(element, "y", -0.1),
                 Width = Fraction(element, "width", 1.2),
                 Height = Fraction(element, "height", 1.2),
-                ObjectBoundingBox = !string.Equals(
-                    element.Attribute("filterUnits")?.Value?.Trim(), "userSpaceOnUse", StringComparison.OrdinalIgnoreCase),
+                ObjectBoundingBox = !userSpace,
                 Output = element.Attribute("result")?.Value ?? string.Empty,
             };
         }
