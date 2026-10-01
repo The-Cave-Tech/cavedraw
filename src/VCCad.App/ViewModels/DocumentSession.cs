@@ -1034,6 +1034,120 @@ public sealed class DocumentSession : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// Applies text fields **member by member** to the selected text blocks, where a member that is null is left
+    /// exactly as the block has it, and reports how many blocks changed.
+    ///
+    /// This is the shape a panel editing a mixed selection needs, and the reason <see cref="UpdateSelectedText"/>
+    /// could not serve it: that method takes one content string, one colour and one face for the whole selection, so
+    /// where two selected blocks hold different words the caller has no value it could pass without writing one
+    /// block's text over the other's from a field nobody touched. Naming the members to change is the same judgement
+    /// <see cref="ApplyStrokeFieldsAt"/> makes about the fields within a stroke.
+    ///
+    /// <paramref name="runIndex"/> names the run the face members land on. A block whose run list is shorter is
+    /// **skipped** for those members rather than having them clamped onto a run nobody named - the same gap
+    /// `StrokeSummary` reports, and the reason it is a gap rather than a disagreement. Null styles every run, which
+    /// is the uniform style <see cref="UpdateSelectedText"/> applies. Content and colour belong to the block: the
+    /// model holds one string and one colour per block and no per-run colour at all.
+    ///
+    /// One <see cref="ReplaceTextCommand"/> per block and a composite across the selection, so a gesture is one undo
+    /// step; a request that changes nothing adds no command, because an undo step that undoes to exactly where it
+    /// started reads as "undo did nothing".
+    /// </summary>
+    public int ApplyTextFieldsAt(int? runIndex, string? content, string? family, double? fontSize,
+        bool? bold, bool? italic, ColorRgb? color)
+    {
+        var edits = new List<IUndoableCommand>();
+        foreach (TextItem text in SelectedTextItems())
+        {
+            TextItem before = (TextItem)text.Clone();
+            bool changed = false;
+
+            if (content is not null && !string.Equals(text.PlainText, content, StringComparison.Ordinal))
+            {
+                text.PlainText = content;
+                changed = true;
+            }
+
+            if (color is { } wanted && !SameColor(text.Color, wanted))
+            {
+                text.Color = wanted;
+                changed = true;
+            }
+
+            foreach (int r in RunsToStyle(text, runIndex))
+            {
+                TextRun run = text.Runs[r];
+                bool faceChanged = false;
+
+                if (family is { } face && !string.Equals(run.FontFamily, face, StringComparison.Ordinal))
+                {
+                    run.FontFamily = face;
+                    faceChanged = true;
+                }
+
+                if (bold is { } weight && run.Bold != weight)
+                {
+                    run.Bold = weight;
+                    faceChanged = true;
+                }
+
+                if (italic is { } slant && run.Italic != slant)
+                {
+                    run.Italic = slant;
+                    faceChanged = true;
+                }
+
+                // A face the person chose no longer means what the file said: the name the document asked for and
+                // the programme it carried both belonged to the face just replaced. A size alone does not replace a
+                // face - the programme is scale-independent - so it is not treated as a choice of face.
+                if (faceChanged)
+                {
+                    ChoseFace(run, run.FontFamily);
+                }
+
+                if (fontSize is { } size)
+                {
+                    double clamped = Math.Max(1, size);
+                    if (Math.Abs(run.FontSize - clamped) > 1e-9)
+                    {
+                        run.FontSize = clamped;
+                        changed = true;
+                    }
+                }
+
+                changed |= faceChanged;
+            }
+
+            if (changed)
+            {
+                edits.Add(new ReplaceTextCommand(text, before, (TextItem)text.Clone(), "Edit text"));
+            }
+        }
+
+        ExecuteIfAny(edits, "Edit text");
+        return edits.Count;
+    }
+
+    /// <summary>The runs a member-by-member edit names: the one at the index, or every run when none is named.</summary>
+    private static IEnumerable<int> RunsToStyle(TextItem text, int? runIndex)
+    {
+        if (runIndex is not { } index)
+        {
+            for (int i = 0; i < text.Runs.Count; i++)
+            {
+                yield return i;
+            }
+
+            yield break;
+        }
+
+        if (index >= 0 && index < text.Runs.Count)
+        {
+            yield return index;
+        }
+    }
+
+    /// <summary>
     /// Distinct colours currently used in the document (fills, strokes and text),
     /// always including black and white — the source for the swatch strip.
     /// </summary>

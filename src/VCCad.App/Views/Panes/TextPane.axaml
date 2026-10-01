@@ -3,8 +3,51 @@
              x:Class="VCCad.App.Views.Panes.TextPane">
   <ScrollViewer>
     <StackPanel Margin="10,8" Spacing="8">
-      <TextBlock Text="CONTENT" FontWeight="SemiBold" Foreground="{DynamicResource VcTextDim}"/>
+      <TextBlock Text="TEXT" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- What the fields below describe, and how many things that is. A panel editing a selection has to say which
+           members it is describing rather than leaving a person to assume it is the first one. -->
+      <TextBlock x:Name="SelectionLabel" TextWrapping="Wrap"
+                 Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+
+      <!-- Which members the selection disagrees about. A field showing one block's value while the selection holds
+           several is how a person edits believing it describes what they selected, so the disagreeing members are
+           named here as well as being marked in place below. -->
+      <TextBlock x:Name="MixedLabel" IsVisible="False" TextWrapping="Wrap"
+                 Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+
+      <TextBlock Text="CONTENT" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
       <TextBox x:Name="ContentBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="70"/>
+
+      <TextBlock Text="COLOUR" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- The model holds one colour per block, so this is a block colour and not a run's. One field rather than four
+           channels because a colour the selection disagrees about has no value to put in a channel: spelled out,
+           "mixed" is a state a person can read and answer. -->
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+        <TextBlock Text="Block" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="ColorBox" Grid.Column="1" ToolTip.Tip="r,g,b,a in 0..255"/>
+      </Grid>
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+        <TextBlock Text="Align" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <ComboBox x:Name="AlignBox" Grid.Column="1" SelectedIndex="0" HorizontalAlignment="Stretch">
+          <ComboBoxItem Content="Left"/>
+          <ComboBoxItem Content="Center"/>
+          <ComboBoxItem Content="Right"/>
+        </ComboBox>
+      </Grid>
+
+      <TextBlock Text="FACE" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- Which run of the block the face fields describe. Face is per run in this model, so with a multi-run block
+           there is no such thing as "the font" and the pane has to say which run it is showing. -->
+      <TextBlock x:Name="RunLabel" TextWrapping="Wrap"
+                 Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+
+      <!-- Which face is actually drawn, asked of the resolver rather than assumed from the family name, plus the name
+           the document itself asked for when the two differ. A substitution nobody is told about looks deliberate. -->
+      <TextBlock x:Name="FontReport" IsVisible="False" TextWrapping="Wrap"
+                 Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
 
       <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
         <TextBlock Text="Font" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
@@ -16,28 +59,20 @@
         <CheckBox x:Name="BoldBox" Grid.Column="3" Content="Bold"/>
         <CheckBox x:Name="ItalicBox" Grid.Column="4" Content="Italic"/>
       </Grid>
-      <Grid ColumnDefinitions="Auto,*">
-        <TextBlock Text="Align" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <ComboBox x:Name="AlignBox" Grid.Column="1" SelectedIndex="0" HorizontalAlignment="Stretch">
-          <ComboBoxItem Content="Left"/>
-          <ComboBoxItem Content="Center"/>
-          <ComboBoxItem Content="Right"/>
-        </ComboBox>
-      </Grid>
 
-      <TextBlock Text="COLOUR" FontWeight="SemiBold" Foreground="{DynamicResource VcTextDim}"/>
-      <Grid ColumnDefinitions="Auto,*,6,Auto,*,6,Auto,*,6,Auto,*" ColumnSpacing="2">
-        <TextBlock Text="R" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="ColorR" Grid.Column="1"/>
-        <TextBlock Text="G" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="ColorG" Grid.Column="4"/>
-        <TextBlock Text="B" Grid.Column="6" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="ColorB" Grid.Column="7"/>
-        <TextBlock Text="A" Grid.Column="9" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="ColorA" Grid.Column="10"/>
+      <TextBlock Text="PARAGRAPH" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+      <Grid ColumnDefinitions="Auto,*,10,Auto,*" ColumnSpacing="4">
+        <TextBlock Text="Leading" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="LeadingBox" Grid.Column="1"/>
+        <TextBlock Text="Space" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="ParagraphBox" Grid.Column="4"/>
       </Grid>
-
-      <Button Content="Apply Text" Click="OnApply"/>
+      <Grid ColumnDefinitions="Auto,*,10,Auto,*" ColumnSpacing="4">
+        <TextBlock Text="Turn" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="RotationBox" Grid.Column="1" ToolTip.Tip="Degrees"/>
+        <TextBlock Text="Frame" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="FrameWidthBox" Grid.Column="4" ToolTip.Tip="Wrap width in points; 0 means the block grows to fit"/>
+      </Grid>
     </StackPanel>
   </ScrollViewer>
 </UserControl>
