@@ -16,6 +16,12 @@ namespace VCCad.Core.Svg;
 /// The **region** comes with it. `x`, `y`, `width` and `height` decide where the filter is evaluated, which is why
 /// a blur near an edge either grows into the margin or is clipped off; it is not decoration, and it is the first
 /// thing that looks wrong when it is read incorrectly.
+///
+/// A region may be written as a **percentage**, and a percentage is a fraction of the reference box `filterUnits`
+/// names - the object's own box, or the document's viewport under `userSpaceOnUse`. Both are resolved in one place
+/// below, so a value cannot come out differently depending on which of the four read it, and one that has no
+/// reference box to be a fraction of is **said** rather than replaced by the region's default: a plausible number
+/// nobody stated is exactly the failure this reader exists to avoid.
 /// </summary>
 internal sealed class SvgFilters
 {
@@ -27,6 +33,12 @@ internal sealed class SvgFilters
     public static SvgFilters Collect(XElement root, Action<string>? warn = null)
     {
         var filters = new SvgFilters();
+
+        // The reference box a percentage in a **user-space** region is a fraction of. It is read once, because it
+        // is a property of the document rather than of any one filter, and it is read here rather than handed in
+        // because a filter is a document asset: it is collected before any element refers to it, and the element
+        // that does may be anywhere - so the viewport a region is measured against can only be the document's own.
+        SvgViewport? viewport = DocumentViewport(root);
 
         foreach (XElement element in root.DescendantsAndSelf())
         {
@@ -85,25 +97,15 @@ internal sealed class SvgFilters
                 continue;
             }
 
-            // A percentage in user-space units is a percentage **of the viewport**, and the reader has no viewport
-            // here - it is a property of the document, not of the filter. Reading `-10%` as a tenth of a user unit
-            // is wrong, so it is **said** rather than done quietly: the region is read as a fraction, and the
-            // caller is told that is an approximation it should not treat as exact.
-            if (userSpace &&
-                new[] { "x", "y", "width", "height" }.Any(name =>
-                    element.Attribute(name)?.Value?.Trim().EndsWith('%') == true))
-            {
-                warn?.Invoke(
-                    $"filter '{id}' gives a percentage region with userSpaceOnUse units, which resolve against the " +
-                    "viewport; read as a fraction of the object instead");
-            }
-
+            // A percentage in user-space units is a percentage **of the viewport**, which is a property of the
+            // document rather than of the filter - so the region is resolved against it, and a document that
+            // states no viewport is reported rather than given a region nobody wrote.
             var filter = new FilterSpec(id, primitives)
             {
-                X = Fraction(element, "x", -0.1),
-                Y = Fraction(element, "y", -0.1),
-                Width = Fraction(element, "width", 1.2),
-                Height = Fraction(element, "height", 1.2),
+                X = Region(element, "x", -10.0, SvgAxis.X, userSpace, viewport, id, warn),
+                Y = Region(element, "y", -10.0, SvgAxis.Y, userSpace, viewport, id, warn),
+                Width = Region(element, "width", 120.0, SvgAxis.X, userSpace, viewport, id, warn),
+                Height = Region(element, "height", 120.0, SvgAxis.Y, userSpace, viewport, id, warn),
                 ObjectBoundingBox = !userSpace,
                 PrimitiveUnitsObjectBoundingBox = !primitiveUserSpace,
                 FilterResolutionX = resolution?.X,
@@ -516,28 +518,107 @@ internal sealed class SvgFilters
     }
 
     /// <summary>
-    /// A region number, which may be a fraction or a percentage.
+    /// One number of the filter region, resolved against the reference box `filterUnits` decides.
     ///
-    /// The defaults are SVG's own, including the ten per cent of margin - which is why a blur larger than that is
-    /// clipped, and why reading this as "the whole shape" makes every blurred edge grow instead of being cut.
+    /// **`objectBoundingBox`** puts the region's numbers in the object's own box, which is what the model carries:
+    /// a percentage is the fraction the engine multiplies that box by, so it is resolved without needing a shape. **`userSpaceOnUse`** puts them in user units, and a percentage there is a fraction
+    /// of the **viewport** - resolved into the file's own units, which is the space a plain number in the same
+    /// attribute is already written in. Both answers come from here, so `x` and `width` cannot disagree about what
+    /// a percentage means.
+    ///
+    /// An attribute the file leaves out is resolved the same way, because SVG's initial values for all four are
+    /// percentages rather than numbers: a region that is absent is not "the whole shape", and under
+    /// `userSpaceOnUse` it is not `-0.1` of a user unit either.
+    ///
+    /// **A percentage that cannot be resolved is said, never substituted.** With no viewport stated there is no
+    /// reference box for a user-space percentage to be a fraction of, and the region's default stands - which the
+    /// caller is told, because the alternative is a region the file did not name looking exactly like one it did.
     /// </summary>
-    private static double Fraction(XElement element, string name, double fallback)
+    /// <param name="initialPercent">SVG's own initial value for the attribute, which is a percentage.</param>
+    private static double Region(
+        XElement element,
+        string name,
+        double initialPercent,
+        SvgAxis axis,
+        bool userSpace,
+        SvgViewport? viewport,
+        string filterId,
+        Action<string>? warn)
     {
-        string? text = element.Attribute(name)?.Value;
-        if (string.IsNullOrWhiteSpace(text))
+        string? text = element.Attribute(name)?.Value?.Trim();
+        double percent = initialPercent;
+
+        if (text is { Length: > 0 })
         {
-            return fallback;
+            if (SvgLength.ParseWithUnit(text, warn) is not { } parsed)
+            {
+                // The report above is the whole of what this reader can say about a value it cannot read; SVG's
+                // initial value stands, which is what the file's own omission would have meant.
+            }
+            else if (!parsed.IsPercent)
+            {
+                // A plain number is already written in the reference box's units - a fraction of the object's box,
+                // or a user unit - so it is the answer as it stands rather than something measured a second time.
+                return parsed.Value;
+            }
+            else
+            {
+                percent = parsed.Value;
+            }
         }
 
-        string trimmed = text.Trim();
-        bool percent = trimmed.EndsWith('%');
-        double? value = SvgReader.Length(trimmed);
-        if (value is null)
+        if (!userSpace)
         {
-            return fallback;
+            // A tenth per cent of the box is a tenth per cent of the **box**, which the model stores as the
+            // fraction it is: the shape is supplied where the filter is evaluated, not where it is read.
+            return percent / 100.0;
         }
 
-        return percent ? value.Value / 100.0 : value.Value;
+        if (viewport is { } port)
+        {
+            // A horizontal coordinate is a fraction of the viewport's width and a vertical one of its height, so
+            // a percentage is the length the file would have written for the same place.
+            return percent / 100.0 * (axis == SvgAxis.Y ? port.Height : port.Width);
+        }
+
+        string stated = text is { Length: > 0 } ? $"{name}=\"{text}\"" : $"{name} (SVG's default)";
+        warn?.Invoke(
+            $"filter '{filterId}' resolves {stated} as a percentage of a userSpaceOnUse region, and the document " +
+            "states no viewport to resolve it against; the region's default is used instead");
+        return initialPercent / 100.0;
+    }
+
+    /// <summary>
+    /// The document's viewport, in the units the file's own coordinates are written in, or null when the file
+    /// never states one.
+    ///
+    /// This is the reference box a percentage in a `userSpaceOnUse` region is a fraction of, and it is a property
+    /// of the root `svg` - the element a viewport and a `viewBox` are declared on.
+    ///
+    /// A dimension the root does not declare comes from the `viewBox`, which is the coordinate system the content
+    /// is written in: a file that gives a box and one of the two has stated the other. Nothing is converted here,
+    /// because a percentage of the viewport is measured in the same user units the geometry around it is.
+    ///
+    /// **A viewport the file never states is not one.** A root with no size still imports, because CSS gives a
+    /// standalone replaced element a default size - but that is the viewer's assumption rather than the file's
+    /// statement, and a region resolved against it would be a size nobody wrote. Null means exactly that, and the
+    /// caller reports it. The root's own lengths are parsed without a warning channel here, because the page has
+    /// already reported them on the way in, and saying the same thing twice is its own kind of noise.
+    /// </summary>
+    private static SvgViewport? DocumentViewport(XElement root)
+    {
+        double? width = SvgLength.Parse(root.Attribute("width")?.Value);
+        double? height = SvgLength.Parse(root.Attribute("height")?.Value);
+
+        if (SvgReader.Numbers(root.Attribute("viewBox")?.Value) is { Length: 4 } box && box[2] > 0 && box[3] > 0)
+        {
+            width ??= box[2];
+            height ??= box[3];
+        }
+
+        return width is { } resolvedWidth && height is { } resolvedHeight
+            ? new SvgViewport(resolvedWidth, resolvedHeight)
+            : null;
     }
 
     private static double Number(string? text, double fallback)

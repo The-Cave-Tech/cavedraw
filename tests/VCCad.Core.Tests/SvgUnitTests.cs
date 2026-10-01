@@ -15,6 +15,11 @@ namespace VCCad.Core.Tests;
 /// The lengths resolve into the document's own coordinate system, SVG's user unit, which is a CSS pixel and is the
 /// same unit the page's own width and height are measured in. That is what makes one number the right answer for a
 /// length wherever it appears in the file.
+///
+/// That space is **not** the model's: the model stores points, so what the reader hands to it is the file's space
+/// carried across by one factor of 0.75 - applied once, at the root, and asserted in the second half of this file.
+/// The assertions that read a path's own nodes therefore see the file's numbers, and the ones that ask where the
+/// geometry lands see points; <see cref="InArtboard"/> is how a test says which it means.
 /// </summary>
 public class SvgUnitTests
 {
