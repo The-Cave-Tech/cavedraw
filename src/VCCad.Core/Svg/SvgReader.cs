@@ -400,7 +400,9 @@ public static partial class SvgReader
             // is the CSS default rather than the file's, so there is no reference at all and the caller reports the
             // percentage instead of measuring it against a number nobody wrote. This mirrors `SvgFilters`' view of
             // the same document, which has answered the question this way since the filter region work.
-            SvgViewport? declared = new SvgViewport(fallbackWidth, fallbackHeight);
+            SvgViewport? declared = width is { } statedWidth && height is { } statedHeight
+                ? new SvgViewport(statedWidth, statedHeight)
+                : null;
 
             return (fallbackWidth * SvgLength.UserUnitsToPoints,
                 fallbackHeight * SvgLength.UserUnitsToPoints,
@@ -431,7 +433,7 @@ public static partial class SvgReader
 
         return (viewWidth * SvgLength.UserUnitsToPoints,
             viewHeight * SvgLength.UserUnitsToPoints,
-            new SvgViewport(viewWidth, viewHeight),
+            new SvgViewport(boxWidth, boxHeight),
             transform);
     }
 
