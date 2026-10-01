@@ -27,10 +27,23 @@ public static class RasterEffectFilters
     /// Each graph takes `SourceGraphic` and produces the artwork **with** the effect, so a list of them chains:
     /// each one's output is the next one's source. That is what makes the order the model keeps meaningful.
     /// </summary>
-    public static FilterSpec? ToFilter(RasterEffectSpec effect, ColorRgb strokeColour)
+    public static FilterSpec? ToFilter(RasterEffectSpec effect, ColorRgb strokeColour, Geometry.Rect2D bounds)
     {
         ColorRgb colour = effect.Tint ?? strokeColour;
         string kind = effect.Kind.ToString();
+
+        // The region is the object's box grown by everything the effect can spread - a blur's radius and a shadow's
+        // displacement. Without this a graph's region is a single unit, and the renderer allocates a bitmap three
+        // pixels wide: the effect would be applied to almost none of the artwork.
+        double margin = effect.Radius + Math.Max(Math.Abs(effect.OffsetX), Math.Abs(effect.OffsetY));
+        var region = new
+        {
+            X = bounds.X - margin,
+            Y = bounds.Y - margin,
+            Width = bounds.Width + (margin * 2),
+            Height = bounds.Height + (margin * 2),
+            ObjectBoundingBox = false,
+        };
 
         return effect.Kind switch
         {
@@ -39,10 +52,10 @@ public static class RasterEffectFilters
                 FilterPrimitive.Blur(effect.Radius, input: "SourceGraphic"),
             })
             {
-                X = -effect.Radius,
-                Y = -effect.Radius,
-                Width = 1,
-                Height = 1,
+                X = region.X,
+                Y = region.Y,
+                Width = region.Width,
+                Height = region.Height,
                 ObjectBoundingBox = false,
             },
 
@@ -57,10 +70,10 @@ public static class RasterEffectFilters
                 FilterPrimitive.Combine("over", "SourceGraphic", "shadow"),
             })
             {
-                X = -effect.Radius,
-                Y = -effect.Radius,
-                Width = 1,
-                Height = 1,
+                X = region.X,
+                Y = region.Y,
+                Width = region.Width,
+                Height = region.Height,
                 ObjectBoundingBox = false,
             },
 
@@ -74,10 +87,10 @@ public static class RasterEffectFilters
                 FilterPrimitive.Combine("over", "SourceGraphic", "glow"),
             })
             {
-                X = -effect.Radius,
-                Y = -effect.Radius,
-                Width = 1,
-                Height = 1,
+                X = region.X,
+                Y = region.Y,
+                Width = region.Width,
+                Height = region.Height,
                 ObjectBoundingBox = false,
             },
 
@@ -90,10 +103,10 @@ public static class RasterEffectFilters
                 FilterPrimitive.Combine("over", "SourceGraphic", "inside"),
             })
             {
-                X = -effect.Radius,
-                Y = -effect.Radius,
-                Width = 1,
-                Height = 1,
+                X = region.X,
+                Y = region.Y,
+                Width = region.Width,
+                Height = region.Height,
                 ObjectBoundingBox = false,
             },
 
@@ -111,10 +124,11 @@ public static class RasterEffectFilters
     public static FilterBuffer Apply(FilterBuffer source, IEnumerable<RasterEffectSpec> effects, ColorRgb strokeColour)
     {
         FilterBuffer current = source;
+        var bounds = new Geometry.Rect2D(0, 0, source.Width, source.Height);
 
         foreach (RasterEffectSpec effect in effects)
         {
-            if (ToFilter(effect, strokeColour) is { } filter)
+            if (ToFilter(effect, strokeColour, bounds) is { } filter)
             {
                 current = new FilterEngine(filter).EvaluateInPlace(current);
             }
