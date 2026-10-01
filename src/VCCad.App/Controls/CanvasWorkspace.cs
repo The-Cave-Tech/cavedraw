@@ -3994,7 +3994,13 @@ public sealed class CanvasWorkspace : Control
             // A pen has one width, so a stroke that varies along its length cannot be drawn with one. It is
             // drawn as the region it covers - the same outline the exporter fills, which is what keeps the
             // canvas and the file agreeing about what a profile looks like.
-            if (stroke.HasWidthProfile)
+            //
+            // The question is asked of the **plan** rather than of `HasWidthProfile`, because a stroke with an
+            // outline effect and no profile is an outline too - that is what the effect means. Asking the narrower
+            // question made the canvas draw an ordinary pen stroke while the exporter and the SVG writer filled the
+            // effected outline: the same document, two different pictures, and the effect invisible on screen,
+            // which is how it went unnoticed until a test compared the two renderers.
+            if (StrokeOutlineBuilder.Plan(path, stroke).IsOutline)
             {
                 context.DrawGeometry(ToBrush(stroke.Color, opacity), null, BuildProfileGeometry(path, stroke));
                 continue;
