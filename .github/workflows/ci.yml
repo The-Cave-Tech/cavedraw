@@ -18,22 +18,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET 8
+      - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
-      # The runner image also ships a newer SDK and may point DOTNET_ROOT at it. If `dotnet` is not 8.0
-      # the workload installs into that newer band, and restoring the net8 browser project then fails with
-      # NETSDK1147 asking for the workload by band name - a confusing way to learn which SDK was used. global.json
-      # pins the SDK; this says so out loud when the pin is not doing its job.
-      - name: Check the toolchain is .NET 8
+      # The runner image also ships other SDKs and may point DOTNET_ROOT at one. If `dotnet` is not the
+      # pinned band the workload installs into the wrong one, and restoring the browser project then fails
+      # with NETSDK1147 asking for the workload by band name - a confusing way to learn which SDK was used.
+      # global.json pins the SDK; this says so out loud when the pin is not doing its job.
+      - name: Check the toolchain is .NET 10
         run: |
           version="$(dotnet --version)"
           echo "dotnet --version: $version"
           case "$version" in
-            8.*) ;;
-            *) echo "::error::expected the .NET 8 SDK (global.json pins it) but dotnet is $version"; exit 1 ;;
+            10.*) ;;
+            *) echo "::error::expected the .NET 10 SDK (global.json pins it) but dotnet is $version"; exit 1 ;;
           esac
       # wasm-tools is needed even to restore the browser project once
       # WasmBuildNative is enabled (Skia native linking).
@@ -120,7 +120,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET 8
+      - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
