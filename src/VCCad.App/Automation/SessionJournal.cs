@@ -38,12 +38,21 @@ public static class SessionJournal
         "document.new", "document.importPdf", "document.openFromServer", "gradient.", "filter.",
     };
 
-    /// <summary>Members of those families that only read.</summary>
+    /// <summary>
+    /// Members of those families that only read.
+    ///
+    /// A name here is a claim that the operation changes nothing, and it outranks the family
+    /// prefix — so a wrong claim is worse than a missing one. The queue then records the edits
+    /// around the mutation and skips the mutation itself, and replaying it produces a document
+    /// other than the one that was on screen. <c>filter.apply</c> was listed here; it attaches a
+    /// filter to <c>LayerItem.FilterId</c>, which is document state like any other appearance
+    /// edit, and it is now classified by the <c>filter.</c> prefix like the rest of its family.
+    /// </summary>
     private static readonly string[] ReadOnlyMembers =
     {
         "object.list", "object.find", "object.get", "artboard.list", "layer.list",
         "image.exportPng", "gradient.get", "gradient.sample",
-        "filter.list", "filter.kinds", "filter.read", "filter.apply",
+        "filter.list", "filter.kinds", "filter.read",
     };
 
     private static readonly string Directory = Path.Combine(
