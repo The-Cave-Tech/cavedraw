@@ -7233,13 +7233,15 @@ public static class EditorOperations
     ///
     /// **Reported rather than ignored.** The SVG reader keeps the reference a path carries to its effect
     /// (<c>inkscape:path-effect="#id"</c>) and the path the effect was applied to (<c>inkscape:original-d</c>),
-    /// but the element the reference points at lives in <c>defs</c> and is not kept - so the effect cannot be
-    /// translated and the stroke is drawn as the file's own frozen output. That is the right picture and the wrong
-    /// silence: a document that came in with a live path effect on it says so here, on the same surface as the
-    /// missing paint servers and unknown elements, rather than looking like a drawing that never had one.
+    /// but only for the ones that were **not** read. The reader now keeps the <c>inkscape:path-effect</c> element from
+    /// <c>defs</c> on the path and translates a powerstroke into a width profile, so a path that carries a
+    /// reference is not by itself evidence of anything: what is reported here is a live path effect that produced
+    /// no profile - an effect this build does not implement, or one it refused. Reporting a translated effect as
+    /// unread would be worse than saying nothing, because it is exactly the failure this family is about: a person
+    /// sees the effect applied and a driver is told it was ignored.
     ///
-    /// The **name** is the id the file referred to it by. The effect's own name is on the element that was not
-    /// kept, so naming the id is the most this surface can honestly say.
+    /// The **name** is the id the file referred to it by. The effect's own name is on the element the reader kept,
+    /// so naming the id is the most this surface can honestly say.
     /// </summary>
     private static (object[] Effects, string[] Warnings) UnreadLivePathEffects(CadDocument document)
     {
@@ -7249,6 +7251,13 @@ public static class EditorOperations
         foreach (PathItem path in document.AllPaths())
         {
             if (PathEffects.ReferenceOn(path) is not { } id)
+            {
+                continue;
+            }
+
+            // A profile on the stroke is the reader saying it read the effect and converted it. Only what it could
+            // not convert is unread, which is the claim this surface makes.
+            if (path.Stroke.HasWidthProfile)
             {
                 continue;
             }

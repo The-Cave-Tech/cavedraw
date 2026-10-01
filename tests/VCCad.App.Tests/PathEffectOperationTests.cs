@@ -221,11 +221,12 @@ public class PathEffectOperationTests
     }
 
     /// <summary>
-    /// **An SVG that came in with a live path effect on it says so.** The reader keeps the reference the path
-    /// carries and the path the effect was applied to, but the element the reference points at lives in
-    /// <c>defs</c> and is not kept - so the effect cannot be translated. The stroke is drawn as the file's own
-    /// frozen output, which is the right picture, and the import reports the effect by the id the file used rather
-    /// than looking like a drawing that never had one.
+    /// **An SVG with a live path effect the reader could not read says so.** The reader keeps the element from
+    /// <c>defs</c> and translates a powerstroke, so a path carrying a reference is not by itself unread; what is
+    /// reported is an effect that produced no profile. This fixture is that case by refusal rather than by absence:
+    /// its knots sit on a **one-segment** path, so the translation is refused and the stroke keeps the file's own
+    /// frozen geometry. The report names the effect by the id the file used rather than looking like a drawing that
+    /// never had one.
     /// </summary>
     [Fact]
     public void ImportingAnSvgWithALivePathEffectReportsIt()
@@ -271,4 +272,33 @@ public class PathEffectOperationTests
     }
 
     private static string Base64(string text) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
+    /// <summary>
+    /// **A powerstroke the reader translated is not reported as unread.** This is the half the first draft of that
+    /// report got wrong: naming every path that carried a reference meant an applied effect was announced as
+    /// ignored - a person seeing it applied while a driver is told it was not, which is the failure this family is
+    /// about. The knots here lie inside an eight-segment path, so the translation succeeds and nothing is reported.
+    /// </summary>
+    [Fact]
+    public void ATranslatedPowerStrokeIsNotReportedAsUnread()
+    {
+        const string Inkscape =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" " +
+            "width=\"100\" height=\"100\" viewBox=\"0 0 100 100\">" +
+            "<defs><inkscape:path-effect effect=\"powerstroke\" id=\"path-effect1\" lpeversion=\"1.4\" " +
+            "offset_points=\"0,2 | 3,5 | 8,1\" interpolator_type=\"Linear\" linejoin_type=\"extrp_arc\" " +
+            "start_linecap_type=\"zerowidth\" end_linecap_type=\"zerowidth\" miter_limit=\"4\" scale_width=\"1\" /></defs>" +
+            "<path id=\"p1\" style=\"fill:none;stroke:#000000\" " +
+            "d=\"M 0,0 L 10,0 L 20,0 L 30,0 L 40,0 L 50,0 L 60,0 L 70,0 L 80,0\" " +
+            "inkscape:original-d=\"M 0,0 L 80,0\" inkscape:path-effect=\"#path-effect1\" /></svg>";
+
+        (AutomationContext context, _) = Host();
+        JsonElement result = JsonSerializer.SerializeToElement(EditorOperations.Invoke(
+            context, "document.importSvg", Params(new { svgBase64 = Base64(Inkscape) })));
+
+        PathItem path = context.Document.AllPaths().Single();
+        Assert.True(path.Stroke.HasWidthProfile, "the effect was translated, so the stroke carries a profile");
+        Assert.Empty(result.GetProperty("livePathEffects").EnumerateArray());
+        string[] warnings = result.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()!).ToArray();
+        Assert.DoesNotContain(warnings, warning => warning.Contains("path-effect1", StringComparison.Ordinal));
+    }
 }
