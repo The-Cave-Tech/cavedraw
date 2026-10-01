@@ -33,7 +33,7 @@ internal sealed class SvgGradients
         List<GradientStop> Stops);
 
     /// <summary>Reads every gradient in the document, so a `url(#id)` can be resolved from anywhere.</summary>
-    public static SvgGradients Collect(XElement root, SvgStylesheet sheet)
+    public static SvgGradients Collect(XElement root, SvgStylesheet sheet, Action<string>? warn = null)
     {
         var gradients = new SvgGradients();
 
@@ -67,6 +67,19 @@ internal sealed class SvgGradients
             foreach (XAttribute attribute in element.Attributes())
             {
                 values[attribute.Name.LocalName] = attribute.Value;
+            }
+
+            // A radial gradient may put its **focal point** somewhere other than its centre - `fx`/`fy` - and the
+            // model has no focal point, so it is dropped. Dropping it silently turns an off-centre highlight into
+            // a centred one, which is a different picture, so it is said.
+            if (name == "radialGradient" &&
+                (values.ContainsKey("fx") || values.ContainsKey("fy")) &&
+                !(string.Equals(values.GetValueOrDefault("fx"), values.GetValueOrDefault("cx"), StringComparison.Ordinal) &&
+                  string.Equals(values.GetValueOrDefault("fy"), values.GetValueOrDefault("cy"), StringComparison.Ordinal)))
+            {
+                warn?.Invoke(
+                    $"radial gradient '{id}' has a focal point (fx/fy); the model has no focal point, so the " +
+                    "gradient is centred on cx/cy instead");
             }
 
             AffineTransform transform = SvgReader.Transform(values.GetValueOrDefault("gradientTransform"));

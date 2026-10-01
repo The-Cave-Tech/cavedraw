@@ -94,8 +94,8 @@ public static class SvgReader
         // still stylesheets and still apply. Collecting them by walking the tree as it is read would miss a sheet
         // defined after the elements it styles, which multi-style.svg does.
         SvgStylesheet sheet = SvgStylesheet.Parse(CollectStyles(root), baseDirectory);
-        SvgGradients gradients = SvgGradients.Collect(root, sheet);
         var warnings = new HashSet<string>(StringComparer.Ordinal);
+        SvgGradients gradients = SvgGradients.Collect(root, sheet, warning => warnings.Add(warning));
 
         // Filters are document assets: an element refers to one by id, so they are collected once and held on the
         // document rather than copied into every element that uses them.
@@ -503,13 +503,15 @@ public static class SvgReader
                         shape.Fill = FillSpec.Solid(
                             solid.Colour with { A = solid.Colour.A * solid.Opacity }, shape.Fill.Rule);
                     }
+                    else if (context.Gradients.Resolve(gradientId, shape.BoundingBox()) is { } resolved)
+                    {
+                        shape.Fill = shape.Fill with { IsVisible = true, Gradient = resolved };
+                    }
                     else
                     {
-                        shape.Fill = shape.Fill with
-                        {
-                            IsVisible = true,
-                            Gradient = context.Gradients.Resolve(gradientId, shape.BoundingBox()),
-                        };
+                        // A reference to a paint server the document does not contain. The shape stays drawable,
+                        // but a fill that is quietly not the one the file asked for is worth saying.
+                        context.Warnings.Add($"no paint server called '{gradientId}' for this fill");
                     }
                 }
 
