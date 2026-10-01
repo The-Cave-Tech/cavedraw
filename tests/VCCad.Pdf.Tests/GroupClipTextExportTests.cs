@@ -298,6 +298,49 @@ public class GroupClipTextExportTests
     }
 
     /// <summary>
+    /// **A document with no clips writes the same operators it always did**, text included.
+    ///
+    /// Moving text into the walk changed *where* it is written - inside the group's <c>q</c>/<c>Q</c> rather than
+    /// after it - so the case that must not move is the one with no group clip to be inside. The check is on the
+    /// drawing rather than on the file's bytes: every export stores the current time in <c>/CreationDate</c> and
+    /// <c>/ModDate</c>, so two exports of one document already differ byte-for-byte and a byte comparison would
+    /// fail whatever the code did. The operator stream is the part this change could have altered.
+    ///
+    /// Text was already written **last** on a page, because the separate loop ran after the whole item walk, so
+    /// putting it in document order is the same order for a document whose items are in document order - which is
+    /// what this pins: the path's fill and stroke, then the text object, with no scope of any kind around either.
+    /// </summary>
+    [Fact]
+    public void AnUnclippedDocumentWritesTextWhereItAlwaysDid()
+    {
+        if (!StandardFontFixture.Available) { return; }
+
+        CadDocument document = CadDocument.CreateDefault("No clips");
+        document.Artboards[0].Layers[0].AddItem(Square(10, 10, 30));
+        document.Artboards[0].Layers[0].AddItem(Label(20, 40));
+
+        string operators = PdfDrawing.Of(PdfDocumentExporter.Export(document));
+        List<string> codes = operators
+            .Replace("\r\n", "\n")
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .Select(line => line[(line.LastIndexOf(' ') + 1)..])
+            .ToList();
+
+        // No clip scope at all: nothing to intersect, so no q/Q pair is opened around anything.
+        Assert.DoesNotContain("q", codes);
+        Assert.DoesNotContain("Q", codes);
+        Assert.DoesNotContain("W", codes);
+
+        // The page flip, then the path's fill and its stroke, then the text - and the text is the last thing.
+        Assert.Equal("cm", codes[0]);
+        Assert.True(codes.IndexOf("f") < codes.IndexOf("S"), "the fill no longer precedes the stroke");
+        Assert.True(codes.IndexOf("S") < codes.IndexOf("BT"), "the text no longer follows the path");
+        Assert.Equal("ET", codes[^1]);
+    }
+
+    /// <summary>
     /// A rectangle stated in artboard coordinates, as the same outline in <paramref name="frame"/>'s own
     /// coordinates - which is the form a clip is recorded in.
     ///
