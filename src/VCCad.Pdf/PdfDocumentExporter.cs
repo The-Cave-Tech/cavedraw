@@ -303,8 +303,9 @@ public static class PdfDocumentExporter
             }
         }
 
-        // Text objects (page-local coordinates, same frame as paths).
-        foreach (TextItem text in AllTextItems(artboard))
+        // Text objects. Each is written in the frame it is placed in - the same accumulated frame paths and images
+        // get from PaintItem - rather than at its own local origin (issue #164).
+        foreach ((TextItem text, AffineTransform textToDoc) in AllPlacedText(artboard))
         {
             if (!text.IsVisible)
             {
@@ -316,17 +317,19 @@ public static class PdfDocumentExporter
             // clipped label came out unclipped, showing text the file had hidden. The
             // Transparency Guide clips its page furniture this way.
             // What is written here is this item's own clips; an ancestor's are written by the ancestor's own group.
+            // The outline is stated in the block's own coordinates, so it goes through the block's frame too —
+            // otherwise the text would be placed by the group and clipped by an outline that never moved.
             bool clipped = text.Clips.Count > 0;
             if (clipped)
             {
                 ops.Add("q");
                 foreach (ClipSpec clip in text.Clips)
                 {
-                    AppendClip(ops, clip, AffineTransform.Identity);
+                    AppendClip(ops, clip, textToDoc);
                 }
             }
 
-            WriteText(ops, text, embedder, alphaStates);
+            WriteText(ops, text, embedder, alphaStates, textToDoc);
 
             if (clipped)
             {
@@ -982,6 +985,54 @@ public static class PdfDocumentExporter
         }
     }
 
+    /// <summary>
+    /// Every text block on an artboard, each with the frame it is placed in: the composition of the transforms of
+    /// every group above it, built exactly as <see cref="PaintItem"/> builds it for a path.
+    ///
+    /// Text used to be walked by <see cref="AllTextItems"/> alone and written at its own local origin, so a group's
+    /// transform reached paths and images and never text. Every SVG import carries a unit-conversion group at its
+    /// root, so that was every imported document with text in it. One composition answers it, for paths and for
+    /// text, so the two cannot land in different frames (issue #164).
+    /// </summary>
+    private static IEnumerable<(TextItem Text, AffineTransform ToDoc)> AllPlacedText(Artboard artboard)
+    {
+        foreach (Layer layer in artboard.Layers)
+        {
+            foreach (LayerItem item in layer.Children)
+            {
+                foreach ((TextItem Text, AffineTransform ToDoc) placed in PlaceText(item, AffineTransform.Identity))
+                {
+                    yield return placed;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<(TextItem Text, AffineTransform ToDoc)> PlaceText(
+        LayerItem item, AffineTransform toDoc)
+    {
+        switch (item)
+        {
+            case TextItem text:
+                yield return (text, toDoc);
+                break;
+
+            case ArtGroup group:
+                // The same composition PaintItem makes as it descends: "apply the group first, then the frame
+                // above it". A second rule here is what a disagreement would be made of.
+                AffineTransform childToDoc = toDoc.Compose(group.Transform);
+                foreach (LayerItem child in group.Children)
+                {
+                    foreach ((TextItem Text, AffineTransform ToDoc) placed in PlaceText(child, childToDoc))
+                    {
+                        yield return placed;
+                    }
+                }
+
+                break;
+        }
+    }
+
     private static IEnumerable<TextItem> FlattenText(LayerItem item)
     {
         switch (item)
@@ -1054,7 +1105,8 @@ public static class PdfDocumentExporter
     /// describe.
     /// </summary>
     private static bool TryWriteRunsAsOneTextObject(
-        List<string> ops, TextItem text, PdfFontEmbedder embedder, PdfAlphaStates alphaStates)
+        List<string> ops, TextItem text, PdfFontEmbedder embedder, PdfAlphaStates alphaStates,
+        AffineTransform toDoc)
     {
         if (text.Runs.Count == 0)
         {
@@ -1094,7 +1146,7 @@ public static class PdfDocumentExporter
         }
 
         ops.Add("BT");
-        ops.Add($"{Num(cos)} {Num(sin)} {Num(sin)} {Num(-cos)} {Num(ox)} {Num(oy)} Tm");
+        ops.Add(TextMatrix(cos, sin, sin, -cos, ox, oy, toDoc));
 
         string? current = null;
         double currentSize = 0;
@@ -1162,12 +1214,36 @@ public static class PdfDocumentExporter
     }
 
     /// <summary>
+    /// The <c>Tm</c> for one run: the block's own text matrix taken through <paramref name="toDoc"/>, the frame the
+    /// block is placed in.
+    ///
+    /// A text matrix is a general 2×3 affine map — the same six numbers a <c>cm</c> writes — so an enclosing group
+    /// transform composes into it exactly, with nothing dropped: a rotation, a mirror or a non-uniform scale in the
+    /// group all land in the six coefficients, and the glyph space, the baseline and the run's advance move with
+    /// them. The font size is multiplied in *after* <c>Tm</c> by PDF, so scaling the frame scales the face, which is
+    /// what "the group makes this text twice as big" means (issue #164).
+    ///
+    /// Composing here rather than pushing a <c>cm</c> and restoring it keeps each text object self-contained, which
+    /// is how the rest of this exporter writes geometry. With no enclosing group the composed matrix is the
+    /// original one to the last bit — <c>Identity.Compose</c> is exact — so an untransformed document's operators
+    /// are unchanged.
+    /// </summary>
+    private static string TextMatrix(double a, double b, double c, double d, double e, double f,
+        AffineTransform toDoc)
+    {
+        AffineTransform placed = toDoc.Compose(new AffineTransform(a, b, c, d, e, f));
+        return $"{Num(placed.A)} {Num(placed.B)} {Num(placed.C)} {Num(placed.D)} " +
+               $"{Num(placed.E)} {Num(placed.F)} Tm";
+    }
+
+    /// <summary>
     /// Writes a block's runs as separate text objects, one per run, each with its own
     /// matrix. Used for everything the single-object path cannot describe.
     /// </summary>
-    private static void WriteText(List<string> ops, TextItem text, PdfFontEmbedder embedder, PdfAlphaStates alphaStates)
+    private static void WriteText(List<string> ops, TextItem text, PdfFontEmbedder embedder,
+        PdfAlphaStates alphaStates, AffineTransform toDoc)
     {
-        if (TryWriteRunsAsOneTextObject(ops, text, embedder, alphaStates))
+        if (TryWriteRunsAsOneTextObject(ops, text, embedder, alphaStates, toDoc))
         {
             return;
         }
@@ -1240,8 +1316,9 @@ public static class PdfDocumentExporter
 
                 ops.Add("BT");
                 ops.Add($"{resource} {Num(run.FontSize)} Tf");
-                // R(rot) with a y-flip for upright glyphs, times the advance scale.
-                ops.Add($"{Num(sx * cos)} {Num(sx * sin)} {Num(sin)} {Num(-cos)} {Num(ox)} {Num(oy)} Tm");
+                // R(rot) with a y-flip for upright glyphs, times the advance scale, taken through the block's
+                // accumulated frame - the group transform.
+                ops.Add(TextMatrix(sx * cos, sx * sin, sin, -cos, ox, oy, toDoc));
                 ops.Add($"<{hex}> Tj");
                 ops.Add("ET");
                 hex.Clear();
