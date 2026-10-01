@@ -158,9 +158,13 @@ public class TextPaintImportTests
     private static List<TextItem> TextItems(CadDocument document)
         => Imported.Page(document).OfType<TextItem>().ToList();
 
-    private const string TilingPattern =
+    /// <summary>The tile's own content stream: fill the cell in whatever colour the base space gave.</summary>
+    private const string TilingTile = "0 0 8 8 re f";
+
+    private static readonly string TilingPattern =
         "<< /Type /Pattern /PatternType 1 /PaintType 2 /TilingType 1 /BBox [0 0 8 8] " +
-        "/XStep 8 /YStep 8 /Resources << >> /Length 0 >>\nstream\n\nendstream";
+        "/XStep 8 /YStep 8 /Resources << >> /Length " + TilingTile.Length +
+        " >>\nstream\n" + TilingTile + "\nendstream";
 
     private const string ShadingPattern =
         "<< /Type /Pattern /PatternType 2 /Shading 7 0 R /Matrix [1 0 0 1 0 0] >>";
