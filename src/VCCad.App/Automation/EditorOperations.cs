@@ -4812,7 +4812,10 @@ public static class EditorOperations
                     objects = result.Objects,
                     byElement = result.ByElement,
                     missing = result.Missing,
-                    warnings = result.Warnings,
+                    warnings = result.Warnings
+                        .Concat(UnreadLivePathEffects(result.Document).Warnings)
+                        .ToArray(),
+                    livePathEffects = UnreadLivePathEffects(result.Document).Effects,
                 };
             });
 
@@ -7223,6 +7226,60 @@ public static class EditorOperations
     /// </summary>
     private static bool Given(JsonElement p, string name)
         => p.ValueKind == JsonValueKind.Object && p.TryGetProperty(name, out _);
+
+    /// <summary>
+    /// The live path effects an imported document carries that this build did not read, and the warning that says
+    /// so.
+    ///
+    /// **Reported rather than ignored.** The SVG reader keeps the reference a path carries to its effect
+    /// (<c>inkscape:path-effect="#id"</c>) and the path the effect was applied to (<c>inkscape:original-d</c>),
+    /// but the element the reference points at lives in <c>defs</c> and is not kept - so the effect cannot be
+    /// translated and the stroke is drawn as the file's own frozen output. That is the right picture and the wrong
+    /// silence: a document that came in with a live path effect on it says so here, on the same surface as the
+    /// missing paint servers and unknown elements, rather than looking like a drawing that never had one.
+    ///
+    /// The **name** is the id the file referred to it by. The effect's own name is on the element that was not
+    /// kept, so naming the id is the most this surface can honestly say.
+    /// </summary>
+    private static (object[] Effects, string[] Warnings) UnreadLivePathEffects(CadDocument document)
+    {
+        var effects = new List<object>();
+        var ids = new List<string>();
+
+        foreach (PathItem path in document.AllPaths())
+        {
+            if (PathEffects.ReferenceOn(path) is not { } id)
+            {
+                continue;
+            }
+
+            effects.Add(new
+            {
+                itemId = path.Id,
+                name = path.Name,
+                effect = id,
+                sourcePathData = PathEffects.SourcePathData(path),
+            });
+
+            if (!ids.Contains(id, StringComparer.Ordinal))
+            {
+                ids.Add(id);
+            }
+        }
+
+        if (ids.Count == 0)
+        {
+            return (effects.ToArray(), Array.Empty<string>());
+        }
+
+        return (effects.ToArray(), new[]
+        {
+            $"{effects.Count} path{(effects.Count == 1 ? "" : "s")} carr" +
+            $"{(effects.Count == 1 ? "ies" : "y")} a live path effect this build did not read " +
+            $"({string.Join(", ", ids)}), so the geometry the file drew is kept and the effect is not applied. " +
+            "pathEffect.list names them and pathEffect.apply converts one that is handed over.",
+        });
+    }
 
     /// <summary>
     /// A live path effect as a request spells it.

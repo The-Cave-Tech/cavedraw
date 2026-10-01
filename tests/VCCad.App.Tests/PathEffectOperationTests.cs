@@ -219,4 +219,56 @@ public class PathEffectOperationTests
         Assert.NotEqual(shortPath.Stroke.WidthProfile.Name, longPath.Stroke.WidthProfile.Name);
         Assert.Empty(context.ViewModel.Document.MissingWidthProfiles());
     }
+
+    /// <summary>
+    /// **An SVG that came in with a live path effect on it says so.** The reader keeps the reference the path
+    /// carries and the path the effect was applied to, but the element the reference points at lives in
+    /// <c>defs</c> and is not kept - so the effect cannot be translated. The stroke is drawn as the file's own
+    /// frozen output, which is the right picture, and the import reports the effect by the id the file used rather
+    /// than looking like a drawing that never had one.
+    /// </summary>
+    [Fact]
+    public void ImportingAnSvgWithALivePathEffectReportsIt()
+    {
+        const string Inkscape =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" " +
+            "width=\"100\" height=\"100\" viewBox=\"0 0 100 100\">" +
+            "<defs><inkscape:path-effect effect=\"powerstroke\" id=\"path-effect1\" lpeversion=\"1.4\" " +
+            "offset_points=\"0,2 | 3,5\" linejoin_type=\"extrp_arc\" /></defs>" +
+            "<path id=\"p1\" style=\"fill:none;stroke:#000000\" d=\"M 10,50 L 90,50\" " +
+            "inkscape:original-d=\"M 10,50 L 90,50\" inkscape:path-effect=\"#path-effect1\" /></svg>";
+
+        (AutomationContext context, _) = Host();
+        JsonElement result = JsonSerializer.SerializeToElement(EditorOperations.Invoke(
+            context, "document.importSvg", Params(new { svgBase64 = Base64(Inkscape) })));
+
+        JsonElement reported = Assert.Single(result.GetProperty("livePathEffects").EnumerateArray());
+        Assert.Equal("path-effect1", reported.GetProperty("effect").GetString());
+        Assert.Equal("M 10,50 L 90,50", reported.GetProperty("sourcePathData").GetString());
+
+        string[] warnings = result.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()!).ToArray();
+        Assert.Contains(warnings, warning => warning.Contains("path-effect1", StringComparison.Ordinal));
+
+        // And the geometry is the file's own, untouched: the reference is data on the path, not something the
+        // import rewrites.
+        PathItem path = context.Document.AllPaths().Single();
+        Assert.Equal("path-effect1", PathEffects.ReferenceOn(path));
+        Assert.Null(path.Stroke.WidthProfile);
+    }
+
+    /// <summary>A file with no live path effect says nothing about one, which is what keeps the report usable.</summary>
+    [Fact]
+    public void AnSvgWithNoLivePathEffectReportsNothing()
+    {
+        (AutomationContext context, _) = Host();
+        JsonElement result = JsonSerializer.SerializeToElement(EditorOperations.Invoke(
+            context,
+            "document.importSvg",
+            Params(new { svgBase64 = Base64("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">" +
+                                            "<path d=\"M0 0 L5 5\"/></svg>") })));
+
+        Assert.Empty(result.GetProperty("livePathEffects").EnumerateArray());
+    }
+
+    private static string Base64(string text) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
 }
