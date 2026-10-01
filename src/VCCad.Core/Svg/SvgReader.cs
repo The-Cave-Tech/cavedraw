@@ -479,7 +479,7 @@ public static class SvgReader
             return;
         }
 
-        foreach (LayerItem item in ReadShape(element, style))
+        foreach (LayerItem item in ReadShape(element, style, warning => context.Warnings.Add(warning)))
         {
             if (item.FilterId is null && FilterReference(element) is { } filterId)
             {
@@ -580,7 +580,7 @@ public static class SvgReader
 
     // ------------------------------------------------------------------ shapes
 
-    private static IEnumerable<LayerItem> ReadShape(XElement element, PresentationStyle style)
+    private static IEnumerable<LayerItem> ReadShape(XElement element, PresentationStyle style, Action<string>? warn = null)
     {
         switch (element.Name.LocalName)
         {
@@ -689,7 +689,9 @@ public static class SvgReader
 
             case "path":
             {
-                IReadOnlyList<SubPath> parsed = SvgPathData.Parse(element.Attribute("d")?.Value ?? string.Empty);
+                IReadOnlyList<SubPath> parsed = SvgPathData.Parse(
+            element.Attribute("d")?.Value ?? string.Empty,
+            warn);
                 if (parsed.Count == 0)
                 {
                     yield break;

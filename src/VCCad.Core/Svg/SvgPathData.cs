@@ -19,7 +19,7 @@ namespace VCCad.Core.Svg;
 /// </summary>
 internal static class SvgPathData
 {
-    public static IReadOnlyList<SubPath> Parse(string d)
+    public static IReadOnlyList<SubPath> Parse(string d, Action<string>? warn = null)
     {
         var subpaths = new List<SubPath>();
         if (string.IsNullOrWhiteSpace(d))
@@ -260,7 +260,10 @@ internal static class SvgPathData
                 }
 
                 default:
-                    // An unknown command: stop rather than guess, so the path keeps what was read correctly.
+                    // An unknown command: stop rather than guess, so the path keeps what was read correctly - and
+                    // **say** which command, because a path that stops early draws less than the file did, and
+                    // nothing about the result looks like an error.
+                    warn?.Invoke($"a path uses a command this build does not read ('{op}'); the rest of it is kept as read");
                     return subpaths;
             }
         }
