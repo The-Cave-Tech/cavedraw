@@ -1059,11 +1059,16 @@ public static class PdfDocumentExporter
         // The baseline of the first run: the block's top-left plus one ascent down the
         // text's own up axis. Later runs continue that baseline, so only this one needs a
         // matrix.
+        //
+        // The mirror is part of that walk rather than a rule beside it: the canvas places a block
+        // as `R(S(p - origin)) + origin` (CanvasWorkspace.PaintText), so a vertical flip sends the
+        // ascent up the block's own y axis and the baseline lands on the other side of the origin.
+        // One sign, read through the one member that states it.
         TextRun first = text.Runs[0];
         double firstAscent = first.PlacedAscentEm > 0
             ? first.PlacedAscentEm
             : first.EmbeddedFont!.Ascent / 1000.0;
-        double depth = firstAscent * first.FontSize;
+        double depth = firstAscent * first.FontSize * text.YSign;
         double ox = text.Origin.X - (sin * depth);
         double oy = text.Origin.Y + (cos * depth);
 
@@ -1077,7 +1082,7 @@ public static class PdfDocumentExporter
         }
 
         ops.Add("BT");
-        ops.Add(TextMatrix(cos, sin, sin, -cos, ox, oy, toDoc));
+        ops.Add(TextMatrix(cos, sin, sin, -cos, ox, oy, toDoc, text.XSign, text.YSign));
 
         string? current = null;
         double currentSize = 0;
@@ -1154,15 +1159,24 @@ public static class PdfDocumentExporter
     /// them. The font size is multiplied in *after* <c>Tm</c> by PDF, so scaling the frame scales the face, which is
     /// what "the group makes this text twice as big" means (issue #164).
     ///
+    /// <paramref name="xSign"/> and <paramref name="ySign"/> are the block's own mirror (-1 for a flipped axis), and
+    /// they are the same kind of number: a mirror **is** a scale of the text space, so it is a sign on the two
+    /// coefficients of the axis it flips and nothing else is needed. The canvas composes it identically —
+    /// <c>R(S(p - origin)) + origin</c> in <c>CanvasWorkspace.PaintText</c> — so a flipped block leaves the file
+    /// flipped, and the sign sits inside the group frame rather than beside it, which is why a mirrored block in a
+    /// transformed group is turned *and* flipped (issue #171). Both signs default to 1, so an unflipped block's
+    /// numbers are the ones it always had.
+    ///
     /// Composing here rather than pushing a <c>cm</c> and restoring it keeps each text object self-contained, which
     /// is how the rest of this exporter writes geometry. With no enclosing group the composed matrix is the
     /// original one to the last bit — <c>Identity.Compose</c> is exact — so an untransformed document's operators
     /// are unchanged.
     /// </summary>
     private static string TextMatrix(double a, double b, double c, double d, double e, double f,
-        AffineTransform toDoc)
+        AffineTransform toDoc, double xSign = 1.0, double ySign = 1.0)
     {
-        AffineTransform placed = toDoc.Compose(new AffineTransform(a, b, c, d, e, f));
+        AffineTransform placed = toDoc.Compose(
+            new AffineTransform(a * xSign, b * xSign, c * ySign, d * ySign, e, f));
         return $"{Num(placed.A)} {Num(placed.B)} {Num(placed.C)} {Num(placed.D)} " +
                $"{Num(placed.E)} {Num(placed.F)} Tm";
     }
@@ -1232,9 +1246,15 @@ public static class PdfDocumentExporter
 
                 // Baseline origin in model space: top-left + R(rot)*(0, y + ascent),
                 // moved along the baseline by everything already set on this line.
-                double depth = yOffset + (ascent * run.FontSize);
-                double ox = text.Origin.X - (sin * depth) + (cos * pen);
-                double oy = text.Origin.Y + (cos * depth) + (sin * pen);
+                //
+                // Both movements run along the block's **own** axes, so a mirror reverses them: a
+                // vertical flip sends the line stack and the ascent up the block's y axis, a horizontal
+                // one sends the pen back along its x axis. Reading the signs off the block here keeps
+                // the mirror the block's, rather than a second rule about this path (issue #171).
+                double depth = (yOffset + (ascent * run.FontSize)) * text.YSign;
+                double penX = pen * text.XSign;
+                double ox = text.Origin.X - (sin * depth) + (cos * penX);
+                double oy = text.Origin.Y + (cos * depth) + (sin * penX);
 
                 // The run's own colour, through the one member that answers it. A block may hold several
                 // colours, and setting the block's for every run is what painted a two-coloured line in one.
@@ -1248,8 +1268,8 @@ public static class PdfDocumentExporter
                 ops.Add("BT");
                 ops.Add($"{resource} {Num(run.FontSize)} Tf");
                 // R(rot) with a y-flip for upright glyphs, times the advance scale, taken through the block's
-                // accumulated frame - the group transform.
-                ops.Add(TextMatrix(sx * cos, sx * sin, sin, -cos, ox, oy, toDoc));
+                // accumulated frame - the group transform - and carrying the block's own mirror.
+                ops.Add(TextMatrix(sx * cos, sx * sin, sin, -cos, ox, oy, toDoc, text.XSign, text.YSign));
                 ops.Add($"<{hex}> Tj");
                 ops.Add("ET");
                 hex.Clear();
