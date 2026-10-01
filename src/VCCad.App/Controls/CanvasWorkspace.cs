@@ -4573,6 +4573,28 @@ public sealed class CanvasWorkspace : Control
             TextLine line = metrics.Layout.Lines[box.Line];
             int pieceStart = box.Start - runOffset[box.Run];
 
+            // Placed by its baseline, never by the line's top edge.
+            Point2D origin = text.Origin + offset
+                + new Vector2D(box.X, TextLayoutEngine.RunTop(run, line));
+
+            // **Tracking is advance, never scale.** A run that asks for letter or word spacing keeps
+            // the face's own letterforms and moves the pen further between glyphs, so it is drawn one
+            // glyph at a time - the only way a run-level draw can put room *between* characters, since
+            // `FormattedText` carries no per-character advance. `TextRun.Advances` (and, through it,
+            // `TextWrapping.Flatten`) already states those pen positions, so nothing is invented here.
+            //
+            // Sizing this run by `box.Width / formatted.Width` instead - which is right for the
+            // substitute-face case below and was applied to every run - stretched it by the tracking
+            // ratio: `FormattedText.Width` is the face's own advance with no tracking in it, so the
+            // glyphs came out wider than the face rather than further apart. The model, the caret, the
+            // selection highlight and the exported PDF all said otherwise, which is the one thing this
+            // canvas must never do.
+            if (run.LetterSpacing != 0 || run.WordSpacing != 0)
+            {
+                DrawTrackedSegment(context, brush, run, box, pieceStart, origin);
+                continue;
+            }
+
             // A run broken across lines - by a newline in its own text, or by wrapping in a frame -
             // is drawn once per line, each piece on its own line's baseline. Drawing it whole
             // stacked the pieces or ran them past the line they belong to.
@@ -4583,10 +4605,6 @@ public sealed class CanvasWorkspace : Control
             FormattedText formatted = CreateFormattedText(segment, brush);
             double natural = formatted.Width;
             double scaleX = natural > 0 ? box.Width / natural : 1.0;
-
-            // Placed by its baseline, never by the line's top edge.
-            Point2D origin = text.Origin + offset
-                + new Vector2D(box.X, TextLayoutEngine.RunTop(run, line));
 
             if (run.EmbeddedFont is { } embedded && run.GlyphIds is { Length: > 0 } glyphIds &&
                 pieceStart >= 0 && pieceStart + box.Length <= glyphIds.Length)
@@ -4603,10 +4621,7 @@ public sealed class CanvasWorkspace : Control
             {
                 // Squeeze/stretch to the advance the layout placed this piece at, so a wider
                 // fallback font does not reflow or overprint the layout.
-                Avalonia.Matrix scale = Avalonia.Matrix.CreateTranslation(-origin.X, -origin.Y)
-                    * Avalonia.Matrix.CreateScale(scaleX, 1.0)
-                    * Avalonia.Matrix.CreateTranslation(origin.X, origin.Y);
-                using (context.PushTransform(scale))
+                using (context.PushTransform(ScaleAbout(new Point(origin.X, origin.Y), scaleX)))
                 {
                     context.DrawText(formatted, new Point(origin.X, origin.Y));
                 }
@@ -4616,6 +4631,144 @@ public sealed class CanvasWorkspace : Control
                 context.DrawText(formatted, new Point(origin.X, origin.Y));
             }
         }
+    }
+
+    /// <summary>
+    /// Draws one segment of a run that carries letter or word spacing, glyph by glyph.
+    ///
+    /// Each glyph is drawn at the pen origin the model computes for it - the sum of the run's own
+    /// advances, tracking included (<see cref="TextRun.Advances"/>) - so the drawn glyphs land on the
+    /// caret, the selection highlight and the model's bounds by construction, and the drawn span is the
+    /// face's own advance plus the tracking rather than the face stretched by it.
+    ///
+    /// Only a recorded advance that the drawn face does not have widens a glyph, exactly as in the
+    /// untracked path: <see cref="TextRun.AdvanceWidth"/> is the file's statement of how far the run
+    /// goes, and a substitute face is squeezed or stretched to meet it. Tracking never does that - it is
+    /// added to the pen, not to the outline.
+    ///
+    /// Drawing a glyph at a time costs one <see cref="FormattedText"/> per character, which is why the
+    /// untracked run above keeps the single run-level draw: spacing is rare and a long paragraph of it
+    /// would otherwise be shaped one character at a time. It is also why the per-character positions
+    /// come from the model instead of being re-derived from the face here.
+    /// </summary>
+    private static void DrawTrackedSegment(
+        DrawingContext context, IBrush brush, TextRun run, TextRunBox box, int pieceStart, Point2D origin)
+    {
+        IReadOnlyList<double> advances = run.Advances();
+
+        double modelled = 0;
+        foreach (double advance in advances)
+        {
+            modelled += advance;
+        }
+
+        // `TextWrapping.Flatten` spreads a recorded advance proportionally over the run's tracked
+        // advances, so a substituted face still ends where the file said. The same ratio is taken here,
+        // for the same reason and by the same formula - not by dividing the layout box by the face.
+        double advanceScale = run.AdvanceWidth is > 0 && modelled > 0
+            ? run.AdvanceWidth.Value / modelled
+            : 1.0;
+
+        // A run that carries its own programme is still drawn from it, exactly as the untracked path
+        // draws it. The glyph ids are only trusted when every one of them belongs to that programme.
+        EmbeddedFont? program = null;
+        IGlyphTypeface? typeface = null;
+        ushort[]? ids = null;
+        if (run.EmbeddedFont is { } embedded && run.GlyphIds is { } glyphIds &&
+            pieceStart >= 0 && pieceStart + box.Length <= glyphIds.Length &&
+            EmbeddedFontManager.TryGetEmbeddedGlyphTypeface(embedded.FamilyName, out IGlyphTypeface resolved) &&
+            GlyphIdsBelongTo(resolved, glyphIds, pieceStart, box.Length))
+        {
+            program = embedded;
+            typeface = resolved;
+            ids = glyphIds;
+        }
+
+        double pen = 0;
+        for (int i = 0; i < box.Length; i++)
+        {
+            int index = pieceStart + i;
+            DrawOneGlyph(context, brush, run, index, new Point(origin.X + pen, origin.Y),
+                advanceScale, program, typeface, ids);
+
+            pen += advanceScale * (index < advances.Count ? advances[index] : TextMeasurement.AdvanceAtEnd(run));
+        }
+    }
+
+    /// <summary>
+    /// One character of a tracked run, at the pen origin the model gives it: from the run's imported
+    /// programme when it has one, otherwise shaped from the resolved face.
+    ///
+    /// A horizontal scale is applied only for <see cref="TextRun.AdvanceWidth"/> - a substitute face
+    /// meeting a recorded advance - and it is about the glyph's own origin, so the pen position the
+    /// model states is not moved by it.
+    /// </summary>
+    private static void DrawOneGlyph(DrawingContext context, IBrush brush, TextRun run, int index,
+        Point at, double advanceScale, EmbeddedFont? program, IGlyphTypeface? typeface, ushort[]? glyphIds)
+    {
+        if (program is not null && typeface is not null && glyphIds is not null)
+        {
+            DrawEmbeddedGlyph(context, brush, run, program, typeface, glyphIds[index], index, at);
+            return;
+        }
+
+        var single = (TextRun)run.Clone();
+        single.Text = run.Text.Substring(index, 1);
+        single.AdvanceWidth = null;
+        FormattedText glyph = CreateFormattedText(single, brush);
+
+        if (Math.Abs(advanceScale - 1.0) > 1e-9)
+        {
+            using (context.PushTransform(ScaleAbout(at, advanceScale)))
+            {
+                context.DrawText(glyph, at);
+            }
+        }
+        else
+        {
+            context.DrawText(glyph, at);
+        }
+    }
+
+    /// <summary>A horizontal scale about a point, which leaves that point where it is.</summary>
+    private static Avalonia.Matrix ScaleAbout(Point at, double scaleX)
+        => Avalonia.Matrix.CreateTranslation(-at.X, -at.Y)
+           * Avalonia.Matrix.CreateScale(scaleX, 1.0)
+           * Avalonia.Matrix.CreateTranslation(at.X, at.Y);
+
+    /// <summary>
+    /// One glyph of a run drawn from its imported programme, on the baseline that programme asks for.
+    ///
+    /// The untracked path draws a whole piece as one <see cref="GlyphRun"/>; a tracked run is drawn a
+    /// glyph at a time, because the room between glyphs is a pen position and a single
+    /// <see cref="GlyphRun"/> takes its advances from the programme.
+    /// </summary>
+    private static void DrawEmbeddedGlyph(DrawingContext context, IBrush brush, TextRun run,
+        EmbeddedFont embedded, IGlyphTypeface glyphTypeface, ushort glyphId, int characterIndex, Point at)
+    {
+        double ascent = embedded.Ascent > 0
+            ? embedded.Ascent / 1000.0
+            : VCCad.Core.Text.TextMeasurement.TypicalAscentEm;
+
+        var baseline = new Point(at.X, at.Y + (ascent * run.FontSize));
+        var glyphRun = new GlyphRun(glyphTypeface, run.FontSize,
+            run.Text.AsMemory(characterIndex, 1), new[] { glyphId }, baseline, 0);
+
+        context.DrawGlyphRun(brush, glyphRun);
+    }
+
+    /// <summary>Whether every glyph id of a piece belongs to the programme it came with.</summary>
+    private static bool GlyphIdsBelongTo(IGlyphTypeface glyphTypeface, ushort[] glyphIds, int start, int length)
+    {
+        for (int i = start; i < start + length; i++)
+        {
+            if (glyphIds[i] >= glyphTypeface.GlyphCount)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>Draws a run with its imported embedded programme by glyph id.
@@ -4635,12 +4788,9 @@ public sealed class CanvasWorkspace : Control
 
         // A glyph id outside the programme cannot belong to it, so draw the decoded
         // text instead of trusting a mismatched typeface.
-        foreach (ushort glyphId in glyphIds)
+        if (!GlyphIdsBelongTo(glyphTypeface, glyphIds, 0, glyphIds.Length))
         {
-            if (glyphId >= glyphTypeface.GlyphCount)
-            {
-                return false;
-            }
+            return false;
         }
 
         double ascent = embedded.Ascent > 0
