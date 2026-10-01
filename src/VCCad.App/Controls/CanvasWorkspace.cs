@@ -4171,7 +4171,21 @@ public sealed class CanvasWorkspace : Control
         }
 
         FilterRenderer.Result? result = FilterRenderer.Render(
-            filters, bounds, world, scale, ctx => PaintPathDirect(ctx, path, opacity));
+            filters,
+            bounds,
+            world,
+            scale,
+            ctx => PaintPathDirect(ctx, path, opacity),
+            // SVG's `FillPaint` and `StrokePaint` are the shape painted in one of the two and not the other, which
+            // the pixels of both together cannot be taken apart into - so the two passes are handed over separately
+            // for the graph to read. `BackgroundImage` is not passed: this renderer draws one item at a time and has
+            // no backdrop picture, so the engine names it as unsupplied rather than being handed an invented one.
+            ctx => PaintPathFill(ctx, path, opacity),
+            ctx => PaintPathStroke(ctx, path, opacity),
+            // The shape's own box, which is what an `objectBoundingBox` primitive length is a fraction of. It is the
+            // geometry's box rather than the alpha's extent: SVG's bounding box is the shape's, and for a stroked
+            // path the two differ by exactly the stroke width the blur would otherwise be measured against.
+            bounds);
 
         if (result is not { } painted)
         {
@@ -4182,19 +4196,48 @@ public sealed class CanvasWorkspace : Control
         return true;
     }
 
+    /// <summary>
+    /// The path drawn without a filter: its fill, then every stroke bottom to top.
+    ///
+    /// Kept as the two halves rather than one call because a filter graph may read the fill and the stroke as
+    /// separate pictures, and because they are the two things SVG's `FillPaint` and `StrokePaint` mean.
+    /// </summary>
     private void PaintPathDirect(DrawingContext context, PathItem path, double opacity)
     {
-        bool anyClosed = path.SubPaths.Any(sp => sp.IsClosed);
+        PaintPathFill(context, path, opacity);
+        PaintPathStroke(context, path, opacity);
+    }
+
+    /// <summary>The path's fill alone - what a graph reading `FillPaint` sees.</summary>
+    private void PaintPathFill(DrawingContext context, PathItem path, double opacity)
+    {
+        if (!path.Fill.IsVisible)
+        {
+            return;
+        }
+
         // PDF fills implicitly close open subpaths, so honour Fill.IsVisible
         // regardless of closure (imported content relies on this).
-        bool fillVisible = path.Fill.IsVisible;
-        bool strokeVisible = path.HasVisibleStroke;
-        if (!fillVisible && !strokeVisible)
+        PaintFill(context, path, GetGeometry(path), opacity);
+
+        if (path.Fill.Hatch is { } hatch)
+        {
+            // A hatch **is** how this fill is painted, so it belongs to the fill's own picture rather than being a
+            // separate source a graph could ask for.
+            PaintHatch(context, path, hatch, opacity);
+        }
+    }
+
+    /// <summary>The path's strokes alone - what a graph reading `StrokePaint` sees.</summary>
+    private void PaintPathStroke(DrawingContext context, PathItem path, double opacity)
+    {
+        if (!path.HasVisibleStroke)
         {
             return;
         }
 
         StreamGeometry geometry = GetGeometry(path);
+        bool anyClosed = path.SubPaths.Any(sp => sp.IsClosed);
 
         // Keep hairlines visible. A 0.3pt stroke is 0.08 device pixels at 27% zoom, so
         // it faded to nothing and an imported pattern looked washed out next to a
@@ -4222,21 +4265,6 @@ public sealed class CanvasWorkspace : Control
             }
 
             return pen;
-        }
-
-        if (fillVisible)
-        {
-            PaintFill(context, path, geometry, opacity);
-
-            if (path.Fill.Hatch is { } hatch)
-            {
-                PaintHatch(context, path, hatch, opacity);
-            }
-        }
-
-        if (!strokeVisible)
-        {
-            return;
         }
 
         // **Every stroke, bottom to top.** Each one states its own width, colour, cap, join, miter limit and

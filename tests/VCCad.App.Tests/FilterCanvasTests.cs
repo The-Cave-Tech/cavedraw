@@ -2,9 +2,12 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using System.Text.Json;
+using VCCad.App.Automation;
 using VCCad.App.Controls;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
@@ -242,9 +245,26 @@ public class FilterCanvasTests
         Assert.True(mid > 100, $"the imported blur should have laid down a ramp: {mid} mid-tones");
     }
 
-    /// <summary>Whether the rendered canvas has an opaque red pixel anywhere - premultiplied BGRA, so red has a
-    /// full alpha and red channel with nothing in green or blue.</summary>
+    /// <summary>
+    /// Whether the rendered canvas has an opaque red pixel anywhere - premultiplied BGRA, so red has a
+    /// full alpha and red channel with nothing in green or blue.
+    /// </summary>
     private static bool HasOpaqueRed(Window window)
+    {
+        byte[] pixels = ReadPixels(window);
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i + 3] > 200 && pixels[i + 2] > 180 && pixels[i + 1] < 60 && pixels[i] < 60)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The window's pixels, premultiplied BGRA, which is what both the canvas and the readback use.</summary>
+    private static byte[] ReadPixels(Window window)
     {
         var target = new RenderTargetBitmap(new PixelSize(600, 500), new Vector(96, 96));
         target.Render(window);
@@ -263,14 +283,144 @@ public class FilterCanvasTests
             handle.Free();
         }
 
-        for (int i = 0; i < pixels.Length; i += 4)
+        return pixels;
+    }
+
+    /// <summary>One pixel of that readback as premultiplied (b, g, r, a).</summary>
+    private static (byte B, byte G, byte R, byte A) PixelAt(Window window, int x, int y)
+    {
+        byte[] pixels = ReadPixels(window);
+        int i = ((y * 600) + x) * 4;
+        return (pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]);
+    }
+
+    /// <summary>
+    /// **A graph reading `FillPaint` draws the shape's own fill colour, and the same filter set through the
+    /// operations is what reaches the canvas.**
+    ///
+    /// `FillPaint` is the shape painted in its fill alone, which the pixels of fill and stroke together cannot be
+    /// taken apart into - so it is the renderer's to supply, and before it did the input read as transparent and
+    /// this composite painted **nothing at all**. The expected value is the shape's own colour, read at a point
+    /// inside it rather than at an edge, so a partly-covered pixel cannot be mistaken for the answer.
+    /// </summary>
+    [AvaloniaFact]
+    public void AFilterReadingFillPaintDrawsTheShapesFillColour()
+    {
+        (Window window, CanvasWorkspace workspace, EditorViewModel viewModel) = Host();
+
+        Artboard board = viewModel.Document.Artboards[0];
+        PathItem rect = PathFactory.CreateRectangle("tinted", new Rect2D(board.X + 80, board.Y + 80, 120, 120));
+        rect.Fill = FillSpec.Solid(new ColorRgb(1, 0, 0));
+        rect.Strokes.Clear();
+        rect.Strokes.Add(StrokeSpec.None);
+        board.Layers[0].AddItem(rect);
+        viewModel.SelectObject(rect);
+        Settle();
+
+        // Through the session, so the canvas is told to repaint - assigning the reference alone notifies nothing.
+        var context = new AutomationContext { ViewModel = viewModel };
+        Edit(context, "filter.create",
+            """{"name":"filling","primitives":[{"kind":"composite","in":"FillPaint","in2":"SourceAlpha","operator":"in"}]}""");
+        Edit(context, "filter.apply", """{"name":"filling"}""");
+        Settle();
+
+        Geometry.Rect2D world = rect.WorldBounds();
+        Point centre = workspace.ModelToWindow(new Point2D(world.X + (world.Width / 2), world.Y + (world.Height / 2)));
+        (byte b, byte g, byte r, byte a) = PixelAt(window, (int)Math.Round(centre.X), (int)Math.Round(centre.Y));
+
+        Assert.Equal(255, a);
+        Assert.Equal(255, r);
+        Assert.Equal(0, g);
+        Assert.Equal(0, b);
+    }
+
+    private static void Edit(AutomationContext context, string op, string parameters)
+        => EditorOperations.Invoke(context, op, JsonSerializer.Deserialize<JsonElement>(parameters));
+
+    /// <summary>
+    /// **A bounding-box primitive length is measured from the shape's box, not from the alpha's extent.**
+    ///
+    /// The bar below is a fifth of the box it belongs to, and a blur of half a box is a very different number of
+    /// pixels under the two readings. Graph read from the owner's box, the blur is the box's; measured from the
+    /// alpha, it is the bar's. Nothing on the canvas can tell the two apart for a shape that fills its own box -
+    /// which is why this drives the renderer directly with a shape that does not.
+    /// </summary>
+    [AvaloniaFact]
+    public void ABoundingBoxLengthIsMeasuredFromTheShapesBoxNotItsAlphaExtent()
+    {
+        var filter = new FilterSpec("wide", new[] { FilterPrimitive.Blur(0.5, input: "SourceAlpha") })
         {
-            if (pixels[i + 3] > 200 && pixels[i + 2] > 180 && pixels[i + 1] < 60 && pixels[i] < 60)
+            PrimitiveUnitsObjectBoundingBox = true,
+            X = -1,
+            Y = -1,
+            Width = 3,
+            Height = 3,
+        };
+
+        var box = new Rect(0, 0, 200, 100);
+        void Paint(DrawingContext ctx) => ctx.FillRectangle(Brushes.Black, new Rect(90, 0, 20, 100));
+
+        FilterRenderer.Result? fromBox = FilterRenderer.Render(
+            new[] { filter }, box, Matrix.Identity, 1.0, Paint, objectBounds: box);
+
+        FilterRenderer.Result? fromAlpha = FilterRenderer.Render(
+            new[] { filter }, box, Matrix.Identity, 1.0, Paint);
+
+        Assert.NotNull(fromBox);
+        Assert.NotNull(fromAlpha);
+
+        // Measured as the alpha-weighted spread of the result rather than as a count of lit pixels: a wider blur
+        // lays the same ink over more pixels, so the count depends on where the faint end is cut off and the spread
+        // does not.
+        double fromTheBox = SpreadX(fromBox!.Value.Bitmap);
+        double fromTheAlpha = SpreadX(fromAlpha!.Value.Bitmap);
+
+        Assert.True(fromTheBox > fromTheAlpha * 1.5,
+            $"blurring half the box should reach further than blurring half the bar: " +
+            $"{fromTheBox:0.0} against {fromTheAlpha:0.0} pixels of spread");
+    }
+
+    /// <summary>
+    /// How far the result spreads sideways, as the standard deviation of its alpha about its own centre of mass.
+    ///
+    /// A Gaussian convolution adds its own variance to the source's, so this is sigma plus the bar's own width and
+    /// does not depend on where a faint tail is called nothing.
+    /// </summary>
+    private static double SpreadX(Avalonia.Media.Imaging.WriteableBitmap bitmap)
+    {
+        using Avalonia.Platform.ILockedFramebuffer locked = bitmap.Lock();
+
+        double total = 0, sum = 0;
+        for (int y = 0; y < locked.Size.Height; y++)
+        {
+            for (int x = 0; x < locked.Size.Width; x++)
             {
-                return true;
+                double alpha = AlphaAt(locked, x, y);
+                total += alpha;
+                sum += alpha * x;
             }
         }
 
-        return false;
+        if (total <= 0)
+        {
+            return 0;
+        }
+
+        double mean = sum / total;
+        double second = 0;
+        for (int y = 0; y < locked.Size.Height; y++)
+        {
+            for (int x = 0; x < locked.Size.Width; x++)
+            {
+                double offset = x - mean;
+                second += AlphaAt(locked, x, y) * offset * offset;
+            }
+        }
+
+        return Math.Sqrt(second / total);
     }
+
+    private static double AlphaAt(Avalonia.Platform.ILockedFramebuffer locked, int x, int y)
+        => System.Runtime.InteropServices.Marshal.ReadByte(
+            locked.Address, (y * locked.RowBytes) + (x * 4) + 3) / 255.0;
 }

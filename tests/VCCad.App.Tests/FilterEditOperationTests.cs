@@ -3,6 +3,7 @@ using System.Text.Json;
 using VCCad.App.Automation;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
+using VCCad.Core.Serialization;
 using VCCad.Geometry;
 using Xunit;
 
@@ -722,5 +723,162 @@ public class FilterEditOperationTests
         Assert.Contains("\"required\":true", json, StringComparison.Ordinal);
         Assert.Contains("\"choices\":[\"over\",\"in\",\"out\",\"atop\",\"xor\",\"arithmetic\"]", json,
             StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------ what a primitive's lengths mean, and the resolution
+
+    /// <summary>
+    /// **The two settings the model carried and no operation could reach.**
+    ///
+    /// `primitiveUnits` decides whether a primitive's own length is a length in the document or a fraction of the
+    /// shape's box, and `filterRes` decides the pixel resolution the filter is evaluated at. Both are read and
+    /// written through the operations, and both have to survive the sidecar: a setting a driver can write and not
+    /// find again is not a capability.
+    /// </summary>
+    [Fact]
+    public void PrimitiveUnitsAndFilterResolutionReadBackAndSurviveSaveAndReload()
+    {
+        (AutomationContext context, _) = Host();
+
+        EditorOperations.Invoke(context, "filter.create", Params(new
+        {
+            name = "coarse",
+            primitives = new object[]
+            {
+                new { kind = "gaussianBlur", @in = "SourceAlpha", radius = 0.1 },
+            },
+            primitiveUnits = "objectBoundingBox",
+            filterRes = 12,
+        }));
+
+        // Read off the model first, so a `filter.list` that echoes the request cannot carry the test on its own.
+        FilterSpec filter = context.Document.FindFilter("coarse")!;
+        Assert.True(filter.PrimitiveUnitsObjectBoundingBox);
+        Assert.Equal(12, filter.FilterResolutionX);
+        Assert.Equal(12, filter.FilterResolutionY);
+
+        string json = JsonSerializer.Serialize(EditorOperations.Invoke(context, "filter.list", default));
+        Assert.Contains("\"primitiveUnits\":\"objectBoundingBox\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"filterRes\":[12,12]", json, StringComparison.Ordinal);
+
+        CadDocument reloaded = VccadDocumentSerializer.Deserialize(
+            VccadDocumentSerializer.SerializeToBytes(context.Document));
+
+        FilterSpec back = reloaded.FindFilter("coarse")!;
+        Assert.Equal(filter, back);
+        Assert.True(back.PrimitiveUnitsObjectBoundingBox);
+        Assert.Equal(12, back.FilterResolutionY);
+    }
+
+    /// <summary>
+    /// The region operation carries them too, and clears the resolution when asked: a filter that named one and
+    /// should not is as much a state a driver has to be able to leave as one it has to be able to enter.
+    /// </summary>
+    [Fact]
+    public void TheRegionOperationCarriesThePrimitiveUnitsAndTheResolution()
+    {
+        (AutomationContext context, _) = Host();
+        Create(context);
+
+        FilterSpec before = context.Document.FindFilter("drop")!;
+        Assert.False(before.PrimitiveUnitsObjectBoundingBox);
+        Assert.Null(before.FilterResolutionX);
+
+        EditorOperations.Invoke(context, "filter.setRegion", Params(new
+        {
+            name = "drop",
+            primitiveUnits = "objectBoundingBox",
+            filterRes = new[] { 16, 9 },
+        }));
+
+        FilterSpec filter = context.Document.FindFilter("drop")!;
+        Assert.True(filter.PrimitiveUnitsObjectBoundingBox);
+        Assert.Equal(16, filter.FilterResolutionX);
+        Assert.Equal(9, filter.FilterResolutionY);
+        Assert.Equal(before.Output, filter.Output);
+
+        // The same member, spelled the other way round: one number is both axes, as SVG writes it.
+        EditorOperations.Invoke(context, "filter.setRegion", Params(new { name = "drop", filterRes = 24 }));
+
+        filter = context.Document.FindFilter("drop")!;
+        Assert.Equal(24, filter.FilterResolutionX);
+        Assert.Equal(24, filter.FilterResolutionY);
+
+        // And null clears it, so the caller's own scale decides again rather than leaving a resolution nobody asked
+        // for pinned to the filter for the rest of the document's life.
+        EditorOperations.Invoke(context, "filter.setRegion", Params(new { name = "drop", filterRes = (int?)null }));
+
+        filter = context.Document.FindFilter("drop")!;
+        Assert.Null(filter.FilterResolutionX);
+        Assert.Null(filter.FilterResolutionY);
+        Assert.False(filter.HasFilterResolution);
+    }
+
+    /// <summary>
+    /// **A resolution this build will not allocate is refused by name rather than stored.**
+    ///
+    /// A resolution is a request to allocate the region at that size, and the engine refuses one it cannot make - but
+    /// a filter is evaluated while the canvas paints, so a model that carried one would throw inside the renderer
+    /// and take the artwork with it. The refusal has to happen where the reason can be said, and the model has to be
+    /// left exactly as it was, or the caller is handed back a filter that throws on the next frame.
+    /// </summary>
+    [Fact]
+    public void AResolutionThisBuildWillNotAllocateIsRefusedByName()
+    {
+        (AutomationContext context, _) = Host();
+        Create(context);
+
+        string? message = MessageOf(() => EditorOperations.Invoke(context, "filter.create", Params(new
+        {
+            name = "huge",
+            primitives = new object[]
+            {
+                new { kind = "gaussianBlur", @in = "SourceAlpha", radius = 2.0 },
+            },
+            filterRes = 100_000,
+        })));
+
+        Assert.Contains("filterRes", message!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("8192", message!, StringComparison.Ordinal);
+        Assert.Null(context.Document.FindFilter("huge"));
+
+        // The same bound on the way in through filter.setRegion, which must leave the existing filter alone.
+        message = MessageOf(() => EditorOperations.Invoke(context, "filter.setRegion", Params(new
+        {
+            name = "drop",
+            filterRes = new[] { 9000, 10 },
+        })));
+
+        Assert.Contains("filterRes", message!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("8192", message!, StringComparison.Ordinal);
+
+        FilterSpec untouched = context.Document.FindFilter("drop")!;
+        Assert.Null(untouched.FilterResolutionX);
+        Assert.Null(untouched.FilterResolutionY);
+
+        // Zero and a negative are the other end of the same rule: a filter that allocates no pixels paints nothing.
+        message = MessageOf(() => EditorOperations.Invoke(
+            context, "filter.setRegion", Params(new { name = "drop", filterRes = 0 })));
+
+        Assert.Contains("8192", message!, StringComparison.Ordinal);
+        Assert.Null(context.Document.FindFilter("drop")!.FilterResolutionX);
+    }
+
+    /// <summary>
+    /// A `primitiveUnits` that is not one of SVG's two is refused rather than defaulted, and a non-string is not
+    /// quietly read as "absent" - both are values the caller meant, and guessing which is how a filter comes back
+    /// measuring its blur in the wrong unit.
+    /// </summary>
+    [Fact]
+    public void AnUnknownPrimitiveUnitsIsRefused()
+    {
+        (AutomationContext context, _) = Host();
+        Create(context);
+
+        string? message = MessageOf(() => EditorOperations.Invoke(
+            context, "filter.setRegion", Params(new { name = "drop", primitiveUnits = "boundingBox" })));
+
+        Assert.Contains("objectBoundingBox", message!, StringComparison.Ordinal);
+        Assert.False(context.Document.FindFilter("drop")!.PrimitiveUnitsObjectBoundingBox);
     }
 }

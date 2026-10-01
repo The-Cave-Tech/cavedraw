@@ -2084,19 +2084,12 @@ public static class EditorOperations
             "The document's filters, with the primitives each holds and the wiring between them. A filter is a " +
             "directed graph rather than a list of effects, so what is reported is what each step reads and what it " +
             "calls its answer, not just the order. Every kind's parameters are declared in filter.kinds, which is " +
-            "what a panel is drawn from.",
+            "what a panel is drawn from. The filter's own settings are reported too: `units` is the region's " +
+            "coordinate system, `primitiveUnits` is what a primitive's own lengths are measured in, and `filterRes` " +
+            "is the pixel resolution the filter is evaluated at (null when the caller's scale decides), so a reader " +
+            "can see both settings and send them straight back through filter.create or filter.setRegion.",
             "",
-            (ctx, _) => ctx.Document.Filters.Select(filter => new
-            {
-                name = filter.Name,
-                x = filter.X,
-                y = filter.Y,
-                width = filter.Width,
-                height = filter.Height,
-                units = filter.ObjectBoundingBox ? "objectBoundingBox" : "userSpaceOnUse",
-                output = filter.Output.Length == 0 ? null : filter.Output,
-                primitives = filter.Primitives.Select(DescribePrimitive).ToArray(),
-            }).ToArray());
+            (ctx, _) => ctx.Document.Filters.Select(DescribeFilter).ToArray());
 
         Add("filter.kinds",
             "Every primitive this build has, with the parameters each one takes, which of them are required and what " +
@@ -2131,9 +2124,14 @@ public static class EditorOperations
             "a named buffer gets that buffer, not whatever happened to run before it. output names the buffer the " +
             "filter answers with, which may be an intermediate step's; omitted means the last primitive's. An unknown " +
             "kind, a parameter the kind does not take, a name nothing produces and a graph that reads its own output " +
-            "are all refused rather than guessed. The library is document state and is not on the undo stack.",
+            "are all refused rather than guessed. `primitiveUnits` is what a primitive's own lengths are measured " +
+            "in - one model unit under SVG's default userSpaceOnUse, or the shape's box under objectBoundingBox - " +
+            "and `filterRes` is the resolution the filter is evaluated at: one number for both axes or a pair of " +
+            "them, and null to let the caller's own scale decide. A resolution this build will not allocate is " +
+            "refused here rather than stored, because the engine refuses it at draw time and a filter that throws " +
+            "while painting takes the artwork with it. The library is document state and is not on the undo stack.",
             "name:string, primitives:[{kind,in?,in2?,result?,...}], x?, y?, width?, height?, userSpace?:bool, " +
-            "output?:string",
+            "primitiveUnits?:string, filterRes?:number|[x,y], output?:string",
             (ctx, p) =>
             {
                 string name = p.GetString("name")
@@ -2161,20 +2159,45 @@ public static class EditorOperations
                     Width = p.GetDouble("width", 1.2),
                     Height = p.GetDouble("height", 1.2),
                     ObjectBoundingBox = !p.GetBool("userSpace", false),
+                    PrimitiveUnitsObjectBoundingBox = OptionalPrimitiveUnits(p) ?? false,
                     Output = p.GetString("output") ?? string.Empty,
                 };
 
+                if (Given(p, "filterRes"))
+                {
+                    (int X, int Y)? resolution = ReadFilterRes(p);
+                    RequireAllocatableFilterRes(resolution);
+                    filter = filter with
+                    {
+                        FilterResolutionX = resolution?.X,
+                        FilterResolutionY = resolution?.Y,
+                    };
+                }
+
                 ValidateGraph(filter);
                 ReplaceFilter(ctx, filter);
-                return new { created = name, primitives = primitives.Count, output = filter.Output };
+                return new
+                {
+                    created = name,
+                    primitives = primitives.Count,
+                    output = filter.Output,
+                    units = filter.ObjectBoundingBox ? "objectBoundingBox" : "userSpaceOnUse",
+                    primitiveUnits = filter.PrimitiveUnitsObjectBoundingBox ? "objectBoundingBox" : "userSpaceOnUse",
+                    filterRes = FilterResPair(filter),
+                };
             });
 
         Add("filter.setRegion",
-            "Where a filter is evaluated and what it answers with - the filter's own settings rather than a step's. " +
-            "The region decides whether a blur near an edge grows into the margin or is cut off, so it is not " +
-            "decoration. Only the members given change; an empty output means the last primitive's result, which is " +
-            "SVG's own rule.",
-            "name:string, x?:number, y?:number, width?:number, height?:number, userSpace?:bool, output?:string",
+            "Where a filter is evaluated, what a primitive's own lengths are measured in, and what the filter answers " +
+            "with - the filter's own settings rather than a step's. The region decides whether a blur near an edge " +
+            "grows into the margin or is cut off, so it is not decoration, and `primitiveUnits` decides whether a " +
+            "blur's radius is a length in the document or a fraction of the shape's box. Only the members given " +
+            "change; an empty output means the last primitive's result, which is SVG's own rule. `filterRes` is one " +
+            "number for both axes or a pair, and null to clear it; a resolution this build will not allocate is " +
+            "refused rather than stored, because the engine refuses it at draw time and a filter that throws while " +
+            "painting takes the artwork with it.",
+            "name:string, x?:number, y?:number, width?:number, height?:number, userSpace?:bool, " +
+            "primitiveUnits?:string, filterRes?:number|[x,y]|null, output?:string",
             (ctx, p) =>
             {
                 FilterSpec filter = RequireFilter(ctx, p.GetString("name"));
@@ -2193,6 +2216,14 @@ public static class EditorOperations
                     ? p.GetString("output") ?? string.Empty
                     : filter.Output;
 
+                bool hasPrimitiveUnits = given && p.TryGetProperty("primitiveUnits", out _);
+                bool hasResolution = given && p.TryGetProperty("filterRes", out _);
+                (int X, int Y)? resolution = hasResolution ? ReadFilterRes(p) : null;
+                if (hasResolution)
+                {
+                    RequireAllocatableFilterRes(resolution);
+                }
+
                 FilterSpec edited = filter with
                 {
                     X = given && p.TryGetProperty("x", out _) ? p.GetDouble("x", filter.X) : filter.X,
@@ -2202,21 +2233,17 @@ public static class EditorOperations
                     ObjectBoundingBox = given && p.TryGetProperty("userSpace", out _)
                         ? !p.GetBool("userSpace", false)
                         : filter.ObjectBoundingBox,
+                    PrimitiveUnitsObjectBoundingBox = hasPrimitiveUnits
+                        ? ReadPrimitiveUnits(p)
+                        : filter.PrimitiveUnitsObjectBoundingBox,
+                    FilterResolutionX = hasResolution ? resolution?.X : filter.FilterResolutionX,
+                    FilterResolutionY = hasResolution ? resolution?.Y : filter.FilterResolutionY,
                     Output = output,
                 };
 
                 ValidateGraph(edited);
                 ReplaceFilter(ctx, edited);
-                return new
-                {
-                    name = edited.Name,
-                    x = edited.X,
-                    y = edited.Y,
-                    width = edited.Width,
-                    height = edited.Height,
-                    units = edited.ObjectBoundingBox ? "objectBoundingBox" : "userSpaceOnUse",
-                    output = edited.Output,
-                };
+                return DescribeFilter(edited);
             });
 
         Add("filter.delete",
@@ -6834,6 +6861,118 @@ public static class EditorOperations
 
     private static string? NullIfEmpty(string? name)
         => string.IsNullOrEmpty(name) ? null : name;
+
+    /// <summary>
+    /// A filter as an operation reports it, in one place.
+    ///
+    /// `filter.list` and `filter.setRegion` answer with the same description, so the settings a driver can read are
+    /// exactly the ones it can write - a member added to one and not the other is how `primitiveUnits` and
+    /// `filterRes` came to be carried by the model and reachable by nobody.
+    /// </summary>
+    private static object DescribeFilter(FilterSpec filter) => new
+    {
+        name = filter.Name,
+        x = filter.X,
+        y = filter.Y,
+        width = filter.Width,
+        height = filter.Height,
+        units = filter.ObjectBoundingBox ? "objectBoundingBox" : "userSpaceOnUse",
+        primitiveUnits = filter.PrimitiveUnitsObjectBoundingBox ? "objectBoundingBox" : "userSpaceOnUse",
+        filterRes = FilterResPair(filter),
+        output = filter.Output.Length == 0 ? null : filter.Output,
+        primitives = filter.Primitives.Select(DescribePrimitive).ToArray(),
+    };
+
+    /// <summary>
+    /// A filter's resolution as the pair a caller sends back, or null when it named none.
+    ///
+    /// Always the pair, even when the two axes agree: SVG lets the attribute be a single number, and a reader asked
+    /// to tell "one number" from "the same number twice" would be reading a distinction the model does not keep.
+    /// </summary>
+    private static int[]? FilterResPair(FilterSpec filter)
+        => filter.HasFilterResolution
+            ? new[] { filter.FilterResolutionX!.Value, filter.FilterResolutionY!.Value }
+            : null;
+
+    /// <summary>
+    /// The `primitiveUnits` a caller named, or null when they named none.
+    ///
+    /// SVG's own two spellings rather than a boolean, because that is the attribute the value comes from and it is
+    /// how filter.list reports it - a boolean would make every reader translate it back.
+    /// </summary>
+    private static bool? OptionalPrimitiveUnits(JsonElement p)
+        => Given(p, "primitiveUnits") ? ReadPrimitiveUnits(p) : null;
+
+    private static bool ReadPrimitiveUnits(JsonElement p)
+    {
+        string? value = p.GetString("primitiveUnits");
+        return value switch
+        {
+            "objectBoundingBox" => true,
+            "userSpaceOnUse" => false,
+            _ => throw new EditorOperationException(
+                $"primitiveUnits is '{value ?? "not a string"}'; it is objectBoundingBox or userSpaceOnUse, which " +
+                "are SVG's own two"),
+        };
+    }
+
+    /// <summary>
+    /// The `filterRes` a caller named: one number for both axes, or a pair of them, or null to clear it.
+    ///
+    /// Anything else is refused rather than rounded to a number the caller did not ask for, because the resolution
+    /// is part of the picture rather than an implementation detail.
+    /// </summary>
+    private static (int X, int Y)? ReadFilterRes(JsonElement p)
+    {
+        JsonElement value = p.GetProperty("filterRes");
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Null:
+                return null;
+            case JsonValueKind.Number:
+            {
+                int both = (int)Math.Round(value.GetDouble());
+                return (both, both);
+            }
+            case JsonValueKind.Array:
+            {
+                double[] parts = value.EnumerateArray()
+                    .Select(entry => entry.ValueKind == JsonValueKind.Number ? entry.GetDouble() : double.NaN)
+                    .ToArray();
+                if (parts.Length is 1 or 2 && parts.All(part => !double.IsNaN(part)))
+                {
+                    int x = (int)Math.Round(parts[0]);
+                    return (x, parts.Length == 2 ? (int)Math.Round(parts[1]) : x);
+                }
+
+                break;
+            }
+        }
+
+        throw new EditorOperationException(
+            "filterRes is one number for both axes or a pair of them, as SVG writes it, or null for the caller's " +
+            "own scale");
+    }
+
+    /// <summary>
+    /// Refuses a resolution this build will not allocate, **here** rather than at draw time.
+    ///
+    /// A resolution is a request to allocate the region at that size, and the engine refuses one it cannot make -
+    /// but a filter is evaluated while painting, so a model carrying one throws inside the renderer and the artwork
+    /// disappears instead of the call failing. The bound is the model's own, so an operation and the reader agree
+    /// about what is storable.
+    /// </summary>
+    private static void RequireAllocatableFilterRes((int X, int Y)? resolution)
+    {
+        if (resolution is not { } pair || FilterSpec.AcceptsFilterResolution(pair.X, pair.Y))
+        {
+            return;
+        }
+
+        throw new EditorOperationException(
+            $"filterRes {pair.X} by {pair.Y} is not one this build will allocate: a filter is evaluated at between " +
+            $"1 and {FilterSpec.MaximumFilterResolution} pixels across, because it allocates the region at that size");
+    }
 
     /// <summary>
     /// Whether the caller named this parameter at all.

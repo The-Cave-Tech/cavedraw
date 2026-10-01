@@ -22,8 +22,10 @@ namespace VCCad.App.Controls;
 /// </summary>
 internal static class FilterRenderer
 {
-    /// <summary>What the caller draws: the filtered bitmap, and the model rectangle to put it in.</summary>
-    internal readonly record struct Result(WriteableBitmap Bitmap, Rect Destination);
+    /// <summary>What the caller draws: the filtered bitmap, the model rectangle to put it in, and the
+    /// renderer-supplied inputs the graph read that this caller could not honestly produce.</summary>
+    internal readonly record struct Result(
+        WriteableBitmap Bitmap, Rect Destination, IReadOnlyList<string> Unsupplied);
 
     /// <summary>
     /// Renders <paramref name="paint"/> over the filter's region, filters it, and returns the bitmap and where it
@@ -48,13 +50,27 @@ internal static class FilterRenderer
     /// model keeps them in order because the order is the picture. So they are applied one after another, each
     /// treating the previous result as its source. The first filter's region decides the canvas, since it is the one
     /// that says how far the result can spread.
+    ///
+    /// <paramref name="fillPaint"/> and <paramref name="strokePaint"/> draw the shape in its **fill alone** and its
+    /// **stroke alone**, which is what SVG's `FillPaint` and `StrokePaint` inputs are and what the pixels painted
+    /// together cannot be taken apart into. They are the caller's, because only it knows how the object was painted;
+    /// one left out is **not invented** - the engine reads that input as transparent and names it in
+    /// <see cref="Result.Unsupplied"/>. Only the ones a graph actually reads are rasterised, so a filter that reads
+    /// neither costs no extra allocation.
+    ///
+    /// <paramref name="objectBounds"/> is the shape's own box in model units, which is what an
+    /// `objectBoundingBox` primitive length is a fraction of. Left out, the engine measures the alpha's extent
+    /// instead - right for a shape that fills what it draws and wrong for one that does not.
     /// </summary>
     public static Result? Render(
         IReadOnlyList<FilterSpec> filters,
         Rect bounds,
         Matrix world,
         double scale,
-        Action<DrawingContext> paint)
+        Action<DrawingContext> paint,
+        Action<DrawingContext>? fillPaint = null,
+        Action<DrawingContext>? strokePaint = null,
+        Rect? objectBounds = null)
     {
         if (filters.Count == 0)
         {
@@ -68,8 +84,9 @@ internal static class FilterRenderer
             return null;
         }
 
+        Geometry.Rect2D sourceBounds = new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
         (int regionX, int regionY, int width, int height) = FilterEngine.RegionPixels(
-            filter, new Geometry.Rect2D(bounds.X, bounds.Y, bounds.Width, bounds.Height), scale);
+            filter, sourceBounds, scale);
 
         // A region larger than anyone would want to allocate is a file with a wild filter region rather than a
         // request to draw it; falling back to unfiltered keeps the artwork visible.
@@ -79,30 +96,59 @@ internal static class FilterRenderer
             return null;
         }
 
-        var target = new RenderTargetBitmap(new PixelSize(width, height), new Vector(96, 96));
-        using (DrawingContext context = target.CreateDrawingContext())
+        // The bitmap is the artwork on **its own pixel grid**, so the canvas transform's scale is applied and
+        // its translation is not. The region is an absolute box in model units, so a transform that carried the
+        // pan would shift the artwork inside a bitmap that the pan already positions when it is drawn, and the
+        // effect then lands a whole pan away from the line it belongs to. The pan is therefore dropped here and
+        // the region's own model rectangle is subtracted instead.
+        Matrix grid = new(world.M11, world.M12, world.M21, world.M22, 0, 0);
+
+        FilterBuffer Rasterise(Action<DrawingContext> draw)
         {
-            // The bitmap is the artwork on **its own pixel grid**, so the canvas transform's scale is applied and
-            // its translation is not. The region is an absolute box in model units, so a transform that carried the
-            // pan would shift the artwork inside a bitmap that the pan already positions when it is drawn, and the
-            // effect then lands a whole pan away from the line it belongs to. The pan is therefore dropped here and
-            // the region's own model rectangle is subtracted instead.
-            Matrix grid = new(world.M11, world.M12, world.M21, world.M22, 0, 0);
+            var target = new RenderTargetBitmap(new PixelSize(width, height), new Vector(96, 96));
+            using (DrawingContext context = target.CreateDrawingContext())
             using (context.PushTransform(
                 Matrix.CreateTranslation(-(regionX / scale), -(regionY / scale)) * grid))
             {
-                paint(context);
+                draw(context);
             }
+
+            return ToBuffer(target, width, height);
         }
 
-        FilterBuffer source = ToBuffer(target, width, height);
+        FilterBuffer source = Rasterise(paint);
+
+        // The source inputs the graph reads, and only those: a fill-only picture of a shape that is not painted
+        // from a reachable closure is impossible to invent, and one nobody reads is an allocation for nothing.
+        FilterBuffer? fill = fillPaint is not null && Reads(filters, "FillPaint") ? Rasterise(fillPaint) : null;
+        FilterBuffer? stroke = strokePaint is not null && Reads(filters, "StrokePaint") ? Rasterise(strokePaint) : null;
+
+        // `BackgroundImage` is deliberately absent: it is the picture **behind** the object, which this renderer
+        // never composes - it draws one item at a time. A graph that reads it therefore reads transparent black and
+        // is named in Result.Unsupplied, which is what SVG directs a viewer with no backdrop and is honest, where a
+        // made-up buffer would be a picture the file did not ask for.
+        FilterSources sources = fill is null && stroke is null
+            ? FilterSources.None
+            : new FilterSources { FillPaint = fill, StrokePaint = stroke };
 
         // Each filter in turn, with the previous result as its source - which is what makes a chain of effects
         // compose in the order the model keeps them.
         FilterBuffer filtered = source;
+        var unsupplied = new List<string>();
         foreach (FilterSpec step in filters)
         {
-            filtered = new FilterEngine(step, scale).EvaluateInPlace(filtered);
+            var engine = new FilterEngine(step, scale);
+            filtered = engine.EvaluateInPlace(filtered, sources, objectBounds is { } box
+                ? new Geometry.Rect2D(box.X, box.Y, box.Width, box.Height)
+                : null);
+
+            foreach (string name in engine.UnsuppliedSourceInputs)
+            {
+                if (!unsupplied.Contains(name, StringComparer.Ordinal))
+                {
+                    unsupplied.Add(name);
+                }
+            }
         }
 
         WriteableBitmap bitmap = ToBitmap(filtered);
@@ -114,7 +160,25 @@ internal static class FilterRenderer
             width / scale,
             height / scale);
 
-        return new Result(bitmap, destination);
+        return new Result(bitmap, destination, unsupplied);
+    }
+
+    /// <summary>Whether any filter in the chain reads this renderer-supplied input.</summary>
+    private static bool Reads(IReadOnlyList<FilterSpec> filters, string name)
+    {
+        foreach (FilterSpec filter in filters)
+        {
+            foreach (FilterPrimitive primitive in filter.Primitives)
+            {
+                if (string.Equals(primitive.Input, name, StringComparison.Ordinal) ||
+                    string.Equals(primitive.Input2, name, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
