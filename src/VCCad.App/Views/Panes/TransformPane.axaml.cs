@@ -361,7 +361,7 @@ public partial class TransformPane : UserControl
     /// A rotation is an angle rather than a length, so it is read from the same evaluator and
     /// then taken as degrees.
     /// </summary>
-    private static bool TryRead(TextBox box, out double value)
+    internal static bool TryRead(TextBox box, out double value)
     {
         value = 0;
         string text = box.Text?.Trim() ?? string.Empty;
@@ -375,7 +375,10 @@ public partial class TransformPane : UserControl
         {
             // Angles carry a degree sign or none; a length with a unit is still a number of
             // degrees here, because the field says so.
-            value = length.Millimetres;
+            // The model is in points (Measurement), so a field is converted at the boundary rather than
+            // handed on as millimetres: a caller that compared this against an object's width - which is in
+            // points - was off by the mm-to-point factor of 2.83.
+            value = Measurement.MmToPoints(length.Millimetres);
             return true;
         }
 
@@ -383,8 +386,15 @@ public partial class TransformPane : UserControl
     }
 
     /// <summary>A length in the configured unit, written the way the field shows it.</summary>
-    private static string Format(double millimetres)
-        => UnitSettings.Current.FormatWithUnit(Length.FromMillimetres(millimetres));
+    /// <summary>
+    /// A length in the configured unit, written the way the field shows it.
+    ///
+    /// The value is **model points**, which is what every coordinate in the document is, so it is converted for
+    /// display rather than relabelled: this used to call its argument millimetres and write the number out as
+    /// though it were, so an A4 page read "841.89mm" across.
+    /// </summary>
+    private static string Format(double points)
+        => UnitSettings.Current.FormatWithUnit(Length.FromPoints(points));
 
     private static Point2D ReferencePoint(Rect2D bounds, int pivot)
     {
