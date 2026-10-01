@@ -30,7 +30,8 @@ public sealed class SvgImportException : Exception
 /// </summary>
 internal sealed record PresentationStyle(
     FillSpec Fill,
-    StrokeSpec Stroke)
+    StrokeSpec Stroke,
+    string? FillGradientId = null)
 {
     /// <summary>SVG's initial values: black fill, no stroke.</summary>
     public static PresentationStyle Default { get; } = new(
@@ -79,11 +80,17 @@ internal sealed record PresentationStyle(
 
         FillSpec fill = inherited.Fill;
         StrokeSpec stroke = inherited.Stroke;
+        string? gradientId = inherited.FillGradientId;
 
         string? fillValue = Value("fill");
         if (fillValue is not null)
         {
-            fill = ParseFill(fillValue, Value("fill-opacity"));
+            // `url(#id)` is a paint server rather than a colour, and it cannot be resolved here: the shape's box is
+            // what a gradient is normalised against, and the shape has not been built yet. The id is carried and
+            // resolved once the geometry exists.
+            (FillSpec parsedFill, string? parsedId) = ParseFill(fillValue, Value("fill-opacity"));
+            fill = parsedFill;
+            gradientId = parsedId;
         }
 
         string? fillRule = Value("fill-rule");
@@ -126,7 +133,7 @@ internal sealed record PresentationStyle(
             _ = alpha;
         }
 
-        return new PresentationStyle(fill, stroke);
+        return new PresentationStyle(fill, stroke, gradientId);
     }
 
     /// <summary>The declarations inside a `style` attribute, which is a small inline stylesheet.</summary>
@@ -173,16 +180,38 @@ internal sealed record PresentationStyle(
         return importance;
     }
 
-    private static FillSpec ParseFill(string value, string? opacity)
+    /// <summary>
+    /// A fill value: a colour, `none`, or a reference to a paint server.
+    ///
+    /// The reference comes back as an id rather than resolved, because a gradient is normalised against the shape
+    /// it paints and that shape does not exist yet. A solid colour comes back with a null id, so a caller can tell
+    /// "paint this with this colour" from "paint it with whatever `#g` turns out to be".
+    /// </summary>
+    private static (FillSpec Fill, string? GradientId) ParseFill(string value, string? opacity)
     {
         string trimmed = value.Trim();
         if (trimmed.Equals("none", StringComparison.OrdinalIgnoreCase))
         {
-            return FillSpec.None;
+            return (FillSpec.None, null);
+        }
+
+        if (trimmed.StartsWith("url(", StringComparison.OrdinalIgnoreCase))
+        {
+            int open = trimmed.IndexOf('(');
+            int close = trimmed.IndexOf(')');
+            if (close > open)
+            {
+                string reference = trimmed[(open + 1)..close].Trim().Trim('"', '\'');
+                string id = reference.StartsWith('#') ? reference[1..] : string.Empty;
+
+                // Visible and fully transparent until the gradient is resolved: the shape is filled, and what
+                // fills it is not known yet.
+                return (FillSpec.Solid(ColorRgb.Black with { A = 0.0 }), id.Length > 0 ? id : null);
+            }
         }
 
         ColorRgb colour = SvgColour.Parse(trimmed) ?? ColorRgb.Black;
-        return FillSpec.Solid(ApplyOpacity(colour, opacity));
+        return (FillSpec.Solid(ApplyOpacity(colour, opacity)), null);
     }
 
     private static StrokeSpec? ParseStroke(string value, string? opacity, string? width)

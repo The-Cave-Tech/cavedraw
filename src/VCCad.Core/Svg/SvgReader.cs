@@ -93,6 +93,7 @@ public static class SvgReader
         // still stylesheets and still apply. Collecting them by walking the tree as it is read would miss a sheet
         // defined after the elements it styles, which multi-style.svg does.
         SvgStylesheet sheet = SvgStylesheet.Parse(CollectStyles(root), baseDirectory);
+        SvgGradients gradients = SvgGradients.Collect(root, sheet);
 
         var context = new Context
         {
@@ -104,6 +105,7 @@ public static class SvgReader
             Resolving = new HashSet<string>(StringComparer.Ordinal),
             Missing = new List<string>(),
             Sheet = sheet,
+            Gradients = gradients,
         };
 
         foreach (XElement child in root.Elements())
@@ -263,6 +265,9 @@ public static class SvgReader
         /// <summary>The document's stylesheets, cascaded together.</summary>
         public required SvgStylesheet Sheet { get; init; }
 
+        /// <summary>The document's paint servers, by id.</summary>
+        public required SvgGradients Gradients { get; init; }
+
         /// <summary>Where a shape is added: the group it is inside, or the layer when there is no group.</summary>
         public void Add(LayerItem item)
         {
@@ -334,9 +339,24 @@ public static class SvgReader
 
         foreach (LayerItem item in ReadShape(element, style))
         {
-            if (!IsIdentity(own) && item is PathItem shape)
+            if (item is PathItem shape)
             {
-                ApplyTransform(shape, own);
+                // A gradient is normalised against the shape's own box, in the space the shape is **written** in -
+                // which is before its own transform, and is what `userSpaceOnUse` means. So it is resolved here:
+                // after the geometry exists, and before the transform is composed into the points.
+                if (style.FillGradientId is { Length: > 0 } gradientId)
+                {
+                    shape.Fill = shape.Fill with
+                    {
+                        IsVisible = true,
+                        Gradient = context.Gradients.Resolve(gradientId, shape.BoundingBox()),
+                    };
+                }
+
+                if (!IsIdentity(own))
+                {
+                    ApplyTransform(shape, own);
+                }
             }
 
             context.Add(item);
@@ -379,6 +399,7 @@ public static class SvgReader
             Resolving = context.Resolving,
             Missing = context.Missing,
             Sheet = context.Sheet,
+            Gradients = context.Gradients,
         };
 
         foreach (XElement child in element.Elements())
@@ -677,6 +698,7 @@ public static class SvgReader
             Resolving = context.Resolving,
             Missing = context.Missing,
             Sheet = context.Sheet,
+            Gradients = context.Gradients,
         };
 
         if (target.Name.LocalName == "symbol")
