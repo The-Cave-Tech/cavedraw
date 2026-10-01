@@ -114,8 +114,12 @@ public static class StrokeOutlineBuilder
     /// A pattern whose lengths sum to nothing is not a dash: PDF and SVG both draw such a stroke solid, and a
     /// pattern of all zeros is the shape that arrives as. Filtering it here rather than dashing with it keeps a
     /// pattern that says "no gaps" from taking a different route through the geometry than a plain stroke.
+    ///
+    /// Public because every caller that has to **decide** whether a stroke reaches the pen or the outline is
+    /// asking this question, and a second reading of the rule drifts from this one: an all-zero pattern read as
+    /// a dash takes the outline route, where the ends are squared, instead of the pen's own caps.
     /// </summary>
-    private static bool Dashing(DashPattern dash, double scale)
+    public static bool Dashing(DashPattern dash, double scale = 1.0)
     {
         if (dash.IsEmpty)
         {

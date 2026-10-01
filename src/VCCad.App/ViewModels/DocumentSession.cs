@@ -568,6 +568,11 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// step, and the result is selected - a person who has just turned a stroke into a shape wants the
     /// shape, not the shape plus the stroke that made it.
     ///
+    /// The geometry is <see cref="StrokeExpander"/>'s, which takes it from <see cref="StrokeOutlineBuilder"/> -
+    /// the one plan the canvas, the PDF writer and the SVG writer draw from. A command that works the expansion
+    /// out for itself draws a different picture from the window it was run in, which is how a dashed stroke came
+    /// out solid here while the canvas drew it dashed.
+    ///
     /// A path with no stroke is left alone rather than silently removed: expanding it would produce
     /// nothing, and deleting something because it had nothing to expand would be a surprise.
     /// </summary>

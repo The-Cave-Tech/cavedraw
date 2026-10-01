@@ -9,6 +9,20 @@ namespace VCCad.Core.Model;
 /// This decomposes the object into that shape, so the ink becomes geometry a person can edit, and the
 /// result is an ordinary filled path.
 ///
+/// **What the ink is is not decided here.** A stroke that varies along its length, or that an outline effect has
+/// reshaped, or that is dashed, is drawn as the region it covers - so the geometry that draws it already exists
+/// in <see cref="StrokeOutlineBuilder"/>, and this reads it from there rather than from the model a second way.
+/// Two expanders agreed for as long as a stroke was one constant width; the moment a dash, a profile or an effect
+/// reached one of them and not the other, the command drew a stroke the canvas beside it did not - which is how
+/// this one came to draw a dashed stroke solid.
+///
+/// **The one thing the plan does not give is the pen.** A constant-width stroke with no dash is deliberately
+/// planned as "stroked and not an outline", because the caps and joins of a stroked path are the renderer's, and
+/// `PathOffset` - which builds every outline the plan does carry - mitres and knows nothing of the stroke's join.
+/// Replacing the ink with geometry takes the pen away, so for that case the region is built here, caps and joins
+/// included: it is the region the renderer's pen would have painted, which is what keeps the command agreeing
+/// with the canvas and the file.
+///
 /// The side each subpath expands to follows from what the subpath is:
 ///
 /// - an **open** subpath traces its whole outside: one contour down one side, round the far cap, back
@@ -20,9 +34,9 @@ namespace VCCad.Core.Model;
 /// its own side, and each hole is banded on the **inside** of that hole, because a hole's outline is its
 /// own closed shape.
 ///
-/// The geometry is built from **flattened** outlines - the tolerance recorded in
-/// <see cref="PathFlattener"/>, which every vertex here follows - while caps and round joins are emitted
-/// as **Bézier arcs**, because a round end is a curve and a polygon standing in for it is visibly faceted
+/// Where the region is built here it starts from **flattened** outlines - the tolerance recorded in
+/// <see cref="PathFlattener"/>, which every vertex follows - while caps and round joins are emitted as
+/// **Bézier arcs**, because the pen's round end is a curve and a polygon standing in for it is visibly faceted
 /// at print size.
 /// </summary>
 public static class StrokeExpander
@@ -45,25 +59,28 @@ public static class StrokeExpander
             return null;
         }
 
-        double half = path.Stroke.Width / 2;
+        StrokeSpec stroke = path.Stroke;
         var expanded = new PathItem { Name = path.Name };
 
-        foreach (SubPath sub in path.SubPaths)
-        {
-            List<Point2D>? points = Flatten(sub);
-            if (points is null)
-            {
-                continue;
-            }
+        // The plan decides whether this stroke is stroked or filled, and it is the same decision the canvas, the
+        // PDF writer and the SVG writer consume - so the command cannot reach a different conclusion about a
+        // dash, a width profile or an outline effect than the renderers it was run in front of.
+        StrokeRenderPlan plan = StrokeOutlineBuilder.Plan(path, stroke);
 
-            if (sub.IsClosed)
-            {
-                AddBand(expanded, points, half, path.Stroke);
-            }
-            else
-            {
-                AddOutline(expanded, points, half, path.Stroke);
-            }
+        if (plan.IsOutline)
+        {
+            Append(expanded, plan.Outlines);
+        }
+        else if (StrokeOutlineBuilder.Dashing(stroke.Dash))
+        {
+            // The plan hands a constant-width stroke to the pen, and the pen is what dashes it - so the plan
+            // itself carries no dash geometry. A command that replaces the ink with geometry has no pen left to
+            // dash anything, and the builder is the one place that knows where the on-intervals fall.
+            Append(expanded, StrokeOutlineBuilder.Outline(path, stroke));
+        }
+        else
+        {
+            AddPenOutline(expanded, path, stroke);
         }
 
         if (expanded.SubPaths.Count == 0)
@@ -82,6 +99,60 @@ public static class StrokeExpander
 
         expanded.GeometryChanged();
         return expanded;
+    }
+
+    /// <summary>
+    /// The region a **pen** would paint a constant-width, undashed stroke as: both sides of every subpath, the
+    /// caps on its open ends and the stroke's own joins.
+    ///
+    /// Used only where the plan declines to answer with geometry, because that is exactly the case it declines:
+    /// a stroked path's caps and joins belong to whichever renderer holds the pen, and this is the pen.
+    /// </summary>
+    private static void AddPenOutline(PathItem into, PathItem path, StrokeSpec stroke)
+    {
+        double half = stroke.Width / 2;
+
+        foreach (SubPath sub in path.SubPaths)
+        {
+            List<Point2D>? points = Flatten(sub);
+            if (points is null)
+            {
+                continue;
+            }
+
+            if (sub.IsClosed)
+            {
+                AddBand(into, points, half, stroke);
+            }
+            else
+            {
+                AddOutline(into, points, half, stroke);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Appends the builder's loops as closed subpaths.
+    ///
+    /// A loop is bare points rather than nodes: the plan has already resolved the corners, the caps and the
+    /// effects into a polygon, so there is no handle left to carry - and adding one would put a curve where the
+    /// renderers have a straight edge.
+    /// </summary>
+    private static void Append(PathItem into, IReadOnlyList<IReadOnlyList<Point2D>> loops)
+    {
+        foreach (IReadOnlyList<Point2D> loop in loops)
+        {
+            if (loop.Count < 3)
+            {
+                continue;
+            }
+
+            SubPath sub = into.AddSubPath(closed: true);
+            foreach (Point2D point in loop)
+            {
+                sub.Nodes.Add(new PathNode(point));
+            }
+        }
     }
 
     /// <summary>
