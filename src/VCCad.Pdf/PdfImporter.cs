@@ -21,7 +21,21 @@ namespace VCCad.Pdf;
 /// </summary>
 public static class PdfImporter
 {
-    /// <summary>Imports <paramref name="pdfBytes"/> into a document.</summary>
+    /// <summary>
+    /// Imports <paramref name="pdfBytes"/> into a document.
+    ///
+    /// <para><b>This is not a way to ask what an exported PDF's page says.</b> A PDF VCCad wrote carries the
+    /// complete model as a lossless sidecar, and this method prefers it (see <see cref="ImportCore"/>), so for
+    /// our own output it returns the very document the exporter was handed - sidecar transforms, artboard offsets
+    /// and all - unchanged by anything the content stream does. Comparing that against the editor therefore
+    /// compares the editor with itself and agrees by construction, which makes it useless as an
+    /// agreement/fidelity check and dangerous as one: it stays green through any exporter geometry bug (issue
+    /// #170). To read what the file actually draws, use <see cref="TryImportVector"/>, which skips the sidecar
+    /// and parses the page the way an outside reader does; the export tests in <c>VCCad.Pdf.Tests</c> and the
+    /// canvas-versus-PDF facts in <c>VCCad.App.Tests</c> read the page for that reason. Keep this path for what
+    /// it is good at: restoring our own documents losslessly, and importing foreign PDFs (which have no
+    /// sidecar).</para>
+    /// </summary>
     /// <exception cref="InvalidDataException">
     /// The bytes are not a PDF at all: no <c>%PDF-</c> header, or a header with
     /// neither a readable page nor any PDF completion marker. Refusing is the
@@ -243,6 +257,13 @@ public static class PdfImporter
     /// Test/benchmark hook: runs only the real vector-import path (no sidecar, no
     /// structural fallback) and reports whether it succeeded. Used by the veraPDF
     /// corpus sweep to measure genuine parsing coverage.
+    ///
+    /// <para><b>This is the reader to use when the question is what the file draws</b> - the placement an
+    /// exported page actually carries, as opposed to the model our sidecar restored. Unlike
+    /// <see cref="Import(byte[])"/> it ignores the sidecar and parses the content stream, so it can and does
+    /// disagree with the exporter, which is what makes it the right half of an agreement test (issue #170).
+    /// Because it skips the sidecar, a body or parenting rule the model would have restored is not available
+    /// here: it answers about the page, not about the document we saved.</para>
     /// </summary>
     internal static bool TryImportVector(byte[] pdfBytes, out CadDocument? document)
         => TryImportVector(pdfBytes, password: null, out document);

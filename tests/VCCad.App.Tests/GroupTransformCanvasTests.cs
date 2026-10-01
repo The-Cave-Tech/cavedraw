@@ -14,6 +14,7 @@ using VCCad.Core.Selection;
 using VCCad.Core.Svg;
 using VCCad.Geometry;
 using VCCad.Pdf;
+using VCCad.Pdf.Fonts;
 using Xunit;
 
 namespace VCCad.App.Tests;
@@ -63,6 +64,18 @@ public class GroupTransformCanvasTests
     /// Enlarged enough that a raster stretched to fit it is a visibly different picture from a sharp one.</summary>
     private const string LargeGroup = Header +
         "<g transform=\"scale(8)\"><rect width=\"10\" height=\"10\" fill=\"#000000\"/></g></svg>";
+
+    /// <summary>
+    /// The **text** figure the PDF agreement facts measure: a 10pt line at local (0,10) inside the same
+    /// `translate(50,50) scale(2)` group the rect uses.
+    ///
+    /// Its local baseline is (0,10) user units; the frame above it is that group composed with the root
+    /// unit-conversion group, `(1.5,0,0,1.5,37.5,37.5)`, so the baseline lands at (37.5,52.5) pt and the 10pt face
+    /// is set at 15pt. Against an exporter that writes the block at its own local origin - which is what #164
+    /// fixed - the page carries the baseline at (0,7.5) pt in a 7.5pt face, and neither number is close.
+    /// </summary>
+    private const string TranslatedAndScaledText = Header +
+        "<g transform=\"translate(50,50) scale(2)\"><text x=\"0\" y=\"10\" font-size=\"10\">Hi</text></g></svg>";
 
     private static (Window Window, CanvasWorkspace Workspace, EditorViewModel ViewModel, CadDocument Document)
         Host(string svg)
@@ -405,11 +418,43 @@ public class GroupTransformCanvasTests
     }
 
     /// <summary>
-    /// The canvas and the exported PDF put the rect in the same place - the invariant this repository's accuracy
-    /// work protects.
+    /// The document as the exported PDF's **page** holds it - the artwork, not the model we handed the exporter.
+    ///
+    /// This goes through <see cref="PdfImporter.TryImportVector"/>, which parses the object model and the content
+    /// streams, and deliberately **not** through <see cref="PdfImporter.Import(byte[])"/>. That path cannot answer
+    /// any question about what the exporter wrote: our export carries the complete model as a lossless sidecar and
+    /// the importer prefers it, so <c>Import</c> hands back the very document the exporter was given - artboards,
+    /// group transforms, artboard offsets and all - and reports the same numbers whatever the content stream says.
+    /// A canvas-versus-PDF comparison made through it is the canvas against itself and stays green through any
+    /// exporter frame bug (issue #170). Only a reader of the page can disagree with the exporter.
+    /// </summary>
+    private static CadDocument OnThePage(CadDocument document)
+    {
+        byte[] pdf = PdfDocumentExporter.Export(document);
+
+        Assert.True(
+            PdfImporter.TryImportVector(pdf, out CadDocument? page) && page is not null,
+            "the exported PDF did not come back through the vector import");
+
+        return page!;
+    }
+
+    /// <summary>The one path the page draws, preferring the filled one when the fill and the stroke came back as
+    /// separate objects - the importer gives each painting operation its own item.</summary>
+    private static PathItem DrawnPath(CadDocument page)
+    {
+        List<PathItem> paths = page.AllPaths().ToList();
+        return paths.Count == 1 ? paths[0] : paths.Single(p => p.Fill.IsVisible);
+    }
+
+    /// <summary>
+    /// The canvas and the exported PDF put the **rect** in the same place - the invariant this repository's
+    /// accuracy work protects.
     ///
     /// The PDF is the reference an external viewer agrees with, so it is read back and its own geometry compared
-    /// with the pixels the canvas drew. Both sides are measured, neither is derived from the other.
+    /// with the pixels the canvas drew. Both sides are measured, neither is derived from the other - and the
+    /// reading is of the **page**, through <see cref="OnThePage"/>, because <see cref="PdfImporter.Import(byte[])"/>
+    /// would return the sidecar and agree by construction (issue #170).
     /// </summary>
     [AvaloniaFact]
     public void TheCanvasAndTheExportedPdfFillOnePlan()
@@ -419,15 +464,144 @@ public class GroupTransformCanvasTests
         {
             (int left, int top, int right, int bottom) = Drawn(document, workspace);
 
-            CadDocument back = PdfImporter.Import(PdfDocumentExporter.Export(document));
-            PathItem inPdf = Assert.Single(back.AllPaths());
+            PathItem inPdf = DrawnPath(OnThePage(document));
             Rect2D pdfBox = InArtboard(inPdf);
 
             Assert.True(
                 Math.Abs(left - pdfBox.Left) <= 2 && Math.Abs(top - pdfBox.Top) <= 2 &&
                 Math.Abs(right - pdfBox.Right) <= 2 && Math.Abs(bottom - pdfBox.Bottom) <= 2,
-                $"the canvas drew {left},{top} to {right},{bottom} and the PDF holds " +
+                $"the canvas drew {left},{top} to {right},{bottom} and the page holds " +
                 $"{pdfBox.Left},{pdfBox.Top} to {pdfBox.Right},{pdfBox.Bottom}");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// Where a block's own text matrix puts it: the baseline, in model points, with the block's rotation folded
+    /// in.
+    ///
+    /// `Origin` is the top-left and a PDF text matrix is set on the baseline, so the baseline is one ascent down
+    /// the text's own up axis - the same arithmetic <c>PdfDocumentExporter.WriteText</c> does. It is worked out
+    /// from whichever block is handed in, so the canvas's own block and the block recovered from the page are
+    /// read by the same rule, and the size the page records is read beside it.
+    /// </summary>
+    private static (Point2D Baseline, double Size) Baseline(TextItem text)
+    {
+        TextRun run = Assert.Single(text.Runs);
+        double depth = run.PlacedAscentEm * run.FontSize;
+        double cos = Math.Cos(text.RotationRadians);
+        double sin = Math.Sin(text.RotationRadians);
+        return (
+            new Point2D(text.Origin.X - (sin * depth), text.Origin.Y + (cos * depth)),
+            run.FontSize);
+    }
+
+    /// <summary>
+    /// The canvas and the exported PDF set the **text** in the same place, at the same size.
+    ///
+    /// This is the half of the agreement the rect fact cannot state, and it is the half that bites: the exporter
+    /// wrote every block through a separate loop at the identity frame until #164 gave text the frame its group
+    /// draws it in, so a rect-only check passes for an exporter that puts every block at its own local origin.
+    ///
+    /// Both halves are measured. The canvas's half is the baseline in the frame the canvas composes and draws and
+    /// picks with (<see cref="SelectionEngine.ToWorld"/>), read from the block it is actually showing; the page's
+    /// half is the baseline a reader recovers from the content stream. Neither is derived from the other, and the
+    /// page is read through <see cref="OnThePage"/> rather than through the sidecar - see there for why
+    /// <see cref="PdfImporter.Import(byte[])"/> cannot answer this (issue #170).
+    ///
+    /// Skipped when the machine supplies no standard-font programme to embed: without one the export substitutes a
+    /// face and there is no page text to compare. The rendered-ink assertion is inside the same guard for the same
+    /// reason.
+    /// </summary>
+    [AvaloniaFact]
+    public void TheCanvasAndTheExportedPdfSetTextInOnePlan()
+    {
+        if (StandardFontFiles.TryReadProgram(new StandardFace(StandardFontKind.Sans, false, false)) is null)
+        {
+            return;
+        }
+
+        (Window window, CanvasWorkspace workspace, _, CadDocument document) = Host(TranslatedAndScaledText);
+        try
+        {
+            TextItem source = Assert.Single(document.AllItems().OfType<TextItem>());
+
+            // The canvas's half: the block it is drawing, placed by the composition the canvas draws with. The
+            // frame is `translate(50,50) scale(2)` under the root's 0.75, so the local baseline (0,10) is
+            // (37.5,52.5) pt. The block's own font size stays the SVG's 10; it is the frame that sets it at 15pt
+            // on the page, so the scale is read from the frame rather than from the block.
+            (Point2D localBaseline, double localSize) = Baseline(source);
+            AffineTransform frame = SelectionEngine.ToWorld(source);
+            Point2D canvasBaseline = frame.Transform(localBaseline);
+            double canvasScale = Math.Sqrt(Math.Abs((frame.A * frame.D) - (frame.B * frame.C)));
+
+            Assert.Equal(37.5, canvasBaseline.X, 3);
+            Assert.Equal(52.5, canvasBaseline.Y, 3);
+            Assert.Equal(1.5, canvasScale, 3);
+
+            // And the canvas's rendered picture has to be there, on the frame's baseline: an unmoved block would
+            // start at x=0.
+            (int left, int top, int right, int bottom) = Drawn(document, workspace);
+            Assert.True(
+                Math.Abs(left - canvasBaseline.X) <= 3 && Math.Abs(bottom - canvasBaseline.Y) <= 3,
+                $"the canvas drew the block at {left},{top} to {right},{bottom}, not on the frame's baseline at " +
+                $"{canvasBaseline.X},{canvasBaseline.Y}");
+
+            // The page's half: what a reader recovers from the content stream.
+            TextItem printed = Assert.Single(OnThePage(document).AllItems().OfType<TextItem>());
+            (Point2D pageBaseline, double pageSize) = Baseline(printed);
+
+            Assert.True(
+                Math.Abs(pageBaseline.X - canvasBaseline.X) < 1e-2 &&
+                Math.Abs(pageBaseline.Y - canvasBaseline.Y) < 1e-2 &&
+                Math.Abs(pageSize - (localSize * canvasScale)) < 1e-3,
+                $"the canvas sets the block on the baseline ({canvasBaseline.X}, {canvasBaseline.Y}) pt in a " +
+                $"{localSize * canvasScale} pt face; the page re-imports at ({pageBaseline.X}, {pageBaseline.Y}) pt " +
+                $"in a {pageSize} pt face (block top-left {printed.Origin.X}, {printed.Origin.Y}).");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// The **sidecar** round-trips the model: an exported document re-imported through
+    /// <see cref="PdfImporter.Import(byte[])"/> is the document that was exported, group transforms intact.
+    ///
+    /// This is labelled for what it is and it is **not** an agreement check. It says the lossless model survived
+    /// the file, which is exactly what the sidecar is for; it says nothing about the page, and it passes however
+    /// badly the exporter writes the content stream - which is why the two facts above read the page instead
+    /// (issue #170). It is kept because the round trip is a real promise of our own format, and because deleting a
+    /// test that may be the only cover for "the sidecar still loads" would hide a different defect.
+    /// </summary>
+    [AvaloniaFact]
+    public void TheSidecarRoundTripsTheModelRatherThanProvingThePage()
+    {
+        (Window window, CanvasWorkspace workspace, _, CadDocument document) = Host(TranslatedAndScaled);
+        try
+        {
+            // The canvas is not the subject here; it is only what makes this document the one the editor holds.
+            Drawn(document, workspace);
+
+            CadDocument back = PdfImporter.Import(PdfDocumentExporter.Export(document));
+
+            // The sidecar hands the model back with the group's transform still on the group, rather than baked
+            // into the geometry - which is the difference between this path and the page.
+            PathItem rect = Assert.Single(back.AllPaths());
+            ArtGroup group = Assert.IsType<ArtGroup>(rect.Container);
+            Assert.Equal(2.0, group.Transform.A, 6);
+            Assert.Equal(2.0, group.Transform.D, 6);
+            Assert.Equal(50.0, group.Transform.E, 6);
+            Assert.Equal(50.0, group.Transform.F, 6);
+
+            // And the rect is still stored in the group's own local coordinates, not in page ones.
+            Rect2D local = rect.BoundingBox();
+            Assert.Equal(0.0, local.Left, 6);
+            Assert.Equal(10.0, local.Width, 6);
         }
         finally
         {
