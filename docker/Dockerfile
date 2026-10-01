@@ -48,16 +48,14 @@ RUN dotnet workload install wasm-tools \
 COPY . .
 RUN dotnet build VCCad.sln -c Release --no-restore
 
-# Gate: run every test project before producing images.
-# The standard PDF faces. Sixteen text-export tests embed a URW base-35 face - "Nimbus Sans" and friends -
+# Gate: run every test project before producing images.`n# The standard PDF faces. Sixteen text-export tests embed a URW base-35 face - "Nimbus Sans" and friends -
 # because a PDF is entitled to name one of the fourteen standard fonts and embed nothing at all. The faces are
 # located on the machine rather than shipped with this project, so a runner without them fails on a missing
 # font key rather than on anything to do with the code. ci.yml has installed them for a while; the image did
 # not, and the container build failed on nine Pdf tests for exactly that reason.
 ENV VCCAD_URW_FONTS=/usr/share/fonts/opentype/urw-base35
 
-# Gate: run every test project before producing images.
-RUN dotnet test tests/VCCad.Geometry.Tests -c Release --no-build --no-restore --logger "console;verbosity=minimal" \
+# Gate: run every test project before producing images.`nRUN dotnet test tests/VCCad.Geometry.Tests -c Release --no-build --no-restore --logger "console;verbosity=minimal" \
  && dotnet test tests/VCCad.Core.Tests -c Release --no-build --no-restore --logger "console;verbosity=minimal" \
  && dotnet test tests/VCCad.Pdf.Tests -c Release --no-build --no-restore --logger "console;verbosity=minimal" \
  && dotnet test tests/VCCad.Api.Integration.Tests -c Release --no-build --no-restore --logger "console;verbosity=minimal"
