@@ -62,12 +62,16 @@ public partial class StrokePane : UserControl
     /// effect takes rather than knowing, so an effect that declares a new parameter gets an editor for it without
     /// anyone touching this file. Only numbers and whole numbers are built, because those are what
     /// `SetEffectParameter` accepts - a colour is not a number and is not claimed here.
+    ///
+    /// The value shown is read from the **inspected stroke**, so the box describes the same stroke the row came
+    /// from; reading the stack's first match would show one stroke's number and write it to another.
     /// </summary>
     private void BuildEffectEditors()
     {
         EffectParameters.Children.Clear();
 
-        if (_vm is null || EffectList.SelectedIndex < 0 || EffectList.SelectedIndex >= _effectRows.Count)
+        if (_vm is null || EffectList.SelectedIndex < 0 || EffectList.SelectedIndex >= _effectRows.Count ||
+            InspectedStrokeIndex() is not { } strokeIndex)
         {
             return;
         }
@@ -97,8 +101,8 @@ public partial class StrokePane : UserControl
 
             var box = new TextBox
             {
-                Text = (_vm.ActiveSession.EffectParameterValue(row.Raster, row.Index, parameter.Name) ?? parameter.Default)
-                    .ToString("0.####", CultureInfo.InvariantCulture),
+                Text = (_vm.ActiveSession.EffectParameterValue(row.Raster, row.Index, parameter.Name, strokeIndex)
+                        ?? parameter.Default).ToString("0.####", CultureInfo.InvariantCulture),
                 Tag = parameter.Name,
             };
 
@@ -126,7 +130,8 @@ public partial class StrokePane : UserControl
     private void CommitEffectParameter(TextBox box)
     {
         if (_vm is null || _syncing || box.Tag is not string name ||
-            EffectList.SelectedIndex < 0 || EffectList.SelectedIndex >= _effectRows.Count)
+            EffectList.SelectedIndex < 0 || EffectList.SelectedIndex >= _effectRows.Count ||
+            InspectedStrokeIndex() is not { } strokeIndex)
         {
             return;
         }
@@ -137,7 +142,7 @@ public partial class StrokePane : UserControl
         }
 
         EffectRow row = _effectRows[EffectList.SelectedIndex];
-        if (_vm.ActiveSession.SetEffectParameter(row.Raster, row.Index, name, value) > 0)
+        if (_vm.ActiveSession.SetEffectParameter(row.Raster, row.Index, name, value, strokeIndex) > 0)
         {
             // Re-reads the effect, so a value that was clamped - an opacity over one, a detail under one - shows
             // as what it became rather than as what was typed.
@@ -151,19 +156,21 @@ public partial class StrokePane : UserControl
     /// Removes the selected effect from the list it came from, through the session method the operation calls.
     ///
     /// The row remembers whether it is an outline or a raster effect, because those are two lists in the model and
-    /// an index into one names a different effect in the other.
+    /// an index into one names a different effect in the other. The stroke is the inspected one: removing row 0 of
+    /// a list that shows a **middle** stroke's effects must not take row 0 off the top of the stack.
     /// </summary>
     private void OnRemoveEffect(object? sender, RoutedEventArgs e)
     {
-        if (_vm is null || EffectList.SelectedIndex < 0 || EffectList.SelectedIndex >= _effectRows.Count)
+        if (_vm is null || EffectList.SelectedIndex < 0 || EffectList.SelectedIndex >= _effectRows.Count ||
+            InspectedStrokeIndex() is not { } strokeIndex)
         {
             return;
         }
 
         EffectRow row = _effectRows[EffectList.SelectedIndex];
         int changed = row.Raster
-            ? _vm.ActiveSession.RemoveStrokeRasterEffect(row.Index)
-            : _vm.ActiveSession.RemoveStrokeEffect(row.Index);
+            ? _vm.ActiveSession.RemoveStrokeRasterEffect(row.Index, strokeIndex)
+            : _vm.ActiveSession.RemoveStrokeEffect(row.Index, strokeIndex);
 
         if (changed > 0)
         {
@@ -177,10 +184,15 @@ public partial class StrokePane : UserControl
     /// The kind comes from the box, which is filled from the registry, and the defaults come from the model's
     /// records - so this never invents a parameter value and never needs to know what an effect takes. A panel that
     /// grows parameter editors will read the same declaration to build them.
+    ///
+    /// The stroke is the inspected one, so the effect arrives on the stroke whose list the panel is showing rather
+    /// than on every stroke of the selection. With nothing inspected there is no stroke it could honestly land on,
+    /// so nothing happens.
     /// </summary>
     private void OnAddEffect(object? sender, RoutedEventArgs e)
     {
-        if (_vm is null || EffectKindBox.SelectedItem is not string kind)
+        if (_vm is null || EffectKindBox.SelectedItem is not string kind ||
+            InspectedStrokeIndex() is not { } strokeIndex)
         {
             return;
         }
@@ -192,8 +204,8 @@ public partial class StrokePane : UserControl
         }
 
         int changed = definition.Raster
-            ? _vm.ActiveSession.AddRasterEffect(new RasterEffectSpec(definition.RasterKind!.Value))
-            : _vm.ActiveSession.AddOutlineEffect(new OutlineEffectSpec(definition.OutlineKind!.Value));
+            ? _vm.ActiveSession.AddRasterEffect(new RasterEffectSpec(definition.RasterKind!.Value), strokeIndex)
+            : _vm.ActiveSession.AddOutlineEffect(new OutlineEffectSpec(definition.OutlineKind!.Value), strokeIndex);
 
         if (changed > 0)
         {
@@ -305,6 +317,15 @@ public partial class StrokePane : UserControl
         return index >= 0 && index < path.Strokes.Count ? path.Strokes[index] : null;
     }
 
+    /// <summary>
+    /// The inspected stroke's index, or null when nothing is being inspected - the form the session methods take,
+    /// where naming a stroke and naming none are different requests.
+    ///
+    /// Derived from <see cref="InspectedStrokeSpec"/> rather than from `_vm.InspectedStroke` alone, so the effects
+    /// list and its buttons agree with the geometry fields about whether there is a stroke here at all.
+    /// </summary>
+    private int? InspectedStrokeIndex() => InspectedStrokeSpec() is null ? null : _vm!.InspectedStroke;
+
     private void Refresh()
     {
         PathItem? path = _vm?.ActiveSession.SelectedPaths().FirstOrDefault();
@@ -314,14 +335,14 @@ public partial class StrokePane : UserControl
         StrokeTargetLabel.Text = _vm?.InspectedStrokeLabel ?? "none";
 
         // The export warning is about the object (its filter, its blend mode, whether any of its strokes carries a
-        // raster effect), so it reads the path even when no stroke is inspected. The effects list deliberately still
-        // reads the top of the stack: the effect session methods work across the stack rather than on one member, so
-        // pointing the list at the inspected stroke would show one stroke's effects while the buttons edited
-        // another's. Widening those is separate work; leaving the list as it was is at least honest about what it is.
+        // raster effect), so it reads the path even when no stroke is inspected.
         ShowExportWarning(path);
-        RefreshEffects(path);
 
+        // One read for both, so the effects list cannot describe a different stroke from the fields below - a list
+        // showing the top of the stack while the buttons edited it was the same disagreement, one level down.
+        // Nothing inspected means an empty list, which is the honest state rather than a fallback.
         StrokeSpec? stroke = InspectedStrokeSpec();
+        RefreshEffects(stroke);
         if (stroke is null)
         {
             _syncing = true;
@@ -412,23 +433,23 @@ public partial class StrokePane : UserControl
     private List<EffectRow> _effectRows = new();
 
     /// <summary>
-    /// The stroke's effects, in the order they apply.
+    /// The inspected stroke's effects, in the order they apply.
     ///
     /// Outline effects first and then the raster ones, because those are two lists the model keeps separately and
     /// pretending otherwise would let a move put an outline effect into the raster list. The row remembers which
-    /// list it came from, which is what makes the move land in the right one.
+    /// list it came from, which is what makes the move land in the right one. Null means nothing is inspected, and
+    /// then there is nothing to list.
     /// </summary>
-    private void RefreshEffects(PathItem? path)
+    private void RefreshEffects(StrokeSpec? stroke)
     {
         var rows = new List<EffectRow>();
 
-        if (path is not null)
+        if (stroke is not null)
         {
-            StrokeSpec stroke = path.Stroke;
-            for (int i = 0; i < stroke.AllEffects.Count; i++)
+            var effects = stroke.AllEffects.ToList();
+            for (int i = 0; i < effects.Count; i++)
             {
-                OutlineEffectSpec effect = stroke.AllEffects.ElementAt(i);
-                rows.Add(new EffectRow(effect.Kind.ToString(), string.Empty, i, Raster: false));
+                rows.Add(new EffectRow(effects[i].Kind.ToString(), string.Empty, i, Raster: false));
             }
 
             if (stroke.AllRasterEffects is { } raster)
@@ -459,7 +480,8 @@ public partial class StrokePane : UserControl
     /// </summary>
     private void MoveEffect(int direction)
     {
-        if (_vm is null || EffectList.SelectedIndex < 0 || EffectList.SelectedIndex >= _effectRows.Count)
+        if (_vm is null || EffectList.SelectedIndex < 0 || EffectList.SelectedIndex >= _effectRows.Count ||
+            InspectedStrokeIndex() is not { } strokeIndex)
         {
             return;
         }
@@ -468,8 +490,8 @@ public partial class StrokePane : UserControl
 
         int to = row.Index + direction;
         int changed = row.Raster
-            ? _vm.ActiveSession.MoveStrokeRasterEffect(row.Index, to)
-            : _vm.ActiveSession.MoveStrokeEffect(row.Index, to);
+            ? _vm.ActiveSession.MoveStrokeRasterEffect(row.Index, to, strokeIndex)
+            : _vm.ActiveSession.MoveStrokeEffect(row.Index, to, strokeIndex);
 
         if (changed == 0)
         {

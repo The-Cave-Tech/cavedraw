@@ -56,6 +56,10 @@ public class StrokePaneEffectListTests
 
         viewModel.Document.Artboards[0].Layers[0].AddItem(path);
         viewModel.SelectObject(path);
+
+        // The list follows the **inspected** stroke, so the row a person is looking at is the one the buttons edit;
+        // nothing inspected means an empty list. Inspecting the only stroke is what the appearance panel publishes.
+        viewModel.InspectedStroke = 0;
         Settle();
         return path;
     }
@@ -160,6 +164,7 @@ public class StrokePaneEffectListTests
         });
         viewModel.Document.Artboards[0].Layers[0].AddItem(path);
         viewModel.SelectObject(path);
+        viewModel.InspectedStroke = 0;
         Settle();
 
         Assert.Equal(1, List(pane).ItemCount);

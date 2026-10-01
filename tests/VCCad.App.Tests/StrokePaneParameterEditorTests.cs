@@ -52,6 +52,10 @@ public class StrokePaneParameterEditorTests
 
         viewModel.Document.Artboards[0].Layers[0].AddItem(path);
         viewModel.SelectObject(path);
+
+        // The editors read and write the **inspected** stroke's effect, so the row shown and the value written are
+        // the same stroke's; nothing inspected builds no editors.
+        viewModel.InspectedStroke = 0;
         Settle();
         return path;
     }

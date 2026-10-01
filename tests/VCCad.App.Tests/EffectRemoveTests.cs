@@ -120,6 +120,9 @@ public class EffectRemoveTests
         PathItem path = Path(OutlineEffectSpec.OffsetPath(4), OutlineEffectSpec.Roughen(2, seed: 3));
         viewModel.Document.Artboards[0].Layers[0].AddItem(path);
         viewModel.SelectObject(path);
+
+        // The list follows the **inspected** stroke, so without choosing one there is no row for Remove to act on.
+        viewModel.InspectedStroke = 0;
         for (int i = 0; i < 3; i++)
         {
             Dispatcher.UIThread.RunJobs();

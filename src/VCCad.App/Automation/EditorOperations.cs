@@ -1676,9 +1676,10 @@ public static class EditorOperations
             "Add an outline effect to the selected paths' strokes, on top of the ones they have. kind is one of " +
             "offsetPath, roughen, zigZag or scribble. size is how far a point may move (or how far an offset path " +
             "moves the edges), detail is how many passes a scribble draws, and seed is what makes a random-looking " +
-            "effect the same every time it is drawn - the same document must render and export identically. One " +
-            "undo step per path.",
-            "kind:string, size?:number, detail?:number, seed?:number",
+            "effect the same every time it is drawn - the same document must render and export identically. " +
+            "strokeIndex picks one stroke of the stack, counted from the bottom, and defaults to every stroke; a " +
+            "path whose stack is shorter is skipped. One undo step per path.",
+            "kind:string, size?:number, detail?:number, seed?:number, strokeIndex?:number",
             (ctx, p) =>
             {
                 string kind = p.GetString("kind") ?? string.Empty;
@@ -1701,7 +1702,13 @@ public static class EditorOperations
                     (int)p.GetLong("seed", 1));
 
                 // Through the session, so the stroke pane's Add button and this run one implementation.
-                return new { effect = parsed.ToString(), changed = ctx.Session.AddOutlineEffect(effect) };
+                int? strokeIndex = OptionalStrokeIndex(p);
+                return new
+                {
+                    effect = parsed.ToString(),
+                    strokeIndex,
+                    changed = ctx.Session.AddOutlineEffect(effect, strokeIndex),
+                };
             });
 
         Add("style.clearStrokeEffects",
@@ -1729,8 +1736,10 @@ public static class EditorOperations
             "Add a raster effect to the selected paths' strokes. kind is blur, dropShadow, innerGlow or " +
             "outerGlow. radius is how far it spreads, offsetX/offsetY displace a drop shadow, opacity is the " +
             "effect's own, and tint is its colour - omitted means the stroke's own colour, which is the usual " +
-            "answer for a glow. One undo step per path.",
-            "kind:string, radius?:number, offsetX?:number, offsetY?:number, opacity?:number, tint?:[r,g,b]",
+            "answer for a glow. strokeIndex picks one stroke of the stack, counted from the bottom, and defaults " +
+            "to every stroke; a path whose stack is shorter is skipped. One undo step per path.",
+            "kind:string, radius?:number, offsetX?:number, offsetY?:number, opacity?:number, tint?:[r,g,b], " +
+            "strokeIndex?:number",
             (ctx, p) =>
             {
                 string kind = p.GetString("kind") ?? string.Empty;
@@ -1760,11 +1769,13 @@ public static class EditorOperations
                     tint);
 
                 // Through the session, for the same reason: one implementation, called by the pane and by this.
+                int? strokeIndex = OptionalStrokeIndex(p);
                 return new
                 {
                     effect = parsed.ToString(),
                     tinted = tint is not null,
-                    changed = ctx.Session.AddRasterEffect(effect),
+                    strokeIndex,
+                    changed = ctx.Session.AddRasterEffect(effect, strokeIndex),
                 };
             });
 
@@ -2319,9 +2330,11 @@ public static class EditorOperations
         Add("style.setEffectParameter",
             "Set one parameter of one effect, by the name the registry declares it under. raster says which list " +
             "the effect is in; index counts from the start of it; name is one of the parameters " +
-            "`style.effectParameters` reports for that kind. A name the effect does not take is refused, because " +
-            "the alternative is a typo quietly setting something else. One undo step per path.",
-            "name:string, value:number, index:number, raster?:bool",
+            "`style.effectParameters` reports for that kind. strokeIndex picks one stroke of the stack, counted " +
+            "from the bottom, and defaults to the first stroke carrying the effect. A name the effect does not " +
+            "take is refused, because the alternative is a typo quietly setting something else. One undo step per " +
+            "path.",
+            "name:string, value:number, index:number, raster?:bool, strokeIndex?:number",
             (ctx, p) =>
             {
                 string name = p.GetString("name")
@@ -2329,58 +2342,74 @@ public static class EditorOperations
                 int index = (int)p.GetLong("index", 0);
                 double value = p.GetDouble("value", 0.0);
                 bool raster = p.GetBool("raster", false);
+                int? strokeIndex = OptionalStrokeIndex(p);
 
                 return new
                 {
                     name,
                     index,
                     raster,
-                    changed = ctx.Session.SetEffectParameter(raster, index, name, value),
+                    strokeIndex,
+                    changed = ctx.Session.SetEffectParameter(raster, index, name, value, strokeIndex),
                 };
             });
 
         Add("style.removeStrokeEffect",
             "Remove one outline effect from the selected paths' strokes. index counts from the start of the effect " +
-            "list, which is the order they apply in. One undo step per path.",
-            "index:number",
+            "list, which is the order they apply in. strokeIndex picks one stroke of the stack, counted from the " +
+            "bottom, and defaults to the first stroke carrying that index. One undo step per path.",
+            "index:number, strokeIndex?:number",
             (ctx, p) =>
             {
                 int index = (int)p.GetLong("index", 0);
-                return new { index, changed = ctx.Session.RemoveStrokeEffect(index) };
+                int? strokeIndex = OptionalStrokeIndex(p);
+                return new { index, strokeIndex, changed = ctx.Session.RemoveStrokeEffect(index, strokeIndex) };
             });
 
         Add("style.removeRasterEffect",
             "Remove one raster effect from the selected paths' strokes. index counts from the start of that list, " +
-            "which is kept separately from the outline effects. One undo step per path.",
-            "index:number",
+            "which is kept separately from the outline effects. strokeIndex picks one stroke of the stack, counted " +
+            "from the bottom, and defaults to the first stroke carrying that index. One undo step per path.",
+            "index:number, strokeIndex?:number",
             (ctx, p) =>
             {
                 int index = (int)p.GetLong("index", 0);
-                return new { index, changed = ctx.Session.RemoveStrokeRasterEffect(index) };
+                int? strokeIndex = OptionalStrokeIndex(p);
+                return new { index, strokeIndex, changed = ctx.Session.RemoveStrokeRasterEffect(index, strokeIndex) };
             });
 
         Add("style.reorderStrokeEffect",
             "Move an outline effect within the selected paths' strokes - how a person changes the order they apply " +
             "in. from and to count from the start of the effect list, and to may be one past the last to put it at " +
             "the end. The order is the picture: roughen inside an offset does not look like an offset inside a " +
-            "roughen. One undo step per path.",
-            "from:number, to:number",
+            "roughen. strokeIndex picks one stroke of the stack, counted from the bottom, and defaults to the first " +
+            "stroke carrying that index. One undo step per path.",
+            "from:number, to:number, strokeIndex?:number",
             (ctx, p) =>
             {
                 int from = (int)p.GetLong("from", 0);
                 int to = (int)p.GetLong("to", 0);
-                return new { from, to, changed = ctx.Session.MoveStrokeEffect(from, to) };
+                int? strokeIndex = OptionalStrokeIndex(p);
+                return new { from, to, strokeIndex, changed = ctx.Session.MoveStrokeEffect(from, to, strokeIndex) };
             });
 
         Add("style.reorderRasterEffect",
             "Move a raster effect within the selected paths' strokes, the same way and for the same reason: they " +
-            "compose in order. One undo step per path.",
-            "from:number, to:number",
+            "compose in order. strokeIndex picks one stroke of the stack, counted from the bottom, and defaults to " +
+            "the first stroke carrying that index. One undo step per path.",
+            "from:number, to:number, strokeIndex?:number",
             (ctx, p) =>
             {
                 int from = (int)p.GetLong("from", 0);
                 int to = (int)p.GetLong("to", 0);
-                return new { from, to, changed = ctx.Session.MoveStrokeRasterEffect(from, to) };
+                int? strokeIndex = OptionalStrokeIndex(p);
+                return new
+                {
+                    from,
+                    to,
+                    strokeIndex,
+                    changed = ctx.Session.MoveStrokeRasterEffect(from, to, strokeIndex),
+                };
             });
 
         Add("style.effectParameters",
@@ -5894,6 +5923,18 @@ public static class EditorOperations
             _ => null,
         };
     }
+
+    /// <summary>
+    /// The stroke a caller named, or null when they named none.
+    ///
+    /// The two are genuinely different requests: none means every stroke of the stack, which is what these
+    /// operations did before the stack was addressable, and one means exactly that member on every selected path -
+    /// with a path whose stack is shorter skipped as a gap rather than clamped onto a stroke nobody named.
+    /// </summary>
+    private static int? OptionalStrokeIndex(JsonElement p)
+        => p.ValueKind == JsonValueKind.Object && p.TryGetProperty("strokeIndex", out _)
+            ? (int)p.GetLong("strokeIndex", 0)
+            : null;
 
     /// <summary>
     /// The width points a caller sent, or an empty list when they sent none.

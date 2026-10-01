@@ -1706,20 +1706,35 @@ public sealed class DocumentSession : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Adds an outline effect to every stroke of every selected path, and reports how many paths changed.
+    /// Adds an outline effect to the selected paths' strokes, and reports how many paths changed.
     ///
     /// Here rather than inside the operation, so the stroke pane and a driver run the **same** code - the shape
     /// `AddStroke` already has. A capability that exists only inside a control's event handler is a defect in this
     /// repository, and the way to avoid one is for the panel to call this rather than to reimplement it.
+    ///
+    /// `strokeIndex` names one member of the stack, counted from the bottom, and is what a panel showing "stroke 2
+    /// of 3" passes so that the effect lands on the stroke it is describing. Naming none keeps the old walk over
+    /// the whole stack, so a caller that was working is unaffected. A path whose stack is shorter than the index is
+    /// **skipped**, the same gap `StrokeSummary` reports, rather than clamped onto a stroke nobody named.
     /// </summary>
-    public int AddOutlineEffect(OutlineEffectSpec effect)
+    public int AddOutlineEffect(OutlineEffectSpec effect, int? strokeIndex = null)
     {
         int changed = 0;
         foreach (PathItem path in SelectedPaths().ToList())
         {
+            if (strokeIndex is not null && (strokeIndex < 0 || strokeIndex >= path.Strokes.Count))
+            {
+                continue;
+            }
+
             var stack = path.Strokes.ToList();
             for (int i = 0; i < stack.Count; i++)
             {
+                if (strokeIndex is not null && i != strokeIndex)
+                {
+                    continue;
+                }
+
                 stack[i] = stack[i] with
                 {
                     Effects = new EffectStack(stack[i].AllEffects.Concat(new[] { effect })),
@@ -1734,14 +1749,24 @@ public sealed class DocumentSession : INotifyPropertyChanged
     }
 
     /// <summary>The same for a raster effect, which is a separate list on the same stroke.</summary>
-    public int AddRasterEffect(RasterEffectSpec effect)
+    public int AddRasterEffect(RasterEffectSpec effect, int? strokeIndex = null)
     {
         int changed = 0;
         foreach (PathItem path in SelectedPaths().ToList())
         {
+            if (strokeIndex is not null && (strokeIndex < 0 || strokeIndex >= path.Strokes.Count))
+            {
+                continue;
+            }
+
             var stack = path.Strokes.ToList();
             for (int i = 0; i < stack.Count; i++)
             {
+                if (strokeIndex is not null && i != strokeIndex)
+                {
+                    continue;
+                }
+
                 stack[i] = stack[i] with
                 {
                     RasterEffects = new RasterEffectStack(stack[i].AllRasterEffects.Concat(new[] { effect })),
@@ -1763,13 +1788,22 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// the whole of what a panel needs to show a control per declared parameter and write it back, and the names
     /// they answer to are the registry's rather than the panel's. Colours are not here, for the same reason they
     /// are not in the setter.
+    ///
+    /// `strokeIndex` names the stack member to read, so a panel describing "stroke 2 of 3" does not show stroke 1's
+    /// value and then write it to stroke 2 - the same disagreement the setter's index exists to remove. Naming none
+    /// keeps the old first-match walk.
     /// </summary>
-    public double? EffectParameterValue(bool raster, int index, string name)
+    public double? EffectParameterValue(bool raster, int index, string name, int? strokeIndex = null)
     {
         foreach (PathItem path in SelectedPaths())
         {
             for (int i = 0; i < path.Strokes.Count; i++)
             {
+                if (strokeIndex is not null && i != strokeIndex)
+                {
+                    continue;
+                }
+
                 StrokeSpec stroke = path.Strokes[i];
                 if (raster)
                 {
@@ -1821,15 +1855,29 @@ public sealed class DocumentSession : INotifyPropertyChanged
     ///
     /// Colours are not settable here: they are not a number, and a signature that took a string would be guessing
     /// at what kind of value it was handed. `tint` is on the list of things this does not yet cover.
+    ///
+    /// `strokeIndex` names one member of the stack, counted from the bottom, and is what a panel describing "stroke
+    /// 2 of 3" passes so the edit lands where it says. Naming none keeps the old walk, which sets the first stroke
+    /// that has the effect. A path whose stack is shorter than the index is skipped, as a gap.
     /// </summary>
-    public int SetEffectParameter(bool raster, int index, string name, double value)
+    public int SetEffectParameter(bool raster, int index, string name, double value, int? strokeIndex = null)
     {
         int changed = 0;
         foreach (PathItem path in SelectedPaths().ToList())
         {
+            if (strokeIndex is not null && (strokeIndex < 0 || strokeIndex >= path.Strokes.Count))
+            {
+                continue;
+            }
+
             var stack = path.Strokes.ToList();
             for (int i = 0; i < stack.Count; i++)
             {
+                if (strokeIndex is not null && i != strokeIndex)
+                {
+                    continue;
+                }
+
                 if (raster)
                 {
                     if (stack[i].AllRasterEffects is not { } effects || index < 0 || index >= effects.Count)
@@ -1897,15 +1945,29 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// The two families are separate lists, so the caller says which one rather than this searching both: an index
     /// into the raster effects and an index into the outline effects name different effects, and guessing which was
     /// meant would remove the wrong one. Mirrors <see cref="MoveStrokeEffect"/>, which has the same shape.
+    ///
+    /// `strokeIndex` names one member of the stack, and is what a panel describing "stroke 2 of 3" passes so it
+    /// removes from that stroke rather than from the first one that happens to carry the effect. Naming none keeps
+    /// the old first-match search.
     /// </summary>
-    public int RemoveStrokeEffect(int index)
+    public int RemoveStrokeEffect(int index, int? strokeIndex = null)
     {
         int changed = 0;
         foreach (PathItem path in SelectedPaths().ToList())
         {
+            if (strokeIndex is not null && (strokeIndex < 0 || strokeIndex >= path.Strokes.Count))
+            {
+                continue;
+            }
+
             var stack = path.Strokes.ToList();
             for (int i = 0; i < stack.Count; i++)
             {
+                if (strokeIndex is not null && i != strokeIndex)
+                {
+                    continue;
+                }
+
                 var effects = stack[i].AllEffects.ToList();
                 if (index < 0 || index >= effects.Count)
                 {
@@ -1924,14 +1986,24 @@ public sealed class DocumentSession : INotifyPropertyChanged
     }
 
     /// <summary>The same for a raster effect, which is the other list.</summary>
-    public int RemoveStrokeRasterEffect(int index)
+    public int RemoveStrokeRasterEffect(int index, int? strokeIndex = null)
     {
         int changed = 0;
         foreach (PathItem path in SelectedPaths().ToList())
         {
+            if (strokeIndex is not null && (strokeIndex < 0 || strokeIndex >= path.Strokes.Count))
+            {
+                continue;
+            }
+
             var stack = path.Strokes.ToList();
             for (int i = 0; i < stack.Count; i++)
             {
+                if (strokeIndex is not null && i != strokeIndex)
+                {
+                    continue;
+                }
+
                 if (stack[i].AllRasterEffects is not { } raster || index < 0 || index >= raster.Count)
                 {
                     continue;
@@ -1960,15 +2032,28 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// **The order is the picture.** Effects compose in order, so roughen inside an offset does not look like an
     /// offset inside a roughen - which is why this is a list rather than a set, and why moving one is a real edit
     /// rather than a tidy-up. Mirrors <see cref="MoveStroke"/>, because the same thing is true one level down.
+    ///
+    /// `strokeIndex` names the stack member whose list moves, so a panel describing "stroke 2 of 3" reorders that
+    /// stroke rather than the first one with two effects. Naming none keeps the old first-match search.
     /// </summary>
-    public int MoveStrokeEffect(int from, int to)
+    public int MoveStrokeEffect(int from, int to, int? strokeIndex = null)
     {
         int changed = 0;
         foreach (PathItem path in SelectedPaths().ToList())
         {
+            if (strokeIndex is not null && (strokeIndex < 0 || strokeIndex >= path.Strokes.Count))
+            {
+                continue;
+            }
+
             var stack = path.Strokes.ToList();
             for (int i = 0; i < stack.Count; i++)
             {
+                if (strokeIndex is not null && i != strokeIndex)
+                {
+                    continue;
+                }
+
                 var effects = stack[i].AllEffects.ToList();
                 if (from < 0 || from >= effects.Count)
                 {
@@ -1990,14 +2075,24 @@ public sealed class DocumentSession : INotifyPropertyChanged
     }
 
     /// <summary>The same for a stroke's raster effects, which are a separate list and ordered for the same reason.</summary>
-    public int MoveStrokeRasterEffect(int from, int to)
+    public int MoveStrokeRasterEffect(int from, int to, int? strokeIndex = null)
     {
         int changed = 0;
         foreach (PathItem path in SelectedPaths().ToList())
         {
+            if (strokeIndex is not null && (strokeIndex < 0 || strokeIndex >= path.Strokes.Count))
+            {
+                continue;
+            }
+
             var stack = path.Strokes.ToList();
             for (int i = 0; i < stack.Count; i++)
             {
+                if (strokeIndex is not null && i != strokeIndex)
+                {
+                    continue;
+                }
+
                 if (stack[i].RasterEffects is not { } raster || from < 0 || from >= raster.Count)
                 {
                     continue;

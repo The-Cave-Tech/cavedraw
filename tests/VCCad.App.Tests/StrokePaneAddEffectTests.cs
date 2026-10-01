@@ -52,6 +52,10 @@ public class StrokePaneAddEffectTests
 
         viewModel.Document.Artboards[0].Layers[0].AddItem(path);
         viewModel.SelectObject(path);
+
+        // The Add button puts the effect on the **inspected** stroke, which is what the appearance panel publishes
+        // when a row is chosen; with nothing inspected there is no stroke it could honestly land on.
+        viewModel.InspectedStroke = 0;
         Settle();
         return path;
     }
