@@ -18,7 +18,8 @@ namespace VCCad.Core.Model;
 ///
 /// **The one thing the plan does not give is the pen.** A constant-width stroke with no dash is deliberately
 /// planned as "stroked and not an outline", because the caps and joins of a stroked path are the renderer's, and
-/// `PathOffset` - which builds every outline the plan does carry - mitres and knows nothing of the stroke's join.
+/// `PathOffset` now honours a cap and a join where it does build an outline, but this case produces no outline at
+/// all, so the region still has to be built here.
 /// Replacing the ink with geometry takes the pen away, so for that case the region is built here, caps and joins
 /// included: it is the region the renderer's pen would have painted, which is what keeps the command agreeing
 /// with the canvas and the file.
