@@ -304,6 +304,20 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         ? "none"
         : $"stroke {InspectedStroke + 1} of {ActiveSession.SelectedPaths().FirstOrDefault()?.Strokes.Count ?? 0}";
 
+    /// <summary>
+    /// Tells a listener that which stroke is being inspected may have changed because the **selection** did.
+    ///
+    /// The property clamps on read, so its value is never stale - but a panel binding to it is only told to ask
+    /// again when something raises a change, and a selection change is exactly such a moment. Without this the
+    /// panels keep showing the stroke from the selection before, which is the disagreement the shared state exists
+    /// to prevent.
+    /// </summary>
+    private void NotifyInspectedStroke()
+    {
+        OnPropertyChanged(nameof(InspectedStroke));
+        OnPropertyChanged(nameof(InspectedStrokeLabel));
+    }
+
     /// <summary>Whether the active document has changes that are not on disk.</summary>
     public bool IsActiveModified => _active.IsModified;
 
@@ -508,16 +522,28 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public bool IsObjectSelected(LayerItem item) => _active.IsObjectSelected(item);
     public bool IsSegmentSelected(PathItem path, int sub, int seg) => _active.IsSegmentSelected(path, sub, seg);
 
-    public void SelectObject(LayerItem? item) => _active.SelectObject(item);
+    public void SelectObject(LayerItem? item)
+    {
+        _active.SelectObject(item);
+        NotifyInspectedStroke();
+    }
     public void ToggleObjectSelection(LayerItem item) => _active.ToggleObjectSelection(item);
-    public void SelectRange(IEnumerable<LayerItem> items, bool additive) => _active.SelectRange(items, additive);
+    public void SelectRange(IEnumerable<LayerItem> items, bool additive)
+    {
+        _active.SelectRange(items, additive);
+        NotifyInspectedStroke();
+    }
     public void SelectSegment(PathItem path, int sub, int seg, bool additive) => _active.SelectSegment(path, sub, seg, additive);
     public void SelectPoint(PathItem path, int sub, int node) => _active.SelectPoint(path, sub, node);
     public void ClearPointSelection() => _active.ClearPointSelection();
     public void ClearSegmentSelection() => _active.ClearSegmentSelection();
     public void InsertPointOnSegment(PathItem path, int subIndex, int segmentIndex, Point2D near)
         => _active.InsertPointOnSegment(path, subIndex, segmentIndex, near);
-    public void ClearSelection() => _active.ClearSelection();
+    public void ClearSelection()
+    {
+        _active.ClearSelection();
+        NotifyInspectedStroke();
+    }
     public void MovePointTo(Point2D target) => _active.MovePointTo(target);
     public void SelectArtboard(Artboard? artboard) => _active.SelectArtboard(artboard);
     public void SetSelectionRotationRadians(double radians) => _active.SetSelectionRotationRadians(radians);
