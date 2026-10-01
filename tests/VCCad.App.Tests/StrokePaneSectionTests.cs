@@ -149,7 +149,7 @@ public class StrokePaneSectionTests
     /// named follow-up for the registry: the operation cannot yet reach the stroke the inspector describes.
     /// </summary>
     [AvaloniaFact]
-    public void ChoosingAProfileLandsOnTheInspectedStrokeOnly()
+    public void ChoosingAProfileLandsOnTheInspectedStrokeRatherThanTheWholeStack()
     {
         var viewModel = new EditorViewModel();
         viewModel.Document.AddWidthProfile(Taper());
