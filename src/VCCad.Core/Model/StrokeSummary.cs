@@ -75,9 +75,9 @@ public sealed record StrokeSummary(
         // from the one `style.commonStroke` reports. A profile and a dynamics spec are compared member by member
         // through the same readings the stroke itself uses - a stroke with no profile draws with none, and a missing
         // dynamics target is Off, exactly as the pane reads them.
-        bool dashMixed = false;
-        bool profileMixed = false;
-        bool dynamicsMixed = false;
+        bool dashMixed = !strokes.All(s => s.Dash.Equals(strokes[0].Dash));
+        bool profileMixed = !strokes.All(s => SameProfile(s, strokes[0]));
+        bool dynamicsMixed = !strokes.All(s => SameDynamics(s, strokes[0]));
 
         return new StrokeSummary(
             strokes.Count,
