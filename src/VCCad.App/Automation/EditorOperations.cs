@@ -2269,6 +2269,42 @@ public static class EditorOperations
                 return new { changed = ctx.Session.RemoveStroke(index) };
             });
 
+        Add("style.commonStroke",
+            "What the selection's strokes agree on, and what they do not: each member is either the common value " +
+            "or explicitly mixed. A panel editing a selection has to show one value per member, and showing the " +
+            "first path's value as though it were everyone's is how a person types a number and believes it " +
+            "describes what they selected. index picks the stroke in the stack, counted from the bottom, and " +
+            "defaults to the top.",
+            "index?:number",
+            (ctx, p) =>
+            {
+                int? index = p.ValueKind == JsonValueKind.Object && p.TryGetProperty("index", out _)
+                    ? (int)p.GetLong("index", 0)
+                    : null;
+
+                var paths = ctx.Session.SelectedPaths().ToList();
+                StrokeSummary summary = StrokeSummary.Of(
+                    paths, index ?? Math.Max(0, (paths.FirstOrDefault()?.Strokes.Count ?? 1) - 1));
+
+                return new
+                {
+                    paths = summary.Paths,
+                    strokes = summary.Strokes,
+                    empty = summary.IsEmpty,
+                    mixed = summary.IsMixed,
+                    width = summary.Width,
+                    widthMixed = summary.WidthMixed,
+                    cap = summary.Cap?.ToString(),
+                    capMixed = summary.CapMixed,
+                    join = summary.Join?.ToString(),
+                    joinMixed = summary.JoinMixed,
+                    miterLimit = summary.MiterLimit,
+                    miterMixed = summary.MiterMixed,
+                    alignment = summary.Alignment?.ToString(),
+                    alignmentMixed = summary.AlignmentMixed,
+                };
+            });
+
         Add("style.inspectStroke",
             "Which stroke of the selection is being inspected, counted from the bottom - the state the stroke " +
             "inspector and the appearance panel share, so both are describing the same one rather than each holding " +
