@@ -61,8 +61,29 @@ public class EffectRegistryTests
             new[] { "radius", "opacity", "tint" },
             EffectRegistry.Find("outerGlow")!.Parameters.Select(p => p.Name).ToArray());
 
-        // An offset path has one number, and no seed - there is nothing random about it.
-        Assert.Equal(new[] { "size" }, EffectRegistry.Find("offsetPath")!.Parameters.Select(p => p.Name).ToArray());
+        // An offset path has a size and a corner, and no seed - there is nothing random about it.
+        Assert.Equal(new[] { "size", "join" }, EffectRegistry.Find("offsetPath")!.Parameters.Select(p => p.Name).ToArray());
+    }
+
+    /// <summary>
+    /// **Each outline effect declares the parameters the feature list names**, not a reduced set.
+    ///
+    /// #105 is exactly this: the effect existed and the knob did not, so the panel had nothing to build an editor
+    /// from and the operation had no name to accept. Pinning the whole list here is what makes a later removal a
+    /// failure rather than a control that quietly disappears.
+    /// </summary>
+    [Fact]
+    public void TheOutlineEffectsDeclareTheParametersTheFeatureListNames()
+    {
+        Assert.Equal(new[] { "size", "detail", "seed" }, Names("roughen"));
+        Assert.Equal(new[] { "size", "ridges", "smooth", "seed" }, Names("zigZag"));
+        Assert.Equal(new[] { "size", "join" }, Names("offsetPath"));
+        Assert.Equal(
+            new[] { "size", "detail", "density", "overlap", "width", "curviness", "scatter", "seed" },
+            Names("scribble"));
+
+        static string[] Names(string kind)
+            => EffectRegistry.Find(kind)!.Parameters.Select(p => p.Name).ToArray();
     }
 
     /// <summary>A parameter's sort is part of the declaration, because a panel builds a different editor for each.</summary>

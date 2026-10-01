@@ -93,8 +93,92 @@ public class EffectParameterTests
 
                 Assert.True(!before.Equals(after),
                     $"'{definition.Kind}' declares parameter '{parameter.Name}', but setting it changed nothing");
+
+                // And the same name reads back, because the panel shows a box per declared parameter and would
+                // otherwise show the declaration's default rather than what the effect actually holds.
+                Assert.NotNull(context.Session.EffectParameterValue(definition.Raster, 0, parameter.Name));
             }
         }
+    }
+
+    /// <summary>
+    /// **Every parameter the outline effects gained reaches the geometry, not only the model.**
+    ///
+    /// A name the model stores and the effect ignores is invisible from the model: the value is set, read back,
+    /// saved and exported while the outline never moves - exactly the defect the registry exists to prevent. So
+    /// each one is set through the operation the panel calls, and the outline the effect draws is compared.
+    /// </summary>
+    [Theory]
+    [InlineData("roughen", "detail", 4.0)]
+    [InlineData("zigZag", "ridges", 3.0)]
+    [InlineData("zigZag", "smooth", 1.0)]
+    [InlineData("offsetPath", "join", 1.0)]
+    [InlineData("offsetPath", "join", 2.0)]
+    [InlineData("scribble", "density", 4.0)]
+    [InlineData("scribble", "overlap", 0.5)]
+    [InlineData("scribble", "width", 3.0)]
+    [InlineData("scribble", "curviness", 3.0)]
+    [InlineData("scribble", "scatter", 2.0)]
+    public void EveryParameterTheOutlineEffectsGainedReachesTheGeometry(string kind, string name, double value)
+    {
+        PathItem path = Path(Base(kind));
+        AutomationContext context = Host(path);
+
+        IReadOnlyList<IReadOnlyList<Point2D>> before = Outline(path.Strokes[0].AllEffects[0]);
+
+        EditorOperations.Invoke(context, "style.setEffectParameter", Params(new { name, value, index = 0 }));
+
+        IReadOnlyList<IReadOnlyList<Point2D>> after = Outline(path.Strokes[0].AllEffects[0]);
+
+        Assert.False(
+            Same(before, after),
+            $"'{kind}' accepts '{name}' but the outline it draws is unchanged");
+    }
+
+    /// <summary>A base spec of the kind, sized so the parameter under test has something to act on.</summary>
+    private static OutlineEffectSpec Base(string kind) => kind switch
+    {
+        "roughen" => OutlineEffectSpec.Roughen(3, seed: 4),
+        "zigZag" => OutlineEffectSpec.ZigZag(4, seed: 4),
+        "offsetPath" => OutlineEffectSpec.OffsetPath(5),
+
+        // A scribble of one pass draws the loop unchanged, so the wandering parameters need a second pass to
+        // have anywhere to show up - which is what the effect itself says a scribble is.
+        _ => OutlineEffectSpec.Scribble(3, passes: 2, seed: 4),
+    };
+
+    /// <summary>A 100x100 square, so every effect has segments and corners to act on.</summary>
+    private static IReadOnlyList<Point2D> Square()
+        => new[] { new Point2D(0, 0), new Point2D(100, 0), new Point2D(100, 100), new Point2D(0, 100) };
+
+    private static IReadOnlyList<IReadOnlyList<Point2D>> Outline(OutlineEffectSpec effect)
+        => OutlineEffects.Apply(new[] { Square() }, new[] { effect });
+
+    /// <summary>Point-for-point equality, so "the outline changed" has to be about the points.</summary>
+    private static bool Same(IReadOnlyList<IReadOnlyList<Point2D>> a, IReadOnlyList<IReadOnlyList<Point2D>> b)
+    {
+        if (a.Count != b.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < a.Count; i++)
+        {
+            if (a[i].Count != b[i].Count)
+            {
+                return false;
+            }
+
+            for (int j = 0; j < a[i].Count; j++)
+            {
+                if (Math.Abs(a[i][j].X - b[i][j].X) > 1e-9 || Math.Abs(a[i][j].Y - b[i][j].Y) > 1e-9)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     private static PathItem RasterPath(RasterEffectKind kind)

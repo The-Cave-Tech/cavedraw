@@ -77,10 +77,63 @@ public static class EffectRegistry
         "How far a point may move - or, for an offset path, how far the edges move. Positive grows, negative shrinks.",
         Default: 2, Minimum: double.NegativeInfinity);
 
-    private static readonly EffectParameter Detail = new(
+    private static readonly EffectParameter RoughenDetail = new(
         "detail", EffectParameterKind.Number,
-        "Scribble: how many passes to draw. Roughen and zig-zag ignore it.",
-        Default: 1, Minimum: 1);
+        "Roughen: how many pieces each segment is divided into before its points are displaced - one is the path's " +
+        "own points, and more puts a displaced point between them, so a roughen can be fine-grained as well as large.",
+        Default: 1, Minimum: 1, Maximum: 64);
+
+    private static readonly EffectParameter ScribbleDetail = new(
+        "detail", EffectParameterKind.Number,
+        "Scribble: how many passes to draw, rounded. One pass is not a scribble, so it draws the path as it was.",
+        Default: 1, Minimum: 1, Maximum: 64);
+
+    private static readonly EffectParameter Ridges = new(
+        "ridges", EffectParameterKind.Integer,
+        "Zig-zag: how many to-and-fro points each segment carries, alternating to either side. One is the single " +
+        "midpoint the effect drew before this was a choice.",
+        Default: 1, Minimum: 1, Maximum: 64);
+
+    private static readonly EffectParameter Smooth = new(
+        "smooth", EffectParameterKind.Integer,
+        "Zig-zag: 0 for a straight-sided to-and-fro, 1 to round every ridge into a wave. A whole number because " +
+        "it is a choice rather than a measurement.",
+        Default: 0, Minimum: 0, Maximum: 1);
+
+    private static readonly EffectParameter Join = new(
+        "join", EffectParameterKind.Integer,
+        "Offset path: how the corners are formed - 0 mitre, the two offset edges extended until they cross; " +
+        "1 bevel, a straight edge across the gap; 2 round, an arc across it. A whole number because it is a " +
+        "choice rather than a measurement.",
+        Default: 0, Minimum: 0, Maximum: 2);
+
+    private static readonly EffectParameter Density = new(
+        "density", EffectParameterKind.Integer,
+        "Scribble: how many points each pass samples per segment of the path - one is the path's own points. A " +
+        "denser pass is a finer strand, which is what the wandering parameters have to act on.",
+        Default: 1, Minimum: 1, Maximum: 64);
+
+    private static readonly EffectParameter Overlap = new(
+        "overlap", EffectParameterKind.Number,
+        "Scribble: how far each pass runs on past the point where the loop closes, as a fraction of one whole turn.",
+        Default: 0, Minimum: 0, Maximum: 4);
+
+    private static readonly EffectParameter WanderWidth = new(
+        "width", EffectParameterKind.Number,
+        "Scribble: how far each sampled point wanders to either side of the path, alternating from one to the other.",
+        Default: 0, Minimum: 0);
+
+    private static readonly EffectParameter Curviness = new(
+        "curviness", EffectParameterKind.Number,
+        "Scribble: how far each pass bows away from the path in one smooth sweep round the loop, rather than " +
+        "jittering from point to point.",
+        Default: 0, Minimum: 0);
+
+    private static readonly EffectParameter Scatter = new(
+        "scatter", EffectParameterKind.Number,
+        "Scribble: how far each sampled point is thrown in a random direction of its own, which is what turns a " +
+        "displaced copy of the path into a hand-drawn strand.",
+        Default: 0, Minimum: 0);
 
     private static readonly EffectParameter Radius = new(
         "radius", EffectParameterKind.Number,
@@ -106,13 +159,14 @@ public static class EffectRegistry
     public static IReadOnlyList<EffectDefinition> All { get; } = new[]
     {
         new EffectDefinition("zigZag", false, "The outline wobbles to either side of the line.",
-            new[] { Size, Seed }, OutlineEffectKind.ZigZag, null, new[] { "zig_zag" }),
+            new[] { Size, Ridges, Smooth, Seed }, OutlineEffectKind.ZigZag, null, new[] { "zig_zag" }),
         new EffectDefinition("roughen", false, "The outline is displaced point by point.",
-            new[] { Size, Seed }, OutlineEffectKind.Roughen),
+            new[] { Size, RoughenDetail, Seed }, OutlineEffectKind.Roughen),
         new EffectDefinition("offsetPath", false, "The outline moves outward or inward as a whole.",
-            new[] { Size }, OutlineEffectKind.OffsetPath, null, new[] { "offset_path", "offset" }),
+            new[] { Size, Join }, OutlineEffectKind.OffsetPath, null, new[] { "offset_path", "offset" }),
         new EffectDefinition("scribble", false, "The stroke is drawn several times, hand-drawn style.",
-            new[] { Size, Detail, Seed }, OutlineEffectKind.Scribble),
+            new[] { Size, ScribbleDetail, Density, Overlap, WanderWidth, Curviness, Scatter, Seed },
+            OutlineEffectKind.Scribble),
 
         new EffectDefinition("blur", true, "The stroke is softened.",
             new[] { Radius }, null, RasterEffectKind.Blur, new[] { "gaussianBlur", "gaussian_blur" }),

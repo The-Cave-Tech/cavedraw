@@ -30,6 +30,24 @@ public class OutlineEffectTests
     private static IReadOnlyList<IReadOnlyList<Point2D>> One(IReadOnlyList<Point2D> loop)
         => new[] { loop };
 
+    private static double Distance(Point2D a, Point2D b)
+        => Math.Sqrt(((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y)));
+
+    /// <summary>How far a point is from the square's nearest corner, which is what an offset path holds constant.</summary>
+    private static double DistanceToNearestCorner(Point2D point)
+        => Square().Min(corner => Distance(point, corner));
+
+    private static double PerpendicularDistance(Point2D point, Point2D from, Point2D to)
+    {
+        double dx = to.X - from.X;
+        double dy = to.Y - from.Y;
+        return Math.Abs((dx * (from.Y - point.Y)) - ((from.X - point.X) * dy)) /
+               Math.Sqrt((dx * dx) + (dy * dy));
+    }
+
+    private static (double MinX, double MinY, double MaxX, double MaxY) Extent(IReadOnlyList<Point2D> loop)
+        => (loop.Min(p => p.X), loop.Min(p => p.Y), loop.Max(p => p.X), loop.Max(p => p.Y));
+
     // ---------------------------------------------------------------- offset path
 
     /// <summary>
@@ -306,6 +324,367 @@ public class OutlineEffectTests
 
         IReadOnlyList<Point2D> only = Assert.Single(loops);
         Assert.Equal(Square().Select(p => (p.X, p.Y)), only.Select(p => (p.X, p.Y)));
+    }
+
+    // ---------------------------------------------------------------- roughen, detail
+
+    /// <summary>
+    /// **`detail` makes a roughen finer, not merely bigger.**
+    ///
+    /// One is the path's own points; four divides every segment into four and displaces each of the new points
+    /// too. Counting the points alone would pass for an implementation that inserted them and left them lying on
+    /// the segment, which draws the same picture as before - so the added points are checked to be off it.
+    /// </summary>
+    [Fact]
+    public void MoreRoughenDetailDividesTheOutlineMoreFinely()
+    {
+        static IReadOnlyList<Point2D> Rough(double detail)
+            => OutlineEffects.Apply(One(Square()), new[]
+            {
+                OutlineEffectSpec.Roughen(3, seed: 7) with { Detail = detail },
+            })[0];
+
+        IReadOnlyList<Point2D> one = Rough(1);
+        IReadOnlyList<Point2D> four = Rough(4);
+
+        Assert.Equal(4, one.Count);
+        Assert.Equal(16, four.Count);
+
+        // Three added points belong between each pair of the path's own points, which puts them at 4i + 1..3.
+        for (int i = 0; i < 4; i++)
+        {
+            for (int k = 1; k <= 3; k++)
+            {
+                double off = PerpendicularDistance(
+                    four[(i * 4) + k], Square()[i], Square()[(i + 1) % 4]);
+
+                Assert.True(off > 1e-9, $"the point added between {i} and {i + 1} was left on the segment");
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- zig-zag, ridges and smooth
+
+    /// <summary>
+    /// **`ridges` puts more to-and-froes on each segment.** One is the single midpoint the effect always drew;
+    /// three places a ridge at a third, a half and five sixths of the way along and alternates them across the
+    /// line, so the line is crossed three times where it used to be crossed once.
+    /// </summary>
+    [Fact]
+    public void MoreRidgesAddsMoreZigZagsToEachSegment()
+    {
+        static IReadOnlyList<Point2D> Jagged(int ridges)
+            => OutlineEffects.Apply(One(Square()), new[]
+            {
+                OutlineEffectSpec.ZigZag(4) with { Ridges = ridges },
+            })[0];
+
+        Assert.Equal(8, Jagged(1).Count);
+        Assert.Equal(16, Jagged(3).Count);
+
+        // The first segment runs along y = 0 from x = 0 to x = 100, so its ridges are its own points 1..3.
+        Point2D[] ridges = Jagged(3).Skip(1).Take(3).ToArray();
+
+        Assert.All(ridges, p => Assert.InRange(p.X, 1e-9, 100.0 - 1e-9));
+        Assert.All(ridges, p => Assert.Equal(4.0, Math.Abs(p.Y), 6));
+        Assert.True(
+            ridges[0].Y < 0 && ridges[1].Y > 0 && ridges[2].Y < 0,
+            $"the ridges should alternate across the segment: {string.Join(", ", ridges.Select(p => p.Y))}");
+    }
+
+    /// <summary>
+    /// **`smooth` rounds each ridge into a wave.**
+    ///
+    /// A sharp ridge goes out to the full size and straight back; a rounded one rises and falls across the ridge,
+    /// so no point of it reaches the peak. It still crosses the line, though - a "smooth" that only bulged to one
+    /// side would not be a zig-zag at all.
+    /// </summary>
+    [Fact]
+    public void SmoothingARidgeRoundsItIntoAWave()
+    {
+        static IReadOnlyList<Point2D> Jagged(OutlineEffectSpec effect)
+            => OutlineEffects.Apply(One(Square()), new[] { effect })[0];
+
+        OutlineEffectSpec sharp = OutlineEffectSpec.ZigZag(4) with { Ridges = 2 };
+        OutlineEffectSpec smooth = sharp with { Smooth = true };
+
+        IReadOnlyList<Point2D> sharpPoints = Jagged(sharp);
+        IReadOnlyList<Point2D> smoothPoints = Jagged(smooth);
+
+        // Two ridges a segment: a sharp ridge is one point, a rounded one is four across the same half.
+        Assert.Equal(12, sharpPoints.Count);
+        Assert.Equal(36, smoothPoints.Count);
+
+        Point2D[] sharpRidges = sharpPoints.Skip(1).Take(2).ToArray();
+        Point2D[] smoothRidges = smoothPoints.Skip(1).Take(8).ToArray();
+
+        Assert.Equal(4.0, sharpRidges.Max(p => Math.Abs(p.Y)), 6);
+
+        double reached = smoothRidges.Max(p => Math.Abs(p.Y));
+        Assert.True(reached < 4.0, $"a rounded ridge should not reach the sharp peak, but reached {reached}");
+        Assert.Contains(smoothRidges, p => p.Y < 0);
+        Assert.Contains(smoothRidges, p => p.Y > 0);
+    }
+
+    // ---------------------------------------------------------------- offset path, join
+
+    /// <summary>
+    /// **`join` chooses what happens at a corner.** A mitre extends the two offset edges until they cross - five
+    /// on each axis, and 5 sqrt(2) from the corner it came from, which is the spike a sharp turn grows. A bevel
+    /// stops them where they reach the corner, and a round joins the same two ends with an arc. Both keep every
+    /// point exactly the offset from the corner, which is what an offset path promises.
+    /// </summary>
+    [Fact]
+    public void TheOffsetJoinChoosesHowTheCornersAreFormed()
+    {
+        static IReadOnlyList<Point2D> Offset(OutlineJoin join)
+            => OutlineEffects.Apply(One(Square()), new[]
+            {
+                OutlineEffectSpec.OffsetPath(5) with { Join = join },
+            })[0];
+
+        IReadOnlyList<Point2D> miter = Offset(OutlineJoin.Miter);
+        Assert.Equal(
+            new[] { (-5.0, -5.0), (105.0, -5.0), (105.0, 105.0), (-5.0, 105.0) },
+            miter.Select(p => (p.X, p.Y)));
+        Assert.Equal(5.0 * Math.Sqrt(2.0), DistanceToNearestCorner(miter[0]), 6);
+
+        IReadOnlyList<Point2D> bevel = Offset(OutlineJoin.Bevel);
+        Assert.Equal(8, bevel.Count);
+        Assert.All(bevel, p => Assert.Equal(5.0, DistanceToNearestCorner(p), 6));
+        Assert.DoesNotContain(bevel, p => Distance(p, miter[0]) < 1e-9);
+
+        IReadOnlyList<Point2D> round = Offset(OutlineJoin.Round);
+        Assert.True(round.Count > bevel.Count, $"an arc should take more points than a bevel: {round.Count}");
+        Assert.All(round, p => Assert.Equal(5.0, DistanceToNearestCorner(p), 6));
+    }
+
+    // ---------------------------------------------------------------- scribble, density
+
+    /// <summary>
+    /// **`density` samples each pass more finely.** One is the path's own points and four puts three more between
+    /// each pair. On its own that adds points along the strand rather than moving it - which is what "denser"
+    /// means - so the same strand is checked to come back, and the extra points are shown to be the ones a wander
+    /// bends, so a dense pass is a finer strand rather than the same corners with more to draw between them.
+    /// </summary>
+    [Fact]
+    public void MoreScribbleDensitySamplesEachPassMoreFinely()
+    {
+        static IReadOnlyList<IReadOnlyList<Point2D>> Strands(double density, double width)
+            => OutlineEffects.Apply(One(Square()), new[]
+            {
+                OutlineEffectSpec.Scribble(3, passes: 2, seed: 5) with { Density = density, Width = width },
+            });
+
+        IReadOnlyList<Point2D> coarse = Strands(1, 0)[0];
+        IReadOnlyList<Point2D> dense = Strands(4, 0)[0];
+
+        Assert.Equal(4, coarse.Count);
+        Assert.Equal(16, dense.Count);
+        Assert.Equal(Extent(coarse), Extent(dense));
+
+        for (int i = 0; i < 4; i++)
+        {
+            for (int k = 1; k <= 3; k++)
+            {
+                Assert.Equal(
+                    0.0,
+                    PerpendicularDistance(dense[(i * 4) + k], coarse[i], coarse[(i + 1) % 4]),
+                    9);
+            }
+        }
+
+        Assert.NotEqual(
+            Strands(1, 2)[0].Select(p => (p.X, p.Y)),
+            Strands(4, 2)[0].Select(p => (p.X, p.Y)).Take(4));
+    }
+
+    // ---------------------------------------------------------------- scribble, overlap
+
+    /// <summary>**`overlap` runs each pass on past the point where the loop closes.**</summary>
+    [Fact]
+    public void ScribbleOverlapRunsEachPassPastTheClosingPoint()
+    {
+        static IReadOnlyList<Point2D> Strand(double overlap)
+            => OutlineEffects.Apply(One(Square()), new[]
+            {
+                OutlineEffectSpec.Scribble(3, passes: 2, seed: 5) with { Overlap = overlap },
+            })[0];
+
+        IReadOnlyList<Point2D> closed = Strand(0);
+        IReadOnlyList<Point2D> past = Strand(0.5);
+
+        Assert.Equal(4, closed.Count);
+
+        // Four points to get round the loop, and half a turn more of them on the way past the start.
+        Assert.Equal(6, past.Count);
+        Assert.NotEqual(closed.Select(p => (p.X, p.Y)), past.Select(p => (p.X, p.Y)).Take(4));
+    }
+
+    // ---------------------------------------------------------------- scribble, width
+
+    /// <summary>**`width` wanders each pass to either side of the path, alternating.**</summary>
+    [Fact]
+    public void ScribbleWidthWandersEachPassToEitherSide()
+    {
+        static IReadOnlyList<Point2D> Strand(double width)
+            => OutlineEffects.Apply(One(Square()), new[]
+            {
+                OutlineEffectSpec.Scribble(3, passes: 2, seed: 5) with { Width = width },
+            })[0];
+
+        IReadOnlyList<Point2D> straight = Strand(0);
+        IReadOnlyList<Point2D> wide = Strand(3);
+
+        Assert.Equal(straight.Count, wide.Count);
+
+        // The first point lies on the segment running along y = 0 and the second on the one running along x = 100,
+        // so each is measured along its own normal: the point turned to one side and then the other.
+        double first = -(wide[0].Y - straight[0].Y);
+        double second = wide[1].X - straight[1].X;
+
+        Assert.Equal(3.0, Math.Abs(first), 6);
+        Assert.Equal(3.0, Math.Abs(second), 6);
+        Assert.True(first * second < 0, $"the wander should alternate sides: {first} and {second}");
+    }
+
+    // ---------------------------------------------------------------- scribble, curviness
+
+    /// <summary>
+    /// **`curviness` bows each pass in one smooth sweep**, rather than jittering from point to point: measured
+    /// along each point's own normal, the bow is zero at the start of the loop, out to the full amount a quarter
+    /// of the way round, back to zero halfway and out the other way three quarters. That is a curve; a per-point
+    /// wander would change sign at every point instead.
+    /// </summary>
+    [Fact]
+    public void ScribbleCurvinessBowsEachPassInOneSmoothSweep()
+    {
+        static IReadOnlyList<Point2D> Strand(double curviness)
+            => OutlineEffects.Apply(One(Square()), new[]
+            {
+                OutlineEffectSpec.Scribble(3, passes: 2, seed: 5) with { Curviness = curviness },
+            })[0];
+
+        IReadOnlyList<Point2D> straight = Strand(0);
+        IReadOnlyList<Point2D> bowed = Strand(3);
+
+        Assert.Equal(straight.Count, bowed.Count);
+
+        // Each point's own normal, in the square's winding: -y on the first segment, +x on the second, +y on the
+        // third and -x on the fourth.
+        double[] alongNormal =
+        {
+            -(bowed[0].Y - straight[0].Y),
+            bowed[1].X - straight[1].X,
+            bowed[2].Y - straight[2].Y,
+            -(bowed[3].X - straight[3].X),
+        };
+
+        Assert.Equal(0.0, alongNormal[0], 9);
+        Assert.Equal(3.0, alongNormal[1], 6);
+        Assert.Equal(0.0, alongNormal[2], 9);
+        Assert.Equal(-3.0, alongNormal[3], 6);
+    }
+
+    // ---------------------------------------------------------------- scribble, scatter
+
+    /// <summary>
+    /// **`scatter` throws each sampled point its own way.** Without it a pass is a rigid copy of the loop, which
+    /// every point sharing one displacement says precisely; with it they no longer do.
+    /// </summary>
+    [Fact]
+    public void ScribbleScatterThrowsEachPointItsOwnWay()
+    {
+        static IReadOnlyList<Point2D> Strand(double scatter)
+            => OutlineEffects.Apply(One(Square()), new[]
+            {
+                OutlineEffectSpec.Scribble(3, passes: 3, seed: 5) with { Scatter = scatter },
+            })[0];
+
+        IReadOnlyList<Point2D> rigid = Strand(0);
+        for (int i = 0; i < rigid.Count; i++)
+        {
+            Assert.Equal(rigid[0].X - Square()[0].X, rigid[i].X - Square()[i].X, 9);
+            Assert.Equal(rigid[0].Y - Square()[0].Y, rigid[i].Y - Square()[i].Y, 9);
+        }
+
+        IReadOnlyList<Point2D> thrown = Strand(2);
+        bool ownWay = thrown.Select((p, i) => (
+                p.X - Square()[i].X - (thrown[0].X - Square()[0].X),
+                p.Y - Square()[i].Y - (thrown[0].Y - Square()[0].Y)))
+            .Any(d => Math.Abs(d.Item1) > 1e-9 || Math.Abs(d.Item2) > 1e-9);
+
+        Assert.True(ownWay, "every point of a scattered pass still shares one rigid displacement");
+    }
+
+    // ---------------------------------------------------------------- defaults
+
+    /// <summary>
+    /// **A new parameter's default is the geometry the effect had before the parameter existed.**
+    ///
+    /// These four pin the pre-existing outline literally, because a saved document is entitled to render as it
+    /// always did: a knob whose default moved the artwork would redraw every effected stroke in the file without
+    /// anyone touching it, and nothing about the document would say so.
+    /// </summary>
+    [Fact]
+    public void RoughenAtItsDefaultDetailDisplacesThePathsOwnPoints()
+    {
+        IReadOnlyList<Point2D> rough = OutlineEffects.Apply(One(Square()), new[]
+        {
+            OutlineEffectSpec.Roughen(3, seed: 1),
+        })[0];
+
+        Assert.Equal(4, rough.Count);
+    }
+
+    [Fact]
+    public void ZigZagAtItsDefaultsIsStillTheSingleMidpointPerSegment()
+    {
+        IReadOnlyList<Point2D> jagged = OutlineEffects.Apply(One(Square()), new[]
+        {
+            OutlineEffectSpec.ZigZag(4),
+        })[0];
+
+        Assert.Equal(
+            new[]
+            {
+                (0.0, 0.0), (50.0, -4.0), (100.0, 0.0), (96.0, 50.0),
+                (100.0, 100.0), (50.0, 104.0), (0.0, 100.0), (4.0, 50.0),
+            },
+            jagged.Select(p => (p.X, p.Y)));
+    }
+
+    [Fact]
+    public void OffsetPathAtItsDefaultJoinIsStillTheMitredCorner()
+    {
+        IReadOnlyList<Point2D> offset = OutlineEffects.Apply(One(Square()), new[]
+        {
+            OutlineEffectSpec.OffsetPath(5),
+        })[0];
+
+        Assert.Equal(
+            new[] { (-5.0, -5.0), (105.0, -5.0), (105.0, 105.0), (-5.0, 105.0) },
+            offset.Select(p => (p.X, p.Y)));
+    }
+
+    [Fact]
+    public void ScribbleAtItsDefaultsIsStillARigidCopyOfTheLoop()
+    {
+        IReadOnlyList<IReadOnlyList<Point2D>> loops = OutlineEffects.Apply(One(Square()), new[]
+        {
+            OutlineEffectSpec.Scribble(6, passes: 3, seed: 9),
+        });
+
+        Assert.Equal(3, loops.Count);
+        Assert.All(loops, loop =>
+        {
+            Assert.Equal(4, loop.Count);
+            for (int i = 0; i < loop.Count; i++)
+            {
+                Assert.Equal(loop[0].X - Square()[0].X, loop[i].X - Square()[i].X, 9);
+                Assert.Equal(loop[0].Y - Square()[0].Y, loop[i].Y - Square()[i].Y, 9);
+            }
+        });
     }
 
     // ---------------------------------------------------------------- general

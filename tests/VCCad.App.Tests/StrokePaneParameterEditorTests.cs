@@ -123,10 +123,17 @@ public class StrokePaneParameterEditorTests
         Select(pane, 1);
         int scribbleBoxes = Boxes(pane).Count;
 
-        // An offset path declares one number; a scribble declares three.
-        Assert.Equal(1, offsetPathBoxes);
-        Assert.Equal(3, scribbleBoxes);
+        // Counted from the registry rather than written here, so a declaration grows a control without this test
+        // being told about it - which is the property the panel exists to have.
+        Assert.Equal(EditableParameters("offsetPath"), offsetPathBoxes);
+        Assert.Equal(EditableParameters("scribble"), scribbleBoxes);
+        Assert.True(scribbleBoxes > offsetPathBoxes,
+            $"a scribble declares more parameters than an offset path: {scribbleBoxes} and {offsetPathBoxes}");
     }
+
+    /// <summary>The editors a kind declares: every parameter but a colour, which is not a number.</summary>
+    private static int EditableParameters(string kind)
+        => EffectRegistry.Find(kind)!.Parameters.Count(p => p.Kind != EffectParameterKind.Color);
 
     /// <summary>**Editing a box writes the model**, through the session method the operation calls.</summary>
     [AvaloniaFact]

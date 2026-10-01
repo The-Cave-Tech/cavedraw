@@ -1836,6 +1836,14 @@ public sealed class DocumentSession : INotifyPropertyChanged
                         "size" => effect.Size,
                         "detail" => effect.Detail,
                         "seed" => effect.Seed,
+                        "ridges" => effect.Ridges,
+                        "smooth" => effect.Smooth ? 1.0 : 0.0,
+                        "join" => (double)(int)effect.Join,
+                        "density" => effect.Density,
+                        "overlap" => effect.Overlap,
+                        "width" => effect.Width,
+                        "curviness" => effect.Curviness,
+                        "scatter" => effect.Scatter,
                         _ => null,
                     };
                 }
@@ -1918,6 +1926,18 @@ public sealed class DocumentSession : INotifyPropertyChanged
                         "size" => effect with { Size = value },
                         "detail" => effect with { Detail = Math.Max(1.0, value) },
                         "seed" => effect with { Seed = (int)value },
+                        "ridges" => effect with { Ridges = Math.Max(1, (int)Math.Round(value)) },
+
+                        // `smooth` and `join` are choices rather than measurements, so they arrive as the whole
+                        // number a panel has to offer for them today: zero or one, and the three joins in order.
+                        "smooth" => effect with { Smooth = value >= 0.5 },
+                        "join" => effect with { Join = (OutlineJoin)Math.Clamp((int)Math.Round(value), 0, 2) },
+
+                        "density" => effect with { Density = Math.Max(1.0, Math.Round(value)) },
+                        "overlap" => effect with { Overlap = Math.Max(0.0, value) },
+                        "width" => effect with { Width = Math.Max(0.0, value) },
+                        "curviness" => effect with { Curviness = Math.Max(0.0, value) },
+                        "scatter" => effect with { Scatter = Math.Max(0.0, value) },
                         _ => null,
                     };
 
