@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Xml.Linq;
 using VCCad.Core.Model;
+using VCCad.Core.Text;
 using VCCad.Geometry;
 
 namespace VCCad.Core.Svg;
@@ -847,15 +848,17 @@ public static class SvgWriter
                         WritePath(path, parent);
                         break;
 
-                    // Neither of these has an element this writer emits, and both are content the document holds
-                    // and a person would see on the canvas. Writing either one badly would be worse than not
-                    // writing it - a wrong `text` element is a file that lies about the layout - so they are left
-                    // out and **named**, which is the half that stops the omission being silent. Writing them
-                    // properly is #132's work and turns these reports back into output.
                     case TextItem text:
-                        Report(text, "the writer has no SVG text output, so the block is not in the file");
+                        WriteText(text, parent);
                         break;
 
+                    // An embedded raster still has no element this writer emits. The model holds **decoded
+                    // samples** in whichever colour space the file used, plus a soft mask, a colour key and a
+                    // decode array; SVG states a picture as an encoded resource - a data URI naming PNG or JPEG -
+                    // and this build reads PNG and cannot write it. Raw samples under an `image` element would be
+                    // a file no viewer can read, which is the plausible-instead-of-honest answer the rule forbids,
+                    // so the raster is left out and **named**. Writing text properly is #132's work; this half of
+                    // it is not done and the issue says so.
                     case ImageItem image:
                         Report(image, "the writer has no SVG image output, so the raster is not in the file");
                         break;
@@ -867,6 +870,429 @@ public static class SvgWriter
                         break;
                 }
             }
+        }
+
+        /// <summary>
+        /// One text block, as an SVG `text` element with a `tspan` per run.
+        ///
+        /// **The frame is the reader's, not the model's.** SVG places a *baseline* and the model stores a block's
+        /// *top-left*, so the writer and the reader must agree about the ascent between them or the numbers do not
+        /// come back. `<see cref="SvgTextStyle"/>`'s reader places the top-left one ascent above the baseline, and
+        /// where the model does not record the ascent it was placed with, that ascent is the reader's own
+        /// `<see cref="TextMeasurement.TypicalAscentEm"/>.` A block that came from an SVG, or one this editor made,
+        /// therefore round-trips its origin exactly. A run that *does* record an ascent is written at **its** own
+        /// baseline - the picture is then where the model says it is - and the block is reported, because the reader
+        /// will recover the origin against its own ascent and move the block by the difference.
+        ///
+        /// **Coordinates are written bare.** The root states its size in `pt` and its `viewBox` in the model's own
+        /// numbers, so the reader's view-box fit is the identity and one bare number is one model unit. Spelling a
+        /// length in `pt` here would send it through the CSS ratio a second time - `font-size="18pt"` reads back as
+        /// 24 - which is the unit bridge this writer must not put text across.
+        ///
+        /// **A line is a `text` element.** SVG joins pieces that share a baseline into one run sequence, and so does
+        /// this reader, so a block set on one baseline is written as one element. A block the model sets on several
+        /// baselines - an explicit newline, or a frame that wrapped it - is written as one element per baseline: the
+        /// content and the picture are then both right, and the block is reported, because each baseline comes back
+        /// as a block of its own.
+        ///
+        /// **What the file cannot state is reported, and the text is still written.** A run's own colour, its
+        /// tracking, its spacing, its face, its size and its position are all attributable to a `tspan`, so they go
+        /// there. An embedded programme and its glyph ids, a trailing advance no run follows, a wrap width, a source
+        /// face recording a substitution - none of those has a spelling an SVG reader would take - and each is named
+        /// in <see cref="SvgWriteResult.Missing"/> rather than approximated, while the characters themselves still
+        /// reach the file. Losing the words as well would help nobody.
+        ///
+        /// **A rotated or mirrored block is written as a transform.** SVG turns an element about a point and mirrors
+        /// it about an axis, and the model's own signs say which of the two it is, so the block is written in its own
+        /// frame and carried by a `matrix`. The reader puts a transform on a group, so such a block comes back inside
+        /// one - a conversion, like a multi-stroke path gaining an element per stroke, rather than a loss.
+        /// </summary>
+        private void WriteText(TextItem text, XElement parent)
+        {
+            if (text.Runs.Count == 0 || text.PlainText.Length == 0)
+            {
+                Report(text, "the block holds no characters, so there is no text to write");
+                return;
+            }
+
+            TextLayout layout = TextLayoutEngine.Compute(text);
+            ReportTextLosses(text, layout);
+
+            string transform = TextTransform(text);
+            bool preserve = PreservesSpace(text);
+            string? clip = WriteClips(text, AffineTransform.Identity);
+
+            // Where each run begins in the block's flattened text, which is the space a layout segment's `Start`
+            // is an index into - a run's own string is a different space, and slicing one with the other's index
+            // takes the wrong characters.
+            var runStart = new int[text.Runs.Count];
+            int flat = 0;
+            for (int i = 0; i < text.Runs.Count; i++)
+            {
+                runStart[i] = flat;
+                flat += text.Runs[i].Text.Length;
+            }
+
+            for (int line = 0; line < layout.Lines.Count; line++)
+            {
+                List<TextRunBox> segments = layout.Runs.Where(box => box.Line == line).ToList();
+                if (segments.Count == 0)
+                {
+                    // A blank line of a multi-line block: SVG states no such line, and the block is reported for
+                    // its baselines either way. Writing an empty `tspan` would add a run the model has not got.
+                    continue;
+                }
+
+                TextLine placed = layout.Lines[line];
+                TextRun lead = text.Runs[segments[0].Run];
+                double ascent = AscentEm(lead) * lead.FontSize;
+
+                // The anchor states where the file put the *start*, the *middle* or the *end* of the line, and the
+                // reader moves the block's origin back by the width its own layout gives it - so every x is written
+                // from the anchor rather than from the line's left edge, and the origin comes back where it was.
+                double anchor = text.Alignment switch
+                {
+                    TextAlignment.Center => placed.Width / 2.0,
+                    TextAlignment.Right => placed.Width,
+                    _ => 0.0,
+                };
+
+                var element = new XElement(Svg + "text");
+                if (line == 0)
+                {
+                    if (!string.IsNullOrEmpty(text.Name))
+                    {
+                        element.Add(new XAttribute("id", text.Name));
+                    }
+
+                    ApplyForeign(element, text);
+                }
+
+                if (transform.Length > 0)
+                {
+                    element.Add(new XAttribute("transform", transform));
+                }
+
+                element.Add(new XAttribute("y", Number(text.Origin.Y + placed.Top + ascent)));
+
+                // The block's leading, when it is not the default the reader assumes. A bare number is a multiple
+                // of the font size, which is what the model stores, so it comes back as it went out.
+                if (Math.Abs(text.LineSpacing - 1.2) > 1e-9)
+                {
+                    element.Add(new XAttribute("line-height", Number(text.LineSpacing)));
+                }
+
+                if (text.Alignment != TextAlignment.Left)
+                {
+                    element.Add(new XAttribute(
+                        "text-anchor", text.Alignment == TextAlignment.Center ? "middle" : "end"));
+                }
+
+                // A clip on a text item is the same statement it is on a path, and leaving it out would draw the
+                // whole block where the model shows a crop of it.
+                if (clip is not null)
+                {
+                    element.Add(new XAttribute("clip-path", $"url(#{clip})"));
+                }
+
+                // The block's own colour paints the element, which is what the reader takes the block's colour
+                // from; a run that states another goes on its own `tspan`.
+                element.Add(new XAttribute("fill", Hex(text.Color)));
+                if (text.Color.A < 1.0)
+                {
+                    element.Add(new XAttribute("fill-opacity", Number(text.Color.A)));
+                }
+
+                element.Add(new XAttribute("font-family", Face(lead.FontFamily)));
+                if (lead.FontSize > 0)
+                {
+                    element.Add(new XAttribute("font-size", Number(lead.FontSize)));
+                }
+
+                // SVG collapses white space unless the file says otherwise, and a block whose text does not
+                // survive that collapse - a leading space, a trailing one, two in a row - asks for it to be kept.
+                // **On the `tspan`, not on the `text`.** `xml:space="preserve"` in scope makes an XML reader keep
+                // every white space character, including the indentation this writer puts between the elements -
+                // which would come back as a run of its own. Scoped to each run, the formatter's own white space
+                // between the elements is out of scope and is still stripped.
+                foreach (TextRunBox box in segments)
+                {
+                    element.Add(RunElement(text, box, anchor, runStart[box.Run], preserve));
+                }
+
+                Wrote("text");
+                parent.Add(element);
+            }
+        }
+
+        /// <summary>One run's piece on one line, as a `tspan`.</summary>
+        private XElement RunElement(TextItem text, TextRunBox box, double anchor, int runStart, bool preserve)
+        {
+            TextRun run = text.Runs[box.Run];
+            int start = Math.Clamp(box.Start - runStart, 0, run.Text.Length);
+            int length = Math.Clamp(box.Length, 0, run.Text.Length - start);
+            string piece = run.Text.Substring(start, length);
+
+            var element = new XElement(Svg + "tspan", new XText(piece));
+
+            if (preserve)
+            {
+                element.Add(new XAttribute(XNamespace.Xml + "space", "preserve"));
+            }
+
+            // The absolute x is the model's own, which is what lets a run whose advance differs from the face's
+            // width come back with that advance: the reader stores the room before the next run as a gap.
+            element.Add(new XAttribute("x", Number(text.Origin.X + box.X + anchor)));
+
+            ColorRgb colour = text.ColourOf(run);
+            if (colour != text.Color)
+            {
+                element.Add(new XAttribute("fill", Hex(colour)));
+            }
+
+            if (colour.A < 1.0)
+            {
+                element.Add(new XAttribute("fill-opacity", Number(colour.A)));
+            }
+
+            element.Add(new XAttribute("font-family", Face(run.FontFamily)));
+            if (run.FontSize > 0)
+            {
+                element.Add(new XAttribute("font-size", Number(run.FontSize)));
+            }
+
+            if (run.Bold)
+            {
+                element.Add(new XAttribute("font-weight", "bold"));
+            }
+
+            if (run.Italic)
+            {
+                element.Add(new XAttribute("font-style", "italic"));
+            }
+
+            // Both are lengths the run holds, and a bare number here is that length in the file's own units - the
+            // same units the geometry is written in, which is what keeps a letter-spaced run the width it was.
+            if (run.LetterSpacing != 0)
+            {
+                element.Add(new XAttribute("letter-spacing", Number(run.LetterSpacing)));
+            }
+
+            if (run.WordSpacing != 0)
+            {
+                element.Add(new XAttribute("word-spacing", Number(run.WordSpacing)));
+            }
+
+            // The face's own width and variant, in the words the model kept. Nothing selects a face by them, and
+            // the reader says so - but they are the file's values and dropping them here would lose them twice.
+            if (run.FontStretch is { Length: > 0 } stretch)
+            {
+                element.Add(new XAttribute("font-stretch", stretch));
+            }
+
+            if (run.FontVariant is { Length: > 0 } variant)
+            {
+                element.Add(new XAttribute("font-variant", variant));
+            }
+
+            Wrote("tspan");
+            return element;
+        }
+
+        /// <summary>
+        /// Everything about a block the file will not carry, named once each, while the text itself is still
+        /// written.
+        ///
+        /// The rule this repository runs on is that a gap is said rather than silently skipped, and it applies to a
+        /// half-carried block as much as to a dropped one: a file holding the words but not the programme they were
+        /// set in looks complete and is not, and only the person who is told can act on it.
+        /// </summary>
+        private void ReportTextLosses(TextItem text, TextLayout layout)
+        {
+            // SVG's `display="none"` is not a hidden element to this reader - it is an element it never reads - so
+            // writing the block hidden would delete it outright. Losing the state is the smaller loss, and it is
+            // named.
+            if (!text.IsVisible)
+            {
+                Report(text, "the block is hidden and the file holds no hidden text the reader keeps: an element " +
+                             "it does not draw is one it does not read");
+            }
+
+            if (text.FrameWidth > 0)
+            {
+                Report(text, "the wrap width is not in the file: SVG has no text frame, so the reader recovers " +
+                             "the block's width from the text it sets");
+            }
+
+            if (layout.Lines.Count > 1)
+            {
+                Report(text, $"the block is set on {layout.Lines.Count} baselines and the file states a baseline " +
+                             "at a time, so the reader reads one block back per line");
+            }
+
+            // The block's colour is whatever its first piece was painted with, so a block whose own colour is not
+            // that piece's comes back painted with the piece's.
+            if (text.Runs[0].Color is { } own && own != text.Color)
+            {
+                Report(text, "the block's own colour is not its first run's, and the reader takes the block's " +
+                             "colour from the first run");
+            }
+
+            double firstBaseline = AscentEm(text.Runs[0]) * text.Runs[0].FontSize;
+
+            // A block that records the ascent it was placed with is written at **that** baseline, so the file is
+            // where the model says it is - and the reader, which measures a top-left back against its own ascent,
+            // will therefore move the block by the difference. Saying so is the honest half of writing it right.
+            if (text.Runs[0].PlacedAscentEm > 0 &&
+                Math.Abs(text.Runs[0].PlacedAscentEm - TextMeasurement.TypicalAscentEm) > 1e-9)
+            {
+                Report(text, $"the recorded ascent of {Number(text.Runs[0].PlacedAscentEm)} em is written where " +
+                             "the model put the baseline, and the reader measures a block's origin back against " +
+                             "the SVG reader's own ascent, so re-importing moves the block by the difference");
+            }
+
+            for (int i = 0; i < text.Runs.Count; i++)
+            {
+                TextRun run = text.Runs[i];
+                string where = $"run {i}";
+
+                // A run with no characters has no piece to write - there is no `tspan` a reader would make the run
+                // from - so the empty run is named rather than quietly disappearing into its neighbours.
+                if (run.Text.Length == 0)
+                {
+                    Report(text, $"{where} holds no characters, and a run is written as the text it sets");
+                }
+
+                if (run.EmbeddedFont is not null || run.RawCodes is { Length: > 0 } || run.GlyphIds is { Length: > 0 })
+                {
+                    Report(text, $"the embedded programme and glyph ids of {where} are not in the file: SVG " +
+                                 "carries the characters and the face's name, and the reader draws them with a " +
+                                 "face this machine supplies");
+                }
+
+                if (!string.IsNullOrEmpty(run.SourceFont) &&
+                    !string.Equals(run.SourceFont, run.FontFamily, StringComparison.Ordinal))
+                {
+                    Report(text, $"the source face '{run.SourceFont}' of {where} is not in the file: a run is " +
+                                 "written as the face it is drawn with");
+                }
+
+                if (i > 0 && Math.Abs((AscentEm(run) * run.FontSize) - firstBaseline) > 1e-9)
+                {
+                    Report(text, $"{where} sits on a different baseline and the file puts every run of a block " +
+                                 "on one, so it is written on the block's");
+                }
+
+                // A run the last one follows has its advance stated as the room before the next run. Nothing
+                // follows the block's last run, so an advance it carries past the face's own width is the one
+                // number SVG has no attribute for - `textLength` is a measured length the reader reports rather
+                // than holds - and it is named rather than quietly dropped.
+                if (i == text.Runs.Count - 1 && run.AdvanceWidth is { } advance)
+                {
+                    double natural = NaturalWidth(run);
+                    if (natural > 0 && Math.Abs(advance - natural) > 1e-6)
+                    {
+                        Report(text, $"{where} carries an advance of {Number(advance)} pt past the " +
+                                     $"{Number(natural)} pt the face sets, and no run follows it for the file to " +
+                                     "state that room before");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// The ascent a block's top-left sits above its baseline by, in em.
+        ///
+        /// The ascent the block was placed with when the model recorded one, and the reader's own otherwise - which
+        /// is the number the reader will measure the origin back with, so a block that records none comes back
+        /// exactly where it started.
+        /// </summary>
+        private static double AscentEm(TextRun run)
+            => run.PlacedAscentEm > 0 ? run.PlacedAscentEm : TextMeasurement.TypicalAscentEm;
+
+        /// <summary>How wide a face sets a run, the recorded advance deliberately not included.</summary>
+        private static double NaturalWidth(TextRun run)
+        {
+            double width = 0;
+            foreach (double advance in run.Advances())
+            {
+                width += advance;
+            }
+
+            return width;
+        }
+
+        /// <summary>
+        /// The transform a block is written with: its turn about its own origin, then its mirror about that
+        /// origin's axes - the order <see cref="TextItem.BoundingBox"/> applies them in, so the file and the box
+        /// agree. Empty for an upright, unmirrored block, which is every block that lets this change be invisible.
+        /// </summary>
+        private static string TextTransform(TextItem text)
+        {
+            double x = text.MirrorX ? -1.0 : 1.0;
+            double y = text.MirrorY ? -1.0 : 1.0;
+            double cos = Math.Cos(text.RotationRadians);
+            double sin = Math.Sin(text.RotationRadians);
+
+            double a = x * cos;
+            double b = x * sin;
+            double c = -y * sin;
+            double d = y * cos;
+
+            const double Tolerance = 1e-12;
+            if (Math.Abs(a - 1.0) < Tolerance && Math.Abs(b) < Tolerance &&
+                Math.Abs(c) < Tolerance && Math.Abs(d - 1.0) < Tolerance)
+            {
+                return string.Empty;
+            }
+
+            // Stated about the block's own origin, because that is the point the model turns and mirrors it about.
+            double ox = text.Origin.X;
+            double oy = text.Origin.Y;
+            return $"matrix({Number(a)},{Number(b)},{Number(c)},{Number(d)}," +
+                   $"{Number(ox - ((a * ox) + (c * oy)))},{Number(oy - ((b * ox) + (d * oy)))})";
+        }
+
+        /// <summary>
+        /// Whether a block's text survives SVG's white-space collapse, and so needs `xml:space="preserve"`.
+        ///
+        /// The reader collapses runs of white space and strips the ends the way the specification says, which is
+        /// right for the files that mean it and lossy for a block whose spacing is content - a run of spaces set
+        /// deliberately, or a leading one. Asking for the spaces to be kept is what makes those come back.
+        /// </summary>
+        private static bool PreservesSpace(TextItem text)
+        {
+            string plain = text.PlainText;
+            if (plain.Length == 0 || char.IsWhiteSpace(plain[0]) || char.IsWhiteSpace(plain[^1]))
+            {
+                return plain.Length > 0;
+            }
+
+            for (int i = 1; i < plain.Length; i++)
+            {
+                if (plain[i] == ' ' && plain[i - 1] == ' ')
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// A family name as CSS wants it: quoted when it is not a single word, because a family with a space in it
+        /// is a list of two families to a parser that is not told otherwise.
+        /// </summary>
+        private static string Face(string family)
+        {
+            string name = family.Trim();
+            if (name.Length == 0)
+            {
+                return TextItem.DefaultFontFamily;
+            }
+
+            bool simple = name.All(c => char.IsLetterOrDigit(c) || c is '-' or '_');
+            return simple ? name : $"'{name}'";
         }
 
         /// <summary>
@@ -1529,7 +1955,17 @@ public static class SvgWriter
     }
 
     private static string Number(double value)
-        => value.ToString("0.#####", CultureInfo.InvariantCulture);
+    {
+        // Negative zero is the same number as zero and a different string, and a transform written from a mirror
+        // or a quarter turn produces one on every axis the sign does not reach. Writing `-0` where the file means
+        // `0` is a difference nobody asked for, and it survives a byte comparison.
+        if (value == 0.0)
+        {
+            value = 0.0;
+        }
+
+        return value.ToString("0.#####", CultureInfo.InvariantCulture);
+    }
 
     /// <summary>
     /// Compares two gradients by value, so a document that uses one gradient twenty times writes one definition.

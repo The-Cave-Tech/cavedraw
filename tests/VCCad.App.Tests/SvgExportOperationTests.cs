@@ -113,12 +113,16 @@ public class SvgExportOperationTests
     }
 
     /// <summary>
-    /// **The driver sees the loss the person would.** The result used to be a character count, which cannot tell
-    /// an export that wrote the document from one that left the words out of it; the text and the raster are named
-    /// instead.
+    /// **The driver sees the loss the person would**, on the surface `document.exportSvg` exposes.
+    ///
+    /// The result used to be a character count, which cannot tell an export that wrote the document from one that
+    /// left the words out of it; the items that did not reach the file are named instead. This test used to pin a
+    /// text block and a raster as two losses. The writer now emits the text (#132), so the converted expectation is
+    /// the one loss that is left - and the assertion that the words are in the file is the half that says the text
+    /// half of the writer is finished rather than merely unreported.
     /// </summary>
     [Fact]
-    public void ExportSvgReportsTheTextAndTheImageItCouldNotWrite()
+    public void ExportSvgWritesTheTextAndReportsTheImageItCouldNotWrite()
     {
         AutomationContext context = Host(out _);
 
@@ -141,13 +145,13 @@ public class SvgExportOperationTests
         string[] missing = result.GetProperty("missing").EnumerateArray()
             .Select(entry => entry.GetString()!).ToArray();
 
-        Assert.Equal(2, missing.Length);
-        Assert.Contains(missing, entry => entry.Contains("text 'Title'", StringComparison.Ordinal));
         Assert.Contains(missing, entry => entry.Contains("image 'logo'", StringComparison.Ordinal));
+        Assert.DoesNotContain(missing, entry => entry.Contains("text 'Title'", StringComparison.Ordinal));
 
-        // And the SVG really is missing them, which is why the report exists.
+        // And the words really are in the file, which is the difference the report is now about.
         string svg = Decode(result);
-        Assert.DoesNotContain("Hello", svg, StringComparison.Ordinal);
+        Assert.Contains("<text", svg, StringComparison.Ordinal);
+        Assert.Contains("Hello", svg, StringComparison.Ordinal);
         Assert.DoesNotContain("<image", svg, StringComparison.Ordinal);
     }
 
