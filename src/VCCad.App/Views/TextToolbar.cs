@@ -88,7 +88,13 @@ public sealed class TextToolbar
         }
 
         TextItem item = items[0];
-        TextRun? run = item.Runs.Count > 0 ? item.Runs[0] : null;
+
+        // **The controls follow the caret, not the block.** A block can hold several faces and sizes - a
+        // heading and a caption in one frame - so the first run's font is wrong for most carets, and it was
+        // what the panel showed while typing went into the run at the caret. The canvas adopts the caret's
+        // font as well, and both ask `TextEditing.RunAt`, so the two cannot disagree.
+        TextRun? run = TextEditing.RunAt(item, _view.ViewModel.TextCaretRunIndex)
+                       ?? (item.Runs.Count > 0 ? item.Runs[0] : null);
 
         _suppress = true;
         if (run is not null)

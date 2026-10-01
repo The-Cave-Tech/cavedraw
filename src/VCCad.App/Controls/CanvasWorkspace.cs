@@ -4867,8 +4867,39 @@ public sealed class CanvasWorkspace : Control
         InvalidateVisual();
     }
 
+    /// <summary>
+    /// Adopts the font at the caret, so the text controls and the next keystroke agree with the block being
+    /// edited rather than with whatever new text is set to. Called when a block is opened and whenever the
+    /// caret moves: the controls follow the caret, not the block, because a block can hold several faces.
+    /// </summary>
+    private void AdoptFontAtCaret()
+    {
+        if (_vm is null || _editingText is null)
+        {
+            return;
+        }
+
+        if (TextEditing.FontAt(_editingText, _caret) is not { } font)
+        {
+            // An empty block has nothing to adopt, and adopting a default here would throw away the face the
+            // person chose before they started typing.
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(font.Family))
+        {
+            _vm.DefaultFontFamily = font.Family;
+        }
+
+        if (font.Size > 0)
+        {
+            _vm.DefaultFontSize = font.Size;
+        }
+    }
+
     private void UpdateCaretInfo()
     {
+        AdoptFontAtCaret();
         if (_vm is null || _editingText is null)
         {
             return;

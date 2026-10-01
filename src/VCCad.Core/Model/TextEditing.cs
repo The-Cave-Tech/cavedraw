@@ -24,6 +24,46 @@ public static class TextEditing
         return GetText(text).Substring(start, end - start);
     }
 
+    /// <summary>
+    /// The font that applies at a caret position, or null when the block has nothing to adopt.
+    ///
+    /// A block can hold several runs at different faces and sizes - a heading and a caption in one frame - so
+    /// "the font of this block" is not a single answer, and taking the first run's is wrong for most carets.
+    /// What a person expects when they click between two words is the font of the words around the caret,
+    /// because that is what they are about to type between.
+    ///
+    /// The character **before** the caret decides, because that is the run the next character joins. At
+    /// position 0 there is nothing before, so the character after it decides. An empty block has neither, and
+    /// returns null: adopting a default there would throw away the face the person chose.
+    /// </summary>
+    public static (string Family, double Size)? FontAt(TextItem text, int caret)
+        => RunAt(text, caret) is { } run ? (run.FontFamily, run.FontSize) : null;
+
+    /// <summary>
+    /// The run that applies at a caret position, or null when the block has no runs.
+    ///
+    /// The character **before** the caret decides, because that is the run the next character joins. At
+    /// position 0 there is nothing before, so the character after it decides. This is the single place that
+    /// answers "which run is the caret in", so the font controls and the adoption cannot disagree.
+    /// </summary>
+    public static TextRun? RunAt(TextItem text, int caret)
+    {
+        if (text.Runs.Count == 0)
+        {
+            return null;
+        }
+
+        int length = Length(text);
+        if (length == 0)
+        {
+            return text.Runs[0];
+        }
+
+        int index = caret <= 0 ? 0 : Math.Min(caret - 1, length - 1);
+        (int run, _) = Locate(text, index);
+        return run >= 0 && run < text.Runs.Count ? text.Runs[run] : text.Runs[0];
+    }
+
     /// <summary>Locates the run/char position for a global index.</summary>
     public static (int Run, int Char) Locate(TextItem text, int index)
     {

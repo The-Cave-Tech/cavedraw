@@ -117,6 +117,15 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// </summary>
     public string DefaultFontFamily { get; set; } = TextItem.DefaultFontFamily;
 
+    /// <summary>
+    /// The size new text is created with, and the size the text controls show while a block is edited.
+    ///
+    /// A block can hold several sizes, so this is adopted from the run at the caret when a block is opened -
+    /// the same reasoning as the face - and it is what the next shape of text is drawn in when nothing is
+    /// being edited.
+    /// </summary>
+    public double DefaultFontSize { get; set; } = 12.0;
+
     public TextItem? EditingText { get; set; }
 
     public bool IsEditingText { get; set; }

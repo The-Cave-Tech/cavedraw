@@ -332,6 +332,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         set => _active.DefaultFontFamily = value;
     }
 
+    /// <summary>The size the text controls show and new text is drawn in.</summary>
+    public double DefaultFontSize
+    {
+        get => _active.DefaultFontSize;
+        set => _active.DefaultFontSize = value;
+    }
+
     /// <summary>The text block being edited, if any; the target of styling operations.</summary>
     public TextItem? EditingText
     {
