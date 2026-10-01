@@ -7,6 +7,20 @@ using VCCad.Geometry;
 namespace VCCad.Core.Svg;
 
 /// <summary>
+/// What an SVG export produced: the file, how many elements of each kind reached it, and everything the writer
+/// could not express and so left out.
+///
+/// The counterpart of <see cref="SvgImportResult"/>. An import that meets something it cannot read says so - that
+/// is what its own <c>Missing</c> and <c>Warnings</c> are for - and an export that cannot write something owes a
+/// caller the same honesty. <see cref="Missing"/> is empty for a document the writer wrote completely, so an empty
+/// list means "nothing was lost" rather than "nobody checked".
+/// </summary>
+public sealed record SvgWriteResult(
+    string Svg,
+    IReadOnlyDictionary<string, int> ByElement,
+    IReadOnlyList<string> Missing);
+
+/// <summary>
 /// Writes the model as SVG.
 ///
 /// **The honest boundary.** SVG can carry a simple stroke natively: width, caps, joins, miter limit, dashes and
@@ -22,6 +36,13 @@ namespace VCCad.Core.Svg;
 /// **Element kinds are not preserved.** A rectangle is imported as a path and exported as a path: the geometry,
 /// the paint and the structure survive exactly, and the element it came from does not. That is a deliberate
 /// conversion rather than a loss, and it is what lets one writer handle every shape the reader accepts.
+///
+/// **What cannot be written is reported, not dropped.** Two things the model holds have no element this writer
+/// emits - a text block and an embedded raster - and both are left out of the file and named, with their kind and
+/// the reason, in <see cref="SvgWriteResult.Missing"/>. The rule this repository runs on is that a gap is said
+/// rather than silently skipped, and an exporter is the one place where being quiet costs somebody a document: a
+/// person opens the file and the words are simply not there. The list is empty for a document the writer wrote
+/// completely, so "nothing was lost" is a fact the caller can rely on rather than a default it has to trust.
 /// </summary>
 public static class SvgWriter
 {
@@ -31,13 +52,20 @@ public static class SvgWriter
     /// <summary>Writes the document as SVG.</summary>
     public static string Write(CadDocument document) => Write(document, page: null);
 
+    /// <summary>Writes one artboard of the document, or all of it when <paramref name="page"/> is null.</summary>
+    public static string Write(CadDocument document, int? page) => WriteResult(document, page).Svg;
+
     /// <summary>
-    /// Writes one artboard of the document, or all of it when <paramref name="page"/> is null.
+    /// Writes the document as SVG **and reports what could not be written**.
+    ///
+    /// The file and the report come out together because a caller that wants one nearly always needs the other:
+    /// a file handed back with no word about what is missing from it is the silent drop this writer exists to
+    /// avoid, and a report that fires on a document it wrote completely is noise a driver learns to ignore.
     ///
     /// One page is written with **its own** view box and its content at the origin, so exporting a single page
     /// produces a file a person can use rather than a canvas with everything else cropped out of it.
     /// </summary>
-    public static string Write(CadDocument document, int? page)
+    public static SvgWriteResult WriteResult(CadDocument document, int? page = null)
     {
         bool single = page is not null && page >= 0 && page < document.Artboards.Count;
         var root = new XElement(Svg + "svg", new XAttribute("version", "1.1"));
@@ -115,7 +143,7 @@ public static class SvgWriter
         }
 
         var xml = new XDocument(new XDeclaration("1.0", "UTF-8", null), root);
-        return xml.ToString();
+        return new SvgWriteResult(xml.ToString(), writer.ByElement, writer.Missing);
     }
 
     private static Rect2D Extent(CadDocument document)
@@ -143,6 +171,8 @@ public static class SvgWriter
         private readonly XElement _root;
         private readonly Dictionary<GradientSpec, string> _gradientIds = new(GradientKey.Instance);
         private readonly IReadOnlyDictionary<string, string> _namespaces;
+        private readonly List<string> _missing = new();
+        private readonly Dictionary<string, int> _written = new(StringComparer.Ordinal);
         private int _gradientCount;
         private int _clipCount;
 
@@ -150,6 +180,50 @@ public static class SvgWriter
         {
             _root = root;
             _namespaces = namespaces ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
+        /// <summary>Every item the writer could not express, in document order; empty when it wrote everything.</summary>
+        public IReadOnlyList<string> Missing => _missing;
+
+        /// <summary>How many SVG elements of each name the writer emitted, so a caller sees what the file holds.</summary>
+        public IReadOnlyDictionary<string, int> ByElement => _written;
+
+        /// <summary>Counts one written element, by its SVG name.</summary>
+        private void Wrote(string element)
+            => _written[element] = _written.TryGetValue(element, out int count) ? count + 1 : 1;
+
+        /// <summary>
+        /// Names an item that did not reach the file, with enough of its own identity to be found: what kind it is,
+        /// what it is called or where it sits, and why it was left out.
+        ///
+        /// A report that only said "some text was dropped" would be true and useless - the whole point is that the
+        /// person or driver reading it can tell **which** object the file is missing.
+        /// </summary>
+        private void Report(LayerItem item, string reason) => _missing.Add($"{Kind(item)} {Identity(item)}: {reason}");
+
+        /// <summary>The word a person would use for the item, which is what the importer's own report speaks in.</summary>
+        private static string Kind(LayerItem item) => item switch
+        {
+            TextItem => "text",
+            ImageItem => "image",
+            ArtGroup => "group",
+            PathItem => "path",
+            _ => item.GetType().Name,
+        };
+
+        /// <summary>The item's name, or where it is when it has none, plus the size that makes it recognisable.</summary>
+        private static string Identity(LayerItem item)
+        {
+            string name = string.IsNullOrEmpty(item.Name) ? "(unnamed)" : $"'{item.Name}'";
+            return item switch
+            {
+                TextItem text =>
+                    $"{name} at {Number(text.Origin.X)},{Number(text.Origin.Y)} ({text.Runs.Count} run(s))",
+                ImageItem image =>
+                    $"{name} at {Number(image.Placement.X)},{Number(image.Placement.Y)} " +
+                    $"({image.PixelWidth}x{image.PixelHeight} px)",
+                _ => name,
+            };
         }
 
         /// <summary>
@@ -583,6 +657,7 @@ public static class SvgWriter
                 WriteItems(layer.Children, group);
             }
 
+            Wrote("g");
             _root.Add(group);
         }
 
@@ -632,6 +707,7 @@ public static class SvgWriter
                         }
 
                         WriteItems(group.Children, element);
+                        Wrote("g");
                         parent.Add(element);
                         break;
                     }
@@ -640,8 +716,24 @@ public static class SvgWriter
                         WritePath(path, parent);
                         break;
 
-                    // Text and images are their own issues: writing them badly would be worse than not writing
-                    // them, and this writer says what it does not handle.
+                    // Neither of these has an element this writer emits, and both are content the document holds
+                    // and a person would see on the canvas. Writing either one badly would be worse than not
+                    // writing it - a wrong `text` element is a file that lies about the layout - so they are left
+                    // out and **named**, which is the half that stops the omission being silent. Writing them
+                    // properly is #132's work and turns these reports back into output.
+                    case TextItem text:
+                        Report(text, "the writer has no SVG text output, so the block is not in the file");
+                        break;
+
+                    case ImageItem image:
+                        Report(image, "the writer has no SVG image output, so the raster is not in the file");
+                        break;
+
+                    // Anything the model grows later lands here rather than falling out of the switch: the one
+                    // thing this writer must never do is drop an object without saying so.
+                    default:
+                        Report(item, $"the writer has no SVG output for a {item.GetType().Name}");
+                        break;
                 }
             }
         }
@@ -707,6 +799,7 @@ public static class SvgWriter
                 }
 
                 parent.Add(element);
+                Wrote("path");
                 return;
             }
 
@@ -730,6 +823,7 @@ public static class SvgWriter
                 ApplyForeign(element, path);
                 element.Add(new XAttribute("stroke", "none"));
                 parent.Add(element);
+                Wrote("path");
             }
 
             foreach (StrokeSpec stroke in strokes)
@@ -826,6 +920,7 @@ public static class SvgWriter
                 }
 
                 parent.Add(element);
+                Wrote("path");
                 return;
             }
 
@@ -883,6 +978,7 @@ public static class SvgWriter
             }
 
             parent.Add(element);
+            Wrote("path");
         }
 
         /// <summary>

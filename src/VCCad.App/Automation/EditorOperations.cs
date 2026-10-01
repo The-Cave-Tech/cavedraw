@@ -4560,7 +4560,9 @@ public static class EditorOperations
         Add("document.exportSvg",
             "Export the active document as SVG. page selects one artboard, counted from zero, and without it the " +
             "whole document is written with each artboard in its place. Returns the SVG as base64, so a driver can " +
-            "send it on or write it itself.",
+            "send it on or write it itself. 'missing' names every object the writer could not put in the file - " +
+            "today that is text blocks and rasters - so a driver can tell an incomplete export from a complete one; " +
+            "it is empty when nothing was dropped.",
             "page?:number",
             (ctx, p) =>
             {
@@ -4568,12 +4570,14 @@ public static class EditorOperations
                     ? (int)p.GetLong("page", 0)
                     : null;
 
-                string svg = ctx.ViewModel.ExportSvg(page);
+                VCCad.Core.Svg.SvgWriteResult result = VCCad.Core.Svg.SvgWriter.WriteResult(ctx.Document, page);
                 return new
                 {
-                    svgBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(svg)),
-                    characters = svg.Length,
+                    svgBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(result.Svg)),
+                    characters = result.Svg.Length,
                     page,
+                    written = result.ByElement,
+                    missing = result.Missing,
                 };
             });
 

@@ -111,4 +111,56 @@ public class SvgExportOperationTests
             File.Delete(path);
         }
     }
+
+    /// <summary>
+    /// **The driver sees the loss the person would.** The result used to be a character count, which cannot tell
+    /// an export that wrote the document from one that left the words out of it; the text and the raster are named
+    /// instead.
+    /// </summary>
+    [Fact]
+    public void ExportSvgReportsTheTextAndTheImageItCouldNotWrite()
+    {
+        AutomationContext context = Host(out _);
+
+        var text = new TextItem { Name = "Title", Origin = new Point2D(12, 34) };
+        text.Runs.Add(new TextRun { Text = "Hello", FontSize = 18 });
+        context.Document.Artboards[0].Layers[0].AddItem(text);
+
+        context.Document.Artboards[0].Layers[0].AddItem(new ImageItem
+        {
+            Name = "logo",
+            PixelWidth = 4,
+            PixelHeight = 3,
+            Samples = new byte[4 * 3 * 3],
+            Placement = new Rect2D(10, 20, 40, 30),
+        });
+
+        JsonElement result = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "document.exportSvg", default));
+
+        string[] missing = result.GetProperty("missing").EnumerateArray()
+            .Select(entry => entry.GetString()!).ToArray();
+
+        Assert.Equal(2, missing.Length);
+        Assert.Contains(missing, entry => entry.Contains("text 'Title'", StringComparison.Ordinal));
+        Assert.Contains(missing, entry => entry.Contains("image 'logo'", StringComparison.Ordinal));
+
+        // And the SVG really is missing them, which is why the report exists.
+        string svg = Decode(result);
+        Assert.DoesNotContain("Hello", svg, StringComparison.Ordinal);
+        Assert.DoesNotContain("<image", svg, StringComparison.Ordinal);
+    }
+
+    /// <summary>The other half: an export that lost nothing reports nothing, so the list stays worth reading.</summary>
+    [Fact]
+    public void ExportSvgReportsNoLossesForAPathsOnlyDocument()
+    {
+        AutomationContext context = Host(out _);
+
+        JsonElement result = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "document.exportSvg", default));
+
+        Assert.Empty(result.GetProperty("missing").EnumerateArray());
+        Assert.Equal(1, result.GetProperty("written").GetProperty("path").GetInt32());
+    }
 }
