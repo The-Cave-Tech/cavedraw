@@ -885,15 +885,11 @@ internal sealed class PdfContentImporter
                 return null;
             }
 
-            // Coords are [x0 y0 r0 x1 y1 r1]. A non-zero r0 is an inner radius - a ramp
-            // that starts part-way out instead of at the centre - which the model has no
-            // field for, so it is reported and the ramp is taken from the centre.
-            if (Math.Abs(coords[2]) > 1e-9)
-            {
-                Notes.Add($"radial shading has an inner radius ({PdfDocumentExporter.Num(coords[2])}); " +
-                          "the model has no inner radius, so the ramp is taken from the centre out.");
-            }
-
+            // Coords are [x0 y0 r0 x1 y1 r1]. Circle 0 is the ramp's inner circle, and a radius
+            // of ZERO makes it a point - which is a focal point, exactly what SVG's fx/fy means.
+            // A non-zero r0 is an inner radius: a ramp that starts part-way out instead of at the
+            // centre, which the model has no field for, so it is reported and the ramp is taken
+            // from the centre.
             Point2D centre = ToModelPoint(ctm, coords[3], coords[4]);
             Point2D xEdge = ToModelPoint(ctm, coords[3] + coords[5], coords[4]);
             Point2D yEdge = ToModelPoint(ctm, coords[3], coords[4] + coords[5]);
@@ -902,16 +898,53 @@ internal sealed class PdfContentImporter
             double ry = Math.Sqrt(((yEdge.X - centre.X) * (yEdge.X - centre.X)) +
                                   ((yEdge.Y - centre.Y) * (yEdge.Y - centre.Y)));
 
+            Point2D modelCentre = NormaliseToBounds(centre, bounds);
+            double modelRadiusX = rx / bounds.Width;
+            double modelRadiusY = ry / bounds.Height;
+
+            Point2D? focal = null;
+            if (Math.Abs(coords[2]) > 1e-9)
+            {
+                Notes.Add($"radial shading has an inner radius ({PdfDocumentExporter.Num(coords[2])}); " +
+                          "the model has no inner radius, so the ramp is taken from the centre out.");
+            }
+            else
+            {
+                // Clamped in the SHADING's own space, where circle 1 is a circle: PDF's rule is
+                // that circle 0 lives inside it, and measuring the ray against that circle is the
+                // one frame in which "inside" is exact for a rotated, anisotropic ellipse - the
+                // affine placement turns the circle's edge into the model's ellipse edge, and the
+                // ray from the centre into the ray from the centre. A focus on the centre is no
+                // focus at all, which is the state meaning "paints what a concentric gradient
+                // paints".
+                double focusX = coords[0];
+                double focusY = coords[1];
+                double offsetX = focusX - coords[3];
+                double offsetY = focusY - coords[4];
+                double length = Math.Sqrt((offsetX * offsetX) + (offsetY * offsetY));
+                double outer = Math.Abs(coords[5]);
+                if (double.IsFinite(length) && length > outer && length > 1e-12)
+                {
+                    double scale = outer / length;
+                    focusX = coords[3] + (offsetX * scale);
+                    focusY = coords[4] + (offsetY * scale);
+                }
+
+                Point2D modelFocus = NormaliseToBounds(ToModelPoint(ctm, focusX, focusY), bounds);
+                focal = modelFocus == modelCentre ? null : modelFocus;
+            }
+
             List<GradientStop> radialStops = StopsFromFunction(function, space, resources, out (double Low, double High) radialDomain);
             return new GradientSpec
             {
                 Kind = GradientKind.Radial,
                 Stops = radialStops,
                 Spread = SpreadFromFunction(function, space, radialDomain, resources),
-                Center = NormaliseToBounds(centre, bounds),
-                RadiusX = rx / bounds.Width,
-                RadiusY = ry / bounds.Height,
+                Center = modelCentre,
+                RadiusX = modelRadiusX,
+                RadiusY = modelRadiusY,
                 Rotation = Math.Atan2(xEdge.Y - centre.Y, xEdge.X - centre.X) * 180.0 / Math.PI,
+                FocalPoint = focal,
             };
         }
 

@@ -256,6 +256,11 @@ public class GradientPdfTests
     /// <summary>
     /// A radial shading with an inner radius cannot be held by the model, so the ramp is
     /// taken from the centre and the gap is reported.
+    ///
+    /// This is the case that must stay a reported gap: circle 0 is a CIRCLE, not a point, so it
+    /// says nothing about where a highlight sits - reading its centre as a focus would invent a
+    /// picture the file does not draw. The note is the difference between an approximation and a
+    /// silent one.
     /// </summary>
     [Fact]
     public void ARadialInnerRadiusIsReportedAsAGap()
@@ -267,6 +272,7 @@ public class GradientPdfTests
 
         Assert.Equal(GradientKind.Radial, path.Fill.Gradient!.Kind);
         Assert.Contains(notes, n => n.Contains("inner radius", StringComparison.OrdinalIgnoreCase));
+        Assert.Null(path.Fill.Gradient!.FocalPoint);
     }
 
     // ------------------------------------------------------------------
@@ -487,6 +493,164 @@ public class GradientPdfTests
         // And the file says what it did rather than leaving a reader to notice.
         Assert.Contains(notes, n => n.Contains("focal point", StringComparison.OrdinalIgnoreCase)
                                     && n.Contains("outer circle", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// **The other half of the focal point: reading it back.** Our own export writes the focus
+    /// as circle 0 of a type 3 shading with a radius of zero, and the vector importer used to
+    /// rebuild the radial from circle 1 alone - so export, import gave back a concentric
+    /// gradient, and nothing was said about it. The focus is asserted as a COORDINATE and not
+    /// as "a focus is present", because the concentric form also writes two circles.
+    /// </summary>
+    [Fact]
+    public void AFocusedRadialSurvivesExportAndVectorImport()
+    {
+        var gradient = new GradientSpec
+        {
+            Kind = GradientKind.Radial,
+            Stops = new[]
+            {
+                new GradientStop(0.0, new ColorRgb(1, 1, 1)),
+                new GradientStop(1.0, new ColorRgb(0, 0, 0)),
+            },
+            Center = new Point2D(0.5, 0.5),
+            RadiusX = 0.5,
+            RadiusY = 0.5,
+            FocalPoint = new Point2D(0.25, 0.5),
+        };
+
+        GradientSpec round = RoundTrip(gradient);
+
+        Assert.True(round.FocalPoint is not null, "the focus was dropped by the vector importer");
+        Assert.Equal(0.25, round.FocalPoint!.Value.X, 4);
+        Assert.Equal(0.5, round.FocalPoint.Value.Y, 4);
+
+        // The focus is a point OFF the centre: a reader that kept the centre as the focus would
+        // satisfy "not null" and still paint the wrong picture.
+        Assert.NotEqual(round.Center, round.FocalPoint.Value);
+    }
+
+    /// <summary>
+    /// The same focus carried through a rotated, anisotropic radial, which is where reading
+    /// circle 0 without the shading's placement matrix goes wrong: the focus would land in the
+    /// page's own frame instead of the object's, and a test that only compared the offset's
+    /// LENGTH would not notice.
+    /// </summary>
+    [Fact]
+    public void AFocusedRadialSurvivesTheRoundTripThroughRotationAndAnEllipse()
+    {
+        var gradient = new GradientSpec
+        {
+            Kind = GradientKind.Radial,
+            Stops = new[]
+            {
+                new GradientStop(0.0, new ColorRgb(1, 1, 1)),
+                new GradientStop(1.0, new ColorRgb(0, 0, 0)),
+            },
+            Center = new Point2D(0.45, 0.55),
+            RadiusX = 0.40,
+            RadiusY = 0.20,
+            Rotation = 30.0,
+            FocalPoint = new Point2D(0.30, 0.30),
+        };
+
+        GradientSpec round = RoundTrip(gradient);
+
+        Assert.True(round.FocalPoint is not null, "the focus was dropped by the vector importer");
+        Assert.Equal(0.30, round.FocalPoint!.Value.X, 3);
+        Assert.Equal(0.30, round.FocalPoint.Value.Y, 3);
+    }
+
+    /// <summary>
+    /// A type 3 shading written by someone else: circle 0 has a radius of ZERO, which is a
+    /// point, and a point circle is the focus. Read by hand rather than through our own export,
+    /// so a writer and a reader agreeing about the same mistake cannot pass.
+    /// </summary>
+    [Fact]
+    public void AZeroRadiusInnerCircleIsReadAsTheFocus()
+    {
+        byte[] pdf = RadialShadedPdf(innerRadius: 0, focusX: 130, focusY: 70);
+
+        CadDocument document = PdfImporter.Import(pdf, out IReadOnlyList<string> notes);
+        GradientSpec gradient = ImportedGradientItem(document).Fill.Gradient!;
+
+        Assert.Equal(GradientKind.Radial, gradient.Kind);
+        Assert.True(gradient.FocalPoint is not null, "a zero-radius inner circle is a focus, not a gap");
+        Assert.DoesNotContain(notes, n => n.Contains("inner radius", StringComparison.OrdinalIgnoreCase));
+
+        // 20pt right of the outer centre, whose radius is 80: a quarter of a radius, so the
+        // normalised focus is a quarter of RadiusX to the right of the normalised centre.
+        Assert.Equal(gradient.Center.X + (0.25 * gradient.RadiusX), gradient.FocalPoint!.Value.X, 4);
+        Assert.Equal(gradient.Center.Y, gradient.FocalPoint.Value.Y, 4);
+    }
+
+    /// <summary>
+    /// A zero-radius inner circle sitting ON the outer centre is the concentric form our own
+    /// exporter writes for a gradient with no focus. It must come back as NO focus rather than as
+    /// a coordinate, because null and "the centre" are the same picture and only one of them is
+    /// what the file said - writing the coordinate back would invent an `fx` the file never had.
+    /// </summary>
+    [Fact]
+    public void AConcentricZeroRadiusShadingComesBackWithNoFocus()
+    {
+        byte[] pdf = RadialShadedPdf(innerRadius: 0, focusX: 110, focusY: 70);
+
+        CadDocument document = PdfImporter.Import(pdf, out IReadOnlyList<string> notes);
+        GradientSpec gradient = ImportedGradientItem(document).Fill.Gradient!;
+
+        Assert.Equal(GradientKind.Radial, gradient.Kind);
+        Assert.Null(gradient.FocalPoint);
+        Assert.DoesNotContain(notes, n => n.Contains("inner radius", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// A focus the SVG reader would clamp - one outside the outer circle - is clamped the same
+    /// way by the PDF importer: onto the edge, along the ray from the centre, NOT recentred to
+    /// the centre and not kept outside the ellipse. The two readers must agree, or the same
+    /// picture imported twice becomes two documents.
+    /// </summary>
+    [Fact]
+    public void AFocusOutsideTheOuterCircleIsClampedToTheEdge()
+    {
+        // Circle 0 at 910,70 (a whole 10 radii right of the centre) with radius zero.
+        byte[] pdf = RadialShadedPdf(innerRadius: 0, focusX: 910, focusY: 70);
+
+        CadDocument document = PdfImporter.Import(pdf, out _);
+        GradientSpec gradient = ImportedGradientItem(document).Fill.Gradient!;
+
+        Assert.True(gradient.FocalPoint is not null, "an outside focus must be clamped, not dropped");
+        Point2D focus = gradient.FocalPoint!.Value;
+
+        // On the edge: one radius from the centre, in the direction the file put it.
+        Assert.Equal(1.0, (focus.X - gradient.Center.X) / gradient.RadiusX, 4);
+        Assert.Equal(0.0, focus.Y - gradient.Center.Y, 4);
+    }
+
+    /// <summary>
+    /// The clamp is SVG's own rule, which is stated for a circle: a focus outside is moved along
+    /// the centre-to-focus ray to where that ray meets the edge. Clamping each axis on its own
+    /// would answer a different direction, and would still be "on the edge".
+    /// </summary>
+    [Fact]
+    public void AnOutsideFocusIsClampedAlongItsOwnRayRatherThanPerAxis()
+    {
+        // 600pt right and 400pt down of a centre whose outer radius is 80: in radii that is
+        // (7.5, 5), so the clamped point is that direction at one radius - neither axis-aligned
+        // nor at the corner a per-axis clamp would have given.
+        byte[] pdf = RadialShadedPdf(innerRadius: 0, focusX: 710, focusY: 470);
+
+        CadDocument document = PdfImporter.Import(pdf, out _);
+        GradientSpec gradient = ImportedGradientItem(document).Fill.Gradient!;
+
+        Point2D focus = gradient.FocalPoint!.Value;
+        double dx = (focus.X - gradient.Center.X) / gradient.RadiusX;
+        double dy = (focus.Y - gradient.Center.Y) / gradient.RadiusY;
+
+        // On the edge, pointing the way the file pointed: the 600/400 offset is 3/2 in radii
+        // units, so the components keep that ratio rather than both running out to 1.
+        Assert.Equal(1.0, Math.Sqrt((dx * dx) + (dy * dy)), 4);
+        Assert.Equal(1.5, Math.Abs(dx / dy), 4);
+        Assert.True(Math.Abs(dx) > 0.1 && Math.Abs(dy) > 0.1, "the direction must not be axis-aligned");
     }
 
     // ------------------------------------------------------------------
@@ -783,7 +947,7 @@ public class GradientPdfTests
         return Assemble(objects);
     }
 
-    private static byte[] RadialShadedPdf(double innerRadius)
+    private static byte[] RadialShadedPdf(double innerRadius, double focusX = 110, double focusY = 70)
     {
         const string content = "q 10 20 200 100 re W n /Sh0 sh Q";
 
@@ -795,7 +959,7 @@ public class GradientPdfTests
             "/Resources << /Shading << /Sh0 5 0 R >> >> >>",
             $"<< /Length {content.Length} >>\nstream\n{content}\nendstream",
             "<< /ShadingType 3 /ColorSpace /DeviceRGB " +
-            $"/Coords [110 70 {innerRadius} 110 70 80] /Function 6 0 R /Extend [true true] >>",
+            $"/Coords [{focusX} {focusY} {innerRadius} 110 70 80] /Function 6 0 R /Extend [true true] >>",
             "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0 0 0] /N 1 >>",
         };
 

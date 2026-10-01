@@ -406,6 +406,10 @@ public static class EditorOperations
             radiusX = Math.Round(g.RadiusX, 6),
             radiusY = Math.Round(g.RadiusY, 6),
             rotation = Math.Round(g.Rotation, 6),
+
+            // Null when the gradient has no focus, which is a state of its own: it paints exactly
+            // what a focus on the centre paints, so a reader must be able to tell the two apart.
+            focalPoint = g.FocalPoint is { } focus ? PointJson(focus) : null,
         },
         angle = Math.Round(g.Angle, 6),
         freeform = new
@@ -1590,6 +1594,75 @@ public static class EditorOperations
                 }
 
                 return Summary(ctx);
+            });
+
+        Add("style.setGradientFocalPoint",
+            "Move the highlight of the selected paths' radial gradients off centre, or take it away " +
+            "again. The point is normalised to each object's bounds, which is the space " +
+            "gradient.get reports `radial.focalPoint` in. A point outside the radial's ellipse is " +
+            "CLAMPED onto its edge along the ray from the centre - the same rule the SVG reader " +
+            "applies to a file that names one - so a driver and a file cannot disagree about where " +
+            "an outside highlight lands. `clear` removes the focus, and so does a point on the " +
+            "centre: a gradient with no focus paints exactly what one naming its centre paints.",
+            "focalPoint?:{x,y} (normalised to the object's bounds), clear?:bool",
+            (ctx, p) =>
+            {
+                bool clear = p.GetBool("clear", false);
+                Point2D? requested = TryPoint(p, "focalPoint", out Point2D given) ? given : null;
+
+                if (!clear && requested is null)
+                {
+                    throw new EditorOperationException(
+                        "Give focalPoint:{x,y} to set a focus, or clear:true to remove one.");
+                }
+
+                var edits = new List<IUndoableCommand>();
+                int radials = 0;
+                int changed = 0;
+                Point2D? result = null;
+
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    if (path.Fill.Gradient is not { Kind: GradientKind.Radial } gradient)
+                    {
+                        continue;
+                    }
+
+                    radials++;
+                    GradientSpec next = (gradient with { FocalPoint = clear ? null : requested })
+                        .WithClampedFocalPoint();
+                    result = next.FocalPoint;
+
+                    if (next.FocalPoint == gradient.FocalPoint)
+                    {
+                        continue;
+                    }
+
+                    edits.Add(new SetFillCommand(
+                        path, FillSpec.WithGradient(next, path.Fill.Rule, path.Fill.Color), path.Fill));
+                    changed++;
+                }
+
+                if (radials == 0)
+                {
+                    throw new EditorOperationException(
+                        "None of the selected paths has a radial gradient. Use gradient.setKind to " +
+                        "give one a radial ramp first.");
+                }
+
+                if (edits.Count > 0)
+                {
+                    ctx.Session.Execute(
+                        edits.Count == 1 ? edits[0] : new CompositeCommand("Gradient focal point", edits));
+                }
+
+                return new
+                {
+                    changed,
+                    cleared = clear,
+                    clamping = "a focus outside the ellipse is moved onto its edge, not refused",
+                    focalPoint = result is { } point ? PointJson(point) : null,
+                };
             });
 
         Add("style.setStroke", "Stroke the selected paths.",

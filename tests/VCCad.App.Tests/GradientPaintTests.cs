@@ -198,6 +198,165 @@ public class GradientPaintTests
         AssertNear(bitmap, 50, 75, 255, 255, 255, "at the edge along Y");
     }
 
+    /// <summary>
+    /// **A radial's focus is where the ramp starts**, and it is a real change to the picture
+    /// rather than a number kept on the side. A concentric radial of the same geometry is
+    /// rendered beside it: at the focus's own point the focused gradient paints the FIRST stop
+    /// and the concentric one paints halfway along, and further out the two disagree as well.
+    /// A test that only asked whether a value was stored would pass on a canvas that recentred
+    /// every gradient, which is the defect this pins.
+    /// </summary>
+    [Fact]
+    public void ARadialFocusIsWhereTheRampStarts()
+    {
+        var centred = new GradientSpec
+        {
+            Kind = GradientKind.Radial,
+            Center = new VCCad.Geometry.Point2D(0.5, 0.5),
+            RadiusX = 0.5,
+            RadiusY = 0.5,
+            Stops = new[]
+            {
+                new GradientStop(0.0, ColorRgb.Black),
+                new GradientStop(1.0, ColorRgb.White),
+            },
+        };
+
+        GradientSpec focused = centred with { FocalPoint = new VCCad.Geometry.Point2D(0.25, 0.5) };
+
+        using SKBitmap withFocus = Render(focused, OpaqueBlue, 100, 100);
+        using SKBitmap without = Render(centred, OpaqueBlue, 100, 100);
+
+        // The focus is (25,50) in a 100x100 box: the ramp's first stop there, and half way from
+        // the centre to the edge for the concentric gradient of the same geometry.
+        AssertNear(withFocus, 25, 50, 0, 0, 0, "the highlight sits at the focus");
+        AssertNear(without, 25, 50, 128, 128, 128, "a concentric radial is half way out there");
+
+        // The focus moved the highlight rather than the shape: the two also differ on the far
+        // side of the centre, where a dropped focus would have left the bitmaps identical.
+        Assert.NotEqual(withFocus.GetPixel(75, 50), without.GetPixel(75, 50));
+    }
+
+    /// <summary>
+    /// The geometry the shader is given keeps the focus inside the ellipse: a point the model
+    /// (or an operation, or a file) put outside is painted on the EDGE along the centre-to-focus
+    /// ray, which is the rule the SVG reader applies. Recentring it would paint a different
+    /// picture; keeping it outside would rely on the reader's mercy.
+    /// </summary>
+    [Fact]
+    public void AFocusOutsideTheEllipseIsPaintedOnItsEdgeAlongTheRay()
+    {
+        var spec = new GradientSpec
+        {
+            Kind = GradientKind.Radial,
+            Center = new VCCad.Geometry.Point2D(0.5, 0.5),
+            RadiusX = 0.5,
+            RadiusY = 0.5,
+            FocalPoint = new VCCad.Geometry.Point2D(2.0, 2.0),
+        };
+
+        GradientGeometry geometry = GradientGeometry.For(spec, new Rect(0, 0, 100, 100));
+
+        Assert.NotNull(geometry.Focus);
+        VCCad.Geometry.Point2D focus = new(geometry.Focus!.Value.X, geometry.Focus.Value.Y);
+
+        // The edge is 50 from the centre (50,50) and the ray is the diagonal, so the painted
+        // focus is 35.36 along each axis - not the centre, and not (100,100).
+        Assert.Equal(50.0 + (50.0 / Math.Sqrt(2.0)), focus.X, 4);
+        Assert.Equal(50.0 + (50.0 / Math.Sqrt(2.0)), focus.Y, 4);
+    }
+
+    /// <summary>
+    /// The brush the canvas paints with carries the focus in its own geometry: Avalonia's radial
+    /// brush is a two-point conical whose inner circle has radius zero, so the origin IS the
+    /// highlight. Asserted on the brush rather than on the model, because a stored coordinate
+    /// that never reaches the brush is exactly the half-wired state.
+    /// </summary>
+    [AvaloniaFact]
+    public void TheRadialBrushPutsItsOriginOnTheFocus()
+    {
+        var spec = new GradientSpec
+        {
+            Kind = GradientKind.Radial,
+            Center = new VCCad.Geometry.Point2D(0.5, 0.5),
+            RadiusX = 0.5,
+            RadiusY = 0.5,
+            FocalPoint = new VCCad.Geometry.Point2D(0.25, 0.5),
+            Stops = new[]
+            {
+                new GradientStop(0.0, ColorRgb.Black),
+                new GradientStop(1.0, ColorRgb.White),
+            },
+        };
+
+        var brush = Assert.IsType<RadialGradientBrush>(GradientPaint.CreateBrush(spec, new Rect(0, 0, 200, 100), 1.0));
+
+        Assert.Equal(new Point(100, 50), brush.Center.Point);
+        Assert.Equal(new Point(50, 50), brush.GradientOrigin.Point);
+
+        // And a gradient with no focus keeps the concentric brush it always had.
+        var centred = Assert.IsType<RadialGradientBrush>(
+            GradientPaint.CreateBrush(spec with { FocalPoint = null }, new Rect(0, 0, 200, 100), 1.0));
+        Assert.Equal(centred.Center.Point, centred.GradientOrigin.Point);
+    }
+
+    /// <summary>
+    /// The brush measured in PIXELS, which is what the canvas actually does with it: the highlight
+    /// lands on the focus and the concentric brush of the same geometry puts the ramp's midpoint
+    /// there instead. The geometry assertion above can be satisfied by a brush the renderer
+    /// ignores; this one cannot.
+    /// </summary>
+    [AvaloniaFact]
+    public void TheCanvasBrushPaintsTheHighlightOnTheFocus()
+    {
+        var centred = new GradientSpec
+        {
+            Kind = GradientKind.Radial,
+            Center = new VCCad.Geometry.Point2D(0.5, 0.5),
+            RadiusX = 0.5,
+            RadiusY = 0.5,
+            Stops = new[]
+            {
+                new GradientStop(0.0, ColorRgb.Black),
+                new GradientStop(1.0, ColorRgb.White),
+            },
+        };
+
+        GradientSpec focused = centred with { FocalPoint = new VCCad.Geometry.Point2D(0.25, 0.5) };
+
+        int atFocus = ChannelAt(GradientPaint.CreateBrush(focused, Box100, 1.0)!, 25, 50);
+        int concentric = ChannelAt(GradientPaint.CreateBrush(centred, Box100, 1.0)!, 25, 50);
+
+        Assert.True(atFocus < 40, $"the brush should paint the first stop at the focus, got {atFocus}");
+        Assert.True(concentric > 100, $"a concentric radial is half way out there, got {concentric}");
+    }
+
+    private static readonly Rect Box100 = new(0, 0, 100, 100);
+
+    /// <summary>One colour channel of one pixel of a brush painted over a 100x100 target.</summary>
+    private static byte ChannelAt(IBrush brush, int x, int y)
+    {
+        using var target = new RenderTargetBitmap(new PixelSize(100, 100), new Vector(96, 96));
+        using (DrawingContext context = target.CreateDrawingContext())
+        {
+            context.FillRectangle(brush, new Rect(0, 0, 100, 100));
+        }
+
+        var pixel = new byte[4];
+        System.Runtime.InteropServices.GCHandle handle = System.Runtime.InteropServices.GCHandle.Alloc(
+            pixel, System.Runtime.InteropServices.GCHandleType.Pinned);
+        try
+        {
+            target.CopyPixels(new PixelRect(x, y, 1, 1), handle.AddrOfPinnedObject(), 4, 4);
+        }
+        finally
+        {
+            handle.Free();
+        }
+
+        return pixel[1];
+    }
+
     [Fact]
     public void ABiasedMidpointMovesTheHalfwayColour()
     {

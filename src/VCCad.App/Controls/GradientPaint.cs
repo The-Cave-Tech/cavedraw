@@ -23,28 +23,85 @@ namespace VCCad.App.Controls;
 /// <param name="RadiusX">Radial horizontal radius, in paint-space units.</param>
 /// <param name="RadiusY">Radial vertical radius, in paint-space units.</param>
 /// <param name="RotationDegrees">Rotation of an elliptical radial.</param>
+/// <param name="Focus">Radial focus - where the highlight sits - in paint space, or null when the
+/// gradient has none. Null is the model's own state rather than a missing coordinate: a gradient
+/// with no focus paints the picture a gradient naming its centre paints.</param>
 public readonly record struct GradientGeometry(
     Point Start,
     Point End,
     Point Centre,
     double RadiusX,
     double RadiusY,
-    double RotationDegrees)
+    double RotationDegrees,
+    Point? Focus = null)
 {
     /// <summary>Maps the spec's normalised geometry onto the box the painted object occupies.</summary>
     public static GradientGeometry For(GradientSpec spec, Rect box)
     {
-        static Point Map(Point2D point, Rect box) => new(
-            box.X + (point.X * box.Width),
-            box.Y + (point.Y * box.Height));
-
         return new GradientGeometry(
             Map(spec.Start, box),
             Map(spec.End, box),
             Map(spec.Center, box),
             Math.Abs(spec.RadiusX * box.Width),
             Math.Abs(spec.RadiusY * box.Height),
-            spec.Rotation);
+            spec.Rotation,
+            ClampedFocus(spec, box));
+    }
+
+    private static Point Map(Point2D point, Rect box) => new(
+        box.X + (point.X * box.Width),
+        box.Y + (point.Y * box.Height));
+
+    /// <summary>
+    /// The focus in paint space, clamped into the ellipse, or null when the gradient has none.
+    ///
+    /// The clamp is measured in the ELLIPSE's own frame - the offset is turned back by the
+    /// ellipse's rotation and measured in units of each radius - because that is the frame SVG's
+    /// fx/fy and PDF's inner circle both live in. Measuring it against an axis-aligned ellipse of
+    /// the same radii would move the focus of a rotated radial that is perfectly well inside it,
+    /// and the canvas would paint a clamp nobody asked for.
+    /// </summary>
+    private static Point? ClampedFocus(GradientSpec spec, Rect box)
+    {
+        if (spec.FocalPoint is not { } focal)
+        {
+            return null;
+        }
+
+        Point centre = Map(spec.Center, box);
+        Point point = Map(focal, box);
+        double radiusX = Math.Abs(spec.RadiusX * box.Width);
+        double radiusY = Math.Abs(spec.RadiusY * box.Height);
+
+        // A degenerate radial has no interior, so nothing is inside it - not even a focus it names.
+        if (!(radiusX > 0) || !(radiusY > 0))
+        {
+            return null;
+        }
+
+        double radians = spec.Rotation * Math.PI / 180.0;
+        double cos = Math.Cos(radians);
+        double sin = Math.Sin(radians);
+        double offsetX = point.X - centre.X;
+        double offsetY = point.Y - centre.Y;
+
+        double alongX = ((offsetX * cos) + (offsetY * sin)) / radiusX;
+        double alongY = ((-offsetX * sin) + (offsetY * cos)) / radiusY;
+        double length = Math.Sqrt((alongX * alongX) + (alongY * alongY));
+
+        if (double.IsFinite(length) && length > 1.0)
+        {
+            double scale = 1.0 / length;
+            alongX *= scale;
+            alongY *= scale;
+            point = new Point(
+                centre.X + ((alongX * radiusX * cos) - (alongY * radiusY * sin)),
+                centre.Y + ((alongX * radiusX * sin) + (alongY * radiusY * cos)));
+        }
+
+        // A focus on the centre is the picture a concentric gradient paints, and the model keeps
+        // that state as null rather than as a coordinate.
+        return Near(point, centre) ? null : point;
     }
 
     /// <summary>A linear gradient needs two distinct ends to have a direction at all.</summary>
@@ -208,7 +265,11 @@ public static class GradientPaint
             var brush = new RadialGradientBrush
             {
                 Center = new RelativePoint(geometry.Centre, RelativeUnit.Absolute),
-                GradientOrigin = new RelativePoint(geometry.Centre, RelativeUnit.Absolute),
+
+                // The origin is the focus: Avalonia's radial brush is a two-point conical whose
+                // inner circle has radius zero, so an origin away from the centre IS the highlight
+                // sitting off centre, and one on the centre is the concentric picture, unchanged.
+                GradientOrigin = new RelativePoint(geometry.Focus ?? geometry.Centre, RelativeUnit.Absolute),
                 RadiusX = new RelativeScalar(geometry.RadiusX, RelativeUnit.Absolute),
                 RadiusY = new RelativeScalar(geometry.RadiusY, RelativeUnit.Absolute),
                 SpreadMethod = spread,
@@ -316,32 +377,58 @@ public static class GradientPaint
         SKShaderTileMode tile)
     {
         double radius = Math.Max(geometry.RadiusX, geometry.RadiusY);
-        SKShader shader = SKShader.CreateRadialGradient(
-            ToSkia(geometry.Centre), (float)radius, colours, positions, tile);
+        SKPoint centre = ToSkia(geometry.Centre);
 
+        // The local matrix that turns the shader's circle into the model's ellipse, or null when
+        // the shader is already the ellipse: a circle with no rotation needs no correction.
+        SKMatrix? ellipse = null;
         double scaleX = geometry.RadiusX / radius;
         double scaleY = geometry.RadiusY / radius;
         bool circular = Math.Abs(scaleX - 1.0) < 1e-9 && Math.Abs(scaleY - 1.0) < 1e-9;
-        if (circular && Math.Abs(geometry.RotationDegrees) < 1e-9)
+        if (!circular || Math.Abs(geometry.RotationDegrees) > 1e-9)
         {
-            return shader;
+            // The shader is a circle; the local matrix is what turns it into the ellipse the model
+            // describes. The matrix maps the shader's own space INTO device space, so it carries
+            // the radii RATIOS: a radius half the other must give a matrix that squashes the short
+            // axis by two, which is what the ratio does here.
+            float cx = (float)geometry.Centre.X;
+            float cy = (float)geometry.Centre.Y;
+            SKMatrix matrix = SKMatrix.CreateTranslation(cx, cy);
+            if (Math.Abs(geometry.RotationDegrees) > 1e-9)
+            {
+                matrix = matrix.PreConcat(SKMatrix.CreateRotationDegrees((float)geometry.RotationDegrees));
+            }
+
+            matrix = matrix.PreConcat(SKMatrix.CreateScale((float)scaleX, (float)scaleY));
+            matrix = matrix.PreConcat(SKMatrix.CreateTranslation(-cx, -cy));
+            ellipse = matrix;
         }
 
-        // The shader is a circle; the local matrix is what turns it into the ellipse the model
-        // describes. A local matrix maps a device point back into the shader's own space, so the
-        // matrix itself carries the radii RATIOS: a radius half the other must give a matrix that
-        // stretches the short axis by two on the way back, which is what squashes it on screen.
-        float cx = (float)geometry.Centre.X;
-        float cy = (float)geometry.Centre.Y;
-        SKMatrix matrix = SKMatrix.CreateTranslation(cx, cy);
-        if (Math.Abs(geometry.RotationDegrees) > 1e-9)
+        SKPoint? focus = null;
+        if (geometry.Focus is { } point)
         {
-            matrix = matrix.PreConcat(SKMatrix.CreateRotationDegrees((float)geometry.RotationDegrees));
+            SKPoint mapped = ToSkia(point);
+            if (ellipse is { } matrix && matrix.TryInvert(out SKMatrix inverse))
+            {
+                // The shader's own geometry lives in the space the local matrix maps FROM, so an
+                // elliptical radial has to bring the focus back through that matrix. Passing the
+                // device point straight in would place the highlight on the mirror image of the
+                // point the model names - which is still "a focus", and still wrong.
+                mapped = inverse.MapPoint(mapped);
+            }
+
+            focus = mapped;
         }
 
-        matrix = matrix.PreConcat(SKMatrix.CreateScale((float)scaleX, (float)scaleY));
-        matrix = matrix.PreConcat(SKMatrix.CreateTranslation(-cx, -cy));
-        return shader.WithLocalMatrix(matrix);
+        // A two-point conical with an inner radius of zero is PDF's type 3 shading: the ramp runs
+        // from a point - the focus - out to the outer circle. With no focus the concentric radial
+        // is the same picture, built the way it always was.
+        SKShader shader = focus is { } start
+            ? SKShader.CreateTwoPointConicalGradient(
+                start, 0f, centre, (float)radius, colours, positions, tile)
+            : SKShader.CreateRadialGradient(centre, (float)radius, colours, positions, tile);
+
+        return ellipse is { } local ? shader.WithLocalMatrix(local) : shader;
     }
 
     /// <summary>

@@ -26,6 +26,7 @@ public class GradientOperationTests
         "gradient.addStop", "gradient.removeStop", "gradient.moveStop", "gradient.setStop",
         "gradient.reverse", "gradient.setGeometry", "gradient.solid", "gradient.remove",
         "gradient.sample",
+        "style.setGradientFocalPoint",
     };
 
     /// <summary>A document with one selected rectangle, and a context to run operations in.</summary>
@@ -241,6 +242,90 @@ public class GradientOperationTests
         Assert.Equal(2, path.Fill.Gradient!.Points.Count);
         Assert.Equal(0.5, path.Fill.Gradient!.Points[1].Opacity, 6);
         Assert.Equal((0, 1), path.Fill.Gradient!.Lines[0]);
+    }
+
+    /// <summary>
+    /// The focus is settable and clearable from a driver, and it is validated the way the reader
+    /// validates it: a point outside the ellipse is CLAMPED onto its edge along the ray from the
+    /// centre rather than refused, so an operation and a file that name the same outside point
+    /// end up with the same picture. These assert the model AND the read-back, because a
+    /// registry that accepted the parameter and dropped it would pass on the model alone.
+    /// </summary>
+    [AvaloniaFact]
+    public void TheGradientFocalPointCanBeSetReadBackClampedAndCleared()
+    {
+        (AutomationContext context, PathItem path) = OnePath();
+        Run(context, "gradient.setKind", new { kind = "radial" });
+
+        object? set = Run(context, "style.setGradientFocalPoint", new
+        {
+            focalPoint = new { x = 0.25, y = 0.5 },
+        });
+
+        Assert.Equal(0.25, path.Fill.Gradient!.FocalPoint!.Value.X, 6);
+        Assert.Equal(0.5, path.Fill.Gradient!.FocalPoint!.Value.Y, 6);
+        Assert.Equal(1, (int)Json(set).GetProperty("changed").GetInt64());
+
+        JsonElement radial = Json(Run(context, "gradient.get", new { }))
+            .GetProperty("gradient").GetProperty("radial");
+        Assert.Equal(0.25, radial.GetProperty("focalPoint").GetProperty("x").GetDouble(), 6);
+
+        // Outside the ellipse: clamped to the edge, and the operation says that is what it does.
+        Run(context, "style.setGradientFocalPoint", new { focalPoint = new { x = 3.0, y = 0.5 } });
+        Assert.Equal(1.0, path.Fill.Gradient!.FocalPoint!.Value.X, 6);
+        Assert.Equal(0.5, path.Fill.Gradient!.FocalPoint!.Value.Y, 6);
+
+        Run(context, "style.setGradientFocalPoint", new { clear = true });
+
+        Assert.Null(path.Fill.Gradient!.FocalPoint);
+        Assert.Equal(JsonValueKind.Null, Json(Run(context, "gradient.get", new { }))
+            .GetProperty("gradient").GetProperty("radial").GetProperty("focalPoint").ValueKind);
+    }
+
+    /// <summary>
+    /// A focus with nowhere to go is refused with a reason rather than reported as a success.
+    /// A selected path whose fill is solid has no radial gradient to put a highlight on, and
+    /// "nothing happened" is not an answer a driver can act on.
+    /// </summary>
+    [AvaloniaFact]
+    public void TheFocalPointOperationRefusesWhenNoSelectedPathHasARadialGradient()
+    {
+        (AutomationContext context, _) = OnePath();
+
+        EditorOperationException error = Assert.Throws<EditorOperationException>(
+            () => Run(context, "style.setGradientFocalPoint", new { focalPoint = new { x = 0.25, y = 0.5 } }));
+
+        Assert.Contains("radial gradient", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Every radial in the selection is given the focus, each as its own undo step.</summary>
+    [AvaloniaFact]
+    public void TheFocalPointOperationActsOnEverySelectedRadial()
+    {
+        var viewModel = new EditorViewModel();
+        Layer layer = viewModel.Document.Artboards[0].Layers[0];
+        PathItem first = PathFactory.CreateRectangle("a", new Rect2D(0, 0, 100, 100));
+        PathItem second = PathFactory.CreateRectangle("b", new Rect2D(200, 0, 100, 100));
+        layer.AddItem(first);
+        layer.AddItem(second);
+
+        var context = new AutomationContext { ViewModel = viewModel };
+        EditorOperations.Invoke(context, "selection.set",
+            JsonSerializer.SerializeToElement(new { itemIds = new[] { first.Id, second.Id } }));
+
+        // gradient.setKind addresses one path, so each is made radial on its own before the
+        // operation under test acts on the selection as a whole.
+        Run(context, "gradient.setKind", new { kind = "radial", itemId = first.Id });
+        Run(context, "gradient.setKind", new { kind = "radial", itemId = second.Id });
+        Run(context, "style.setGradientFocalPoint", new { focalPoint = new { x = 0.2, y = 0.2 } });
+
+        Assert.Equal(0.2, first.Fill.Gradient!.FocalPoint!.Value.X, 6);
+        Assert.Equal(0.2, second.Fill.Gradient!.FocalPoint!.Value.X, 6);
+
+        viewModel.Undo();
+
+        Assert.Null(first.Fill.Gradient!.FocalPoint);
+        Assert.Null(second.Fill.Gradient!.FocalPoint);
     }
 
     [AvaloniaFact]

@@ -190,6 +190,67 @@ public sealed record GradientSpec
     /// <summary>A plain two-stop black-to-white linear gradient, Illustrator's default new gradient.</summary>
     public static GradientSpec Default { get; } = new();
 
+    /// <summary>
+    /// The focal point the model can hold: one inside this radial's ellipse, or null when the
+    /// gradient has no focus.
+    ///
+    /// This is the SVG reader's own rule, restated where every other writer can reach it, so a
+    /// point that arrives from a file and one that arrives from an operation land in the same
+    /// place. A focus outside the ellipse is MOVED to its edge along the ray from the centre
+    /// rather than discarded: a file that puts its highlight out at the left means it to be seen
+    /// there, and recentring it is not the closest picture - it is a different one. A focus
+    /// landing on the centre becomes null, which is the state meaning "paints what a centred
+    /// gradient paints"; keeping the coordinate would make the writer emit an `fx` for a
+    /// gradient that has none.
+    ///
+    /// <see cref="Rotation"/> is deliberately not folded in: the model applies it in artboard
+    /// space when the gradient is drawn, so this normalised frame cannot know which way the
+    /// ellipse leans. This is the rule the model can state on its own, and it is exactly the
+    /// reader's - which never carries a rotation. Callers that also know the object's box (the
+    /// canvas, the PDF importer) clamp in the frame that does.
+    /// </summary>
+    public Point2D? ClampedFocalPoint()
+    {
+        if (FocalPoint is not { } focus || focus == Center)
+        {
+            return null;
+        }
+
+        return ClampToRadial(focus, Center, RadiusX, RadiusY);
+    }
+
+    /// <summary>This gradient with a focal point it can hold; see <see cref="ClampedFocalPoint"/>.</summary>
+    public GradientSpec WithClampedFocalPoint() => this with { FocalPoint = ClampedFocalPoint() };
+
+    /// <summary>
+    /// Moves a point that lies outside the radial onto its edge, along the line from the centre.
+    ///
+    /// The focus is measured in units of each radius, which is measuring it in the gradient's own
+    /// coordinates: SVG's `r` is one length, so an ellipse only ever arises from the shape's box,
+    /// and the two frames agree. A degenerate radial has no interior to be inside of, so the
+    /// centre is the only point it can mean.
+    /// </summary>
+    public static Point2D ClampToRadial(Point2D point, Point2D centre, double radiusX, double radiusY)
+    {
+        if (!(radiusX > 0) || !(radiusY > 0) ||
+            !double.IsFinite(radiusX) || !double.IsFinite(radiusY))
+        {
+            return centre;
+        }
+
+        double dx = (point.X - centre.X) / radiusX;
+        double dy = (point.Y - centre.Y) / radiusY;
+        double length = Math.Sqrt((dx * dx) + (dy * dy));
+
+        if (!double.IsFinite(length) || length <= 1.0)
+        {
+            return point;
+        }
+
+        double scale = 1.0 / length;
+        return new Point2D(centre.X + (dx * scale * radiusX), centre.Y + (dy * scale * radiusY));
+    }
+
     private static IReadOnlyList<GradientStop> DefaultStops() => new[]
     {
         new GradientStop(0.0, ColorRgb.White),

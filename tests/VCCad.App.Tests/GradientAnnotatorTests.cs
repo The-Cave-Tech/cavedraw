@@ -164,4 +164,62 @@ public class GradientAnnotatorTests
         Assert.Equal(spec.RadiusX, dragged.RadiusX);
         Assert.Equal(spec.RadiusY, dragged.RadiusY);
     }
+
+    /// <summary>
+    /// A radial whose focus is its centre has no focus handle: the model holds null for exactly
+    /// that picture, and a second handle on the centre would sit under the centre's own where no
+    /// pointer could pick it.
+    /// </summary>
+    [Fact]
+    public void ARadialWithNoFocusOffersNoFocusHandle()
+    {
+        IReadOnlyList<(GradientHandle Handle, Point2D Point)> handles =
+            GradientAnnotators.Handles(Radial(0.5, 0.5), Box);
+
+        Assert.DoesNotContain(handles, h => h.Handle == GradientHandle.RadialFocus);
+    }
+
+    /// <summary>
+    /// A focused radial offers a handle AT the focus, in world coordinates, so a pointer can grab
+    /// the highlight and move it - the person's half of the same capability the operation gives a
+    /// driver.
+    /// </summary>
+    [Fact]
+    public void AFocusedRadialOffersAHandleAtItsFocus()
+    {
+        GradientSpec spec = Radial(0.5, 0.5) with { FocalPoint = new Point2D(0.25, 0.5) };
+
+        IReadOnlyList<(GradientHandle Handle, Point2D Point)> handles =
+            GradientAnnotators.Handles(spec, Box);
+
+        (GradientHandle handle, Point2D point) = handles.First(h => h.Handle == GradientHandle.RadialFocus);
+        Assert.Equal(new Point2D(50, 50), point);   // 0.25 of 200 across, half of 100 down
+
+        Assert.Equal(GradientHandle.RadialFocus, GradientAnnotators.HitTest(spec, Box, point, tolerance: 4));
+    }
+
+    /// <summary>
+    /// Dragging the focus moves the highlight, and a drag past the ellipse lands on its EDGE
+    /// along the ray from the centre - the rule the SVG reader applies to a file that names one
+    /// outside. Dragging it onto the centre removes it: null and "the centre" are one picture,
+    /// and only one of them is a coordinate the model needs to keep.
+    /// </summary>
+    [Fact]
+    public void DraggingTheFocusMovesItAndClampsItToTheEdge()
+    {
+        GradientSpec spec = Radial(0.5, 0.5);
+
+        GradientSpec moved = GradientAnnotators.Drag(
+            spec, Box, GradientHandle.RadialFocus, new Point2D(50, 50), shift: false);
+        Assert.Equal(new Point2D(0.25, 0.5), moved.FocalPoint);
+
+        // Ten radii to the right: clamped to one radius, on the ellipse's edge, not recentred.
+        GradientSpec outside = GradientAnnotators.Drag(
+            moved, Box, GradientHandle.RadialFocus, new Point2D(1000, 50), shift: false);
+        Assert.Equal(new Point2D(1.0, 0.5), outside.FocalPoint);
+
+        GradientSpec back = GradientAnnotators.Drag(
+            outside, Box, GradientHandle.RadialFocus, new Point2D(100, 50), shift: false);
+        Assert.Null(back.FocalPoint);
+    }
 }

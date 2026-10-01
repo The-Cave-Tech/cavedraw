@@ -18,6 +18,9 @@ public enum GradientHandle
     /// <summary>The radial centre.</summary>
     RadialCentre,
 
+    /// <summary>Where the highlight sits, when the gradient has a focus away from its centre.</summary>
+    RadialFocus,
+
     /// <summary>The radial ellipse's horizontal radius handle.</summary>
     RadialRadiusX,
 
@@ -57,6 +60,15 @@ public static class GradientAnnotators
                 break;
 
             case GradientKind.Radial:
+                // The focus is offered before the centre, and only when it is a point of its own.
+                // A gradient with no focus paints what one naming its centre paints, so a second
+                // handle on the centre would be a handle for a state the model does not have - and
+                // it would sit exactly under the centre's, where it could not be picked.
+                if (geometry.Focus is { } focus)
+                {
+                    handles.Add((GradientHandle.RadialFocus, new Point2D(focus.X, focus.Y)));
+                }
+
                 handles.Add((GradientHandle.RadialCentre, new Point2D(geometry.Centre.X, geometry.Centre.Y)));
                 handles.Add((GradientHandle.RadialRadiusX,
                     RadialHandle(geometry, geometry.RadiusX, 0.0)));
@@ -128,7 +140,16 @@ public static class GradientAnnotators
             }
 
             case GradientHandle.RadialCentre:
-                return spec with { Center = Normal(world) };
+                // The focus keeps its object-relative position and is clamped if the ellipse has
+                // moved out from under it, so the spec never holds a highlight off the radial.
+                return WithClampedFocus(spec with { Center = Normal(world) }, box);
+
+            case GradientHandle.RadialFocus:
+                // The gesture is clamped through the geometry the canvas paints with, so the two
+                // cannot disagree: dragging past the ellipse lands on its edge along the ray from
+                // the centre, and dragging onto the centre removes the focus - which is what the
+                // SVG reader would have kept from a file naming that point.
+                return WithClampedFocus(spec with { FocalPoint = Normal(world) }, box);
 
             case GradientHandle.RadialRadiusX:
             case GradientHandle.RadialRadiusY:
@@ -158,16 +179,40 @@ public static class GradientAnnotators
                     radiusY = spec.RadiusY * box.Height * scale;
                 }
 
-                return spec with
+                // A shrunken ellipse can leave the focus outside it; clamping is what keeps the
+                // picture the model describes drawable rather than relying on a reader's mercy.
+                return WithClampedFocus(spec with
                 {
                     RadiusX = radiusX / box.Width,
                     RadiusY = radiusY / box.Height,
-                };
+                }, box);
             }
 
             default:
                 return spec;
         }
+    }
+
+    /// <summary>
+    /// The spec with its focus put back inside the ellipse by the geometry the canvas paints with,
+    /// or with none at all when it has landed on the centre. A gradient with no focus is returned
+    /// untouched: there is nothing to clamp, and null is a state rather than a coordinate.
+    /// </summary>
+    private static GradientSpec WithClampedFocus(GradientSpec spec, Rect box)
+    {
+        if (spec.FocalPoint is null)
+        {
+            return spec;
+        }
+
+        return GradientGeometry.For(spec, box).Focus is { } focus
+            ? spec with
+            {
+                FocalPoint = new Point2D(
+                    (focus.X - box.X) / box.Width,
+                    (focus.Y - box.Y) / box.Height),
+            }
+            : spec with { FocalPoint = null };
     }
 
     /// <summary>A point on one of the ellipse's axes, rotated with the ellipse.</summary>

@@ -142,6 +142,56 @@ public class GradientAnnotatorCanvasTests
     }
 
     /// <summary>
+    /// The focus handle is a real handle on a real canvas: a pointer grabs it, the highlight
+    /// moves, and the whole gesture is one undo step. This is what makes the focal point a thing
+    /// a PERSON can do as well as a driver - the operation alone would leave the capability
+    /// one-sided, which AGENTS.md §1.1 calls a defect.
+    /// </summary>
+    [AvaloniaFact]
+    public void DraggingTheFocusHandleOnCanvasMovesTheHighlightAndUndoesInOneStep()
+    {
+        (Window window, CanvasWorkspace workspace, EditorViewModel viewModel) = Host();
+        try
+        {
+            var spec = new GradientSpec
+            {
+                Kind = GradientKind.Radial,
+                Center = new Point2D(0.5, 0.5),
+                RadiusX = 0.5,
+                RadiusY = 0.5,
+                FocalPoint = new Point2D(0.25, 0.5),
+                Stops = new[]
+                {
+                    new GradientStop(0.0, ColorRgb.White),
+                    new GradientStop(1.0, ColorRgb.Black),
+                },
+            };
+
+            (PathItem rect, Rect box) = GradientRect(viewModel, spec);
+
+            Point2D handle = GradientAnnotators.Handles(rect.Fill.Gradient!, box)
+                .First(h => h.Handle == GradientHandle.RadialFocus).Point;
+
+            Drag(window, workspace, handle, new Point2D(box.X + 60, box.Y + 75));
+
+            // The gesture goes through window coordinates and back, so the point is read with the
+            // window's own resolution in mind rather than demanded to the model's last digit.
+            Point2D moved = rect.Fill.Gradient!.FocalPoint!.Value;
+            Assert.True(
+                Math.Abs(moved.X - 0.3) < 0.02 && Math.Abs(moved.Y - 0.75) < 0.02,
+                $"the focus should follow the drag to (0.3, 0.75), got ({moved.X}, {moved.Y})");
+
+            viewModel.Undo();
+
+            Assert.Equal(new Point2D(0.25, 0.5), rect.Fill.Gradient!.FocalPoint);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
     /// The handles are drawn where the model puts them. The ramp's end here is deliberately off
     /// the selection box's own handles, so a white pixel at that point can only be the annotator.
     /// </summary>
