@@ -604,30 +604,10 @@ public static class PdfDocumentExporter
             ops.Add(ColorOperator(path.Fill.Color, path.SourceFillCmyk, stroke: false));
         }
 
-        if (strokeVisible)
-        {
-            ops.Add(ColorOperator(path.Stroke.Color, path.SourceStrokeCmyk, stroke: true));
-            ops.Add($"{CapToPdf(path.Stroke.Cap)} J");
-            ops.Add($"{JoinToPdf(path.Stroke.Join)} j");
-            if (path.Stroke.Join == StrokeJoin.Miter)
-            {
-                ops.Add($"{Num(path.Stroke.MiterLimit)} M");
-            }
-
-            if (!path.Stroke.Dash.IsEmpty)
-            {
-                string array = string.Join(' ', path.Stroke.Dash.Segments.Select(v => Num(Math.Max(0.0, v * strokeScale))));
-                ops.Add($"[{array}] {Num(path.Stroke.Dash.Offset * strokeScale)} d");
-            }
-            else
-            {
-                // **The dash is graphics state, not a property of a path.** Setting it only when a path has one
-                // leaves it set for every path after it, so an undashed stroke that follows a dashed one is
-                // drawn dashed - and the effect is order-dependent, which makes it look like a rendering fault
-                // rather than an export one. Every path states its own dash, including "none".
-                ops.Add("[] 0 d");
-            }
-        }
+        // The stroke's own graphics state - colour, cap, join, miter, dash - is set per stroke where the
+        // strokes are drawn, below. It used to be set here, once, which is the same thing for a path with one
+        // stroke and wrong for a path with several: those are all part of PDF's graphics state, so a stack
+        // shares one and the last writer would win.
 
         var closed = contours.Where(c => c.IsClosed).ToList();
         var open = contours.Where(c => !c.IsClosed).ToList();
@@ -772,58 +752,90 @@ public static class PdfDocumentExporter
             }
         }
 
-        if (!strokeVisible)
+        // --- Strokes, bottom to top -----------------------------------------
+        // Each stroke states its own colour, cap, join, miter limit, dash and width before it is drawn. Those
+        // are all PDF graphics state, so a stack of strokes shares one - which means every stroke has to say
+        // what it is, including "no dash", or it is drawn with whatever the stroke before it set.
+        foreach (StrokeSpec stroke in path.Strokes)
         {
-            return;
-        }
-
-        // --- Stroke: honour Inside/Outside by clipping ---------------------
-        // PDF has no stroke alignment, so an aligned stroke is drawn at double
-        // width and clipped to the inside or outside of the path.
-        if (alphaStates.HasTransparency)
-        {
-            ops.Add($"{alphaStates.NameFor(path.Stroke.Color.A * opacity)} gs");
-        }
-
-        bool aligned = path.Stroke.Alignment != StrokeAlignment.Center && closed.Count > 0;
-        if (closed.Count > 0)
-        {
-            if (!aligned)
+            if (!stroke.HasVisibleOutline)
             {
-                ops.Add($"{Num(width)} w");
-                WriteContours(ops, closed);
-                ops.Add("S");
+                continue;
+            }
+
+            double strokeWidth = Math.Max(0.0, stroke.Width * strokeScale);
+
+            // The original ink values belong to the item rather than to a stroke, so they describe the first
+            // one. Writing them for every stroke would paint the later ones in a colour they never had.
+            ops.Add(ColorOperator(
+                stroke.Color,
+                ReferenceEquals(stroke, path.Strokes[0]) ? path.SourceStrokeCmyk : null,
+                stroke: true));
+            ops.Add($"{CapToPdf(stroke.Cap)} J");
+            ops.Add($"{JoinToPdf(stroke.Join)} j");
+            if (stroke.Join == StrokeJoin.Miter)
+            {
+                ops.Add($"{Num(stroke.MiterLimit)} M");
+            }
+
+            if (!stroke.Dash.IsEmpty)
+            {
+                string array = string.Join(' ', stroke.Dash.Segments.Select(v => Num(Math.Max(0.0, v * strokeScale))));
+                ops.Add($"[{array}] {Num(stroke.Dash.Offset * strokeScale)} d");
             }
             else
             {
-                ops.Add("q");
-                if (path.Stroke.Alignment == StrokeAlignment.Inside)
+                ops.Add("[] 0 d");
+            }
+
+            if (alphaStates.HasTransparency)
+            {
+                ops.Add($"{alphaStates.NameFor(stroke.Color.A * opacity)} gs");
+            }
+
+            // --- Stroke: honour Inside/Outside by clipping ------------------
+            // PDF has no stroke alignment, so an aligned stroke is drawn at double
+            // width and clipped to the inside or outside of the path.
+            bool aligned = stroke.Alignment != StrokeAlignment.Center && closed.Count > 0;
+            if (closed.Count > 0)
+            {
+                if (!aligned)
                 {
+                    ops.Add($"{Num(strokeWidth)} w");
                     WriteContours(ops, closed);
-                    ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "W* n" : "W n");
+                    ops.Add("S");
                 }
                 else
                 {
-                    // Outside = everything except the path interior (even-odd).
-                    ops.Add($"{Num(-10000)} {Num(-10000)} m {Num(20000)} {Num(-10000)} l " +
-                            $"{Num(20000)} {Num(20000)} l {Num(-10000)} {Num(20000)} l h");
+                    ops.Add("q");
+                    if (stroke.Alignment == StrokeAlignment.Inside)
+                    {
+                        WriteContours(ops, closed);
+                        ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "W* n" : "W n");
+                    }
+                    else
+                    {
+                        // Outside = everything except the path interior (even-odd).
+                        ops.Add($"{Num(-10000)} {Num(-10000)} m {Num(20000)} {Num(-10000)} l " +
+                                $"{Num(20000)} {Num(20000)} l {Num(-10000)} {Num(20000)} l h");
+                        WriteContours(ops, closed);
+                        ops.Add("W* n");
+                    }
+
+                    ops.Add($"{Num(strokeWidth * 2)} w");
                     WriteContours(ops, closed);
-                    ops.Add("W* n");
+                    ops.Add("S");
+                    ops.Add("Q");
                 }
-
-                ops.Add($"{Num(width * 2)} w");
-                WriteContours(ops, closed);
-                ops.Add("S");
-                ops.Add("Q");
             }
-        }
 
-        // --- Open contours: always centre-stroked --------------------------
-        if (open.Count > 0)
-        {
-            ops.Add($"{Num(width)} w");
-            WriteContours(ops, open);
-            ops.Add("S");
+            // --- Open contours: always centre-stroked ----------------------
+            if (open.Count > 0)
+            {
+                ops.Add($"{Num(strokeWidth)} w");
+                WriteContours(ops, open);
+                ops.Add("S");
+            }
         }
     }
 

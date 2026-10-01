@@ -85,6 +85,14 @@ public static class ModelDump
                     .Append(" opacity=").Append(Num(path.Opacity))
                     .Append(" fill=").Append(Fill(path.Fill))
                     .Append(" stroke=").Append(Stroke(path.Stroke))
+
+                    // The rest of the stack. A dump that printed only the bottom stroke would make two
+                    // different documents compare equal, which quietly weakens every round-trip test built on
+                    // this text - so a path with more than one reports all of them, and a path with one is
+                    // written exactly as it was before strokes became a stack.
+                    .Append(path.Strokes.Count > 1
+                        ? " strokes=" + string.Join(" | ", path.Strokes.Select(Stroke))
+                        : string.Empty)
                     .Append(" subpaths=").Append(path.SubPaths.Count)
                     .Append(" fillCmyk=").Append(Cmyk(path.SourceFillCmyk))
                     .Append(" strokeCmyk=").Append(Cmyk(path.SourceStrokeCmyk))

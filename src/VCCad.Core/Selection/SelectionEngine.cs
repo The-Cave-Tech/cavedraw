@@ -964,17 +964,17 @@ public static class SelectionEngine
             return inBox;
         }
 
-        if (!path.Stroke.HasVisibleOutline)
+        if (!path.HasVisibleStroke)
         {
             // Nothing is painted, so nothing is there to click. An invisible object that still swallowed
             // clicks would be the same defect as the frame, one step quieter.
             return false;
         }
 
-        // Stroked and unfilled: the stroke is the object. Half the stroke's width, because that is how far
-        // the paint reaches from the centreline. Walked from the subpaths rather than the fill flattener,
-        // which only reports closed outlines - a stroked line has two points and would be unclickable.
-        double reach = tolerance + (path.Stroke.Width / 2.0);
+        // Stroked and unfilled: the stroke is the object. Half the width of the **widest visible stroke**,
+        // because that is how far the paint reaches from the centreline - a path whose second stroke is wider
+        // is clickable that much further out, and one that consulted only the bottom stroke would not be.
+        double reach = tolerance + (path.Strokes.Where(s => s.HasVisibleOutline).Max(s => s.Width) / 2.0);
         foreach (SubPath sub in path.SubPaths)
         {
             if (NearSubPath(sub, point, reach))

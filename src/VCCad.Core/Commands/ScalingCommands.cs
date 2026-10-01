@@ -48,7 +48,15 @@ public sealed class ScaleWithObject
     }
 }
 
-/// <summary>Changes a path's stroke width, keeping the rest of the stroke as it was.</summary>
+/// <summary>
+/// Changes a path's stroke width, keeping the rest of each stroke as it was.
+///
+/// **Every stroke in the stack scales, by the ratio the caller asked for.** The caller computes the new width
+/// of the bottom stroke from the object's scale factor; applying that same ratio to the whole stack is what
+/// keeps a highlight sitting the same distance proud of an outline when the shape it is on is resized. Scaling
+/// only the bottom stroke would leave a stack growing at a different rate from its shape, which is the kind of
+/// fault that is noticed late and on exactly one drawing.
+/// </summary>
 public sealed class SetStrokeWidthCommand : IUndoableCommand
 {
     private readonly PathItem _path;
@@ -64,9 +72,20 @@ public sealed class SetStrokeWidthCommand : IUndoableCommand
 
     public string Description => "Scale line weight";
 
-    public void Do() => _path.Stroke = _path.Stroke with { Width = _after };
+    public void Do() => Scale(_before <= 0 ? 1.0 : _after / _before);
 
-    public void Undo() => _path.Stroke = _path.Stroke with { Width = _before };
+    public void Undo() => Scale(_after <= 0 ? 1.0 : _before / _after);
+
+    private void Scale(double factor)
+    {
+        for (int i = 0; i < _path.Strokes.Count; i++)
+        {
+            StrokeSpec stroke = _path.Strokes[i];
+            _path.Strokes[i] = stroke with { Width = stroke.Width * factor };
+        }
+
+        _path.NotifyStrokesChanged();
+    }
 }
 
 /// <summary>
