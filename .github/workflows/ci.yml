@@ -21,11 +21,11 @@ jobs:
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       # The runner image also ships a newer SDK and may point DOTNET_ROOT at it. If `dotnet` is not 8.0
       # the workload installs into that newer band, and restoring the net8 browser project then fails with
-      # NETSDK1147 asking for wasm-tools-net8 - a confusing way to learn which SDK was used. global.json
+      # NETSDK1147 asking for the workload by band name - a confusing way to learn which SDK was used. global.json
       # pins the SDK; this says so out loud when the pin is not doing its job.
       - name: Check the toolchain is .NET 8
         run: |
@@ -116,7 +116,7 @@ jobs:
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       # The text-export tests embed a URW base-35 face - "Nimbus Sans" and friends. Those faces are
       # located on the machine rather than shipped with this project, because their licence is not ours to

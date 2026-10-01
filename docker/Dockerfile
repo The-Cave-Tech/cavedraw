@@ -10,7 +10,7 @@
 # Build and run on the docker host:  ssh user@host (see project plan §6).
 # =============================================================================
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Emscripten (from the wasm-tools workload) requires python on PATH.
@@ -57,7 +57,7 @@ RUN dotnet publish src/VCCad.Api -c Release -o /app/api --no-restore
 RUN dotnet workload install wasm-tools \
  && dotnet publish src/VCCad.App.Browser -c Release -o /app/www --no-restore
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
 RUN useradd --create-home --uid 10001 vccad
 

@@ -225,8 +225,8 @@ depends on Avalonia, ASP.NET, or the UI; everything testable headless.
   VCCad.Pdf/           PDF writer/reader + lossless embedding + font pass-through
   VCCad.Api/           ASP.NET host (REST + WS JSON-RPC + static WASM)
   VCCad.App/           Avalonia WebAssembly editor shell
-  VCCad.App.Browser/   net8.0-browser WASM host
-  VCCad.App.Desktop/   net8.0 native Windows/Linux host (same shell as the browser)
+  VCCad.App.Browser/   net10.0-browser WASM host
+  VCCad.App.Desktop/   net10.0 native Windows/Linux host (same shell as the browser)
 /tests/
   VCCad.Geometry.Tests/    unit
   VCCad.Core.Tests/        unit

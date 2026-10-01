@@ -58,7 +58,7 @@ PDF-lossless**:
 | `src/VCCad.Pdf` | PDF 1.7 **writer + reader**, vector importer, font embedding/pass-through, PDF/A-2b metadata, sidecar |
 | `src/VCCad.Api` | Automation host: REST + JSON-RPC over WebSocket; serves the published editor |
 | `src/VCCad.App` | Avalonia editor shell (menus, toolbar, docking panes, workspace canvas, font collection) |
-| `src/VCCad.App.Browser` | WebAssembly host (`net8.0-browser`) |
+| `src/VCCad.App.Browser` | WebAssembly host (`net10.0-browser`) |
 | `src/VCCad.App.Desktop` | Native desktop host (Windows/Linux) for the same editor shell |
 | `tests/*` | xUnit suites (Geometry, Core, Pdf, Api, App headless incl. desktop bootstrap) |
 | `tools/qwen-corpus-tracker` | qwen vision-model render-fidelity progress tracker |
@@ -171,7 +171,7 @@ Discovery: the method catalog is in `EditorApi.ListMethods()`.
 
 ```bash
 # start with a task already queued and the diagnostics window open
-src/VCCad.App.Desktop/bin/Release/net8.0/VCCad.App.Desktop.exe \
+src/VCCad.App.Desktop/bin/Release/net10.0/VCCad.App.Desktop.exe \
     --chat "draw a red circle centred on the artboard" --diagnostics
 
 curl http://127.0.0.1:5099/api/v1/operations        # everything that can be done

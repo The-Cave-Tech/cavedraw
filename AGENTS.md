@@ -122,7 +122,7 @@ visible; `git status` showing `ahead N` means the evidence does not exist yet.
 
 Facts about the runner that cost real time to learn, all now handled in `ci.yml`:
 
-- **The SDK is pinned by `global.json`** (8.0.x) with a guard step that prints the
+- **The SDK is pinned by `global.json`** (10.0.x) with a guard step that prints the
   toolchain. Without it `dotnet` resolved to whatever the image's newest SDK was, the
   `wasm-tools` workload was installed into *that* band, and the build failed with
   `NETSDK1147` complaining about a workload nobody had asked for.
@@ -275,7 +275,7 @@ Required:
 
 | Tool | Why | Check |
 |------|-----|-------|
-| .NET 8 SDK | build/test/run | `dotnet --version` (8.0.x) |
+| .NET 10 SDK | build/test/run | `dotnet --version` (10.0.x) |
 | `wasm-tools` workload | building `VCCad.App.Browser` | `dotnet workload list` |
 | `qpdf` | PDF structural validation | `qpdf --version` |
 | poppler `pdftoppm`/`pdftotext` | render/text verification | `pdftoppm -v` |
@@ -509,7 +509,7 @@ curl -X POST http://127.0.0.1:5099/api/v1/cancel
 Start the editor with work already queued, and with the diagnostics window open:
 
 ```powershell
-src/VCCad.App.Desktop/bin/Release/net8.0/VCCad.App.Desktop.exe `
+src/VCCad.App.Desktop/bin/Release/net10.0/VCCad.App.Desktop.exe `
     --chat "draw a red circle centred on the artboard" `
     --port 5099 --diagnostics
 ```
@@ -600,8 +600,8 @@ src/VCCad.Pdf          PDF 1.7 writer + reader; content importer; font embedding
                        PDF/A-2b metadata; exporter sidecar
 src/VCCad.Api          ASP.NET host: REST /api/v1/* + JSON-RPC /ws/rpc + static WASM
 src/VCCad.App          Avalonia editor shell (canvas, panes, docking, font collection)
-src/VCCad.App.Browser  net8.0-browser WASM host
-src/VCCad.App.Desktop  net8.0 native Windows/Linux host for the same editor shell
+src/VCCad.App.Browser  net10.0-browser WASM host
+src/VCCad.App.Desktop  net10.0 native Windows/Linux host for the same editor shell
 tests/*                xUnit suites (see table above)
 tools/qwen-corpus-tracker  qwen-based render-fidelity progress tracker
 tools/ai-private-data      independent reference decoder + golden manifest for .ai private data
