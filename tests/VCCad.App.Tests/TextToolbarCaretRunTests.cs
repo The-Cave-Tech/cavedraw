@@ -190,4 +190,41 @@ public class TextToolbarCaretRunTests
             window.Close();
         }
     }
+
+    /// <summary>
+    /// At the join between the two runs the two views still name the **same** run, which is the run the next
+    /// character joins - the one the character before the caret belongs to.
+    ///
+    /// This is the boundary the two rules used to disagree at: the panel's run index came from "the run the
+    /// caret is drawn at" (the second here) while the toolbar asked `RunAt`, whose rule is the run the next
+    /// character joins (the first). One caret cannot have two answers, so the plumbing publishes `RunAt`'s -
+    /// which is also the run `TextEditing.Insert` puts the next character into.
+    /// </summary>
+    [AvaloniaFact]
+    public void AtTheJoinBetweenTwoRunsTheToolbarAndThePanelNameTheSameRun()
+    {
+        (Window window, EditorView view, EditorViewModel vm, CanvasWorkspace workspace, TextItem block,
+            TextPane pane, _, Window paneWindow) = Host();
+        try
+        {
+            ClickIntoTheSecondRun(workspace, block);
+
+            // Exactly between "TITLE" and "caption".
+            MoveCaretTo(vm, workspace, block.Runs[0].Text.Length);
+
+            Assert.Equal(5, vm.TextCaretOffset);
+            Assert.Equal(0, vm.TextCaretRunIndex);
+
+            Assert.Equal("run 1 of 2, the run the face fields describe",
+                pane.FindControl<TextBlock>("RunLabel")!.Text);
+            Assert.Equal("36", Box(view, "TtSize").Text);
+            Assert.True(Toggle(view, "TtBold").IsChecked);
+            Assert.False(Toggle(view, "TtItalic").IsChecked);
+        }
+        finally
+        {
+            paneWindow.Close();
+            window.Close();
+        }
+    }
 }
