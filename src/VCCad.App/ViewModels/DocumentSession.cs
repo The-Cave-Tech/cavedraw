@@ -1705,6 +1705,75 @@ public sealed class DocumentSession : INotifyPropertyChanged
         return changed;
     }
 
+    /// <summary>
+    /// Moves an outline effect within a stroke's list, which is how a person changes the order they apply in.
+    ///
+    /// **The order is the picture.** Effects compose in order, so roughen inside an offset does not look like an
+    /// offset inside a roughen - which is why this is a list rather than a set, and why moving one is a real edit
+    /// rather than a tidy-up. Mirrors <see cref="MoveStroke"/>, because the same thing is true one level down.
+    /// </summary>
+    public int MoveStrokeEffect(int from, int to)
+    {
+        int changed = 0;
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            var stack = path.Strokes.ToList();
+            for (int i = 0; i < stack.Count; i++)
+            {
+                var effects = stack[i].AllEffects.ToList();
+                if (from < 0 || from >= effects.Count)
+                {
+                    continue;
+                }
+
+                OutlineEffectSpec moved = effects[from];
+                effects.RemoveAt(from);
+                effects.Insert(Math.Clamp(to, 0, effects.Count), moved);
+
+                stack[i] = stack[i] with { Effects = new EffectStack(effects) };
+                Execute(new SetStrokesCommand(path, stack, "Reorder effect"));
+                changed++;
+                break;
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>The same for a stroke's raster effects, which are a separate list and ordered for the same reason.</summary>
+    public int MoveStrokeRasterEffect(int from, int to)
+    {
+        int changed = 0;
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            var stack = path.Strokes.ToList();
+            for (int i = 0; i < stack.Count; i++)
+            {
+                if (stack[i].RasterEffects is not { } raster || from < 0 || from >= raster.Count)
+                {
+                    continue;
+                }
+
+                var effects = new List<RasterEffectSpec>();
+                for (int k = 0; k < raster.Count; k++)
+                {
+                    effects.Add(raster[k]);
+                }
+
+                RasterEffectSpec moved = effects[from];
+                effects.RemoveAt(from);
+                effects.Insert(Math.Clamp(to, 0, effects.Count), moved);
+
+                stack[i] = stack[i] with { RasterEffects = new RasterEffectStack(effects) };
+                Execute(new SetStrokesCommand(path, stack, "Reorder raster effect"));
+                changed++;
+                break;
+            }
+        }
+
+        return changed;
+    }
+
     /// <summary>Moves a stroke within the stack, which is how a person changes which one is on top.</summary>
     public int MoveStroke(int from, int to)
     {

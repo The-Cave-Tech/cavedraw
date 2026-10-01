@@ -2308,6 +2308,30 @@ public static class EditorOperations
                 };
             });
 
+        Add("style.reorderStrokeEffect",
+            "Move an outline effect within the selected paths' strokes - how a person changes the order they apply " +
+            "in. from and to count from the start of the effect list, and to may be one past the last to put it at " +
+            "the end. The order is the picture: roughen inside an offset does not look like an offset inside a " +
+            "roughen. One undo step per path.",
+            "from:number, to:number",
+            (ctx, p) =>
+            {
+                int from = (int)p.GetLong("from", 0);
+                int to = (int)p.GetLong("to", 0);
+                return new { from, to, changed = ctx.Session.MoveStrokeEffect(from, to) };
+            });
+
+        Add("style.reorderRasterEffect",
+            "Move a raster effect within the selected paths' strokes, the same way and for the same reason: they " +
+            "compose in order. One undo step per path.",
+            "from:number, to:number",
+            (ctx, p) =>
+            {
+                int from = (int)p.GetLong("from", 0);
+                int to = (int)p.GetLong("to", 0);
+                return new { from, to, changed = ctx.Session.MoveStrokeRasterEffect(from, to) };
+            });
+
         Add("style.effectParameters",
             "Every effect a stroke can carry, with the parameters each one takes: name, sort, meaning and defaults. " +
             "This is the **declaration** an effects panel builds its editors from and an operation validates " +
