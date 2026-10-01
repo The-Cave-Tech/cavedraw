@@ -352,8 +352,14 @@ public static class SvgWriter
         /// an effect means from its own `lpeversion` and a parameter set this build does not model, so rebuilding
         /// the element from the translated stroke would drop exactly the half that says how to shape it.
         ///
-        /// Written **once per id**: two paths may share one effect, and a file with the same id twice is one that
+        /// **Written once per id**: two paths may share one effect, and a file with the same id twice is one that
         /// Inkscape resolves in whichever order it happens to walk the tree.
+        ///
+        /// **A definition nothing refers to is written too**, from the document-level home it was kept in - so a
+        /// file that carries a library of named effects hands that library back rather than the entries something
+        /// happens to point at (issue #155). The referenced definitions are collected first, so an id claimed by a
+        /// path is written once and from the path it belongs to, and a document-level entry under the same id is
+        /// the same definition written the same way rather than a second copy.
         /// </summary>
         public void WritePathEffects(CadDocument document)
         {
@@ -376,6 +382,21 @@ public static class SvgWriter
 
                     elements.Add(child);
                 }
+            }
+
+            foreach (string foreign in document.ForeignPathEffects)
+            {
+                if (ForeignChild(foreign) is not { } child || !IsPathEffect(child))
+                {
+                    continue;
+                }
+
+                if (child.Attribute("id")?.Value is { Length: > 0 } id && !ids.Add(id))
+                {
+                    continue;
+                }
+
+                elements.Add(child);
             }
 
             if (elements.Count == 0)

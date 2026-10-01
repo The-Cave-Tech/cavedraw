@@ -1214,6 +1214,11 @@ internal sealed record DocumentDto(
     // Root-level elements that are not artwork (the Inkscape named view, the RDF), verbatim, when there are any.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string[]? SvgExtras = null,
 
+    // Foreign-namespace definitions nothing in the document points at, verbatim, when there are any. Document-level
+    // because nothing else can hold a definition with no user, and absent rather than an empty array so a document
+    // that keeps none is written exactly as it was before this existed (issue #155).
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string[]? ForeignPathEffects = null,
+
     // The namespace prefixes the file declared, so the writer uses the same ones rather than generated ones.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<string, string>? SvgNamespaces = null);
 
@@ -1332,6 +1337,8 @@ public static class VccadDocumentSerializer
             d.Filters.Count == 0 ? null : d.Filters.Select(ToFilterDto).ToArray(),
 
             d.SvgExtras.Count == 0 ? null : d.SvgExtras.ToArray(),
+
+            d.ForeignPathEffects.Count == 0 ? null : d.ForeignPathEffects.ToArray(),
 
             d.SvgNamespaces.Count == 0 ? null : new Dictionary<string, string>(d.SvgNamespaces));
     }
@@ -1510,11 +1517,17 @@ public static class VccadDocumentSerializer
                     p.Points!.Select(point => new WidthPoint(
                         point.Position, point.Left, point.Right, point.Interpolation)))));
 
-        // And the filters, for the same reason: an element refers to one by name, so a library that did not load
-        // would leave every filtered shape unfiltered.
+        // The root-level baggage - the Inkscape named view, the RDF - verbatim, so a saved and reopened document
+        // still carries the settings the file gave it.
         document.SetSvgExtras(dto.SvgExtras ?? Array.Empty<string>());
+
+        // The foreign definitions nothing points at, which only the document can hold - so a document saved and
+        // reopened keeps the effects it was imported with rather than losing the unreferenced ones on the first save.
+        document.SetForeignPathEffects(dto.ForeignPathEffects ?? Array.Empty<string>());
         document.SetSvgNamespaces(dto.SvgNamespaces ?? new Dictionary<string, string>(StringComparer.Ordinal));
 
+        // The filters, for the same reason as the profiles above: an element refers to one by name, so a library
+        // that did not load would leave every filtered shape unfiltered.
         document.SetFilters(
             (dto.Filters ?? Array.Empty<FilterDto>())
                 .Where(f => f.Primitives is { Length: > 0 })

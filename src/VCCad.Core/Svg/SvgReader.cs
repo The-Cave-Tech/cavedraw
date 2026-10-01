@@ -162,6 +162,7 @@ public static partial class SvgReader
             Ids = ids,
             Resolving = new HashSet<string>(StringComparer.Ordinal),
             Missing = new List<string>(),
+            UsedPathEffects = new HashSet<string>(StringComparer.Ordinal),
             Sheet = sheet,
             Gradients = gradients,
             PathEffects = pathEffects,
@@ -188,6 +189,13 @@ public static partial class SvgReader
         {
             layer.AddItem(viewGroup);
         }
+
+        // An effect no path in the document named is a definition with no home on any item, so it is kept on the
+        // document itself. Collected by id from what was read up front rather than from the XML again, so the
+        // element that goes back out is the one the file wrote. See CadDocument.ForeignPathEffects (issue #155).
+        document.SetForeignPathEffects(pathEffects
+            .Where(entry => !context.UsedPathEffects.Contains(entry.Key))
+            .Select(entry => entry.Value.Xml));
 
         return new SvgImportResult(document, counts, context.Missing, warnings.OrderBy(w => w, StringComparer.Ordinal).ToArray());
     }
@@ -321,10 +329,11 @@ public static partial class SvgReader
     /// document that comes back without it has lost the reason its stroke looks the way it does - but an SVG
     /// element inside `defs` is not an effect and is handled (or deliberately not handled) as the SVG element it is.
     ///
-    /// **A definition nothing refers to is not kept**, and that is a boundary rather than an oversight: the model
-    /// has no document-level place for a verbatim foreign element, and an effect with no reference on it says
-    /// nothing about how anything in the document is drawn. What the file's own paths point at is preserved
-    /// verbatim on those paths, so the reference leads somewhere on both sides of the round trip.
+    /// **A definition nothing refers to is kept at the document level.** An effect no path names says nothing about
+    /// how anything is drawn, so no item can hold it - but it is still content the file carried, and a file whose
+    /// `defs` keeps a library of named effects would otherwise lose the unused half of it in silence (issue #155).
+    /// What nothing referred to is therefore handed to the document, which is the only thing that can hold a
+    /// definition with no user, and the writer puts it back into `defs` beside the referenced ones.
     /// </summary>
     private static IReadOnlyDictionary<string, PathEffectDefinition> CollectPathEffects(XElement root)
     {
@@ -390,6 +399,10 @@ public static partial class SvgReader
     /// never drew. The same goes for a reference that points at nothing: the geometry stands, and the dangling id
     /// is reported beside the missing `use` and image targets rather than only being discoverable by comparing the
     /// file with the drawing.
+    ///
+    /// **A definition nothing refers to is not lost here.** The id is recorded as used the moment a path names it,
+    /// so whatever the walk leaves unclaimed is handed to the document at the end - see
+    /// <c>CadDocument.ForeignPathEffects</c>.
     /// </summary>
     private static void ApplyPathEffect(PathItem path, Context context)
     {
@@ -397,6 +410,10 @@ public static partial class SvgReader
         {
             return;
         }
+
+        // Recorded before the lookup: a reference that resolves to nothing is still a reference, and the dangling
+        // case is reported rather than answered a second time by keeping a definition under the same id.
+        context.UsedPathEffects.Add(id);
 
         if (!context.PathEffects.TryGetValue(id, out PathEffectDefinition? definition))
         {
@@ -667,6 +684,19 @@ public static partial class SvgReader
         /// </summary>
         public IReadOnlyDictionary<string, PathEffectDefinition> PathEffects { get; init; } =
             new Dictionary<string, PathEffectDefinition>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// The ids of the live path effects a path in this document actually named.
+        ///
+        /// Collected while the tree is walked because that is the only point at which a reference is known, and
+        /// needed afterwards: whatever is left in <see cref="PathEffects"/> when the walk ends is a definition with
+        /// no user, which the document keeps rather than dropping. See <c>CadDocument.ForeignPathEffects</c>.
+        ///
+        /// An id is recorded whether or not its definition was found - a reference to an effect the file does not
+        /// define is reported as a dangling reference, and keeping a definition nothing refers to under that id
+        /// would be a second, contradicting answer to the same question.
+        /// </summary>
+        public required HashSet<string> UsedPathEffects { get; init; }
 
         /// <summary>
         /// The font and line properties in force here, which a text element inherits the way it inherits paint.
@@ -946,6 +976,7 @@ public static partial class SvgReader
             Ids = context.Ids,
             Resolving = context.Resolving,
             Missing = context.Missing,
+            UsedPathEffects = context.UsedPathEffects,
             Sheet = context.Sheet,
             Gradients = context.Gradients,
             PathEffects = context.PathEffects,
@@ -1057,6 +1088,7 @@ public static partial class SvgReader
             Ids = context.Ids,
             Resolving = context.Resolving,
             Missing = context.Missing,
+            UsedPathEffects = context.UsedPathEffects,
             Sheet = context.Sheet,
             Gradients = context.Gradients,
             PathEffects = context.PathEffects,
@@ -1555,6 +1587,7 @@ public static partial class SvgReader
             Ids = context.Ids,
             Resolving = context.Resolving,
             Missing = context.Missing,
+            UsedPathEffects = context.UsedPathEffects,
             Sheet = context.Sheet,
             Gradients = context.Gradients,
             PathEffects = context.PathEffects,

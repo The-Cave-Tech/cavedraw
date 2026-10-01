@@ -1,5 +1,6 @@
 using System.Xml.Linq;
 using VCCad.Core.Model;
+using VCCad.Core.Serialization;
 using VCCad.Core.Svg;
 using VCCad.Geometry;
 using Xunit;
@@ -22,6 +23,13 @@ namespace VCCad.Core.Tests;
 /// a profile. The **description, attribute for attribute**, because a translation that threw the element away
 /// would draw the right picture once. And the two **silences** that produced issues #140, #143, #144, #150 and
 /// #151: an effect this build does not implement, and a reference that points at nothing.
+///
+/// Issue #155 is the third silence and the one this class did not cover: an effect **nothing refers to**. It says
+/// nothing about how anything is drawn, so it was a stated boundary rather than a bug - but a file that keeps a
+/// library of named effects lost the unused half of it on the way through, silently, and silence was the option
+/// the issue says should not survive. The model now has a document-level home for it
+/// (<see cref="CadDocument.ForeignPathEffects"/>), the reader puts it there and the writer puts it back in
+/// <c>defs</c> beside the referenced ones.
 /// </summary>
 public class SvgPathEffectTests
 {
@@ -59,7 +67,40 @@ public class SvgPathEffectTests
            "inkscape:original-d=\"" + Line + "\" inkscape:path-effect=\"" + reference + "\" />" +
            "</svg>";
 
+    /// <summary>
+    /// An effect nothing points at. It is the same kind of element as <see cref="PowerStroke"/> and a different one
+    /// of Inkscape's own to keep: a library entry a person has not applied yet.
+    /// </summary>
+    private const string UnreferencedEffect =
+        "<inkscape:path-effect effect=\"powerstroke\" id=\"path-effect2\" lpeversion=\"1.4\" " +
+        "is_visible=\"true\" offset_points=\"0,1 | 4,6 | 8,2\" not_jump=\"false\" sort_points=\"true\" " +
+        "interpolator_type=\"Linear\" start_linecap_type=\"zerowidth\" linejoin_type=\"extrp_arc\" " +
+        "miter_limit=\"4\" scale_width=\"1\" end_linecap_type=\"zerowidth\" />";
+
+    /// <summary>
+    /// A file with a library of two effects: <c>#path-effect1</c>, which the path refers to, and
+    /// <c>#path-effect2</c>, which nothing refers to.
+    ///
+    /// The second one is issue #155. It says nothing about how anything is drawn, which is exactly why it had no
+    /// home - the reader hangs a referenced effect on the path that points at it, and there is no path here to hang
+    /// this one on. But it is still content the file carried, and a file that keeps a library of named effects loses
+    /// the unused half of it on the way through this editor.
+    /// </summary>
+    private const string TwoEffects =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" " +
+        "xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" " +
+        "width=\"100\" height=\"100\" viewBox=\"0 0 100 100\">" +
+        "<defs>" + PowerStroke + UnreferencedEffect + "</defs>" +
+        "<path id=\"p1\" style=\"fill:none;stroke:#000000;stroke-width:1\" d=\"" + Line + "\" " +
+        "inkscape:original-d=\"" + Line + "\" inkscape:path-effect=\"#path-effect1\" />" +
+        "</svg>";
+
     private static PathItem OnlyPath(SvgImportResult result) => Assert.Single(result.Document.AllPaths());
+
+    /// <summary>The effect with this id wherever it sits in a file, or null when the file has no such element.</summary>
+    private static XElement? Effect(string svg, string id)
+        => XDocument.Parse(svg).Descendants()
+            .FirstOrDefault(e => e.Name.LocalName == "path-effect" && e.Attribute("id")?.Value == id);
 
     /// <summary>The effect element in a file, wherever it sits.</summary>
     private static XElement Effect(string svg)
@@ -75,6 +116,84 @@ public class SvgPathEffectTests
             .Where(a => !a.IsNamespaceDeclaration)
             .Select(a => $"{a.Name.LocalName}={a.Value}")
             .ToArray();
+
+    // ---------------------------------------------------------------- a library with an unused entry
+
+    /// <summary>
+    /// **The half of a two-effect library that is used still survives, and the half that is not is kept too.**
+    ///
+    /// This is the case issue #155 names: a file whose <c>defs</c> holds two effects, one referenced by a path and
+    /// one not. The referenced one has always travelled on the path that points at it, so this test is partly a
+    /// guard against the new document-level home swallowing it - a kept list that also claimed the referenced
+    /// element would write the same definition into <c>defs</c> twice.
+    ///
+    /// The unreferenced one is asserted on **both sides**: on the imported model, because that is where a caller
+    /// looks before exporting, and on the exported bytes, because a model that held it and an exporter that did not
+    /// write it would still hand the person back a file with their library missing.
+    /// </summary>
+    [Fact]
+    public void AReferencedEffectSurvivesAndAnUnreferencedOneIsKept()
+    {
+        SvgImportResult result = SvgReader.Read(TwoEffects);
+
+        // The referenced half: translated into a stroke, and its element kept on the path as it always was.
+        PathItem path = OnlyPath(result);
+        Assert.True(path.Stroke.HasWidthProfile, string.Join(" | ", result.Warnings));
+        Assert.Equal("path-effect1", path.Stroke.WidthProfile!.Name);
+        Assert.Contains(path.ForeignElements, xml => xml.Contains("path-effect1", StringComparison.Ordinal));
+
+        // The unreferenced half: nothing was invented onto the path to hold it, and it has a home of its own.
+        Assert.DoesNotContain(path.ForeignElements, xml => xml.Contains("path-effect2", StringComparison.Ordinal));
+
+        string kept = Assert.Single(result.Document.ForeignPathEffects);
+        Assert.Equal(Attributes(Effect(TwoEffects, "path-effect2")), Attributes(XElement.Parse(kept)));
+
+        // And it is written back into `defs` beside the referenced one, verbatim.
+        string exported = SvgWriter.Write(result.Document);
+
+        Assert.NotNull(Effect(exported, "path-effect1"));
+        Assert.NotNull(Effect(exported, "path-effect2"));
+        Assert.Equal("defs", Effect(exported, "path-effect2")!.Parent!.Name.LocalName);
+        Assert.Equal(Attributes(Effect(TwoEffects, "path-effect2")), Attributes(Effect(exported, "path-effect2")!));
+
+        // A second import finds the kept effect again, so the element is read rather than merely echoed.
+        SvgImportResult again = SvgReader.Read(exported);
+        Assert.Single(again.Document.ForeignPathEffects);
+        Assert.Contains("path-effect2", again.Document.ForeignPathEffects[0], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// **The kept effect survives this repository's own format too.**
+    ///
+    /// A document saved as a sidecar and reopened is the ordinary path through this editor, so "kept on the
+    /// document" would only be true until the first save if the serializer did not carry it - which is the rule the
+    /// Inkscape metadata already follows. And a document that has none stays byte-identical, so the member is
+    /// **absent** rather than an empty array: the same reason <c>OutlineEffectDto</c> writes a default as nothing.
+    /// </summary>
+    [Fact]
+    public void TheKeptEffectSurvivesTheSidecarAndANoneIsAbsent()
+    {
+        SvgImportResult result = SvgReader.Read(TwoEffects);
+
+        CadDocument reloaded = VccadDocumentSerializer.Deserialize(
+            VccadDocumentSerializer.SerializeToBytes(result.Document));
+
+        Assert.Single(reloaded.ForeignPathEffects);
+        Assert.Equal(
+            Attributes(XElement.Parse(result.Document.ForeignPathEffects[0])),
+            Attributes(XElement.Parse(reloaded.ForeignPathEffects[0])));
+
+        // And a document that keeps nothing gains no member: the bytes are what they were before this existed.
+        string plain = System.Text.Encoding.UTF8.GetString(
+            VccadDocumentSerializer.SerializeToBytes(CadDocument.CreateDefault()));
+
+        Assert.DoesNotContain("ForeignPathEffects", plain, StringComparison.Ordinal);
+
+        // An effect reference is not a use of the *definition* the path was written from, so a file whose only
+        // effect is referenced still keeps nothing at the document level.
+        CadDocument referenced = SvgReader.Read(File(PowerStroke)).Document;
+        Assert.Empty(referenced.ForeignPathEffects);
+    }
 
     // ---------------------------------------------------------------- the translation
 

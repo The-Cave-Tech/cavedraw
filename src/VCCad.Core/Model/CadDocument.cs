@@ -69,6 +69,37 @@ public sealed class CadDocument
         }
     }
 
+    /// <summary>
+    /// Foreign-namespace **definitions** the file carried that nothing in the document points at, kept verbatim as
+    /// XML.
+    ///
+    /// This is the second half of the SVG baggage problem, and the one issue #155 names. A foreign element that
+    /// something refers to - an Inkscape live path effect a path names by id - travels on the item that refers to
+    /// it, because that item is what can find it and what an export reaches it from. An element *nothing* refers to
+    /// has no such item: it says nothing about how anything is drawn, so the reader hangs it on no path, and before
+    /// this member it was dropped in silence. An Inkscape file that keeps a library of named path effects is the
+    /// case that hurts: an effect applied to nothing today is one somebody applies tomorrow, and losing it is a
+    /// silent rewrite of their file.
+    ///
+    /// It lives here rather than on a path because only the **document** can hold something nothing points at, and
+    /// the writer puts it back into <c>defs</c> beside the referenced definitions, which is where the file had it
+    /// and where the next reader looks for it. Nothing is ever invented onto an item to give one of these a home:
+    /// a path that did not carry an effect must not gain one.
+    ///
+    /// Stored as text for the same reason an item's foreign elements are: the model carries it and does not pretend
+    /// to understand it.
+    /// </summary>
+    public IReadOnlyList<string> ForeignPathEffects => _foreignPathEffects;
+
+    private readonly List<string> _foreignPathEffects = new();
+
+    /// <summary>Replaces the unreferenced foreign definitions the document keeps.</summary>
+    public void SetForeignPathEffects(IEnumerable<string> effects)
+    {
+        _foreignPathEffects.Clear();
+        _foreignPathEffects.AddRange(effects);
+    }
+
     /// <summary>Document-level container for objects that belong to no artboard
     /// (the pasteboard / orphans). These are "parentless" in the sense that no
     /// artboard owns them; their coordinates are document/world coordinates.</summary>
