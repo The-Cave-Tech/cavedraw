@@ -1756,6 +1756,69 @@ public sealed class DocumentSession : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// Removes one **outline** effect from every selected path's strokes, counted from the start of the effect list.
+    ///
+    /// The two families are separate lists, so the caller says which one rather than this searching both: an index
+    /// into the raster effects and an index into the outline effects name different effects, and guessing which was
+    /// meant would remove the wrong one. Mirrors <see cref="MoveStrokeEffect"/>, which has the same shape.
+    /// </summary>
+    public int RemoveStrokeEffect(int index)
+    {
+        int changed = 0;
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            var stack = path.Strokes.ToList();
+            for (int i = 0; i < stack.Count; i++)
+            {
+                var effects = stack[i].AllEffects.ToList();
+                if (index < 0 || index >= effects.Count)
+                {
+                    continue;
+                }
+
+                effects.RemoveAt(index);
+                stack[i] = stack[i] with { Effects = new EffectStack(effects) };
+                Execute(new SetStrokesCommand(path, stack, "Remove effect"));
+                changed++;
+                break;
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>The same for a raster effect, which is the other list.</summary>
+    public int RemoveStrokeRasterEffect(int index)
+    {
+        int changed = 0;
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            var stack = path.Strokes.ToList();
+            for (int i = 0; i < stack.Count; i++)
+            {
+                if (stack[i].AllRasterEffects is not { } raster || index < 0 || index >= raster.Count)
+                {
+                    continue;
+                }
+
+                var effects = new List<RasterEffectSpec>();
+                for (int k = 0; k < raster.Count; k++)
+                {
+                    effects.Add(raster[k]);
+                }
+
+                effects.RemoveAt(index);
+                stack[i] = stack[i] with { RasterEffects = new RasterEffectStack(effects) };
+                Execute(new SetStrokesCommand(path, stack, "Remove raster effect"));
+                changed++;
+                break;
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>
     /// Moves an outline effect within a stroke's list, which is how a person changes the order they apply in.
     ///
     /// **The order is the picture.** Effects compose in order, so roughen inside an offset does not look like an

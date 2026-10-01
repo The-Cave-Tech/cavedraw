@@ -2299,6 +2299,26 @@ public static class EditorOperations
                 };
             });
 
+        Add("style.removeStrokeEffect",
+            "Remove one outline effect from the selected paths' strokes. index counts from the start of the effect " +
+            "list, which is the order they apply in. One undo step per path.",
+            "index:number",
+            (ctx, p) =>
+            {
+                int index = (int)p.GetLong("index", 0);
+                return new { index, changed = ctx.Session.RemoveStrokeEffect(index) };
+            });
+
+        Add("style.removeRasterEffect",
+            "Remove one raster effect from the selected paths' strokes. index counts from the start of that list, " +
+            "which is kept separately from the outline effects. One undo step per path.",
+            "index:number",
+            (ctx, p) =>
+            {
+                int index = (int)p.GetLong("index", 0);
+                return new { index, changed = ctx.Session.RemoveStrokeRasterEffect(index) };
+            });
+
         Add("style.reorderStrokeEffect",
             "Move an outline effect within the selected paths' strokes - how a person changes the order they apply " +
             "in. from and to count from the start of the effect list, and to may be one past the last to put it at " +

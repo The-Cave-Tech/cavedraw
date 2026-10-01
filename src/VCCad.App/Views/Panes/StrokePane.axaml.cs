@@ -51,6 +51,31 @@ public partial class StrokePane : UserControl
 
         EffectKindBox.SelectedIndex = 0;
         AddEffectButton.Click += OnAddEffect;
+        RemoveEffectButton.Click += OnRemoveEffect;
+    }
+
+    /// <summary>
+    /// Removes the selected effect from the list it came from, through the session method the operation calls.
+    ///
+    /// The row remembers whether it is an outline or a raster effect, because those are two lists in the model and
+    /// an index into one names a different effect in the other.
+    /// </summary>
+    private void OnRemoveEffect(object? sender, RoutedEventArgs e)
+    {
+        if (_vm is null || EffectList.SelectedIndex < 0 || EffectList.SelectedIndex >= _effectRows.Count)
+        {
+            return;
+        }
+
+        EffectRow row = _effectRows[EffectList.SelectedIndex];
+        int changed = row.Raster
+            ? _vm.ActiveSession.RemoveStrokeRasterEffect(row.Index)
+            : _vm.ActiveSession.RemoveStrokeEffect(row.Index);
+
+        if (changed > 0)
+        {
+            Refresh();
+        }
     }
 
     /// <summary>
