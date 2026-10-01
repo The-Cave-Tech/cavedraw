@@ -41,6 +41,46 @@ public partial class StrokePane : UserControl
         // after each, so it cannot show an order the document does not have.
         MoveEffectUpButton.Click += (_, _) => MoveEffect(+1);
         MoveEffectDownButton.Click += (_, _) => MoveEffect(-1);
+
+        // The kinds come from the registry, so a new effect appears in this list by existing rather than by being
+        // added to a switch here - the requirement the issue names.
+        foreach (EffectDefinition definition in EffectRegistry.All)
+        {
+            EffectKindBox.Items.Add(definition.Kind);
+        }
+
+        EffectKindBox.SelectedIndex = 0;
+        AddEffectButton.Click += OnAddEffect;
+    }
+
+    /// <summary>
+    /// Adds the chosen effect with the registry's own defaults.
+    ///
+    /// The kind comes from the box, which is filled from the registry, and the defaults come from the model's
+    /// records - so this never invents a parameter value and never needs to know what an effect takes. A panel that
+    /// grows parameter editors will read the same declaration to build them.
+    /// </summary>
+    private void OnAddEffect(object? sender, RoutedEventArgs e)
+    {
+        if (_vm is null || EffectKindBox.SelectedItem is not string kind)
+        {
+            return;
+        }
+
+        EffectDefinition? definition = EffectRegistry.Find(kind);
+        if (definition is null)
+        {
+            return;
+        }
+
+        int changed = definition.Raster
+            ? _vm.ActiveSession.AddRasterEffect(new RasterEffectSpec(definition.RasterKind!.Value))
+            : _vm.ActiveSession.AddOutlineEffect(new OutlineEffectSpec(definition.OutlineKind!.Value));
+
+        if (changed > 0)
+        {
+            Refresh();
+        }
     }
 
     /// <summary>Applies the current stroke fields to the selection (and current style).</summary>

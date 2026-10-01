@@ -63,9 +63,14 @@
         </ListBox.ItemTemplate>
       </ListBox>
 
-      <Grid ColumnDefinitions="*,*" ColumnSpacing="4">
-        <Button x:Name="MoveEffectUpButton" Grid.Column="0" Content="Up" HorizontalAlignment="Stretch"/>
-        <Button x:Name="MoveEffectDownButton" Grid.Column="1" Content="Down" HorizontalAlignment="Stretch"/>
+      <Grid ColumnDefinitions="*,Auto,*,*" ColumnSpacing="4">
+        <!-- Filled from EffectRegistry, so every effect this build has is offered here by existing rather than by
+             being added to a list in the panel. -->
+        <ComboBox x:Name="EffectKindBox" Grid.Column="0" HorizontalAlignment="Stretch"
+                  ToolTip.Tip="The effect to add, from the registry of what this build has"/>
+        <Button x:Name="AddEffectButton" Grid.Column="1" Content="Add"/>
+        <Button x:Name="MoveEffectUpButton" Grid.Column="2" Content="Up" HorizontalAlignment="Stretch"/>
+        <Button x:Name="MoveEffectDownButton" Grid.Column="3" Content="Down" HorizontalAlignment="Stretch"/>
       </Grid>
 
       <!-- What the PDF export will leave out, from the same list the exporter is checked against. A person should
