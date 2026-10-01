@@ -11,6 +11,12 @@
       <TextBlock x:Name="StrokeTargetLabel" TextWrapping="Wrap"
                  Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
 
+      <!-- Which members the selection disagrees about. A field that shows one path's number while the selection
+           holds several is how a person types a value believing it describes what they selected, so the members
+           that differ are named here as well as being marked in place below. -->
+      <TextBlock x:Name="MixedLabel" IsVisible="False" TextWrapping="Wrap"
+                 Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+
       <Grid ColumnDefinitions="Auto,*,10,Auto,*">
         <TextBlock Text="Width" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="StrokeWidthBox" Grid.Column="1"/>
@@ -51,6 +57,85 @@
           <ComboBoxItem Content="Outside"/>
         </ComboBox>
       </Grid>
+
+      <TextBlock Text="TYPE" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
+                 Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- The kind of stroke this is: a plain one, or one whose width varies along the path. The items are the
+           document's own width profiles plus the stroke's, so a profile is offered here by existing rather than by
+           being added to a list in this panel. -->
+      <Grid ColumnDefinitions="Auto,*">
+        <TextBlock Text="Stroke" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <ComboBox x:Name="StrokeTypeBox" Grid.Column="1" HorizontalAlignment="Stretch"
+                  ToolTip.Tip="Plain, or a width profile the stroke carries"/>
+      </Grid>
+
+      <!-- Only when the inspected stroke has one: a profile readout over a stroke that has no profile would be
+           chrome describing something that is not there. -->
+      <StackPanel x:Name="ProfileSection" Spacing="2" IsVisible="False">
+        <TextBlock x:Name="ProfileSummary" TextWrapping="Wrap"
+                   Foreground="{DynamicResource VcText}" FontSize="{DynamicResource VcFontSize}"/>
+        <TextBlock x:Name="ProfilePoints" TextWrapping="Wrap"
+                   Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+      </StackPanel>
+
+      <TextBlock Text="DYNAMICS" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
+                 Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- What the stroke **records** about the pen that drew it, not what it looks like: what it looks like is the
+           width profile above, which the pressure produced. A target the selection disagrees about reads mixed. -->
+      <StackPanel x:Name="DynamicsRows" Spacing="2">
+        <Grid ColumnDefinitions="Auto,*">
+          <CheckBox x:Name="DynamicsWidthEnabled" Content="Width" MinWidth="112" VerticalAlignment="Center"
+                    Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+          <ComboBox x:Name="DynamicsWidthCurve" Grid.Column="1" HorizontalAlignment="Stretch">
+            <ComboBoxItem Content="Linear"/>
+            <ComboBoxItem Content="Soft"/>
+            <ComboBoxItem Content="Hard"/>
+            <ComboBoxItem Content="Exponential"/>
+          </ComboBox>
+        </Grid>
+        <Grid ColumnDefinitions="Auto,*">
+          <CheckBox x:Name="DynamicsOpacityEnabled" Content="Opacity" MinWidth="112" VerticalAlignment="Center"
+                    Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+          <ComboBox x:Name="DynamicsOpacityCurve" Grid.Column="1" HorizontalAlignment="Stretch">
+            <ComboBoxItem Content="Linear"/>
+            <ComboBoxItem Content="Soft"/>
+            <ComboBoxItem Content="Hard"/>
+            <ComboBoxItem Content="Exponential"/>
+          </ComboBox>
+        </Grid>
+        <Grid ColumnDefinitions="Auto,*">
+          <CheckBox x:Name="DynamicsScatterEnabled" Content="Scatter scale" MinWidth="112" VerticalAlignment="Center"
+                    Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+          <ComboBox x:Name="DynamicsScatterCurve" Grid.Column="1" HorizontalAlignment="Stretch">
+            <ComboBoxItem Content="Linear"/>
+            <ComboBoxItem Content="Soft"/>
+            <ComboBoxItem Content="Hard"/>
+            <ComboBoxItem Content="Exponential"/>
+          </ComboBox>
+        </Grid>
+        <Grid ColumnDefinitions="Auto,*">
+          <CheckBox x:Name="DynamicsAngleEnabled" Content="Nib angle" MinWidth="112" VerticalAlignment="Center"
+                    Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+          <ComboBox x:Name="DynamicsAngleCurve" Grid.Column="1" HorizontalAlignment="Stretch">
+            <ComboBoxItem Content="Linear"/>
+            <ComboBoxItem Content="Soft"/>
+            <ComboBoxItem Content="Hard"/>
+            <ComboBoxItem Content="Exponential"/>
+          </ComboBox>
+        </Grid>
+        <Grid ColumnDefinitions="Auto,*">
+          <CheckBox x:Name="DynamicsSmoothingEnabled" Content="Smoothing" MinWidth="112" VerticalAlignment="Center"
+                    Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+          <ComboBox x:Name="DynamicsSmoothingCurve" Grid.Column="1" HorizontalAlignment="Stretch">
+            <ComboBoxItem Content="Linear"/>
+            <ComboBoxItem Content="Soft"/>
+            <ComboBoxItem Content="Hard"/>
+            <ComboBoxItem Content="Exponential"/>
+          </ComboBox>
+        </Grid>
+      </StackPanel>
 
       <TextBlock Text="EFFECTS" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
                  Foreground="{DynamicResource VcTextDim}"/>

@@ -1716,7 +1716,9 @@ public static class EditorOperations
             "Give the selected paths' strokes a width profile - a stroke whose width changes along its length, " +
             "and can change differently on each side. points is [{position, left, right, interpolation?}], where " +
             "position runs 0 at the start of the path to 1 at the end and left/right are the widths on each " +
-            "side. An empty points list clears the profile and leaves the stroke's own width, which is what " +
+            "side. A negative width is clamped at zero, the way the canvas clamps a dragged grip: a negative " +
+            "half-width would put the offset edge across the centreline and draw the stroke inside out. " +
+            "An empty points list clears the profile and leaves the stroke's own width, which is what " +
             "removing a profile does. Every stroke in the stack is given it, like style.setStroke. One undo " +
             "step per path.",
             "points:[{position:number, left:number, right:number, interpolation?:linear|cubic}], name?:string",
@@ -2542,7 +2544,8 @@ public static class EditorOperations
 
         Add("profile.setPoint",
             "Change one width point of a stored profile - its position, either width, or its interpolation. " +
-            "Only the members given change. The strokes that use the profile are edited with it, because that is " +
+            "Only the members given change, and a negative width is clamped at zero the way a dragged grip is. " +
+            "The strokes that use the profile are edited with it, because that is " +
             "what makes it an asset rather than a copy. One undo step.",
             "name:string, index:number, position?:number, left?:number, right?:number, interpolation?:linear|cubic",
             (ctx, p) =>
@@ -2564,8 +2567,12 @@ public static class EditorOperations
                 WidthPoint changed = point with
                 {
                     Position = given && p.TryGetProperty("position", out _) ? p.GetDouble("position", point.Position) : point.Position,
-                    LeftWidth = given && p.TryGetProperty("left", out _) ? p.GetDouble("left", point.LeftWidth) : point.LeftWidth,
-                    RightWidth = given && p.TryGetProperty("right", out _) ? p.GetDouble("right", point.RightWidth) : point.RightWidth,
+                    LeftWidth = given && p.TryGetProperty("left", out _)
+                        ? ClampedWidth(p.GetDouble("left", point.LeftWidth))
+                        : point.LeftWidth,
+                    RightWidth = given && p.TryGetProperty("right", out _)
+                        ? ClampedWidth(p.GetDouble("right", point.RightWidth))
+                        : point.RightWidth,
                     Interpolation = given && p.TryGetProperty("interpolation", out _)
                         ? ParseEnum(p.GetString("interpolation"), point.Interpolation)
                         : point.Interpolation,
@@ -6841,11 +6848,30 @@ public static class EditorOperations
                 : WidthInterpolation.Linear;
 
             points.Add(new WidthPoint(
-                position.GetDouble(), left.GetDouble(), right.GetDouble(), interpolation));
+                position.GetDouble(),
+                ClampedWidth(left.GetDouble()),
+                ClampedWidth(right.GetDouble()),
+                interpolation));
         }
 
         return points;
     }
+
+    /// <summary>
+    /// A width as the model is allowed to hold it, which is never negative.
+    ///
+    /// The canvas clamps a dragged grip at zero (<see cref="Controls.WidthProfileAnnotators.Drag"/>), so a
+    /// person cannot produce a negative width - but a driver or a script can, and a negative one is not a
+    /// thinner stroke. A point's widths are full widths and the geometry halves them, so a negative half puts
+    /// the offset edge on the other side of the centreline and the stroke draws inside out: mirrored rather
+    /// than narrowed, and no longer the profile the model says it is.
+    ///
+    /// **Clamped rather than refused**, because this is where a measurement a driver computed arrives: a width
+    /// across a stroke takes its sign from which side of the centreline the sample landed on, so a side being
+    /// pinned shut can be sent as a small negative number. Clamping lands it on the model the drag produces;
+    /// refusing would throw the edit away and leave the two routes disagreeing about one value.
+    /// </summary>
+    private static double ClampedWidth(double width) => Math.Max(0.0, width);
 
     /// <summary>One stroke as a caller reads it: every member that decides what it looks like.</summary>
     private static object DescribeStroke(StrokeSpec stroke) => new

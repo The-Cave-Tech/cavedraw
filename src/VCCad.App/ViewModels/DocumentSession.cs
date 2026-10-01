@@ -2228,6 +2228,29 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// </summary>
     public int ApplyStrokeAt(int index, double width, StrokeCap cap, StrokeJoin join, double miterLimit,
         StrokeAlignment alignment, DashPattern? dash = null, ColorRgb? color = null)
+        => ApplyStrokeFieldsAt(index, width, cap, join, miterLimit, alignment, dash, color);
+
+    /// <summary>
+    /// Applies stroke geometry **member by member** to one stroke of every selected path, where a member that is
+    /// null is left exactly as the stroke has it, and reports how many paths changed.
+    ///
+    /// This is the shape a panel editing a mixed selection needs, and the reason <see cref="ApplyStrokeAt"/> could
+    /// not serve it: with widths of 4 and 8 the width field reads **mixed**, and a method that must be given a
+    /// `double` can only be handed *some* number - the first path's, or a default - which writes one member's value
+    /// over the others' from a field the person never touched. Naming the members to change is the same judgement
+    /// the appearance stack already makes about strokes, applied to the fields within one.
+    ///
+    /// <see cref="ApplyStrokeAt"/> delegates here, so a person's field and a driver's `style.setStroke` run the
+    /// **same** code rather than two that agree until somebody changes one of them. `style.setStroke` cannot yet
+    /// ask for a partial edit - an omitted member arrives as its default and overwrites - which is a registry
+    /// follow-up rather than something this method should work around.
+    ///
+    /// One <see cref="SetStrokesCommand"/> per path and a composite across the selection, so a gesture is one undo
+    /// step; a request that changes nothing on a path adds no command at all, because an undo step that undoes to
+    /// exactly where it started reads as "undo did nothing".
+    /// </summary>
+    public int ApplyStrokeFieldsAt(int index, double? width, StrokeCap? cap, StrokeJoin? join, double? miterLimit,
+        StrokeAlignment? alignment, DashPattern? dash = null, ColorRgb? color = null)
     {
         if (index < 0)
         {
@@ -2248,19 +2271,114 @@ public sealed class DocumentSession : INotifyPropertyChanged
             StrokeSpec before = stack[index];
             stack[index] = before with
             {
-                Width = Math.Max(0, width),
-                Cap = cap,
-                Join = join,
-                MiterLimit = Math.Max(1, miterLimit),
-                Alignment = alignment,
+                Width = width is { } w ? Math.Max(0, w) : before.Width,
+                Cap = cap ?? before.Cap,
+                Join = join ?? before.Join,
+                MiterLimit = miterLimit is { } m ? Math.Max(1, m) : before.MiterLimit,
+                Alignment = alignment ?? before.Alignment,
                 Dash = dash ?? before.Dash,
                 Color = color ?? before.Color,
             };
+
+            if (stack[index] == before)
+            {
+                continue;
+            }
 
             edits.Add(new SetStrokesCommand(path, stack, "Stroke"));
         }
 
         ExecuteIfAny(edits, "Stroke");
+        return edits.Count;
+    }
+
+    /// <summary>
+    /// Gives **one stroke** of every selected path a width profile, or clears it, and reports how many paths
+    /// changed.
+    ///
+    /// The stroke is named by index for the reason <see cref="ApplyStrokeAt"/> names it: with a stack there is no
+    /// such thing as "the stroke" on a selection, and a panel describing stroke 2 of 3 must not give the profile to
+    /// strokes 1 and 3. `style.setWidthProfile` writes every stroke of every selected path, so it cannot reach the
+    /// stroke an inspector describes - a registry follow-up, not a reason for a click handler to write the model.
+    ///
+    /// Null clears, because that is the state the model uses for "no profile" - an empty profile is the same thing
+    /// spelled differently, and the type's own comment says so. The stroke keeps its own width either way: a
+    /// profile modulates an ordinary stroke rather than replacing it.
+    /// </summary>
+    public int SetWidthProfileAt(int index, WidthProfileSpec? profile)
+    {
+        if (index < 0)
+        {
+            return 0;
+        }
+
+        var edits = new List<IUndoableCommand>();
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            if (index >= path.Strokes.Count)
+            {
+                continue;
+            }
+
+            var stack = path.Strokes.ToList();
+            StrokeSpec before = stack[index];
+            if (before.WidthProfile == profile)
+            {
+                continue;
+            }
+
+            stack[index] = before with { WidthProfile = profile };
+            edits.Add(new SetStrokesCommand(path, stack, profile is null ? "Clear width profile" : "Width profile"));
+        }
+
+        ExecuteIfAny(edits, "Width profile");
+        return edits.Count;
+    }
+
+    /// <summary>
+    /// Sets one target of the tablet response on **one stroke** of every selected path, leaving every other target
+    /// as it was, and reports how many paths changed.
+    ///
+    /// The other targets are carried over rather than rebuilt, because turning width dynamics on must not switch
+    /// opacity dynamics off - the same judgement `style.setDynamics` makes when it walks the target list, which is
+    /// also why an untouched target is left alone rather than compared.
+    ///
+    /// A path already carrying exactly this response is skipped, so a panel refresh cannot put an empty undo step on
+    /// the stack. `style.setDynamics` writes every stroke of every selected path and so cannot reach the one an
+    /// inspector describes - a registry follow-up.
+    /// </summary>
+    public int SetDynamicsAt(int index, DynamicsTarget target, bool enabled, DynamicsCurve curve)
+    {
+        if (index < 0)
+        {
+            return 0;
+        }
+
+        var edits = new List<IUndoableCommand>();
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            if (index >= path.Strokes.Count)
+            {
+                continue;
+            }
+
+            var stack = path.Strokes.ToList();
+            StrokeSpec before = stack[index];
+
+            var wanted = new DynamicsTargetSpec(enabled, curve);
+            if ((before.Dynamics?.For(target) ?? DynamicsTargetSpec.Off) == wanted)
+            {
+                continue;
+            }
+
+            var spec = new DynamicsSpec(Enum.GetValues<DynamicsTarget>().Select(existing =>
+                existing == target ? wanted : before.Dynamics?.For(existing) ?? DynamicsTargetSpec.Off));
+
+            stack[index] = before with { Dynamics = spec };
+            edits.Add(new SetStrokesCommand(path, stack, "Tablet dynamics"));
+        }
+
+        ExecuteIfAny(edits, "Tablet dynamics");
         return edits.Count;
     }
 

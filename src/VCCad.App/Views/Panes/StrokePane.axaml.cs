@@ -8,11 +8,45 @@ using VCCad.Pdf;
 
 namespace VCCad.App.Views.Panes;
 
-/// <summary>Stroke tab: width, cap, join and miter limit for the selection.</summary>
+/// <summary>Stroke tab: what the selection's strokes are, and what they disagree about.</summary>
 public partial class StrokePane : UserControl
 {
     private EditorViewModel? _vm;
     private bool _syncing;
+
+    /// <summary>What the last refresh put in each control.</summary>
+    /// <remarks>
+    /// Tracked because a field the person did not touch is **not** an edit. A mixed selection's width box reads
+    /// "mixed", and an apply that could not tell that from a typed value would have to invent a number for it -
+    /// which is the defect the mixed readout exists to remove, one level down.
+    /// </remarks>
+    private string _shownWidth = string.Empty;
+    private string _shownMiter = string.Empty;
+    private int _shownCap = -1;
+    private int _shownJoin = -1;
+    private int _shownAlign = -1;
+    private int _shownDash = -1;
+
+    /// <summary>The profile the inspected stroke carries, as the last refresh read it.</summary>
+    private WidthProfileSpec? _shownProfile;
+
+    /// <summary>The curve shown for each dynamics target, so a change to one control can keep the other's value.</summary>
+    private readonly Dictionary<DynamicsTarget, DynamicsCurve> _shownCurves = new();
+
+    private readonly Dictionary<DynamicsTarget, (CheckBox Enabled, ComboBox Curve)> _dynamicsRows = new();
+
+    /// <summary>The word every mixed field reads, so the pane says the same thing in every place.</summary>
+    private const string MixedWord = "mixed";
+
+    private const string PlainStrokeLabel = "Plain";
+
+    private static readonly DynamicsPreset[] Presets =
+    {
+        DynamicsPreset.Linear,
+        DynamicsPreset.Soft,
+        DynamicsPreset.Hard,
+        DynamicsPreset.Exponential,
+    };
 
     public StrokePane()
     {
@@ -36,6 +70,25 @@ public partial class StrokePane : UserControl
             box.LostFocus += (_, _) => ApplyNow();
         }
 
+        // Choosing the kind of stroke is a model edit like any other, and it goes through the session for the same
+        // reason the width does - see ApplyStrokeType.
+        StrokeTypeBox.SelectionChanged += (_, _) => ApplyStrokeType();
+
+        _dynamicsRows[DynamicsTarget.Width] = (DynamicsWidthEnabled, DynamicsWidthCurve);
+        _dynamicsRows[DynamicsTarget.Opacity] = (DynamicsOpacityEnabled, DynamicsOpacityCurve);
+        _dynamicsRows[DynamicsTarget.ScatterScale] = (DynamicsScatterEnabled, DynamicsScatterCurve);
+        _dynamicsRows[DynamicsTarget.CalligraphicAngle] = (DynamicsAngleEnabled, DynamicsAngleCurve);
+        _dynamicsRows[DynamicsTarget.Smoothing] = (DynamicsSmoothingEnabled, DynamicsSmoothingCurve);
+
+        foreach (KeyValuePair<DynamicsTarget, (CheckBox Enabled, ComboBox Curve)> row in _dynamicsRows)
+        {
+            // The target travels with the closure rather than being looked up from the sender, which is what keeps
+            // this one handler rather than five near-identical ones.
+            DynamicsTarget target = row.Key;
+            row.Value.Enabled.IsCheckedChanged += (_, _) => ApplyDynamics(target);
+            row.Value.Curve.SelectionChanged += (_, _) => ApplyDynamics(target);
+        }
+
         // The effects list, ordered because the order is the picture. The two moves go through the session methods
         // the operations call, so a person and a driver do the same thing - and the list is rebuilt from the model
         // after each, so it cannot show an order the document does not have.
@@ -53,6 +106,280 @@ public partial class StrokePane : UserControl
         EffectKindBox.SelectedIndex = 0;
         AddEffectButton.Click += OnAddEffect;
         RemoveEffectButton.Click += OnRemoveEffect;
+    }
+
+    // ------------------------------------------------------------------
+    // Stroke type: plain, or a width profile
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Gives the inspected stroke a width profile - the stroke's own, or one from the document's library - or
+    /// clears it, through the session method rather than by building the edit here.
+    ///
+    /// The session method names the stroke, because the operation that does the same thing
+    /// (`style.setWidthProfile`) writes **every** stroke of the selection: a panel describing stroke 2 of 3 must
+    /// not give the profile to strokes 1 and 3. That gap is reported rather than worked around by writing the
+    /// model from a click handler, which is a defect in this repository.
+    /// </summary>
+    private void ApplyStrokeType()
+    {
+        if (_vm is null || _syncing || StrokeTypeBox.SelectedItem is not string name ||
+            InspectedStrokeIndex() is not { } index)
+        {
+            return;
+        }
+
+        WidthProfileSpec? profile;
+        if (name == PlainStrokeLabel)
+        {
+            profile = null;
+        }
+        else if (_shownProfile is { } own && own.Name == name)
+        {
+            // The stroke's own profile, which need not be in the document's library at all -
+            // `style.setWidthProfile` writes one without registering it. Choosing it keeps it as it is rather than
+            // replacing it with whatever the library happens to hold under the same name.
+            profile = own;
+        }
+        else
+        {
+            profile = _vm.ActiveSession.Document.FindProfile(name);
+            if (profile is null)
+            {
+                return;
+            }
+        }
+
+        if (_vm.ActiveSession.SetWidthProfileAt(index, profile) > 0)
+        {
+            Refresh();
+        }
+    }
+
+    /// <summary>
+    /// The type box's items: the inspected stroke's own profile first, then the document's library.
+    ///
+    /// The stroke's own goes first because the point of the box is to show **this stroke's** kind, and a profile
+    /// the document does not carry would otherwise be unrepresentable - which is exactly the state
+    /// `profile.missing` reports.
+    /// </summary>
+    private void RefreshStrokeType(int index, StrokeSpec? stroke)
+    {
+        WidthProfileSpec? own = stroke is { HasWidthProfile: true } ? stroke.WidthProfile : null;
+        _shownProfile = own;
+
+        var names = new List<string> { PlainStrokeLabel };
+        if (own is not null)
+        {
+            names.Add(own.Name);
+        }
+
+        if (_vm is not null)
+        {
+            foreach (WidthProfileSpec library in _vm.ActiveSession.Document.WidthProfiles)
+            {
+                if (!names.Contains(library.Name))
+                {
+                    names.Add(library.Name);
+                }
+            }
+        }
+
+        bool mixed = ProfileMixedAt(index);
+
+        StrokeTypeBox.ItemsSource = names;
+        StrokeTypeBox.PlaceholderText = mixed ? MixedWord : string.Empty;
+        StrokeTypeBox.SelectedIndex = mixed ? -1 : own is null ? 0 : names.IndexOf(own.Name);
+
+        // A readout of a profile that is not there describes nothing, and neither does one over a selection that
+        // disagrees about which profile it has.
+        ProfileSection.IsVisible = !mixed && own is not null;
+        ProfileSummary.Text = own is null ? string.Empty : ProfileName(own);
+        ProfilePoints.Text = own is null ? string.Empty : ProfilePointsText(own);
+    }
+
+    /// <summary>The profile's name, saying so when the document does not carry it.</summary>
+    private string ProfileName(WidthProfileSpec profile)
+    {
+        bool known = _vm?.ActiveSession.Document.FindProfile(profile.Name) is not null;
+        string points = profile.Points.Count == 1 ? "1 width point" : $"{profile.Points.Count} width points";
+        return known ? $"{profile.Name} — {points}" : $"{profile.Name} — {points} (not in the document)";
+    }
+
+    /// <summary>Every width point, position and both sides, because a profile is not a symmetric bulge.</summary>
+    private static string ProfilePointsText(WidthProfileSpec profile)
+    {
+        return string.Join(" · ", profile.Points.Select(point =>
+            $"{point.Position:0.##}: {point.LeftWidth:0.##}/{point.RightWidth:0.##}pt"
+            + (point.Interpolation == WidthInterpolation.Cubic ? " cubic" : string.Empty)));
+    }
+
+    /// <summary>Whether the selection disagrees about which width profile the stroke at this index carries.</summary>
+    private bool ProfileMixedAt(int index)
+    {
+        IReadOnlyList<StrokeSpec> strokes = AgreeingStrokesAt(index);
+        if (strokes.Count < 2)
+        {
+            return false;
+        }
+
+        return strokes.Skip(1).Any(stroke => !SameProfile(strokes[0], stroke));
+    }
+
+    private static bool SameProfile(StrokeSpec a, StrokeSpec b)
+    {
+        WidthProfileSpec? left = a.HasWidthProfile ? a.WidthProfile : null;
+        WidthProfileSpec? right = b.HasWidthProfile ? b.WidthProfile : null;
+        return left is null ? right is null : left.Equals(right);
+    }
+
+    // ------------------------------------------------------------------
+    // Dynamics: what the stroke records about the pen
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Sets one target of the tablet response on the inspected stroke, through the session method rather than by
+    /// building the edit here.
+    ///
+    /// A target the selection **disagrees** about is shown indeterminate, and that is not something a person chose:
+    /// writing it would turn "mixed" into "off" on every path without anybody asking, so it is left alone. Clicking
+    /// the box does choose a value, and that resolves the disagreement on every path at this index.
+    /// </summary>
+    private void ApplyDynamics(DynamicsTarget target)
+    {
+        if (_vm is null || _syncing || !_dynamicsRows.TryGetValue(target, out (CheckBox Enabled, ComboBox Curve) row) ||
+            row.Enabled.IsChecked is not { } enabled || InspectedStrokeIndex() is not { } index)
+        {
+            return;
+        }
+
+        // The preset the box shows, or - the box showing "custom" or "mixed" - the curve this stroke already has.
+        int preset = row.Curve.SelectedIndex;
+        DynamicsCurve curve = DynamicsCurve.Linear;
+        if (preset >= 0 && preset < Presets.Length)
+        {
+            curve = DynamicsCurve.FromPreset(Presets[preset]);
+        }
+        else if (_shownCurves.TryGetValue(target, out DynamicsCurve shown))
+        {
+            curve = shown;
+        }
+
+        if (_vm.ActiveSession.SetDynamicsAt(index, target, enabled, curve) > 0)
+        {
+            Refresh();
+        }
+    }
+
+    /// <summary>
+    /// Shows each target's recorded response, or says **mixed** where the selection disagrees about it.
+    ///
+    /// Enabled and the curve are marked separately, because they differ independently: two paths can both respond
+    /// to pressure while following different curves, and one path can respond while another does not. A target
+    /// nobody responds to agrees - it agrees on "off" - which is why the mixed flag is about disagreement rather
+    /// than about whether anything is switched on.
+    /// </summary>
+    private List<string> RefreshDynamics(int index, StrokeSpec? stroke)
+    {
+        var mixedNames = new List<string>();
+
+        IReadOnlyList<StrokeSpec> strokes = AgreeingStrokesAt(index);
+        if (strokes.Count == 0 && stroke is not null)
+        {
+            // Nothing at this index is drawn, so the inspected stroke is the only witness there is - which is the
+            // same fallback the geometry fields take for a hidden stroke.
+            strokes = new[] { stroke };
+        }
+
+        DynamicsRows.IsVisible = stroke is not null;
+
+        foreach (KeyValuePair<DynamicsTarget, (CheckBox Enabled, ComboBox Curve)> row in _dynamicsRows)
+        {
+            DynamicsTarget target = row.Key;
+            CheckBox enabled = row.Value.Enabled;
+            ComboBox curve = row.Value.Curve;
+
+            if (strokes.Count == 0)
+            {
+                enabled.IsChecked = false;
+                curve.SelectedIndex = 0;
+                curve.PlaceholderText = string.Empty;
+                _shownCurves[target] = DynamicsCurve.Linear;
+                continue;
+            }
+
+            DynamicsTargetSpec first = Dynamics(strokes[0], target);
+            bool enabledAgrees = strokes.All(s => Dynamics(s, target).Enabled == first.Enabled);
+            bool curveAgrees = strokes.All(s => Dynamics(s, target).Curve == first.Curve);
+
+            enabled.IsChecked = enabledAgrees ? first.Enabled : null;
+
+            int preset = PresetIndex(first.Curve);
+            curve.SelectedIndex = curveAgrees && preset >= 0 ? preset : -1;
+            curve.PlaceholderText = !curveAgrees ? MixedWord : preset >= 0 ? string.Empty : "custom";
+            _shownCurves[target] = first.Curve;
+
+            if (!enabledAgrees || !curveAgrees)
+            {
+                mixedNames.Add($"{TargetName(target)} dynamics");
+            }
+        }
+
+        return mixedNames;
+    }
+
+    private static DynamicsTargetSpec Dynamics(StrokeSpec stroke, DynamicsTarget target)
+        => stroke.Dynamics?.For(target) ?? DynamicsTargetSpec.Off;
+
+    private static int PresetIndex(DynamicsCurve curve)
+    {
+        for (int i = 0; i < Presets.Length; i++)
+        {
+            if (DynamicsCurve.FromPreset(Presets[i]) == curve)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string TargetName(DynamicsTarget target) => target switch
+    {
+        DynamicsTarget.Opacity => "opacity",
+        DynamicsTarget.ScatterScale => "scatter scale",
+        DynamicsTarget.CalligraphicAngle => "nib angle",
+        DynamicsTarget.Smoothing => "smoothing",
+        _ => "width",
+    };
+
+    // ------------------------------------------------------------------
+    // The selection, and what it agrees about
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// The strokes at <paramref name="index"/> that count towards agreement - which is exactly what
+    /// `StrokeSummary.Of` counts, and for the same reason: a path whose stack is shorter has no stroke there, which
+    /// is a gap in the selection rather than a disagreement about a value, and a stroke nobody draws is not
+    /// something a person is comparing on canvas.
+    /// </summary>
+    private IReadOnlyList<StrokeSpec> AgreeingStrokesAt(int index)
+    {
+        var strokes = new List<StrokeSpec>();
+        if (_vm is null || index < 0)
+        {
+            return strokes;
+        }
+
+        foreach (PathItem path in _vm.ActiveSession.SelectedPaths())
+        {
+            if (index < path.Strokes.Count && path.Strokes[index].HasVisibleOutline)
+            {
+                strokes.Add(path.Strokes[index]);
+            }
+        }
+
+        return strokes;
     }
 
     /// <summary>
@@ -214,16 +541,17 @@ public partial class StrokePane : UserControl
     }
 
     /// <summary>
-    /// Applies the current fields to **the stroke the pane is describing** - the inspected one - by calling the
-    /// session, the way the operations do, rather than building the edit here.
+    /// Applies the fields the person **actually changed** to the stroke the pane is describing - the inspected one -
+    /// by calling the session, the way the operations do, rather than building the edit here.
     ///
-    /// The old version of this wrote the selection's **top** stroke (`PathItem.Stroke`, the compatibility property),
-    /// so typing a width while the appearance panel showed stroke 2 changed stroke 3: one panel describing a stroke
-    /// the other was not editing. Naming the index is what closes that, and the panel does not build the edit itself
-    /// because a capability living only in a click handler is a defect here.
+    /// Only the changed ones, because a selection is not obliged to agree with itself: with widths of 4 and 8 the
+    /// width box reads "mixed", and a method that had to be given a number for it would write one path's width over
+    /// the other's from a field the person never touched. That was the old defect here - it wrote the selection's
+    /// top stroke, so typing while the appearance panel showed stroke 2 changed stroke 3.
     ///
     /// With nothing selected there is no stroke to edit, and the fields keep doing what they did before - becoming
-    /// the style objects drawn next get, which is why setting a width before drawing works.
+    /// the style objects drawn next get, which is why setting a width before drawing works. That path still reads
+    /// every field, because there is no model there to disagree with.
     /// </summary>
     private void ApplyNow()
     {
@@ -232,16 +560,36 @@ public partial class StrokePane : UserControl
             return;
         }
 
-        double width = double.TryParse(StrokeWidthBox.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double w) ? w : 1.0;
-        double miter = double.TryParse(MiterBox.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double m) ? m : 4.0;
-        StrokeCap cap = StrokeCapBox.SelectedIndex switch { 1 => StrokeCap.Round, 2 => StrokeCap.Square, _ => StrokeCap.Butt };
-        StrokeJoin join = StrokeJoinBox.SelectedIndex switch { 1 => StrokeJoin.Round, 2 => StrokeJoin.Bevel, _ => StrokeJoin.Miter };
-        StrokeAlignment align = StrokeAlignBox.SelectedIndex switch { 1 => StrokeAlignment.Inside, 2 => StrokeAlignment.Outside, _ => StrokeAlignment.Center };
-        DashPattern dash = DashPreset(StrokeDashBox.SelectedIndex);
-
         if (_vm.ActiveSession.SelectedPaths().FirstOrDefault() is not { } path)
         {
-            _vm.ApplyStroke(width, cap, join, miter, align, dash);
+            double typedWidth = Parse(StrokeWidthBox.Text) ?? 1.0;
+            double typedMiter = Parse(MiterBox.Text) ?? 4.0;
+            _vm.ApplyStroke(
+                typedWidth,
+                StrokeCapBox.SelectedIndex switch { 1 => StrokeCap.Round, 2 => StrokeCap.Square, _ => StrokeCap.Butt },
+                StrokeJoinBox.SelectedIndex switch { 1 => StrokeJoin.Round, 2 => StrokeJoin.Bevel, _ => StrokeJoin.Miter },
+                typedMiter,
+                StrokeAlignBox.SelectedIndex switch
+                {
+                    1 => StrokeAlignment.Inside,
+                    2 => StrokeAlignment.Outside,
+                    _ => StrokeAlignment.Center,
+                },
+                DashPreset(StrokeDashBox.SelectedIndex));
+            return;
+        }
+
+        double? width = ChangedDouble(StrokeWidthBox, _shownWidth);
+        double? miter = ChangedDouble(MiterBox, _shownMiter);
+        StrokeCap? cap = Changed(StrokeCapBox, _shownCap) is { } capIndex ? MapCap(capIndex) : null;
+        StrokeJoin? join = Changed(StrokeJoinBox, _shownJoin) is { } joinIndex ? MapJoin(joinIndex) : null;
+        StrokeAlignment? align = Changed(StrokeAlignBox, _shownAlign) is { } alignIndex ? MapAlign(alignIndex) : null;
+        DashPattern? dash = Changed(StrokeDashBox, _shownDash) is { } dashIndex ? DashPreset(dashIndex) : null;
+
+        if (width is null && miter is null && cap is null && join is null && align is null && dash is null)
+        {
+            // A field committed without being edited is not an edit. Writing it anyway would put an undo step on the
+            // stack that undoes to exactly where it started, which reads as "undo did nothing".
             return;
         }
 
@@ -253,8 +601,67 @@ public partial class StrokePane : UserControl
             return;
         }
 
-        _vm.ActiveSession.ApplyStrokeAt(index, width, cap, join, miter, align, dash);
+        _vm.ActiveSession.ApplyStrokeFieldsAt(index, width, cap, join, miter, align, dash);
     }
+
+    /// <summary>A text field's value, or null when the person did not change it.</summary>
+    private static double? ChangedDouble(TextBox box, string shown)
+    {
+        string text = box.Text?.Trim() ?? string.Empty;
+        return text == shown ? null : Parse(text);
+    }
+
+    /// <summary>A combo's index, or null when the person did not change it - and when it is showing no value at all,
+    /// which is how a mixed member is drawn.</summary>
+    private static int? Changed(ComboBox box, int shown)
+        => box.SelectedIndex == shown || box.SelectedIndex < 0 ? null : box.SelectedIndex;
+
+    private static double? Parse(string? text)
+        => double.TryParse(text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double value)
+            ? value
+            : null;
+
+    private static StrokeCap MapCap(int index) => index switch
+    {
+        1 => StrokeCap.Round,
+        2 => StrokeCap.Square,
+        _ => StrokeCap.Butt,
+    };
+
+    private static StrokeJoin MapJoin(int index) => index switch
+    {
+        1 => StrokeJoin.Round,
+        2 => StrokeJoin.Bevel,
+        _ => StrokeJoin.Miter,
+    };
+
+    private static StrokeAlignment MapAlign(int index) => index switch
+    {
+        1 => StrokeAlignment.Inside,
+        2 => StrokeAlignment.Outside,
+        _ => StrokeAlignment.Center,
+    };
+
+    private static int CapIndex(StrokeCap cap) => cap switch
+    {
+        StrokeCap.Round => 1,
+        StrokeCap.Square => 2,
+        _ => 0,
+    };
+
+    private static int JoinIndex(StrokeJoin join) => join switch
+    {
+        StrokeJoin.Round => 1,
+        StrokeJoin.Bevel => 2,
+        _ => 0,
+    };
+
+    private static int AlignIndex(StrokeAlignment alignment) => alignment switch
+    {
+        StrokeAlignment.Inside => 1,
+        StrokeAlignment.Outside => 2,
+        _ => 0,
+    };
 
     public void Attach(EditorViewModel vm)
     {
@@ -326,6 +733,15 @@ public partial class StrokePane : UserControl
     /// </summary>
     private int? InspectedStrokeIndex() => InspectedStrokeSpec() is null ? null : _vm!.InspectedStroke;
 
+    /// <summary>
+    /// Shows what the selection says about the inspected stroke: each member's **common** value, or the word
+    /// "mixed" where the selection disagrees.
+    ///
+    /// `StrokeSummary` is the authority on agreement, so the pane asks it rather than forming a second opinion that
+    /// could drift from the one `style.commonStroke` reports. The value shown for an agreeing member is the
+    /// summary's common value, never one path's, which is the difference between describing a selection and
+    /// describing whichever path happened to be first.
+    /// </summary>
     private void Refresh()
     {
         PathItem? path = _vm?.ActiveSession.SelectedPaths().FirstOrDefault();
@@ -338,50 +754,130 @@ public partial class StrokePane : UserControl
         // raster effect), so it reads the path even when no stroke is inspected.
         ShowExportWarning(path);
 
-        // One read for both, so the effects list cannot describe a different stroke from the fields below - a list
-        // showing the top of the stack while the buttons edited it was the same disagreement, one level down.
-        // Nothing inspected means an empty list, which is the honest state rather than a fallback.
+        // One read for the geometry, the sections and the effects list, so none of them can describe a different
+        // stroke from the others - a list showing the top of the stack while the buttons edited it was the same
+        // disagreement, one level down.
         StrokeSpec? stroke = InspectedStrokeSpec();
+        int index = _vm?.InspectedStroke ?? -1;
+
         RefreshEffects(stroke);
+
+        StrokeSummary summary = StrokeSummary.Of(
+            _vm?.ActiveSession.SelectedPaths() ?? Enumerable.Empty<PathItem>(), index);
+        IReadOnlyList<StrokeSpec> agreeing = AgreeingStrokesAt(index);
+
+        var mixed = new List<string>();
+        _syncing = true;
+
         if (stroke is null)
         {
-            _syncing = true;
+            // Nothing inspected is a state, and it is not the same as mixed: there is no value to compare, so the
+            // fields are empty rather than saying they disagree.
             StrokeWidthBox.Text = string.Empty;
             MiterBox.Text = string.Empty;
+            _shownWidth = string.Empty;
+            _shownMiter = string.Empty;
+            MixedLabel.Text = string.Empty;
+            MixedLabel.IsVisible = false;
+            RefreshStrokeType(index, null);
+            RefreshDynamics(index, null);
             _syncing = false;
             return;
         }
 
-        _syncing = true;
+        // The summary is empty when nothing at this index is drawn, and then there is no selection-wide statement
+        // to make: the inspected stroke's own value is what the pane has, and what it will edit.
+        double? shownWidth = summary.Width ?? stroke.Width;
+        double? shownMiter = summary.MiterLimit ?? stroke.MiterLimit;
+        bool widthMixed = summary.WidthMixed;
+        bool miterMixed = summary.MiterMixed;
+        bool capMixed = summary.CapMixed;
+        bool joinMixed = summary.JoinMixed;
+        bool alignMixed = summary.AlignmentMixed;
+        StrokeCap shownCap = summary.Cap ?? stroke.Cap;
+        StrokeJoin shownJoin = summary.Join ?? stroke.Join;
+        StrokeAlignment shownAlign = summary.Alignment ?? stroke.Alignment;
+
+        // Dash is not one of `StrokeSummary`'s members, so its agreement is read here - over the same strokes the
+        // summary counts, so the two cannot disagree about what a gap is. Reported as a follow-up: the summary
+        // should carry it and this should stop being a second reading.
+        DashPattern shownDash = stroke.Dash;
+        bool dashMixed = false;
+        if (agreeing.Count > 0)
+        {
+            shownDash = agreeing[0].Dash;
+            dashMixed = agreeing.Any(candidate => !candidate.Dash.Equals(shownDash));
+        }
+
         if (!StrokeWidthBox.IsFocused)
         {
-            StrokeWidthBox.Text = stroke.Width.ToString("0.##", CultureInfo.InvariantCulture);
+            StrokeWidthBox.Text = widthMixed ? MixedWord : shownWidth!.Value.ToString("0.##", CultureInfo.InvariantCulture);
+            _shownWidth = StrokeWidthBox.Text;
         }
 
         if (!MiterBox.IsFocused)
         {
-            MiterBox.Text = stroke.MiterLimit.ToString("0.##", CultureInfo.InvariantCulture);
+            MiterBox.Text = miterMixed ? MixedWord : shownMiter!.Value.ToString("0.##", CultureInfo.InvariantCulture);
+            _shownMiter = MiterBox.Text;
         }
 
-        StrokeCapBox.SelectedIndex = stroke.Cap switch
+        StrokeCapBox.PlaceholderText = capMixed ? MixedWord : string.Empty;
+        StrokeCapBox.SelectedIndex = capMixed ? -1 : CapIndex(shownCap);
+        _shownCap = StrokeCapBox.SelectedIndex;
+
+        StrokeJoinBox.PlaceholderText = joinMixed ? MixedWord : string.Empty;
+        StrokeJoinBox.SelectedIndex = joinMixed ? -1 : JoinIndex(shownJoin);
+        _shownJoin = StrokeJoinBox.SelectedIndex;
+
+        StrokeAlignBox.PlaceholderText = alignMixed ? MixedWord : string.Empty;
+        StrokeAlignBox.SelectedIndex = alignMixed ? -1 : AlignIndex(shownAlign);
+        _shownAlign = StrokeAlignBox.SelectedIndex;
+
+        StrokeDashBox.PlaceholderText = dashMixed ? MixedWord : string.Empty;
+        StrokeDashBox.SelectedIndex = dashMixed ? -1 : DashIndexOf(shownDash);
+        _shownDash = StrokeDashBox.SelectedIndex;
+
+        if (widthMixed)
         {
-            StrokeCap.Round => 1,
-            StrokeCap.Square => 2,
-            _ => 0,
-        };
-        StrokeJoinBox.SelectedIndex = stroke.Join switch
+            mixed.Add("width");
+        }
+
+        if (capMixed)
         {
-            StrokeJoin.Round => 1,
-            StrokeJoin.Bevel => 2,
-            _ => 0,
-        };
-        StrokeAlignBox.SelectedIndex = stroke.Alignment switch
+            mixed.Add("cap");
+        }
+
+        if (joinMixed)
         {
-            StrokeAlignment.Inside => 1,
-            StrokeAlignment.Outside => 2,
-            _ => 0,
-        };
-        StrokeDashBox.SelectedIndex = DashIndexOf(stroke.Dash);
+            mixed.Add("join");
+        }
+
+        if (miterMixed)
+        {
+            mixed.Add("miter");
+        }
+
+        if (alignMixed)
+        {
+            mixed.Add("align");
+        }
+
+        if (dashMixed)
+        {
+            mixed.Add("dash");
+        }
+
+        RefreshStrokeType(index, stroke);
+        if (ProfileMixedAt(index))
+        {
+            mixed.Add("profile");
+        }
+
+        mixed.AddRange(RefreshDynamics(index, stroke));
+
+        MixedLabel.Text = mixed.Count == 0 ? string.Empty : MixedWord + ": " + string.Join(", ", mixed);
+        MixedLabel.IsVisible = mixed.Count > 0;
+
         _syncing = false;
     }
 
