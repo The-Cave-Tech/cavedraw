@@ -112,7 +112,14 @@ public class SessionJournalTests
 
         IReadOnlyList<string> after = SessionJournal.ReadQueue();
         Assert.True(after.Count > before, "filter.apply changed the document but wrote nothing to the journal");
-        Assert.Contains("\"op\":\"filter.apply\"", after[^1], StringComparison.Ordinal);
+
+        // The queue is one file in the person's profile, so a second process running these
+        // tests appends to it between the two reads — which is exactly what happened while
+        // this was being written. What is asserted is therefore the entry this call wrote,
+        // not whatever happens to be last.
+        Assert.Contains(
+            after.Skip(before),
+            line => line.Contains("\"op\":\"filter.apply\"", StringComparison.Ordinal));
     }
 
     /// <summary>The counterpart: a filter operation that only reads must not grow the queue.</summary>
@@ -128,7 +135,13 @@ public class SessionJournalTests
         EditorOperations.Invoke(context, "filter.kinds", default);
         EditorOperations.Invoke(context, "filter.read", default);
 
-        Assert.Equal(before, SessionJournal.ReadQueue().Count);
+        IEnumerable<string> appended = SessionJournal.ReadQueue().Skip(before);
+        foreach (string op in new[] { "filter.list", "filter.kinds", "filter.read" })
+        {
+            Assert.DoesNotContain(
+                appended,
+                line => line.Contains($"\"op\":\"{op}\"", StringComparison.Ordinal));
+        }
     }
 
     private static JsonElement Parameters(object value) => JsonSerializer.SerializeToElement(value);
