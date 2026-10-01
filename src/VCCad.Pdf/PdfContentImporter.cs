@@ -1782,8 +1782,16 @@ internal sealed class PdfContentImporter
         // fit was tried and it butchered the labels. Clipping belongs at render time.
 
         // Does this fragment continue the line the last one was on? If it starts where
-        // that one ended, along the same baseline and in the same colour, the two are one
-        // line of text that the file happened to split, and they belong in one block.
+        // that one ended, along the same baseline, the two are one line of text that the
+        // file happened to split, and they belong in one block.
+        //
+        // **The colour is deliberately not part of this test.** A content stream changes
+        // the fill with an operator of its own between two show operations, so the colour
+        // a run is drawn in is a property of the run, not of the text object: a line the
+        // file wrote as one object with a colour change in it must stay one block, or an
+        // edit to the text as a whole is no longer possible. The run carries the colour
+        // instead, which the canvas and the exporter both read through `ColourOf`. This is
+        // the same rule the SVG reader keeps for a `tspan fill=...` (#161, #167).
         Point2D baselineModel = new(baseline.X, _pageHeight - baseline.Y);
         double theta = -rotation;
         Point2D right = new(Math.Cos(theta), Math.Sin(theta));
@@ -1794,21 +1802,30 @@ internal sealed class PdfContentImporter
 
         bool continues = _lastTextValid && _lastText is { } previous
             && Math.Abs(previous.RotationRadians - rotation) < 1e-6
-            && previous.Color == color
             && Math.Abs(baselineModel.X - _lastTextEnd.X) < 0.5
             && Math.Abs(baselineModel.Y - _lastTextEnd.Y) < 0.5;
 
         if (continues)
         {
-            _lastText!.Runs.Add(run);
+            // The piece is another run of the block in hand, and it is always a run of its
+            // own: the file showed it separately, so joining it to the previous run would
+            // invent a string the file does not have. The block's colour is the first
+            // run's; a run the file painted differently carries its own, exactly as a
+            // `tspan fill=...` does in the SVG reader. Deciding it here rather than when
+            // the run is built is what makes the answer relative to the block it lands in.
+            TextItem block = _lastText!;
+            if (block.Color != color)
+            {
+                run.Color = color;
+            }
+
+            block.Runs.Add(run);
             _lastTextEnd = end;
             return;
         }
         if (Clipped(item) is { } placed) { items.Add(new PdfImportedItem(layer, placed)); }
         _lastText = item;
         _lastTextEnd = end;
-        _lastTextRotation = rotation;
-        _lastTextColor = color;
         _lastTextValid = true;
     }
 
@@ -2688,8 +2705,13 @@ internal sealed class PdfContentImporter
     private TextItem? _lastText;
 
     private Point2D _lastTextEnd;
-    private double _lastTextRotation;
-    private ColorRgb _lastTextColor;
+
+    /// <summary>
+    /// Whether the last show operation left a line the next one may continue.
+    ///
+    /// The rotation and colour of that line are deliberately not remembered here: rotation is compared against
+    /// the block's own, and colour is a property of the run rather than of the line (#167).
+    /// </summary>
     private bool _lastTextValid;
 
     /// <summary>Ends the current text line, so the next show starts a block of its own.</summary>
