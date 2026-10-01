@@ -3757,6 +3757,7 @@ public static class EditorOperations
                     objects = result.Objects,
                     byElement = result.ByElement,
                     missing = result.Missing,
+                    warnings = result.Warnings,
                 };
             });
 
@@ -3776,6 +3777,7 @@ public static class EditorOperations
                     objects = result.Objects,
                     byElement = result.ByElement,
                     missing = result.Missing,
+                    warnings = result.Warnings,
                 };
             });
 

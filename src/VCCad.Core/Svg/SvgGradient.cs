@@ -19,6 +19,7 @@ namespace VCCad.Core.Svg;
 internal sealed class SvgGradients
 {
     private readonly Dictionary<string, RawGradient> _gradients = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (ColorRgb Colour, double Opacity)> _solids = new(StringComparer.Ordinal);
 
     /// <summary>One gradient as the file writes it, before any shape is known.</summary>
     private sealed record RawGradient(
@@ -45,6 +46,18 @@ internal sealed class SvgGradients
             }
 
             string name = element.Name.LocalName;
+            if (string.Equals(name, "solidcolor", StringComparison.OrdinalIgnoreCase))
+            {
+                // SVG 1.2's solid colour paint server, which Inkscape still writes. The element is spelled
+                // **lowercase** in the corpus file and XML is case-sensitive, so the name is matched ignoring
+                // case - reading only the camel-case spelling would miss the one file that uses it.
+                ColorRgb colour = SvgColour.Parse(CascadeValue(element, "solid-color", sheet) ?? "black")
+                    ?? ColorRgb.Black;
+                double opacity = CascadeNumber(element, "solid-opacity", sheet) ?? 1.0;
+                gradients._solids[id] = (colour, Math.Clamp(opacity, 0.0, 1.0));
+                continue;
+            }
+
             if (name is not ("linearGradient" or "radialGradient"))
             {
                 continue;
@@ -84,7 +97,46 @@ internal sealed class SvgGradients
     }
 
     /// <summary>
-    /// One stop, with its colour and opacity taken through the cascade.
+    /// A property read through the cascade: an important rule, then an inline style, then a rule, then the
+    /// attribute. The same order as paint, because these properties are paint.
+    /// </summary>
+    private static string? CascadeValue(XElement element, string name, SvgStylesheet sheet)
+    {
+        Dictionary<string, (string Value, bool Important)> declarations =
+            sheet.DeclarationsFor(element, element.Ancestors().ToArray());
+
+        bool hasSheet = declarations.TryGetValue(name, out var fromSheet);
+        if (hasSheet && fromSheet.Important)
+        {
+            return fromSheet.Value;
+        }
+
+        string? inline = InlineValue(element, name);
+        if (inline is not null)
+        {
+            return inline;
+        }
+
+        return hasSheet ? fromSheet.Value : element.Attribute(name)?.Value;
+    }
+
+    private static double? CascadeNumber(XElement element, string name, SvgStylesheet sheet)
+        => CascadeValue(element, name, sheet) is { } text &&
+           double.TryParse(text.Trim(), System.Globalization.NumberStyles.Float,
+               System.Globalization.CultureInfo.InvariantCulture, out double value)
+            ? value
+            : null;
+
+    /// <summary>
+    /// The solid colour a paint-server id names, or null when it is not one.
+    ///
+    /// Kept separate from <see cref="Resolve"/> because a solid has no geometry: it is a colour with an opacity,
+    /// and the shape's box - which every gradient needs - has nothing to do with it.
+    /// </summary>
+    public (ColorRgb Colour, double Opacity)? SolidFor(string id)
+        => _solids.TryGetValue(id, out (ColorRgb Colour, double Opacity) solid) ? solid : null;
+
+    /// <summary>One stop, with its colour and opacity taken through the cascade.
     ///
     /// A stop is styled like anything else: `stop-color` can arrive from a presentation attribute, from an inline
     /// `style`, or from a rule in a stylesheet, and the corpus uses all three. Reading only the attribute gets the

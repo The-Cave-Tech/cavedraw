@@ -10,7 +10,8 @@ namespace VCCad.Core.Svg;
 public sealed record SvgImportResult(
     CadDocument Document,
     IReadOnlyDictionary<string, int> ByElement,
-    IReadOnlyList<string> Missing)
+    IReadOnlyList<string> Missing,
+    IReadOnlyList<string> Warnings)
 {
     /// <summary>How many objects were imported in total.</summary>
     public int Objects => ByElement.Values.Sum();
@@ -94,6 +95,7 @@ public static class SvgReader
         // defined after the elements it styles, which multi-style.svg does.
         SvgStylesheet sheet = SvgStylesheet.Parse(CollectStyles(root), baseDirectory);
         SvgGradients gradients = SvgGradients.Collect(root, sheet);
+        var warnings = new HashSet<string>(StringComparer.Ordinal);
 
         var context = new Context
         {
@@ -106,6 +108,7 @@ public static class SvgReader
             Missing = new List<string>(),
             Sheet = sheet,
             Gradients = gradients,
+            Warnings = warnings,
         };
 
         foreach (XElement child in root.Elements())
@@ -118,7 +121,7 @@ public static class SvgReader
             layer.AddItem(viewGroup);
         }
 
-        return new SvgImportResult(document, counts, context.Missing);
+        return new SvgImportResult(document, counts, context.Missing, warnings.OrderBy(w => w, StringComparer.Ordinal).ToArray());
     }
 
     /// <summary>
@@ -268,6 +271,15 @@ public static class SvgReader
         /// <summary>The document's paint servers, by id.</summary>
         public required SvgGradients Gradients { get; init; }
 
+        /// <summary>
+        /// SVG elements the reader does not know, by name, each recorded once.
+        ///
+        /// Reported rather than silently skipped: an element that is not understood is artwork that went missing,
+        /// and a list of names is a gap somebody can act on. Silently ignoring it produces a drawing that is
+        /// simply wrong with nothing to say why.
+        /// </summary>
+        public required HashSet<string> Warnings { get; init; }
+
         /// <summary>Where a shape is added: the group it is inside, or the layer when there is no group.</summary>
         public void Add(LayerItem item)
         {
@@ -337,6 +349,15 @@ public static class SvgReader
         // model's paths have no transform of their own: their coordinates are the artboard's.
         AffineTransform own = Transform(element.Attribute("transform")?.Value);
 
+        // Anything that reaches here is an element this reader does not know. It is **reported** and then skipped:
+        // artwork that quietly went missing is the worst kind of import bug, because the drawing looks deliberate.
+        // The known elements are the ones above and the shapes ReadShape handles.
+        if (name is not ("rect" or "circle" or "ellipse" or "line" or "polyline" or "polygon" or "path"))
+        {
+            context.Warnings.Add(name);
+            return;
+        }
+
         foreach (LayerItem item in ReadShape(element, style))
         {
             if (item is PathItem shape)
@@ -346,11 +367,21 @@ public static class SvgReader
                 // after the geometry exists, and before the transform is composed into the points.
                 if (style.FillGradientId is { Length: > 0 } gradientId)
                 {
-                    shape.Fill = shape.Fill with
+                    if (context.Gradients.SolidFor(gradientId) is { } solid)
                     {
-                        IsVisible = true,
-                        Gradient = context.Gradients.Resolve(gradientId, shape.BoundingBox()),
-                    };
+                        // SVG 1.2's solid colour: a paint server that is only a colour and an opacity, so there is
+                        // no geometry to resolve and the shape's box has nothing to do with it.
+                        shape.Fill = FillSpec.Solid(
+                            solid.Colour with { A = solid.Colour.A * solid.Opacity }, shape.Fill.Rule);
+                    }
+                    else
+                    {
+                        shape.Fill = shape.Fill with
+                        {
+                            IsVisible = true,
+                            Gradient = context.Gradients.Resolve(gradientId, shape.BoundingBox()),
+                        };
+                    }
                 }
 
                 if (!IsIdentity(own))
@@ -400,6 +431,7 @@ public static class SvgReader
             Missing = context.Missing,
             Sheet = context.Sheet,
             Gradients = context.Gradients,
+            Warnings = context.Warnings,
         };
 
         foreach (XElement child in element.Elements())
@@ -699,6 +731,7 @@ public static class SvgReader
             Missing = context.Missing,
             Sheet = context.Sheet,
             Gradients = context.Gradients,
+            Warnings = context.Warnings,
         };
 
         if (target.Name.LocalName == "symbol")
