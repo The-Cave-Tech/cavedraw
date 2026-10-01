@@ -1613,6 +1613,103 @@ public static class EditorOperations
             return Summary(ctx);
         });
 
+        Add("style.strokes",
+            "The stroke stack on each selected path, bottom to top: every stroke's colour, width, cap, join, " +
+            "miter limit, alignment and dash. What a driver reads to check a path that has more than one " +
+            "stroke, and what the appearance panel shows.",
+            "",
+            (ctx, _) => ctx.Session.SelectedPaths().Select(path => new
+            {
+                itemId = path.Id,
+                name = path.Name,
+                count = path.Strokes.Count,
+                strokes = path.Strokes.Select(DescribeStroke).ToArray(),
+            }).ToArray());
+
+        Add("style.addStroke",
+            "Add a stroke to the selected paths, on top of the ones they have. With no parameters it copies the " +
+            "current top stroke - what pressing add gives a person, a copy they then edit - and any parameter " +
+            "given overrides the copy. One undo step.",
+            "color?:[r,g,b], width?:number, cap?:butt|round|square, join?:miter|round|bevel, miterLimit?, " +
+            "alignment?:center|inside|outside, dash?:number[]",
+            (ctx, p) =>
+            {
+                int changed = 0;
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    StrokeSpec top = path.Strokes.Count > 0
+                        ? path.Strokes[^1]
+                        : StrokeSpec.Hairline(ColorRgb.Black);
+
+                    var stack = path.Strokes.ToList();
+                    stack.Add(ReadStroke(p, top));
+                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Add stroke"));
+                    changed++;
+                }
+
+                return new { changed };
+            });
+
+        Add("style.removeStroke",
+            "Remove a stroke from the selected paths. index counts from the bottom and defaults to the top " +
+            "one. Removing the last stroke leaves the path with a single invisible stroke rather than none, so " +
+            "the stack a caller reads is always there.",
+            "index?:number",
+            (ctx, p) =>
+            {
+                int changed = 0;
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    if (path.Strokes.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    // Default to the top: "remove the stroke" on a path with a stack means the last one added.
+                    int index = (int)p.GetLong("index", path.Strokes.Count - 1);
+                    if (index < 0 || index >= path.Strokes.Count)
+                    {
+                        continue;
+                    }
+
+                    var stack = path.Strokes.ToList();
+                    stack.RemoveAt(index);
+                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Remove stroke"));
+                    changed++;
+                }
+
+                return new { changed };
+            });
+
+        Add("style.reorderStroke",
+            "Move a stroke within the stack on the selected paths - how a person changes which one is on top. " +
+            "from and to count from the bottom; to may be one past the last to put a stroke on top. One undo " +
+            "step.",
+            "from:number, to:number",
+            (ctx, p) =>
+            {
+                int from = (int)p.GetLong("from", 0);
+                int to = (int)p.GetLong("to", 0);
+                int changed = 0;
+
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    if (from < 0 || from >= path.Strokes.Count)
+                    {
+                        continue;
+                    }
+
+                    var stack = path.Strokes.ToList();
+                    StrokeSpec moved = stack[from];
+                    stack.RemoveAt(from);
+                    stack.Insert(Math.Clamp(to, 0, stack.Count), moved);
+                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Reorder stroke"));
+                    changed++;
+                }
+
+                return new { from, to, changed };
+            });
+
         // ---- text --------------------------------------------------------
         Add("text.create",
             "Create a text object at (x, y). With no layerId it goes on the active artboard, as typing does; " +
@@ -2185,6 +2282,18 @@ public static class EditorOperations
             "",
             (ctx, _) =>
             {
+                // **Refused rather than half-done.** Stroke expansion produces one filled path per stroke, and
+                // the expander still works a stroke at a time - so on a path with a stack it would expand the
+                // bottom stroke and silently drop the rest, which is the failure this whole issue is about.
+                // Refusing leaves the path and every stroke on it exactly as it was, and says why.
+                if (ctx.Session.SelectedPaths()
+                        .Any(p => p.Strokes.Count(s => s.HasVisibleOutline) > 1))
+                {
+                    throw new EditorOperationException(
+                        "path.expandStroke works on one stroke at a time, and something selected has more than " +
+                        "one. Expanding it would drop the others, so nothing has been changed.");
+                }
+
                 int count = ctx.Session.ExpandSelectedStrokes();
                 ctx.ViewModel.NotifyDocumentChanged();
                 return new { expanded = count };
@@ -4769,6 +4878,62 @@ public static class EditorOperations
                 ? new Point2D(tailX.GetDouble() - offset.X, tailY.GetDouble() - offset.Y)
                 : centre,
         };
+    }
+
+    /// <summary>One stroke as a caller reads it: every member that decides what it looks like.</summary>
+    private static object DescribeStroke(StrokeSpec stroke) => new
+    {
+        visible = stroke.IsVisible,
+        r = Math.Round(stroke.Color.R, 6),
+        g = Math.Round(stroke.Color.G, 6),
+        b = Math.Round(stroke.Color.B, 6),
+        hex = HexColor.Format(stroke.Color),
+        width = Math.Round(stroke.Width, 4),
+        cap = stroke.Cap.ToString().ToLowerInvariant(),
+        join = stroke.Join.ToString().ToLowerInvariant(),
+        miterLimit = Math.Round(stroke.MiterLimit, 4),
+        alignment = stroke.Alignment.ToString().ToLowerInvariant(),
+        dash = stroke.Dash.IsEmpty ? null : stroke.Dash.Segments.ToArray(),
+        dashOffset = Math.Round(stroke.Dash.Offset, 4),
+    };
+
+    /// <summary>
+    /// A stroke built from the parameters given, falling back to <paramref name="basis"/> for the rest.
+    ///
+    /// The presence checks matter rather than being defensive noise: <c>ParseColor</c> reports its fallback for
+    /// a parameter that is **absent**, so a plain "no colour given" would arrive as black and overwrite the
+    /// colour of the stroke being copied.
+    /// </summary>
+    private static StrokeSpec ReadStroke(JsonElement p, StrokeSpec basis)
+    {
+        // A caller that passes no parameters sends an **undefined** element, and reading a property of one
+        // throws rather than answering "not given". `GetDouble` and `GetLong` tolerate it, which is why the
+        // operations that only read numbers never had to know.
+        bool given = p.ValueKind == JsonValueKind.Object;
+
+        ColorRgb color = given && p.TryGetProperty("color", out _) ? p.ParseColor("color", basis.Color) : basis.Color;
+        StrokeCap cap = given && p.TryGetProperty("cap", out _) ? ParseEnum(p.GetString("cap"), basis.Cap) : basis.Cap;
+        StrokeJoin join = given && p.TryGetProperty("join", out _) ? ParseEnum(p.GetString("join"), basis.Join) : basis.Join;
+        StrokeAlignment alignment = given && p.TryGetProperty("alignment", out _)
+            ? ParseEnum(p.GetString("alignment"), basis.Alignment)
+            : basis.Alignment;
+
+        DashPattern dash = basis.Dash;
+        if (given && p.TryGetProperty("dash", out JsonElement d) && d.ValueKind == JsonValueKind.Array)
+        {
+            double[] segments = d.EnumerateArray().Select(e => e.GetDouble()).ToArray();
+            dash = segments.Length > 0 ? new DashPattern(segments) : default;
+        }
+
+        return new StrokeSpec(
+            true,
+            color,
+            p.GetDouble("width", basis.Width),
+            cap,
+            join,
+            p.GetDouble("miterLimit", basis.MiterLimit),
+            alignment,
+            dash);
     }
 
     private static object DescribeShape(PathItem path)
