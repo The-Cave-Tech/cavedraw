@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using VCCad.App.Automation;
 using VCCad.App.ViewModels;
@@ -189,8 +190,9 @@ public class FilterEditOperationTests
 
     /// <summary>
     /// **The declaration is the panel.** Every kind it lists can be added and every parameter it declares can be
-    /// set through the operations - which is what stops #133's panel being a hand-written switch that drifts from
-    /// the engine.
+    /// set through the operations, and the value is read back **off the model** - which is what stops #133's panel
+    /// being a hand-written switch that drifts from the engine, and what makes a kind added to the registry
+    /// without a build path fail here instead of being quietly accepted.
     /// </summary>
     [Fact]
     public void EveryDeclaredKindAndParameterCanBeDrivenThroughTheOperations()
@@ -221,13 +223,19 @@ public class FilterEditOperationTests
                     continue;
                 }
 
+                object sample = Sample(parameter);
                 EditorOperations.Invoke(context, "filter.setPrimitiveParameter", Params(new Dictionary<string, object?>
                 {
                     ["name"] = "drop",
                     ["index"] = 0,
                     ["parameter"] = parameter.Name,
-                    ["value"] = Sample(parameter),
+                    ["value"] = sample,
                 }));
+
+                // Read off the record rather than off the operation's own answer: `filter.list` echoing a value
+                // back is not evidence that the model holds it.
+                FilterPrimitive after = context.Document.FindFilter("drop")!.Primitives[0];
+                Assert.Equal(Text(sample), Text(Read(after, parameter.Name)));
             }
 
             EditorOperations.Invoke(context, "filter.removePrimitive", Params(new { name = "drop", index = 0 }));
@@ -235,12 +243,164 @@ public class FilterEditOperationTests
         }
     }
 
-    /// <summary>A value the declaration allows: inside its range, and one of its choices when it has any.</summary>
+    /// <summary>
+    /// **The declaration and the operations as two lists, compared.**
+    ///
+    /// `filter.kinds` is only a promise about what a driver can build until every entry in it is driven through
+    /// `filter.addPrimitive` and the kind that landed is read back. A declared kind with no build path - or, worse,
+    /// a build path that answers with some **other** kind - fails here rather than being accepted quietly, which is
+    /// what the arms that invented a `feBlend` did.
+    /// </summary>
+    [Fact]
+    public void TheKindsTheDeclarationListsAreTheKindsTheOperationsBuild()
+    {
+        (AutomationContext context, _) = Host();
+        EditorOperations.Invoke(context, "filter.create", Params(new
+        {
+            name = "drop",
+            primitives = new object[] { new { kind = "gaussianBlur", radius = 1.0, result = "base" } },
+        }));
+
+        string[] declared = FilterPrimitiveRegistry.All.Select(definition => definition.Kind).ToArray();
+
+        var built = new List<string>();
+        foreach (FilterPrimitiveDefinition definition in FilterPrimitiveRegistry.All)
+        {
+            var add = new Dictionary<string, object?> { ["name"] = "drop", ["kind"] = definition.Kind };
+            foreach (FilterParameter parameter in definition.Required)
+            {
+                add[parameter.Name] = Sample(parameter);
+            }
+
+            EditorOperations.Invoke(context, "filter.addPrimitive", Params(add));
+
+            FilterPrimitive landed = context.Document.FindFilter("drop")!.Primitives[^1];
+            built.Add(FilterPrimitiveRegistry.Find(landed.Kind.ToString())?.Kind ?? landed.Kind.ToString());
+        }
+
+        Assert.Equal(declared, built);
+    }
+
+    /// <summary>
+    /// A parameter the request does not carry takes the **declaration's** default, not the record's own.
+    ///
+    /// The two are not always the same word, and one record cannot start life holding two kinds' defaults at once:
+    /// a morphology added with no operator would otherwise be `operator="over"`, an operator `feMorphology` does not
+    /// have and one the SVG export would then write out.
+    /// </summary>
+    [Fact]
+    public void AStepWithNoValueForAParameterTakesTheDeclarationsDefault()
+    {
+        (AutomationContext context, _) = Host();
+        EditorOperations.Invoke(context, "filter.create", Params(new
+        {
+            name = "drop",
+            primitives = new object[] { new { kind = "gaussianBlur", radius = 1.0, result = "base" } },
+        }));
+
+        EditorOperations.Invoke(context, "filter.addPrimitive", Params(new
+        {
+            name = "drop",
+            kind = "morphology",
+            radius = 2.0,
+        }));
+
+        FilterPrimitive morph = context.Document.FindFilter("drop")!.Primitives[^1];
+        Assert.Equal(FilterPrimitiveKind.Morphology, morph.Kind);
+        Assert.Equal("erode", morph.Operator);
+
+        EditorOperations.Invoke(context, "filter.addPrimitive", Params(new
+        {
+            name = "drop",
+            kind = "colorMatrix",
+            values = 0.35,
+        }));
+
+        FilterPrimitive matrix = context.Document.FindFilter("drop")!.Primitives[^1];
+        Assert.Equal(FilterPrimitiveKind.ColorMatrix, matrix.Kind);
+        Assert.Equal("matrix", matrix.Type);
+    }
+
+    /// <summary>
+    /// A value the declaration allows for a parameter, and **not** the default it declares - so a value that
+    /// reached the wrong member, or never reached the model at all, is caught rather than matching what was there.
+    /// </summary>
     private static object Sample(FilterParameter parameter) => parameter.Kind switch
     {
         FilterParameterKind.Color => new[] { 10, 20, 30 },
-        FilterParameterKind.Choice => parameter.Choices![0],
-        _ => parameter.Maximum < 1.0 ? parameter.Maximum : parameter.Minimum <= 1.0 ? 1.0 : parameter.Minimum,
+        // The last word rather than the first, which is the one every kind declares as its default.
+        FilterParameterKind.Choice => parameter.Choices![^1],
+        // A colour matrix's `values` is the twenty numbers, which a shorthand's single amount is not.
+        _ when parameter.Name.Equals("values", StringComparison.OrdinalIgnoreCase) =>
+            Enumerable.Range(1, 20).Select(number => (double)number).ToArray(),
+        _ => Whole(parameter),
+    };
+
+    /// <summary>
+    /// A whole number the declaration allows that is not its default.
+    ///
+    /// Whole because two declared parameters - `numOctaves` and `seed` - are integers in the model, so a sample of
+    /// 2.5 would be rounded on the way in and fail a read-back that is about the member and not the rounding.
+    /// </summary>
+    private static double Whole(FilterParameter parameter)
+    {
+        double declared = parameter.Default is { Length: > 0 } text &&
+                          double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed)
+            ? parsed
+            : 0.0;
+
+        return declared + 1 <= parameter.Maximum ? declared + 1 : declared - 1;
+    }
+
+    /// <summary>
+    /// The model member a declared parameter name stands for - the read half of the map the operation keeps as its
+    /// write half, because the declaration names a parameter by the word a caller sets it with.
+    /// </summary>
+    private static object? Read(FilterPrimitive primitive, string parameter) => parameter switch
+    {
+        "radius" => primitive.Radius,
+        "dx" => primitive.Dx,
+        "dy" => primitive.Dy,
+        "floodColor" => primitive.FloodColor is { } flood ? Bytes(flood) : null,
+        "floodOpacity" => primitive.FloodOpacity,
+        "operator" => primitive.Operator,
+        "mode" => primitive.Mode,
+        "type" => primitive.Type,
+        "values" => primitive.Matrix,
+        "scale" => primitive.Scale,
+        "xChannel" => primitive.XChannel,
+        "yChannel" => primitive.YChannel,
+        "baseFrequency" => primitive.BaseFrequency,
+        "numOctaves" => (double)primitive.Octaves,
+        "seed" => (double)primitive.Seed,
+        "surfaceScale" => primitive.SurfaceScale,
+        "diffuseConstant" => primitive.DiffuseConstant,
+        "specularConstant" => primitive.SpecularConstant,
+        "specularExponent" => primitive.SpecularExponent,
+        "lightingColor" => primitive.LightingColor is { } light ? Bytes(light) : null,
+        "azimuth" => primitive.Azimuth,
+        "elevation" => primitive.Elevation,
+        _ => throw new InvalidOperationException($"this test has no reader for the parameter '{parameter}'"),
+    };
+
+    private static int[] Bytes(ColorRgb colour) => new[]
+    {
+        (int)Math.Round(Math.Clamp(colour.R, 0.0, 1.0) * 255),
+        (int)Math.Round(Math.Clamp(colour.G, 0.0, 1.0) * 255),
+        (int)Math.Round(Math.Clamp(colour.B, 0.0, 1.0) * 255),
+    };
+
+    /// <summary>A value as one string, so a sample and the member it should have reached compare whatever sort
+    /// they are: a number, a declared word, a colour's bytes or a matrix's twenty numbers.</summary>
+    private static string Text(object? value) => value switch
+    {
+        null => string.Empty,
+        double number => number.ToString("0.####", CultureInfo.InvariantCulture),
+        int whole => whole.ToString(CultureInfo.InvariantCulture),
+        int[] bytes => string.Join(",", bytes),
+        double[] numbers => string.Join(",", numbers.Select(number => number.ToString("0.####", CultureInfo.InvariantCulture))),
+        string text => text,
+        object other => other.ToString() ?? string.Empty,
     };
 
     // ---------------------------------------------------------------- refusing what is not there
@@ -250,15 +410,18 @@ public class FilterEditOperationTests
     {
         (AutomationContext context, _) = Host();
 
+        // `feTile` is a real SVG primitive this build has not got. `feTurbulence` used to stand here and cannot any
+        // more: it is the element name of a kind the registry now declares, and a declaration answers to the element
+        // name as well as the kind name - so it is a known kind, not an example of an unknown one.
         string? message = MessageOf(() => EditorOperations.Invoke(
-            context, "filter.addPrimitive", Params(new { name = "drop", kind = "feTurbulence", radius = 1.0 })));
+            context, "filter.addPrimitive", Params(new { name = "drop", kind = "feTile", radius = 1.0 })));
 
         // A filter with no primitives paints nothing, so there is nothing to add to yet either.
         Assert.Contains("no filter called", message!, StringComparison.OrdinalIgnoreCase);
 
         Create(context);
         message = MessageOf(() => EditorOperations.Invoke(
-            context, "filter.addPrimitive", Params(new { name = "drop", kind = "feTurbulence", radius = 1.0 })));
+            context, "filter.addPrimitive", Params(new { name = "drop", kind = "feTile", radius = 1.0 })));
 
         Assert.Contains("not a filter primitive", message!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("gaussianBlur", message!, StringComparison.Ordinal);

@@ -190,7 +190,26 @@ internal sealed record FilterPrimitiveDto(
     ColorDto? FloodColor,
     double FloodOpacity,
     string Operator,
-    string Mode);
+    string Mode,
+
+    // The parameters the later primitives gained. Optional and absent when they hold their default, so a sidecar
+    // written before these primitives existed is byte-identical, and one written now does not grow members for
+    // filters that do not use them. The same rule the outline effects, the raster effects and the gradients follow.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Scale = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? XChannel = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? YChannel = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Type = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? BaseFrequency = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Octaves = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Seed = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double[]? Matrix = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? SurfaceScale = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? SpecularConstant = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? SpecularExponent = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? DiffuseConstant = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ColorDto? LightingColor = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Azimuth = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Elevation = null);
 
 internal sealed record NodeDto(Point2D Anchor, Point2D InHandle, Point2D OutHandle);
 
@@ -1307,7 +1326,32 @@ public static class VccadDocumentSerializer
                     : null,
                 p.FloodOpacity,
                 p.Operator,
-                p.Mode)).ToArray(),
+                p.Mode,
+                p.Kind == FilterPrimitiveKind.DisplacementMap ? p.Scale : null,
+                p.Kind == FilterPrimitiveKind.DisplacementMap ? p.XChannel : null,
+                p.Kind == FilterPrimitiveKind.DisplacementMap ? p.YChannel : null,
+                p.Kind is FilterPrimitiveKind.ColorMatrix or FilterPrimitiveKind.Turbulence ? p.Type : null,
+                p.Kind == FilterPrimitiveKind.Turbulence ? p.BaseFrequency : null,
+                p.Kind == FilterPrimitiveKind.Turbulence ? p.Octaves : null,
+                p.Kind == FilterPrimitiveKind.Turbulence ? p.Seed : null,
+                p.Kind == FilterPrimitiveKind.ColorMatrix && p.Matrix is { Length: > 0 } matrix
+                    ? PadMatrix(matrix)
+                    : null,
+                p.Kind is FilterPrimitiveKind.SpecularLighting or FilterPrimitiveKind.DiffuseLighting
+                    ? p.SurfaceScale
+                    : null,
+                p.Kind == FilterPrimitiveKind.SpecularLighting ? p.SpecularConstant : null,
+                p.Kind == FilterPrimitiveKind.SpecularLighting ? p.SpecularExponent : null,
+                p.Kind == FilterPrimitiveKind.DiffuseLighting ? p.DiffuseConstant : null,
+                p.Kind is FilterPrimitiveKind.SpecularLighting or FilterPrimitiveKind.DiffuseLighting
+                    ? p.LightingColor is { } light ? new ColorDto(light.R, light.G, light.B, light.A) : null
+                    : null,
+                p.Kind is FilterPrimitiveKind.SpecularLighting or FilterPrimitiveKind.DiffuseLighting
+                    ? p.Azimuth
+                    : null,
+                p.Kind is FilterPrimitiveKind.SpecularLighting or FilterPrimitiveKind.DiffuseLighting
+                    ? p.Elevation
+                    : null)).ToArray(),
             filter.X,
             filter.Y,
             filter.Width,
@@ -1315,15 +1359,38 @@ public static class VccadDocumentSerializer
             filter.ObjectBoundingBox,
             filter.Output);
 
+    /// <summary>
+    /// A colour matrix, padded to the twenty numbers the format names.
+    ///
+    /// The shorthand forms are stored with a single number - the amount - and written back that way, because a
+    /// `saturate` read as a matrix and written back as one would still draw the same picture but would no longer be
+    /// the filter that was read. Only a matrix that is short of twenty numbers is padded, which is the one case
+    /// where a reader would otherwise have to guess the missing columns.
+    /// </summary>
+    private static double[] PadMatrix(double[] values)
+    {
+        // One number is a shorthand's amount, twenty is the whole matrix, and both travel as they are. Sixteen is
+        // the "four straight rows, no constants" spelling, and the four missing numbers are the fifth column - zeros
+        // - so the padding invents nothing.
+        if (values.Length is 1 or 20)
+        {
+            return values;
+        }
+
+        if (values.Length != 16)
+        {
+            return values;
+        }
+
+        var padded = new double[20];
+        Array.Copy(values, padded, 16);
+        return padded;
+    }
+
     private static FilterSpec ToModel(FilterDto dto)
         => new(
             dto.Name,
-            (dto.Primitives ?? Array.Empty<FilterPrimitiveDto>()).Select(p => new FilterPrimitive(
-                p.Kind, p.Input, p.Input2, p.Result, p.Radius, p.Dx, p.Dy,
-                p.FloodColor is { } colour
-                    ? new ColorRgb(colour.R, colour.G, colour.B, colour.A)
-                    : null,
-                p.FloodOpacity, p.Operator, p.Mode)))
+            (dto.Primitives ?? Array.Empty<FilterPrimitiveDto>()).Select(ToModel).ToArray())
         {
             X = dto.X,
             Y = dto.Y,
@@ -1331,6 +1398,38 @@ public static class VccadDocumentSerializer
             Height = dto.Height,
             ObjectBoundingBox = dto.ObjectBoundingBox,
             Output = dto.Output,
+        };
+
+    /// <summary>
+    /// One primitive off the wire.
+    ///
+    /// An absent member is the **declared default** rather than a zero, which is what lets a sidecar written before
+    /// these primitives existed come back as the filter it meant: a colour matrix with no matrix is identity, a
+    /// specular highlight with no exponent is one.
+    /// </summary>
+    private static FilterPrimitive ToModel(FilterPrimitiveDto dto)
+        => new(
+            dto.Kind, dto.Input, dto.Input2, dto.Result, dto.Radius, dto.Dx, dto.Dy,
+            dto.FloodColor is { } colour ? new ColorRgb(colour.R, colour.G, colour.B, colour.A) : null,
+            dto.FloodOpacity, dto.Operator, dto.Mode)
+        {
+            Scale = dto.Scale ?? 0.0,
+            XChannel = dto.XChannel ?? "A",
+            YChannel = dto.YChannel ?? "A",
+            Type = dto.Type ?? (dto.Kind == FilterPrimitiveKind.ColorMatrix ? "matrix" : "turbulence"),
+            BaseFrequency = dto.BaseFrequency ?? 0.0,
+            Octaves = dto.Octaves ?? 1,
+            Seed = dto.Seed ?? 0,
+            Matrix = dto.Matrix,
+            SurfaceScale = dto.SurfaceScale ?? 1.0,
+            SpecularConstant = dto.SpecularConstant ?? 1.0,
+            SpecularExponent = dto.SpecularExponent ?? 1.0,
+            DiffuseConstant = dto.DiffuseConstant ?? 1.0,
+            LightingColor = dto.LightingColor is { } light
+                ? new ColorRgb(light.R, light.G, light.B, light.A)
+                : null,
+            Azimuth = dto.Azimuth ?? 0.0,
+            Elevation = dto.Elevation ?? 0.0,
         };
 
     private static CadDocument ToModel(DocumentDto dto)

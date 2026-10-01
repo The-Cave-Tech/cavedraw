@@ -2066,8 +2066,10 @@ public static class EditorOperations
             }).ToArray());
 
         Add("filter.create",
-            "Create or replace a filter. primitives is [{kind, in?, in2?, result?, ...}] where kind names a primitive " +
-            "from filter.kinds - gaussianBlur, offset, flood, composite or blend - and in/in2 name the buffers a step " +
+            "Create or replace a filter. primitives is [{kind, in?, in2?, result?, ...}] where kind names any " +
+            "primitive filter.kinds lists - the kind name or the element name, so `morphology` and `feMorphology` " +
+            "are one step - and every other member is a parameter that kind declares, under the name the " +
+            "declaration gives it. in/in2 name the buffers a step " +
             "reads: SourceGraphic, SourceAlpha, or another step's result. The wiring is the filter: a step that reads " +
             "a named buffer gets that buffer, not whatever happened to run before it. output names the buffer the " +
             "filter answers with, which may be an intermediate step's; omitted means the last primitive's. An unknown " +
@@ -2323,10 +2325,12 @@ public static class EditorOperations
             });
 
         Add("filter.setPrimitiveParameter",
-            "Change one value of one step - a blur's radius, an offset's displacement, a flood's colour and opacity, " +
-            "a composite's operator, a blend's mode. The parameter is named as filter.kinds declares it, and a name " +
-            "that kind does not take is refused rather than ignored. Colours are [r,g,b] with components 0-255. " +
-            "Inputs and results are wiring rather than values, so they belong to filter.connectPrimitive.",
+            "Change one value of one step. Every parameter the kind declares in filter.kinds can be set by the " +
+            "name it is declared with - a blur's radius, a colour matrix's type and values, a turbulence's seed, a " +
+            "light's azimuth - and a name that kind does not take is refused rather than ignored. Colours are " +
+            "[r,g,b] with components 0-255; `values` is the twenty numbers of the colour matrix, or the single " +
+            "amount a shorthand takes. Inputs and results are wiring rather than values, so they belong to " +
+            "filter.connectPrimitive.",
             "name:string, index:number, parameter:string, value:number|string|array",
             (ctx, p) =>
             {
@@ -2623,6 +2627,70 @@ public static class EditorOperations
                     profile = missing.Name,
                 })
                 .ToArray());
+
+        Add("profile.editMode",
+            "Open or close the on-canvas width-profile editor for a path: the mode in which a handle is " +
+            "shown at each of the profile's width points, at the stroke's own width, and a grip dragged " +
+            "across the stroke sets that point's width. The handles come back with their world positions, " +
+            "so a driver that cannot see can aim its pointer at them, and dragging a grip is the same " +
+            "edit as profile.setPoint - the canvas invokes that operation, so a person and a driver do " +
+            "one thing rather than two. Nothing in the document changes by opening or closing the mode; " +
+            "a path with no profile opens a mode with no handles to drag. With no 'on', the mode toggles.",
+            "on?:bool, itemId?:guid (default: the selected path)",
+            (ctx, p) =>
+            {
+                VCCad.App.Controls.CanvasWorkspace canvas = Workspace(ctx)
+                    ?? throw new EditorOperationException(
+                        "There is no canvas to edit a width profile on; profile.setPoint edits one without a window.");
+
+                bool on = p.ValueKind == JsonValueKind.Object &&
+                          p.TryGetProperty("on", out JsonElement wanted) &&
+                          wanted.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? wanted.GetBoolean()
+                    : canvas.WidthProfileTarget is null;
+
+                if (!on)
+                {
+                    canvas.EditWidthProfile(null);
+
+                    // An empty list rather than a count, because the member has to be the same shape
+                    // whichever way the mode went - a caller that gets a number here and an array there
+                    // has to guess which one it was handed.
+                    return new
+                    {
+                        editing = false,
+                        itemId = (Guid?)null,
+                        profile = (string?)null,
+                        handles = Array.Empty<object>(),
+                    };
+                }
+
+                PathItem path = p.TryGetGuid("itemId", out Guid id)
+                    ? RequirePath(ctx.Document, id)
+                    : ctx.Session.SelectedPaths().FirstOrDefault()
+                        ?? throw new EditorOperationException(
+                            "No path is selected. Select the stroke whose profile to edit, or pass itemId.");
+
+                canvas.EditWidthProfile(path);
+
+                // Reported, not implied: the mode is the canvas's, and a caller that has to guess
+                // whether it took has no way to tell "no handles" from "no mode".
+                return new
+                {
+                    editing = canvas.IsEditingWidthProfile,
+                    itemId = path.Id,
+                    profile = path.Strokes.LastOrDefault(stroke => stroke.HasWidthProfile)?.WidthProfile?.Name,
+                    handles = canvas.WidthProfileHandles()
+                        .Select(handle => new
+                        {
+                            index = handle.Index,
+                            position = Math.Round(handle.Position, 6),
+                            left = new { x = Math.Round(handle.Left.Point.X, 4), y = Math.Round(handle.Left.Point.Y, 4), width = Math.Round(handle.Left.Width, 4) },
+                            right = new { x = Math.Round(handle.Right.Point.X, 4), y = Math.Round(handle.Right.Point.Y, 4), width = Math.Round(handle.Right.Width, 4) },
+                        })
+                        .ToArray(),
+                };
+            });
 
         Add("style.strokes",
             "The stroke stack on each selected path, bottom to top: every stroke's colour, width, cap, join, " +
@@ -6277,10 +6345,16 @@ public static class EditorOperations
     /// <summary>
     /// A primitive from the parameters a caller sent, validated against the declaration for its kind.
     ///
-    /// A kind this build does not have, a parameter the kind does not take, and a required parameter that is
-    /// missing are each **refused**: a filter is a graph, and a step that silently does nothing changes what every
-    /// step after it receives. <paramref name="ignored"/> names the members of the caller's own envelope - `name`,
-    /// `index` - which are not the primitive's.
+    /// **The declaration builds the step.** The kind is taken from it rather than chosen by a switch, and every
+    /// parameter is read by the name the declaration gives it - so a primitive added to the registry is buildable
+    /// here without this method learning a branch per parameter, and no arm of anything can answer with a
+    /// different kind.
+    ///
+    /// A kind this build does not have, a parameter the kind does not take, a value outside what the kind allows, a
+    /// required parameter that is missing and a declared parameter this build has no member for are each
+    /// **refused**: a filter is a graph, and a step that silently does nothing changes what every step after it
+    /// receives. <paramref name="ignored"/> names the members of the caller's own envelope - `name`, `index` -
+    /// which are not the primitive's.
     /// </summary>
     private static FilterPrimitive ReadPrimitive(JsonElement entry, params string[] ignored)
     {
@@ -6295,6 +6369,34 @@ public static class EditorOperations
                 $"'{kind}' is not a filter primitive this build has; filter.kinds lists " +
                 string.Join(", ", FilterPrimitiveRegistry.All.Select(known => known.Kind)));
 
+        // A parameter the declaration names and this build cannot set is refused **before anything is built**,
+        // rather than being ignored when it happens to be absent: a step missing a value its kind declares is not
+        // the step filter.kinds describes, and the one thing a registry is for is that the two cannot come apart
+        // in silence.
+        foreach (FilterParameter parameter in definition.Parameters)
+        {
+            if (parameter.Kind != FilterParameterKind.Buffer && !Setters.ContainsKey(parameter.Name))
+            {
+                throw new EditorOperationException(
+                    $"{definition.Element} declares '{parameter.Name}', which this build has no way to set, so a " +
+                    "step built here would not be the one filter.kinds describes");
+            }
+        }
+
+        // **The kind comes from the declaration; nothing switches on it.** There is therefore no arm that can
+        // answer with a different primitive - a kind the registry does not have was refused above, and a kind it
+        // does have is the kind that lands.
+        var primitive = new FilterPrimitive(definition.ModelKind)
+        {
+            // `in`, `in2` and `result` are the wiring rather than values, and a buffer left out is the previous
+            // step's result - except on the steps that take two, where an unnamed first input reads the shape,
+            // which is what this operation has meant by a composite with no `in` from the start.
+            Input = entry.GetString("in") ?? (definition.Parameter("in2") is not null ? "SourceGraphic" : null),
+            Input2 = definition.Parameter("in2") is not null ? entry.GetString("in2") ?? string.Empty : null,
+            Result = entry.GetString("result") ?? string.Empty,
+        };
+
+        var supplied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (JsonProperty member in entry.EnumerateObject())
         {
             if (member.NameEquals("kind") || ignored.Contains(member.Name, StringComparer.OrdinalIgnoreCase))
@@ -6311,34 +6413,66 @@ public static class EditorOperations
             }
 
             ValidateValue(definition, parameter, member.Value);
+
+            // A member the declaration matched is a member that is **applied**, however it was spelled: a name the
+            // declaration accepted and the build then failed to find would be a value dropped without saying so.
+            supplied.Add(parameter.Name);
+            if (parameter.Kind != FilterParameterKind.Buffer)
+            {
+                primitive = WithParameter(primitive, parameter.Name, member.Value);
+            }
         }
 
         foreach (FilterParameter parameter in definition.Required)
         {
-            if (!entry.TryGetProperty(parameter.Name, out _))
+            if (!supplied.Contains(parameter.Name))
             {
                 throw new EditorOperationException($"{definition.Element} needs '{parameter.Name}': {parameter.Meaning}");
             }
         }
 
-        string? input = entry.GetString("in");
-        string? input2 = entry.GetString("in2");
-        string result = entry.GetString("result") ?? string.Empty;
-
-        return definition.ModelKind switch
+        // What the request does not say, the **declaration** says: a morphology's operator is `erode` and a colour
+        // matrix's type is `matrix`, and one record cannot start life holding both kinds' defaults at once. The
+        // declaration can, and it is what a panel and a driver read, so a step built here is the step they describe.
+        foreach (FilterParameter parameter in definition.Parameters)
         {
-            FilterPrimitiveKind.GaussianBlur => FilterPrimitive.Blur(entry.GetDouble("radius", 0), input, result),
-            FilterPrimitiveKind.Offset => FilterPrimitive.OffsetBy(
-                entry.GetDouble("dx", 0), entry.GetDouble("dy", 0), input, result),
-            FilterPrimitiveKind.Flood => FilterPrimitive.Solid(
-                entry.TryGetColorArray("floodColor", out ColorRgb ink) ? ink : ColorRgb.Black,
-                entry.GetDouble("floodOpacity", 1.0),
-                result),
-            FilterPrimitiveKind.Composite => FilterPrimitive.Combine(
-                entry.GetString("operator") ?? "over", input ?? "SourceGraphic", input2 ?? string.Empty, result),
-            _ => FilterPrimitive.Blended(
-                entry.GetString("mode") ?? "normal", input ?? "SourceGraphic", input2 ?? string.Empty, result),
-        };
+            if (!supplied.Contains(parameter.Name) && TryDeclaredDefault(parameter, out JsonElement fallback))
+            {
+                primitive = WithParameter(primitive, parameter.Name, fallback);
+            }
+        }
+
+        return primitive;
+    }
+
+    /// <summary>
+    /// The declaration's own default for a parameter, as the value a request would have carried for it.
+    ///
+    /// A colour's default is one of the format's words - `black`, `white` - and both readers of a colour already
+    /// treat an absent one as exactly that, so a colour has nothing to set here and says so by answering false.
+    /// </summary>
+    private static bool TryDeclaredDefault(FilterParameter parameter, out JsonElement value)
+    {
+        value = default;
+        if (parameter.Default is not { Length: > 0 } text)
+        {
+            return false;
+        }
+
+        if (parameter.Kind == FilterParameterKind.Number &&
+            double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double number))
+        {
+            value = JsonSerializer.SerializeToElement(number);
+            return true;
+        }
+
+        if (parameter.Kind == FilterParameterKind.Choice)
+        {
+            value = JsonSerializer.SerializeToElement(text);
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -6358,6 +6492,24 @@ public static class EditorOperations
         {
             case FilterParameterKind.Number:
             {
+                // `values` is the one declared Number that is really a sequence: a colour matrix is twenty numbers,
+                // or the single amount one of the shorthands takes. Keyed on the name rather than the kind, because
+                // a name means one thing to every kind that declares it.
+                if (parameter.Name.Equals("values", StringComparison.OrdinalIgnoreCase) &&
+                    value.ValueKind == JsonValueKind.Array)
+                {
+                    int given = value.GetArrayLength();
+                    bool allNumbers = value.EnumerateArray().All(entry => entry.ValueKind == JsonValueKind.Number);
+                    if (allNumbers && given is 1 or 16 or 20)
+                    {
+                        break;
+                    }
+
+                    throw new EditorOperationException(
+                        $"{where} is the twenty numbers of the colour matrix, or the single value a shorthand " +
+                        $"takes; it was given {given}");
+                }
+
                 if (value.ValueKind != JsonValueKind.Number)
                 {
                     throw new EditorOperationException($"{where} takes a number");
@@ -6452,22 +6604,64 @@ public static class EditorOperations
         return false;
     }
 
-    /// <summary>One value of one primitive, set by the name the declaration gives it.</summary>
-    private static FilterPrimitive WithParameter(FilterPrimitive primitive, string parameter, JsonElement value) =>
-        parameter switch
+    /// <summary>
+    /// Every parameter this build can set, by the name the declaration gives it, and the record member each one
+    /// writes.
+    ///
+    /// A name and a member are the same thing written twice in C# - `numOctaves` is `Octaves`, `values` is
+    /// `Matrix` - and this is the only place the two are written together. It is a map rather than a switch so that
+    /// "which names can be set" is a question with an answer: a kind that declares a parameter with no entry here
+    /// is refused outright rather than built with a value nothing applied.
+    /// </summary>
+    private static readonly Dictionary<string, Func<FilterPrimitive, JsonElement, FilterPrimitive>> Setters =
+        new(StringComparer.OrdinalIgnoreCase)
         {
-            "radius" => primitive with { Radius = value.GetDouble() },
-            "dx" => primitive with { Dx = value.GetDouble() },
-            "dy" => primitive with { Dy = value.GetDouble() },
-            "floodColor" => primitive with { FloodColor = TryColour(value, out ColorRgb ink) ? ink : ColorRgb.Black },
-            "floodOpacity" => primitive with { FloodOpacity = value.GetDouble() },
-            "operator" => primitive with { Operator = value.GetString()!.Trim() },
-            "mode" => primitive with { Mode = value.GetString()!.Trim() },
+            ["radius"] = (primitive, value) => primitive with { Radius = value.GetDouble() },
+            ["dx"] = (primitive, value) => primitive with { Dx = value.GetDouble() },
+            ["dy"] = (primitive, value) => primitive with { Dy = value.GetDouble() },
+            ["floodColor"] = (primitive, value) =>
+                primitive with { FloodColor = TryColour(value, out ColorRgb ink) ? ink : ColorRgb.Black },
+            ["floodOpacity"] = (primitive, value) => primitive with { FloodOpacity = value.GetDouble() },
+            ["operator"] = (primitive, value) => primitive with { Operator = value.GetString()!.Trim() },
+            ["mode"] = (primitive, value) => primitive with { Mode = value.GetString()!.Trim() },
+            ["type"] = (primitive, value) => primitive with { Type = value.GetString()!.Trim() },
+            ["values"] = (primitive, value) => primitive with { Matrix = MatrixValue(value) },
+            ["scale"] = (primitive, value) => primitive with { Scale = value.GetDouble() },
+            ["xChannel"] = (primitive, value) => primitive with { XChannel = value.GetString()!.Trim() },
+            ["yChannel"] = (primitive, value) => primitive with { YChannel = value.GetString()!.Trim() },
+            ["baseFrequency"] = (primitive, value) => primitive with { BaseFrequency = value.GetDouble() },
+            ["numOctaves"] = (primitive, value) => primitive with { Octaves = (int)Math.Round(value.GetDouble()) },
+            ["seed"] = (primitive, value) => primitive with { Seed = (int)Math.Round(value.GetDouble()) },
+            ["surfaceScale"] = (primitive, value) => primitive with { SurfaceScale = value.GetDouble() },
+            ["diffuseConstant"] = (primitive, value) => primitive with { DiffuseConstant = value.GetDouble() },
+            ["specularConstant"] = (primitive, value) => primitive with { SpecularConstant = value.GetDouble() },
+            ["specularExponent"] = (primitive, value) => primitive with { SpecularExponent = value.GetDouble() },
+            ["lightingColor"] = (primitive, value) =>
+                primitive with { LightingColor = TryColour(value, out ColorRgb light) ? light : ColorRgb.White },
+            ["azimuth"] = (primitive, value) => primitive with { Azimuth = value.GetDouble() },
+            ["elevation"] = (primitive, value) => primitive with { Elevation = value.GetDouble() },
+        };
+
+    /// <summary>One value of one primitive, set by the name the declaration gives it.</summary>
+    private static FilterPrimitive WithParameter(FilterPrimitive primitive, string parameter, JsonElement value)
+        => Setters.TryGetValue(parameter, out Func<FilterPrimitive, JsonElement, FilterPrimitive>? set)
+            ? set(primitive, value)
             // A parameter the registry declares but this build cannot set is a defect, not a caller error: it says
             // the declaration grew a parameter without the engine learning it. Failing loudly is how it is found.
-            _ => throw new EditorOperationException(
-                $"'{parameter}' is declared for {primitive.Kind} but this build has no way to set it"),
-        };
+            : throw new EditorOperationException(
+                $"'{parameter}' is declared for {primitive.Kind} but this build has no way to set it");
+
+    /// <summary>
+    /// A colour matrix's `values`: the twenty numbers of the 4x5 matrix, or the single amount a shorthand takes.
+    ///
+    /// The declaration calls it a Number because a shorthand is one number, and the model holds both spellings in
+    /// its one `Matrix` member - so both are read here rather than a caller spelling the matrix out being told it
+    /// "takes a number".
+    /// </summary>
+    private static double[] MatrixValue(JsonElement value)
+        => value.ValueKind == JsonValueKind.Array
+            ? value.EnumerateArray().Select(entry => entry.GetDouble()).ToArray()
+            : new[] { value.GetDouble() };
 
     /// <summary>The filter a caller named, or an error naming what is missing.</summary>
     private static FilterSpec RequireFilter(AutomationContext ctx, string? name)
