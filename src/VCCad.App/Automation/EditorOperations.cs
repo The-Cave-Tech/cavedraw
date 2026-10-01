@@ -1593,7 +1593,8 @@ public static class EditorOperations
             });
 
         Add("style.setStroke", "Stroke the selected paths.",
-            "color:[r,g,b], width:number, cap?:butt|round|square, join?:miter|round|bevel, miterLimit?, alignment?:center|inside|outside, dash?:number[]",
+            "color:[r,g,b], width:number, cap?:butt|round|square, join?:miter|round|bevel, miterLimit?, " +
+            "alignment?:center|inside|outside, dash?:number[], index?:number",
             (ctx, p) =>
             {
                 // Only when it was actually given: ParseColor reports its fallback for a parameter that is
@@ -1612,7 +1613,23 @@ public static class EditorOperations
                     }
                 }
 
-                ctx.Session.ApplyStroke(p.GetDouble("width", 1), cap, join, p.GetDouble("miterLimit", 4), alignment, dash, color);
+                // index edits that stroke of the stack rather than the top one, which is what the stroke
+                // inspector does when a person picks a stroke. Without it a driver could not reach the same
+                // stroke a person can, and a capability that exists only in the UI is a defect here.
+                int? index = p.ValueKind == JsonValueKind.Object && p.TryGetProperty("index", out _)
+                    ? (int)p.GetLong("index", 0)
+                    : null;
+
+                if (index is { } at)
+                {
+                    ctx.Session.ApplyStrokeAt(
+                        at, p.GetDouble("width", 1), cap, join, p.GetDouble("miterLimit", 4), alignment, dash, color);
+                }
+                else
+                {
+                    ctx.Session.ApplyStroke(
+                        p.GetDouble("width", 1), cap, join, p.GetDouble("miterLimit", 4), alignment, dash, color);
+                }
                 return Summary(ctx);
             });
 

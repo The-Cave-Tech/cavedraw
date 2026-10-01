@@ -2097,7 +2097,8 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// overwriting whichever happens to be on top. Here rather than inside the panel, so a person's field and a
     /// driver's operation run the **same** code - the same reason <see cref="AddStroke"/> is here.
     ///
-    /// The colour and the width profile are left as the stroke's own: this edit is the geometry a person typed, and
+    /// The colour and the width profile are left as the stroke's own unless the caller gives them: this edit is the
+    /// geometry a person typed, and
     /// rebuilding the whole spec would silently discard what the stroke otherwise is. `CurrentStroke`, the style
     /// objects drawn next get, is deliberately untouched too - it is "the stroke" rather than a member of somebody's
     /// stack, and there is no honest way to choose which member's geometry should become it.
@@ -2106,7 +2107,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// step.
     /// </summary>
     public int ApplyStrokeAt(int index, double width, StrokeCap cap, StrokeJoin join, double miterLimit,
-        StrokeAlignment alignment, DashPattern? dash = null)
+        StrokeAlignment alignment, DashPattern? dash = null, ColorRgb? color = null)
     {
         if (index < 0)
         {
@@ -2133,6 +2134,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 MiterLimit = Math.Max(1, miterLimit),
                 Alignment = alignment,
                 Dash = dash ?? before.Dash,
+                Color = color ?? before.Color,
             };
 
             edits.Add(new SetStrokesCommand(path, stack, "Stroke"));
