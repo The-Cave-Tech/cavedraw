@@ -97,6 +97,13 @@ public static class SvgReader
         SvgGradients gradients = SvgGradients.Collect(root, sheet);
         var warnings = new HashSet<string>(StringComparer.Ordinal);
 
+        // Filters are document assets: an element refers to one by id, so they are collected once and held on the
+        // document rather than copied into every element that uses them.
+        foreach (FilterSpec filter in SvgFilters.Collect(root).All.Values)
+        {
+            document.AddFilter(filter);
+        }
+
         var context = new Context
         {
             Layer = layer,
@@ -152,6 +159,26 @@ public static class SvgReader
         }
 
         return builder.ToString();
+    }
+
+    /// <summary>`filter="url(#id)"` resolves to the id, or null when the element is not filtered.</summary>
+    private static string? FilterReference(XElement element)
+    {
+        string? value = element.Attribute("filter")?.Value?.Trim();
+        if (value is null || !value.StartsWith("url(", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        int open = value.IndexOf('(');
+        int close = value.IndexOf(')');
+        if (close <= open)
+        {
+            return null;
+        }
+
+        string reference = value[(open + 1)..close].Trim().Trim('"', '\'');
+        return reference.StartsWith('#') && reference.Length > 1 ? reference[1..] : null;
     }
 
     /// <summary>Indexes every element that has an id, so a reference resolves whichever way round it is written.</summary>
@@ -360,6 +387,11 @@ public static class SvgReader
 
         foreach (LayerItem item in ReadShape(element, style))
         {
+            if (item.FilterId is null && FilterReference(element) is { } filterId)
+            {
+                item.FilterId = filterId;
+            }
+
             if (item is PathItem shape)
             {
                 // A gradient is normalised against the shape's own box, in the space the shape is **written** in -

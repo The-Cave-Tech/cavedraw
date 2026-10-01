@@ -21,6 +21,7 @@ public sealed class CadDocument
 {
     private readonly List<Artboard> _artboards = new();
     private readonly List<WidthProfileSpec> _widthProfiles = new();
+    private readonly List<FilterSpec> _filters = new();
 
     /// <summary>Document-level container for objects that belong to no artboard
     /// (the pasteboard / orphans). These are "parentless" in the sense that no
@@ -63,6 +64,62 @@ public sealed class CadDocument
     /// <summary>The profile with this name, or null. Names are matched exactly and case-sensitively.</summary>
     public WidthProfileSpec? FindProfile(string name)
         => _widthProfiles.FirstOrDefault(p => p.Name == name);
+
+    /// <summary>
+    /// The document's filters, in the order they were created.
+    ///
+    /// Filters are **document state**, like a width profile: an element refers to one by name, and a filter that did
+    /// not travel with the file would leave every shape that used it unpainted on the machine that opened it.
+    /// </summary>
+    public IReadOnlyList<FilterSpec> Filters => _filters;
+
+    /// <summary>The filter with this name, or null.</summary>
+    public FilterSpec? FindFilter(string name)
+        => _filters.FirstOrDefault(f => f.Name == name);
+
+    /// <summary>Adds a filter, or replaces the one with that name.</summary>
+    public FilterSpec AddFilter(FilterSpec filter)
+    {
+        int existing = _filters.FindIndex(f => f.Name == filter.Name);
+        if (existing >= 0)
+        {
+            _filters[existing] = filter;
+        }
+        else
+        {
+            _filters.Add(filter);
+        }
+
+        return filter;
+    }
+
+    /// <summary>Removes a filter, reporting whether it was there.</summary>
+    public bool RemoveFilter(string name) => _filters.RemoveAll(f => f.Name == name) > 0;
+
+    /// <summary>Replaces the filter library wholesale; deserialization and the edit command use this.</summary>
+    internal void SetFilters(IEnumerable<FilterSpec> filters)
+    {
+        _filters.Clear();
+        _filters.AddRange(filters);
+    }
+
+    /// <summary>
+    /// The items that refer to a filter the document does not have.
+    ///
+    /// A reported condition rather than a silent default, for the same reason a missing width profile is: an element
+    /// asking for a filter that is not there is a document that has been merged or edited in a way that lost an
+    /// asset, and drawing it unfiltered quietly would make that look like a design decision.
+    /// </summary>
+    public IEnumerable<(LayerItem Item, string Name)> MissingFilters()
+    {
+        foreach (LayerItem item in AllItems())
+        {
+            if (item.FilterId is { Length: > 0 } name && FindFilter(name) is null)
+            {
+                yield return (item, name);
+            }
+        }
+    }
 
     /// <summary>Adds a profile to the library, or replaces the one with that name. Returns the profile added.</summary>
     public WidthProfileSpec AddWidthProfile(WidthProfileSpec profile)

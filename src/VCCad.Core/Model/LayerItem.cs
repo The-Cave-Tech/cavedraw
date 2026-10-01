@@ -61,10 +61,26 @@ public abstract class LayerItem : CadObject
     }
 
     /// <summary>
+    /// The name of the document filter this item is drawn through, or null when it is not filtered.
+    ///
+    /// A **reference**, not the filter itself: a filter is a document-level asset an element points at, which is what
+    /// makes editing one change every element that uses it. On the base class rather than on a path, because every
+    /// kind of item can be filtered - a blurred photograph and a blurred paragraph are the same problem.
+    /// </summary>
+    public string? FilterId
+    {
+        get => _filterId;
+        set => SetField(ref _filterId, value);
+    }
+
+    private string? _filterId;
+
+    /// <summary>
     /// The clip paths that were in force when this item was painted, outermost first, or
     /// empty when it was not clipped.
     ///
     /// Clipping is part of the artwork, not a rendering detail to be applied later: a file
+
     /// may draw the same paragraph several times and use a clip to show one copy, and
     /// without the clip every copy paints. Several clips mean their intersection — PDF
     /// accumulates clips as it goes, so an item inside two nested clips is inside both.

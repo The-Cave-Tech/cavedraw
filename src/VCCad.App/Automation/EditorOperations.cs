@@ -1860,6 +1860,103 @@ public static class EditorOperations
             return new { changed };
         });
 
+        Add("filter.list",
+            "The document's filters, with the primitives each holds and the wiring between them. A filter is a " +
+            "directed graph rather than a list of effects, so what is reported is what each step reads and what it " +
+            "calls its answer, not just the order.",
+            "",
+            (ctx, _) => ctx.Document.Filters.Select(filter => new
+            {
+                name = filter.Name,
+                x = filter.X,
+                y = filter.Y,
+                width = filter.Width,
+                height = filter.Height,
+                units = filter.ObjectBoundingBox ? "objectBoundingBox" : "userSpaceOnUse",
+                primitives = filter.Primitives.Select(DescribePrimitive).ToArray(),
+            }).ToArray());
+
+        Add("filter.create",
+            "Create or replace a filter. primitives is [{kind, in?, in2?, result?, ...}] where kind is " +
+            "gaussianBlur, offset, flood, composite or blend; in/in2 name the buffers a step reads - SourceGraphic, " +
+            "SourceAlpha, or another step's result - and result names this step's answer. The wiring is the filter: " +
+            "a step that reads a named buffer gets that buffer, not whatever happened to run before it. One undo " +
+            "step.",
+            "name:string, primitives:[{kind,in?,in2?,result?,radius?,dx?,dy?,floodColor?,floodOpacity?," +
+            "operator?,mode?}], x?, y?, width?, height?, userSpace?:bool",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name")
+                    ?? throw new EditorOperationException("Parameter 'name' is required.");
+
+                var primitives = new List<FilterPrimitive>();
+                if (p.TryGetProperty("primitives", out JsonElement list) && list.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (JsonElement entry in list.EnumerateArray())
+                    {
+                        FilterPrimitive? primitive = ReadPrimitive(entry);
+                        if (primitive is not null)
+                        {
+                            primitives.Add(primitive);
+                        }
+                    }
+                }
+
+                if (primitives.Count == 0)
+                {
+                    throw new EditorOperationException(
+                        "a filter needs at least one primitive; one with none paints nothing at all");
+                }
+
+                var filter = new FilterSpec(name, primitives)
+                {
+                    X = p.GetDouble("x", -0.1),
+                    Y = p.GetDouble("y", -0.1),
+                    Width = p.GetDouble("width", 1.2),
+                    Height = p.GetDouble("height", 1.2),
+                    ObjectBoundingBox = !p.GetBool("userSpace", false),
+                };
+
+                ctx.Document.AddFilter(filter);
+                ctx.ViewModel.NotifyDocumentChanged();
+                return new { created = name, primitives = primitives.Count };
+            });
+
+        Add("filter.apply", "Draw the selected items through a filter. An empty name removes the filter.",
+            "name:string",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                if (name.Length > 0 && ctx.Document.FindFilter(name) is null)
+                {
+                    throw new EditorOperationException($"there is no filter called '{name}'");
+                }
+
+                var items = ctx.Session.SelectedObjects.ToList();
+                foreach (LayerItem item in items)
+                {
+                    item.FilterId = name.Length == 0 ? null : name;
+                }
+
+                ctx.ViewModel.NotifyDocumentChanged();
+                return new { applied = name, items = items.Count };
+            });
+
+        Add("filter.read",
+            "The filters on the selection, and the items that refer to a filter the document does not have. The " +
+            "second list is why this is worth asking: an item asking for a filter that is not there is drawn " +
+            "unfiltered, which looks like a design decision rather than a lost asset.",
+            "",
+            (ctx, _) => new
+            {
+                items = ctx.Session.SelectedObjects
+                    .Select(item => new { itemId = item.Id, name = item.Name, filter = item.FilterId })
+                    .ToArray(),
+                missing = ctx.Document.MissingFilters()
+                    .Select(missing => new { itemId = missing.Item.Id, filter = missing.Name })
+                    .ToArray(),
+            });
+
         Add("profile.create",
             "Create a reusable width profile in the document. points is [{position, left, right, interpolation?}], " +
             "the same shape style.setWidthProfile takes. The name has to be free: two profiles with one name would " +
@@ -5523,6 +5620,61 @@ public static class EditorOperations
         };
 
         return DynamicsCurve.FromPreset(preset);
+    }
+
+    /// <summary>One filter primitive as a caller reads it: its kind, its wiring and its parameters.</summary>
+    private static object DescribePrimitive(FilterPrimitive primitive) => new
+    {
+        kind = primitive.Kind.ToString(),
+        input = primitive.Input,
+        input2 = primitive.Input2,
+        result = primitive.Result.Length == 0 ? null : primitive.Result,
+        radius = Math.Round(primitive.Radius, 4),
+        dx = Math.Round(primitive.Dx, 4),
+        dy = Math.Round(primitive.Dy, 4),
+        floodColor = primitive.FloodColor is { } colour
+            ? new[] { Math.Round(colour.R, 6), Math.Round(colour.G, 6), Math.Round(colour.B, 6) }
+            : null,
+        floodOpacity = Math.Round(primitive.FloodOpacity, 4),
+        op = primitive.Operator,
+        mode = primitive.Mode,
+    };
+
+    /// <summary>
+    /// A primitive from the parameters a caller sent, or null when the kind is not one this build has.
+    ///
+    /// A primitive that is not understood is **skipped** rather than approximated: a filter is a graph, and a step
+    /// that silently does nothing changes what every step after it receives.
+    /// </summary>
+    private static FilterPrimitive? ReadPrimitive(JsonElement entry)
+    {
+        if (entry.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        string kind = (entry.GetString("kind") ?? string.Empty).ToLowerInvariant();
+        string? input = entry.GetString("in");
+        string? input2 = entry.GetString("in2");
+        string result = entry.GetString("result") ?? string.Empty;
+
+        return kind switch
+        {
+            "gaussianblur" or "blur" => FilterPrimitive.Blur(entry.GetDouble("radius", 2.0), input, result),
+            "offset" => FilterPrimitive.OffsetBy(
+                entry.GetDouble("dx", 0.0), entry.GetDouble("dy", 0.0), input, result),
+            "flood" => FilterPrimitive.Solid(
+                entry.TryGetProperty("floodColor", out _)
+                    ? entry.ParseColor("floodColor", ColorRgb.Black)
+                    : ColorRgb.Black,
+                entry.GetDouble("floodOpacity", 1.0),
+                result),
+            "composite" => FilterPrimitive.Combine(
+                entry.GetString("operator") ?? "over", input ?? "SourceGraphic", input2 ?? string.Empty, result),
+            "blend" => FilterPrimitive.Blended(
+                entry.GetString("mode") ?? "normal", input ?? "SourceGraphic", input2 ?? string.Empty, result),
+            _ => null,
+        };
     }
 
     /// <summary>

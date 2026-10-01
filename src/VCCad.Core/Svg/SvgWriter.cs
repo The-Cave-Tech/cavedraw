@@ -57,6 +57,7 @@ public static class SvgWriter
 
         // Gradients first, because a path refers to them by id and a definition may come after its use.
         writer.WriteGradients(document);
+        writer.WriteFilters(document);
 
         // **One artboard at the origin is written without a wrapper group.** A group would be structure the document
         // does not have, and the reader would faithfully turn it back into one - so the model would gain a level on
@@ -147,6 +148,120 @@ public static class SvgWriter
             {
                 _root.Add(defs);
             }
+        }
+
+        /// <summary>
+        /// Every filter the document holds, written into `defs`.
+        ///
+        /// A filter is a document asset referred to by id, so it is written once and pointed at - and the wiring is
+        /// written back exactly as it was read, because the graph **is** the filter rather than an implementation
+        /// detail of it.
+        /// </summary>
+        public void WriteFilters(CadDocument document)
+        {
+            if (document.Filters.Count == 0)
+            {
+                return;
+            }
+
+            XElement defs = _root.Element(Svg + "defs") ?? new XElement(Svg + "defs");
+
+            foreach (FilterSpec filter in document.Filters)
+            {
+                var element = new XElement(Svg + "filter", new XAttribute("id", filter.Name));
+
+                // Only when they differ from SVG's own defaults, so an ordinary filter is not buried in numbers
+                // that say what a viewer already assumes.
+                if (!filter.ObjectBoundingBox)
+                {
+                    element.Add(new XAttribute("filterUnits", "userSpaceOnUse"));
+                }
+
+                foreach ((string name, double value, double expected) in new[]
+                         {
+                             ("x", filter.X, -0.1),
+                             ("y", filter.Y, -0.1),
+                             ("width", filter.Width, 1.2),
+                             ("height", filter.Height, 1.2),
+                         })
+                {
+                    if (Math.Abs(value - expected) > 1e-9)
+                    {
+                        element.Add(new XAttribute(name, Number(value)));
+                    }
+                }
+
+                foreach (FilterPrimitive primitive in filter.Primitives)
+                {
+                    element.Add(PrimitiveElement(primitive));
+                }
+
+                defs.Add(element);
+            }
+
+            if (defs.Parent is null)
+            {
+                _root.Add(defs);
+            }
+        }
+
+        /// <summary>One primitive, with its wiring and its parameters.</summary>
+        private static XElement PrimitiveElement(FilterPrimitive primitive)
+        {
+            var element = new XElement(Svg + primitive.Kind switch
+            {
+                FilterPrimitiveKind.GaussianBlur => "feGaussianBlur",
+                FilterPrimitiveKind.Offset => "feOffset",
+                FilterPrimitiveKind.Flood => "feFlood",
+                FilterPrimitiveKind.Composite => "feComposite",
+                _ => "feBlend",
+            });
+
+            if (!string.IsNullOrEmpty(primitive.Input))
+            {
+                element.Add(new XAttribute("in", primitive.Input));
+            }
+
+            if (!string.IsNullOrEmpty(primitive.Input2))
+            {
+                element.Add(new XAttribute("in2", primitive.Input2));
+            }
+
+            if (!string.IsNullOrEmpty(primitive.Result))
+            {
+                element.Add(new XAttribute("result", primitive.Result));
+            }
+
+            switch (primitive.Kind)
+            {
+                case FilterPrimitiveKind.GaussianBlur:
+                    element.Add(new XAttribute("stdDeviation", Number(primitive.Radius)));
+                    break;
+
+                case FilterPrimitiveKind.Offset:
+                    element.Add(new XAttribute("dx", Number(primitive.Dx)));
+                    element.Add(new XAttribute("dy", Number(primitive.Dy)));
+                    break;
+
+                case FilterPrimitiveKind.Flood:
+                    element.Add(new XAttribute("flood-color", Hex(primitive.FloodColor ?? ColorRgb.Black)));
+                    if (primitive.FloodOpacity < 1.0)
+                    {
+                        element.Add(new XAttribute("flood-opacity", Number(primitive.FloodOpacity)));
+                    }
+
+                    break;
+
+                case FilterPrimitiveKind.Composite:
+                    element.Add(new XAttribute("operator", primitive.Operator));
+                    break;
+
+                default:
+                    element.Add(new XAttribute("mode", primitive.Mode));
+                    break;
+            }
+
+            return element;
         }
 
         private string WriteGradient(XElement defs, GradientSpec gradient)
@@ -252,6 +367,13 @@ public static class SvgWriter
                             element.Add(new XAttribute("opacity", Number(group.Opacity)));
                         }
 
+                        // A group can be filtered too, and a filter that vanished on export would leave whatever
+                        // it was softening drawn hard.
+                        if (!string.IsNullOrEmpty(group.FilterId))
+                        {
+                            element.Add(new XAttribute("filter", $"url(#{group.FilterId})"));
+                        }
+
                         if (!group.IsVisible)
                         {
                             element.Add(new XAttribute("display", "none"));
@@ -322,6 +444,11 @@ public static class SvgWriter
                 if (path.Opacity < 1.0)
                 {
                     element.Add(new XAttribute("opacity", Number(path.Opacity)));
+                }
+
+                if (!string.IsNullOrEmpty(path.FilterId))
+                {
+                    element.Add(new XAttribute("filter", $"url(#{path.FilterId})"));
                 }
 
                 if (strokes.Count == 1)

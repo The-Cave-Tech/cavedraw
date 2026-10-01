@@ -145,6 +145,35 @@ internal sealed record WidthProfileDto(string Name, WidthPointDto[] Points);
 internal sealed record WidthPointDto(
     double Position, double Left, double Right, WidthInterpolation Interpolation = WidthInterpolation.Linear);
 
+/// <summary>
+/// A filter on the wire: its name, its primitives in evaluation order, and the region it is evaluated over.
+///
+/// The primitives carry their wiring - `in`, `in2`, `result` - because that wiring **is** the filter: a graph
+/// written back as a list would draw differently, which is exactly the loss this format exists to avoid.
+/// </summary>
+internal sealed record FilterDto(
+    string Name,
+    FilterPrimitiveDto[] Primitives,
+    double X,
+    double Y,
+    double Width,
+    double Height,
+    bool ObjectBoundingBox,
+    string Output);
+
+internal sealed record FilterPrimitiveDto(
+    FilterPrimitiveKind Kind,
+    string? Input,
+    string? Input2,
+    string Result,
+    double Radius,
+    double Dx,
+    double Dy,
+    ColorDto? FloodColor,
+    double FloodOpacity,
+    string Operator,
+    string Mode);
+
 internal sealed record NodeDto(Point2D Anchor, Point2D InHandle, Point2D OutHandle);
 
 internal sealed record SubPathDto(bool Closed, NodeDto[] Nodes);
@@ -298,12 +327,22 @@ internal abstract record ItemDto
     /// </summary>
     public ClipDto[]? Clips { get; init; }
 
+    /// <summary>
+    /// The document filter this item is drawn through, by name, or null when it is not filtered.
+    ///
+    /// On the base for the same reason the clips are: every kind of item can be filtered, and a reference that was
+    /// dropped on the way out would leave the shape unfiltered with nothing to say so.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? FilterId { get; init; }
+
     public static ItemDto From(LayerItem item) => item switch
     {
-        PathItem path => ToPath(path) with { Clips = ToClips(item) },
-        ArtGroup group => ToGroup(group) with { Clips = ToClips(item) },
-        TextItem text => ToText(text) with { Clips = ToClips(item) },
-        ImageItem image => ToImage(image) with { Clips = ToClips(item) },
+        PathItem path => ToPath(path) with { Clips = ToClips(item), FilterId = item.FilterId },
+        ArtGroup group => ToGroup(group) with { Clips = ToClips(item), FilterId = item.FilterId },
+        TextItem text => ToText(text) with { Clips = ToClips(item), FilterId = item.FilterId },
+        ImageItem image => ToImage(image) with { Clips = ToClips(item), FilterId = item.FilterId },
         _ => throw new NotSupportedException($"Unsupported layer item type {item.GetType().Name}."),
     };
 
@@ -336,6 +375,10 @@ internal abstract record ItemDto
 
             item.Clips.Add(spec);
         }
+
+        // The filter reference travels the same way as a clip: on the base DTO, restored here for every kind of
+        // item, because a filter applies to a group as readily as to a path.
+        item.FilterId = dto.FilterId;
 
         return item;
     }
@@ -1026,7 +1069,10 @@ internal sealed record DocumentDto(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AiPrivateDataDto? AiPrivateData = null,
 
     // The reusable width profiles, when the document has any.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WidthProfileDto[]? WidthProfiles = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WidthProfileDto[]? WidthProfiles = null,
+
+    // The filters, when the document has any. Document state, like the profiles: an element refers to one by name.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FilterDto[]? Filters = null);
 
 /// <summary>
 /// Lossless, deterministic serializer for <see cref="CadDocument"/>.
@@ -1138,7 +1184,9 @@ public static class VccadDocumentSerializer
             // is written exactly as it was before profiles existed.
             d.WidthProfiles.Count == 0
                 ? null
-                : d.WidthProfiles.Select(ToDto).ToArray());
+                : d.WidthProfiles.Select(ToDto).ToArray(),
+
+            d.Filters.Count == 0 ? null : d.Filters.Select(ToFilterDto).ToArray());
     }
 
     private static WidthProfileDto ToDto(WidthProfileSpec profile)
@@ -1146,6 +1194,49 @@ public static class VccadDocumentSerializer
             profile.Name,
             profile.Points.Select(p => new WidthPointDto(p.Position, p.LeftWidth, p.RightWidth, p.Interpolation))
                 .ToArray());
+
+    /// <summary>A filter on the wire, with every primitive's wiring and parameters.</summary>
+    private static FilterDto ToFilterDto(FilterSpec filter)
+        => new(
+            filter.Name,
+            filter.Primitives.Select(p => new FilterPrimitiveDto(
+                p.Kind,
+                p.Input,
+                p.Input2,
+                p.Result,
+                p.Radius,
+                p.Dx,
+                p.Dy,
+                p.FloodColor is { } colour
+                    ? new ColorDto(colour.R, colour.G, colour.B, colour.A)
+                    : null,
+                p.FloodOpacity,
+                p.Operator,
+                p.Mode)).ToArray(),
+            filter.X,
+            filter.Y,
+            filter.Width,
+            filter.Height,
+            filter.ObjectBoundingBox,
+            filter.Output);
+
+    private static FilterSpec ToModel(FilterDto dto)
+        => new(
+            dto.Name,
+            (dto.Primitives ?? Array.Empty<FilterPrimitiveDto>()).Select(p => new FilterPrimitive(
+                p.Kind, p.Input, p.Input2, p.Result, p.Radius, p.Dx, p.Dy,
+                p.FloodColor is { } colour
+                    ? new ColorRgb(colour.R, colour.G, colour.B, colour.A)
+                    : null,
+                p.FloodOpacity, p.Operator, p.Mode)))
+        {
+            X = dto.X,
+            Y = dto.Y,
+            Width = dto.Width,
+            Height = dto.Height,
+            ObjectBoundingBox = dto.ObjectBoundingBox,
+            Output = dto.Output,
+        };
 
     private static CadDocument ToModel(DocumentDto dto)
     {
@@ -1170,6 +1261,13 @@ public static class VccadDocumentSerializer
                     p.Name,
                     p.Points!.Select(point => new WidthPoint(
                         point.Position, point.Left, point.Right, point.Interpolation)))));
+
+        // And the filters, for the same reason: an element refers to one by name, so a library that did not load
+        // would leave every filtered shape unfiltered.
+        document.SetFilters(
+            (dto.Filters ?? Array.Empty<FilterDto>())
+                .Where(f => f.Primitives is { Length: > 0 })
+                .Select(ToModel));
 
         foreach (ArtboardDto a in artboards)
         {
