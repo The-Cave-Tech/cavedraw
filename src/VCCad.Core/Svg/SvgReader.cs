@@ -33,6 +33,15 @@ public static class SvgReader
 {
     private static readonly XNamespace Svg = "http://www.w3.org/2000/svg";
 
+    /// <summary>
+    /// The size a standalone SVG has when it declares neither a width nor a height, in user units.
+    ///
+    /// This is the default object size CSS gives a replaced element with no intrinsic dimensions, which is what a
+    /// browser uses for such a file. Inventing something else - the content's bounding box, say - would make the
+    /// same file a different size depending on what happened to be in it.
+    /// </summary>
+    private const double DefaultViewport = 300.0;
+
     /// <summary>Reads an SVG document from a string.</summary>
     public static SvgImportResult Read(string svg)
     {
@@ -121,7 +130,14 @@ public static class SvgReader
 
         if (box is not { Length: 4 })
         {
-            return (width ?? 0, height ?? 0, AffineTransform.Identity);
+            // No view box: the declared size is the space, and a dimension the file does not declare is the CSS
+            // default object size - which is what a viewer uses for a standalone SVG with no intrinsic size.
+            //
+            // That case is real rather than theoretical. Inkscape's own test corpus contains glyph fragments in
+            // `svginotf/`: an `svg` element with no width, no height and no view box, holding `<glyph>` definitions
+            // and nothing drawable. Refusing those made four corpus files fail to import, and the honest answer is
+            // not to invent a size from content that does not exist - it is the default every viewer already uses.
+            return (width ?? DefaultViewport, height ?? DefaultViewport, AffineTransform.Identity);
         }
 
         double boxWidth = box[2];

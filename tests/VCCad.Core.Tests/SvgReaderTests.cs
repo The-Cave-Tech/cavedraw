@@ -243,14 +243,34 @@ public class SvgReaderTests
         Assert.Empty(result.Document.Artboards[0].Layers[0].Children.OfType<ArtGroup>());
     }
 
-    /// <summary>A file with neither a size nor a view box is refused rather than imported into nothing.</summary>
+    /// <summary>
+    /// **A file with neither a size nor a view box gets the default viewport**, not a refusal.
+    ///
+    /// This test used to assert the opposite, and the corpus changed the answer. Inkscape's own test files include
+    /// glyph fragments - an `svg` element with no size and nothing drawable but `<glyph>` definitions - and refusing
+    /// them made four real files fail to import. The default object size CSS gives a replaced element with no
+    /// intrinsic dimensions is what a viewer uses, so that is what this does.
+    /// </summary>
     [Fact]
-    public void ADocumentWithNoSizeIsRefused()
+    public void ADocumentWithNoSizeGetsTheDefaultViewport()
     {
-        SvgImportException error = Assert.Throws<SvgImportException>(() => SvgReader.Read(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"1\" height=\"1\"/></svg>"));
+        SvgImportResult result = SvgReader.Read(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"1\" height=\"1\"/></svg>");
 
-        Assert.Contains("no usable size", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(300.0, result.Document.Artboards[0].Width, 6);
+        Assert.Equal(300.0, result.Document.Artboards[0].Height, 6);
+        Assert.Single(result.Document.AllPaths());
+    }
+
+    /// <summary>A file with no width still uses the width it does declare, rather than defaulting both.</summary>
+    [Fact]
+    public void AHalfSizedFileDefaultsOnlyTheMissingDimension()
+    {
+        SvgImportResult result = SvgReader.Read(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"120\"><rect width=\"1\" height=\"1\"/></svg>");
+
+        Assert.Equal(120.0, result.Document.Artboards[0].Width, 6);
+        Assert.Equal(300.0, result.Document.Artboards[0].Height, 6);
     }
 
     // ---------------------------------------------------------------- paint

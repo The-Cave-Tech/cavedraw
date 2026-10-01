@@ -3714,6 +3714,60 @@ public static class EditorOperations
                 return new { opened = path, document = ctx.Document.Name, artboards = ctx.Document.Artboards.Count };
             });
 
+        Add("document.importSvg",
+            "Import SVG as a new document. The SVG travels as base64 so a driver can hand over a file it built " +
+            "rather than one it had to save first. Returns how many objects were imported, by element.",
+            "svgBase64:string, name?:string",
+            (ctx, p) =>
+            {
+                string encoded = p.GetString("svgBase64")
+                    ?? throw new EditorOperationException("Parameter 'svgBase64' is required.");
+
+                string svg;
+                try
+                {
+                    svg = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+                }
+                catch (FormatException exception)
+                {
+                    throw new EditorOperationException($"svgBase64 is not base64: {exception.Message}");
+                }
+
+                VCCad.Core.Svg.SvgImportResult result = VCCad.Core.Svg.SvgReader.Read(svg);
+                string? name = p.GetString("name");
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    result.Document.Name = name;
+                }
+
+                ctx.ViewModel.ImportDocument(result.Document);
+                return new
+                {
+                    document = result.Document.Name,
+                    artboards = result.Document.Artboards.Count,
+                    objects = result.Objects,
+                    byElement = result.ByElement,
+                };
+            });
+
+        Add("document.importSvgFile", "Import an SVG from disk as a new document (no dialog).",
+            "path:string",
+            (ctx, p) =>
+            {
+                string path = RequireExistingFile(p, "path");
+                VCCad.Core.Svg.SvgImportResult result = VCCad.Core.Svg.SvgReader.ReadFile(path);
+                result.Document.Name = Path.GetFileNameWithoutExtension(path);
+
+                ctx.ViewModel.ImportDocument(result.Document);
+                return new
+                {
+                    opened = path,
+                    document = result.Document.Name,
+                    objects = result.Objects,
+                    byElement = result.ByElement,
+                };
+            });
+
         Add("document.savePdfToFile", "Write the active document's PDF to disk (no dialog).", "path:string",
             (ctx, p) =>
             {

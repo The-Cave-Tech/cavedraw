@@ -199,6 +199,44 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         return session;
     }
 
+    /// <summary>
+    /// Imports an SVG as a new document tab.
+    ///
+    /// The reader lives in Core rather than here, for the same reason the PDF one does: a format reader produces a
+    /// model, and putting the view model in the way would mean the reader's tests needed one. The name comes from
+    /// the file when there is one, because a document tab called "Imported SVG" five times over tells nobody which
+    /// file is which.
+    /// </summary>
+    public DocumentSession ImportSvg(string svg, string? path = null)
+    {
+        VCCad.Core.Svg.SvgImportResult result = VCCad.Core.Svg.SvgReader.Read(svg);
+        CadDocument document = result.Document;
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            document.Name = System.IO.Path.GetFileNameWithoutExtension(path);
+        }
+
+        Status = $"Opened {document.Name} ({result.Objects} object(s))";
+
+        DocumentSession session = AddDocument(document);
+        session.MarkSaved();
+        return session;
+    }
+
+    /// <summary>
+    /// Adds an already-built document as a new tab and marks it saved.
+    ///
+    /// For an importer that has done its own work and has the document in hand - the SVG reader, for one, which
+    /// has to be able to report how many objects of each kind it made before the tab exists.
+    /// </summary>
+    public DocumentSession ImportDocument(CadDocument document)
+    {
+        DocumentSession session = AddDocument(document);
+        session.MarkSaved();
+        Status = $"Opened {document.Name}";
+        return session;
+    }
+
     /// <summary>Whether the active document has changes that are not on disk.</summary>
     public bool IsActiveModified => _active.IsModified;
 
