@@ -3829,6 +3829,40 @@ public sealed class CanvasWorkspace : Control
             : 0.0;
 
     /// <summary>
+    /// <summary>
+    /// The filter graphs for this path's raster effects, in order, or empty when it has none.
+    ///
+    /// A raster effect belongs to a **stroke**, and this renders the path as one picture - so the first stroke that
+    /// carries any supplies them. A path whose strokes each carry different raster effects renders the first
+    /// stroke's, which is the honest limit of drawing the path in one pass; the single-stroke case is exact.
+    /// </summary>
+    private static List<FilterSpec> RasterFiltersFor(PathItem path)
+    {
+        // **World** bounds, because the region is where the artwork is painted, not where it is stored. A path's
+        // geometry is kept in its artboard's own coordinates and drawn at the artboard's offset, so a region built
+        // from the stored box lands beside the line on every page that is not at the document origin - the stroke is
+        // then rasterised outside its own bitmap, and the painter that reports "handled" drops it from the page.
+        Geometry.Rect2D bounds = path.BoundingBox(); // REVERT-CHECK: temporarily local again
+
+        foreach (StrokeSpec stroke in path.Strokes)
+        {
+            if (stroke.AllRasterEffects is { Count: > 0 } effects)
+            {
+                // The region starts from the stroke's own extent, not the path's centreline: a stroke reaches half
+                // its width beyond the line, and an outer glow reaches further still. Using the centreline box clips
+                // exactly the part of a glow that falls outside the line - which is the whole of an outer glow.
+                Geometry.Rect2D region = bounds.Inflated(stroke.Width / 2);
+
+                return effects
+                    .Select(effect => RasterEffectFilters.ToFilter(effect, stroke.Color, region))
+                    .Where(filter => filter is not null)
+                    .Select(filter => filter!)
+                    .ToList();
+            }
+        }
+
+        return new List<FilterSpec>();
+    }
     /// Draws a path, through its filter when the document has one.
     ///
     /// A filter is a raster operation, so an object that has one cannot be drawn with the same draw calls as one
@@ -3838,8 +3872,16 @@ public sealed class CanvasWorkspace : Control
     /// </summary>
     private void PaintPath(DrawingContext context, PathItem path, double opacity)
     {
+        // A stroke's raster effects are pixel operations - a blur, a shadow, a glow - so the path is rendered
+        // offscreen and the effects run over those pixels, the same route an SVG filter takes.
+        if (RasterFiltersFor(path) is { Count: > 0 } raster &&
+            PaintFilteredPath(context, path, opacity, raster))
+        {
+            return;
+        }
+
         if (_document?.FindFilter(path.FilterId) is { } filter &&
-            PaintFilteredPath(context, path, opacity, filter))
+            PaintFilteredPath(context, path, opacity, new[] { filter }))
         {
             return;
         }
@@ -3849,7 +3891,7 @@ public sealed class CanvasWorkspace : Control
 
     /// <summary>The path as it is drawn without a filter.</summary>
     private bool PaintFilteredPath(
-        DrawingContext context, PathItem path, double opacity, FilterSpec filter)
+        DrawingContext context, PathItem path, double opacity, IReadOnlyList<FilterSpec> filters)
     {
         if (_paintWorld is not { } world)
         {
@@ -3872,7 +3914,7 @@ public sealed class CanvasWorkspace : Control
         }
 
         FilterRenderer.Result? result = FilterRenderer.Render(
-            filter, bounds, world, scale, ctx => PaintPathDirect(ctx, path, opacity));
+            filters, bounds, world, scale, ctx => PaintPathDirect(ctx, path, opacity));
 
         if (result is not { } painted)
         {

@@ -39,7 +39,30 @@ internal static class FilterRenderer
         Matrix world,
         double scale,
         Action<DrawingContext> paint)
+        => Render(new[] { filter }, bounds, world, scale, paint);
+
+    /// <summary>
+    /// The same, for a **chain** of filters applied in order.
+    ///
+    /// A stroke's raster effects are several effects that each compose with the artwork and with each other, and the
+    /// model keeps them in order because the order is the picture. So they are applied one after another, each
+    /// treating the previous result as its source. The first filter's region decides the canvas, since it is the one
+    /// that says how far the result can spread.
+    /// </summary>
+    public static Result? Render(
+        IReadOnlyList<FilterSpec> filters,
+        Rect bounds,
+        Matrix world,
+        double scale,
+        Action<DrawingContext> paint)
     {
+        if (filters.Count == 0)
+        {
+            return null;
+        }
+
+        FilterSpec filter = filters[0];
+
         if (scale <= 0.01 || bounds.Width <= 0 || bounds.Height <= 0)
         {
             return null;
@@ -69,7 +92,14 @@ internal static class FilterRenderer
         }
 
         FilterBuffer source = ToBuffer(target, width, height);
-        FilterBuffer filtered = new FilterEngine(filter, scale).EvaluateInPlace(source);
+
+        // Each filter in turn, with the previous result as its source - which is what makes a chain of effects
+        // compose in the order the model keeps them.
+        FilterBuffer filtered = source;
+        foreach (FilterSpec step in filters)
+        {
+            filtered = new FilterEngine(step, scale).EvaluateInPlace(filtered);
+        }
 
         WriteableBitmap bitmap = ToBitmap(filtered);
         var destination = new Rect(
