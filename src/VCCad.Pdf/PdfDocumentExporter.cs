@@ -1321,7 +1321,7 @@ public static class PdfDocumentExporter
         };
 
         IReadOnlyList<IReadOnlyList<Point2D>> loops = PathOffset.Outline(
-            PathFlattener.FlattenForStroke(path), scaled, stroke.Width * strokeScale);
+            PathFlattener.FlattenForStroke(path), scaled, stroke.Width * strokeScale, stroke.MiterLimit);
 
         if (loops.Count == 0)
         {

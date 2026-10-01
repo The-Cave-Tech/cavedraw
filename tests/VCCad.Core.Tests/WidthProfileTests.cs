@@ -211,4 +211,71 @@ public class WidthProfileTests
         Assert.Contains(outline, p => Math.Abs(p.Y - (-3)) < 1e-6);
         Assert.Contains(outline, p => Math.Abs(p.Y - 3) < 1e-6);
     }
+
+    /// <summary>
+    /// **A sharp corner is bevelled rather than left as a needle.**
+    ///
+    /// A mitre at a nearly-straight corner meets the two offset lines a very long way out - the length grows as
+    /// 1/sin(half the turn), so a ten-degree corner reaches 11.5 times the half-width. That is the spike the
+    /// issue calls a bow-tie, and leaving it in is how a stroke acquires a needle sticking out of its artwork at
+    /// every sharp point. Past the miter limit the corner is bevelled instead, which is finite.
+    /// </summary>
+    [Fact]
+    public void ASharpCornerIsBevelledRatherThanSpiking()
+    {
+        // A corner with a ten-degree **included** angle - the path doubles back, turning by 170 degrees. This is
+        // the shape that spikes, and the one a first attempt gets wrong: a ten-degree *turn* is very nearly
+        // straight, mitres to almost exactly the half-width, and tests nothing at all. The miter length grows as
+        // 1/sin(half the included angle), so ten degrees gives 11.5 half-widths where a right angle gives 1.41.
+        const double Included = 10 * Math.PI / 180.0;
+        const double Turn = Math.PI - Included;
+        var corner = new Point2D(100, 0);
+        PathItem path = Line(
+            closed: false,
+            new Point2D(0, 0),
+            corner,
+            new Point2D(100 + (100 * Math.Cos(Turn)), 100 * Math.Sin(Turn)));
+
+        IReadOnlyList<Point2D> outline = PathOffset.Outline(
+            PathFlattener.FlattenForStroke(path),
+            WidthProfileSpec.Constant(10),
+            fallbackWidth: 10,
+            miterLimit: 4.0)[0];
+
+        // The outline is the left edge forwards and the right edge backwards, so the two points that come from
+        // the corner are index 1 (left) and index n+1 (right). Measuring the whole outline would measure the far
+        // end of the path instead, which is legitimately a hundred units away from the corner.
+        double Distance(Point2D p)
+            => Math.Sqrt(((p.X - corner.X) * (p.X - corner.X)) + ((p.Y - corner.Y) * (p.Y - corner.Y)));
+
+        double furthest = Math.Max(Distance(outline[1]), Distance(outline[3 + 1]));
+
+        // Without the limit the corner would be 11.5 half-widths out - 57.5 - so the two answers are not close.
+        Assert.True(furthest <= (4.0 * 5.0) + 1e-6, $"a bevelled corner stays within the limit, but reached {furthest}");
+        Assert.True(furthest > 4.9, $"and it is still a corner rather than a rounded one: {furthest}");
+    }
+
+    /// <summary>
+    /// And a right angle keeps its mitre rather than being bevelled: the limit is 4, and a right angle reaches
+    /// only sqrt(2). Bevel-everything would pass the test above and quietly change every ordinary corner.
+    /// </summary>
+    [Fact]
+    public void ARightAngleKeepsItsMitre()
+    {
+        PathItem path = Line(closed: false, new Point2D(0, 0), new Point2D(100, 0), new Point2D(100, 100));
+
+        IReadOnlyList<Point2D> outline = PathOffset.Outline(
+            PathFlattener.FlattenForStroke(path),
+            WidthProfileSpec.Constant(10),
+            fallbackWidth: 10,
+            miterLimit: 4.0)[0];
+
+        // The corner's mitre sits 5*sqrt(2) = 7.07 from it, where a bevel would sit 5: that difference is the
+        // mitre, and it is the thing bevel-everything would quietly take away.
+        var corner = new Point2D(100, 0);
+        double furthest = outline.Max(p => Math.Sqrt(
+            ((p.X - corner.X) * (p.X - corner.X)) + ((p.Y - corner.Y) * (p.Y - corner.Y))));
+
+        Assert.True(furthest > 6.5, $"a right angle should mitre to about 7.07, but reached {furthest}");
+    }
 }

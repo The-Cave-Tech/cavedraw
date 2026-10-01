@@ -29,7 +29,8 @@ public static class PathOffset
     public static IReadOnlyList<IReadOnlyList<Point2D>> Outline(
         IReadOnlyList<FlattenedOutline> outlines,
         WidthProfileSpec? profile,
-        double fallbackWidth)
+        double fallbackWidth,
+        double miterLimit = 4.0)
     {
         var result = new List<IReadOnlyList<Point2D>>();
 
@@ -48,13 +49,13 @@ public static class PathOffset
             for (int i = 0; i < points.Count; i++)
             {
                 (double left, double _) = WidthsAt(profile, fallbackWidth, positions[i]);
-                loop.Add(MiterPoint(points, i, incoming, outgoing, left, left: true));
+                loop.Add(MiterPoint(points, i, incoming, outgoing, left, left: true, miterLimit));
             }
 
             for (int i = points.Count - 1; i >= 0; i--)
             {
                 (double _, double right) = WidthsAt(profile, fallbackWidth, positions[i]);
-                loop.Add(MiterPoint(points, i, incoming, outgoing, right, left: false));
+                loop.Add(MiterPoint(points, i, incoming, outgoing, right, left: false, miterLimit));
             }
 
             result.Add(loop);
@@ -91,7 +92,8 @@ public static class PathOffset
         Vector2D[] incoming,
         Vector2D[] outgoing,
         double halfWidth,
-        bool left)
+        bool left,
+        double miterLimit)
     {
         Vector2D n1 = OffsetNormal(incoming[index], left);
         Vector2D n2 = OffsetNormal(outgoing[index], left);
@@ -99,9 +101,16 @@ public static class PathOffset
         double dot = (n1.X * n2.X) + (n1.Y * n2.Y);
         double denominator = 1.0 + dot;
 
-        if (denominator < 1e-3)
+        // How far the miter reaches, as a multiple of the half-width. The miter length is halfWidth / sin(theta/2)
+        // and cos(theta) = dot, so sin(theta/2) = sqrt((1+dot)/2) and the ratio is sqrt(2/(1+dot)). A straight run
+        // has dot = 1 and so a ratio of 1; a right angle gives sqrt(2); a corner whose included angle is ten degrees
+        // gives 11.5, which is the needle a viewer would draw sticking out of the artwork.
+        double ratio = Math.Sqrt(2.0 / Math.Max(1e-9, denominator));
+
+        if (denominator < 1e-3 || ratio > Math.Max(1.0, miterLimit))
         {
-            // Nearly doubling back: a miter would be a spike, so bevel instead.
+            // Past the limit the two offset lines meet so far out that the join is a spike, so the corner is
+            // bevelled: finite, and the same fallback every renderer uses.
             return points[index] + (Normalise(n1 + n2) * halfWidth);
         }
 

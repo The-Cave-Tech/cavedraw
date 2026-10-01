@@ -3886,6 +3886,15 @@ public sealed class CanvasWorkspace : Control
                 continue;
             }
 
+            // A pen has one width, so a stroke that varies along its length cannot be drawn with one. It is
+            // drawn as the region it covers - the same outline the exporter fills, which is what keeps the
+            // canvas and the file agreeing about what a profile looks like.
+            if (stroke.HasWidthProfile)
+            {
+                context.DrawGeometry(ToBrush(stroke.Color, opacity), null, BuildProfileGeometry(path, stroke));
+                continue;
+            }
+
             double width = Math.Max(
                 Math.Max(0.01, stroke.Width),
                 MinDevicePixels / Math.Max(_layout.Zoom, 1e-6));
@@ -3905,6 +3914,67 @@ public sealed class CanvasWorkspace : Control
                 context.DrawGeometry(null, StrokePen(stroke, width * 2), geometry);
             }
         }
+    }
+
+    /// <summary>
+    /// The region a variable-width stroke covers, as geometry ready to draw.
+    ///
+    /// Built in the same coordinates <see cref="BuildGeometry"/> uses, **including the artboard offset**,
+    /// because everything painted under <see cref="Render"/> is already inside the world transform: a loop
+    /// built in path-local coordinates and drawn there would land offset by the artboard's origin, which looks
+    /// like a profile that draws somewhere else on the page.
+    ///
+    /// The fill rule is **nonzero**, whatever the path's own fill rule is. That is a property of this outline
+    /// rather than of the shape: the mitred corners of an offset outline overlap, and even-odd would punch holes
+    /// in precisely the corners a mitre was used to keep full.
+    /// </summary>
+    internal static StreamGeometry BuildProfileGeometry(PathItem path, StrokeSpec stroke)
+    {
+        var geometry = new StreamGeometry();
+        using StreamGeometryContext g = geometry.Open();
+        g.SetFillRule(MediaFillRule.NonZero);
+
+        foreach (IReadOnlyList<Point2D> loop in ProfileLoops(path, stroke))
+        {
+            g.BeginFigure(new Point(loop[0].X, loop[0].Y), isFilled: true);
+            for (int i = 1; i < loop.Count; i++)
+            {
+                g.LineTo(new Point(loop[i].X, loop[i].Y));
+            }
+
+            g.EndFigure(true);
+        }
+
+        return geometry;
+    }
+
+    /// <summary>
+    /// The region a variable-width stroke covers, in the coordinates the canvas paints in.
+    ///
+    /// Separated from <see cref="BuildProfileGeometry"/> so the arithmetic can be tested without a rendering
+    /// platform: a `StreamGeometry` cannot even be opened without Avalonia initialised, and the part worth
+    /// getting right is where the points end up rather than how they are put into a geometry.
+    ///
+    /// The artboard's origin is added here, because path coordinates are stored relative to it and everything
+    /// painted under <see cref="Render"/> is already inside the world transform. An outline built in path-local
+    /// coordinates would land offset by the artboard's origin, which looks like a profile that draws somewhere
+    /// else on the page.
+    /// </summary>
+    internal static IReadOnlyList<IReadOnlyList<Point2D>> ProfileLoops(PathItem path, StrokeSpec stroke)
+    {
+        IReadOnlyList<IReadOnlyList<Point2D>> loops = PathOffset.Outline(
+            PathFlattener.FlattenForStroke(path), stroke.WidthProfile, stroke.Width, stroke.MiterLimit);
+
+        Vector2D offset = path.ArtboardOffset();
+        if (offset.X == 0 && offset.Y == 0)
+        {
+            return loops;
+        }
+
+        return loops.Select(loop => (IReadOnlyList<Point2D>)loop
+                .Select(p => new Point2D(p.X + offset.X, p.Y + offset.Y))
+                .ToList())
+            .ToList();
     }
 
     /// <summary>
