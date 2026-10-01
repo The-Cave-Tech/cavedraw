@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Avalonia.Headless.XUnit;
 using VCCad.App.Automation;
-using VCCad.App.Views.Panes;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
 using VCCad.Geometry;
@@ -11,11 +10,18 @@ using GradientStop = VCCad.Core.Model.GradientStop;
 namespace VCCad.App.Tests;
 
 /// <summary>
-/// The fill rule from the Colour pane.
+/// The fill rule, through the operation that owns it.
 ///
-/// The chooser was removed when the pane was tidied, which left the rule reachable only from the
-/// registry - a parity gap in the other direction. These pin that the pane sets it, that setting
-/// it is about the rule and nothing else, and that one undo puts it back.
+/// This file used to test the rule **chooser in the Colour pane** as well, and the history is worth keeping:
+/// the chooser was removed when the pane was tidied, then added back on the argument that a person needed it.
+/// It has been removed again, this time as the product decision it is - a rule about how an outline is filled
+/// is a property of the geometry, not of the colour, and a picker that also decides it answers two unrelated
+/// questions at once. `ColorsPaneContentsTests` now asserts the picker holds no rule control, so this cannot
+/// be re-litigated by accident.
+///
+/// The coverage those pane tests carried is not dropped: what they proved - that setting the rule leaves the
+/// colour alone, leaves a gradient intact, and undoes in one step - is behaviour of the **operation**, and it
+/// is asserted here against the operation instead. Only their subject, the control, is gone.
 /// </summary>
 public class FillRulePaneTests
 {
@@ -30,44 +36,34 @@ public class FillRulePaneTests
         return path;
     }
 
-    private static (EditorViewModel Vm, PathItem Path) Selected(PathItem path)
+    private static (EditorViewModel Vm, PathItem Path, AutomationContext Context) Selected(PathItem path)
     {
         var vm = new EditorViewModel();
         vm.Document.Artboards[0].Layers[0].AddItem(path);
         vm.SelectObject(path);
-        return (vm, path);
+        return (vm, path, new AutomationContext { ViewModel = vm });
     }
 
+    private static void SetEvenOdd(AutomationContext context)
+        => EditorOperations.Invoke(context, "style.setFillRule",
+            JsonSerializer.SerializeToElement(new { rule = "evenodd" }));
+
+    /// <summary>The rule is settable without a colour, so a driver does not flatten a gradient to set it.</summary>
     [AvaloniaFact]
-    public void TheRuleChooserSetsTheRuleAndLeavesTheColourAlone()
+    public void TheRuleIsReachableFromTheRegistryWithoutTouchingTheColour()
     {
-        PathItem path = Box();
-        (EditorViewModel vm, PathItem item) = Selected(path);
+        (_, PathItem item, AutomationContext context) = Selected(Box());
 
-        var pane = new ColorsPane();
-        pane.Attach(vm);
-        try
-        {
-            Assert.Equal(0, pane.FillRuleBox.SelectedIndex);
+        SetEvenOdd(context);
 
-            pane.FillRuleBox.SelectedIndex = 1; // Even-odd
-
-            Assert.Equal(FillRule.EvenOdd, item.Fill.Rule);
-            Assert.Equal(ColorRgb.Red, item.Fill.Color);
-            Assert.True(item.Fill.IsVisible);
-
-            vm.Undo();
-            Assert.Equal(FillRule.NonZero, item.Fill.Rule);
-        }
-        finally
-        {
-            pane.Detach();
-        }
+        Assert.Equal(FillRule.EvenOdd, item.Fill.Rule);
+        Assert.Equal(ColorRgb.Red, item.Fill.Color);
+        Assert.True(item.Fill.IsVisible);
     }
 
-    /// <summary>A rule says what the outline means, not what colour it is: a gradient survives.</summary>
+    /// <summary>A rule says what the outline means, not what colour it is: a gradient survives it.</summary>
     [AvaloniaFact]
-    public void TheRuleChooserLeavesAGradientIntact()
+    public void SettingTheRuleLeavesAGradientIntact()
     {
         PathItem path = Box();
         path.Fill = FillSpec.WithGradient(new GradientSpec
@@ -79,59 +75,25 @@ public class FillRulePaneTests
             },
         });
 
-        (EditorViewModel vm, PathItem item) = Selected(path);
+        (_, PathItem item, AutomationContext context) = Selected(path);
 
-        var pane = new ColorsPane();
-        pane.Attach(vm);
-        try
-        {
-            pane.FillRuleBox.SelectedIndex = 1;
-
-            Assert.Equal(FillRule.EvenOdd, item.Fill.Rule);
-            Assert.True(item.Fill.HasGradient, "the gradient must survive a rule change");
-            Assert.Equal(2, item.Fill.Gradient!.Stops.Count);
-        }
-        finally
-        {
-            pane.Detach();
-        }
-    }
-
-    [AvaloniaFact]
-    public void TheChooserShowsTheSelectedObjectsRule()
-    {
-        PathItem path = Box();
-        path.Fill = FillSpec.Solid(ColorRgb.Red, FillRule.EvenOdd);
-        (EditorViewModel vm, _) = Selected(path);
-
-        var pane = new ColorsPane();
-        pane.Attach(vm);
-        try
-        {
-            Assert.Equal(1, pane.FillRuleBox.SelectedIndex);
-        }
-        finally
-        {
-            pane.Detach();
-        }
-    }
-
-    /// <summary>
-    /// The registry half of the parity rule: the rule is settable without a colour, so a driver
-    /// can change it without flattening a gradient the way style.setFill would.
-    /// </summary>
-    [AvaloniaFact]
-    public void TheRuleIsReachableFromTheRegistryWithoutTouchingTheColour()
-    {
-        PathItem path = Box();
-        (EditorViewModel vm, PathItem item) = Selected(path);
-        var context = new AutomationContext { ViewModel = vm };
-
-        EditorOperations.Invoke(context, "style.setFillRule",
-            JsonSerializer.SerializeToElement(new { rule = "evenodd" }));
+        SetEvenOdd(context);
 
         Assert.Equal(FillRule.EvenOdd, item.Fill.Rule);
-        Assert.Equal(ColorRgb.Red, item.Fill.Color);
-        Assert.True(item.Fill.IsVisible);
+        Assert.True(item.Fill.HasGradient, "the gradient must survive a rule change");
+        Assert.Equal(2, item.Fill.Gradient!.Stops.Count);
+    }
+
+    /// <summary>And it is one undo step, like every other edit.</summary>
+    [AvaloniaFact]
+    public void SettingTheRuleUndoesInOneStep()
+    {
+        (EditorViewModel vm, PathItem item, AutomationContext context) = Selected(Box());
+
+        SetEvenOdd(context);
+        Assert.Equal(FillRule.EvenOdd, item.Fill.Rule);
+
+        vm.Undo();
+        Assert.Equal(FillRule.NonZero, item.Fill.Rule);
     }
 }
