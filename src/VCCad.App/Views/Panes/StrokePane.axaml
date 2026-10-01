@@ -44,6 +44,11 @@
           <ComboBoxItem Content="Outside"/>
         </ComboBox>
       </Grid>
+
+      <!-- What the PDF export will leave out, from the same list the exporter is checked against. A person should
+           learn it here rather than by opening the exported file and finding the effect missing. -->
+      <TextBlock x:Name="ExportWarning" IsVisible="False" TextWrapping="Wrap"
+                 Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
     </StackPanel>
   </ScrollViewer>
 </UserControl>

@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
+using VCCad.Pdf;
 
 namespace VCCad.App.Views.Panes;
 
@@ -89,8 +90,11 @@ public partial class StrokePane : UserControl
         {
             StrokeWidthBox.Text = string.Empty;
             MiterBox.Text = string.Empty;
+            ShowExportWarning(null);
             return;
         }
+
+        ShowExportWarning(path);
 
         _syncing = true;
         if (!StrokeWidthBox.IsFocused)
@@ -123,6 +127,47 @@ public partial class StrokePane : UserControl
         };
         StrokeDashBox.SelectedIndex = DashIndexOf(path.Stroke.Dash);
         _syncing = false;
+    }
+
+    /// <summary>
+    /// Says what the PDF export will leave out of what is selected.
+    ///
+    /// The list comes from <see cref="PdfExportSupport"/> - the same declaration `PdfExportSupportTests` derives
+    /// from the exported bytes - so this cannot warn about a gap the exporter no longer has, or stay silent about
+    /// one it has grown. Saying it here is the point: a person should not have to open the exported file to find
+    /// out that a blur was not in it.
+    /// </summary>
+    private void ShowExportWarning(PathItem? path)
+    {
+        var present = new List<string>();
+
+        if (path is not null)
+        {
+            // Raster effects are per stroke; a filter and a blend mode are per object. All three are declared as
+            // not written, and the declaration is asked rather than a list being repeated here.
+            if (path.Strokes.Any(stroke => stroke.HasRasterEffects))
+            {
+                present.Add("rasterEffect");
+            }
+
+            if (path.FilterId is { Length: > 0 })
+            {
+                present.Add("filter");
+            }
+
+            if (path.BlendMode != BlendMode.Normal)
+            {
+                present.Add("blendMode");
+            }
+        }
+
+        string[] missing = PdfExportSupport.Lossy
+            .Where(feature => present.Contains(feature.Name))
+            .Select(feature => $"{feature.Name}: {feature.Note}")
+            .ToArray();
+
+        ExportWarning.Text = missing.Length == 0 ? string.Empty : "Not in the PDF export: " + string.Join(" ", missing);
+        ExportWarning.IsVisible = missing.Length > 0;
     }
 
 }
