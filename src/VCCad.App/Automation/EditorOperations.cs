@@ -3305,7 +3305,8 @@ public static class EditorOperations
                         descent = Math.Round(VCCad.Core.Text.TextMeasurement.Descent(r), 4),
                     }).ToArray(),
                     plain = text.PlainText,
-                    caret = ctx.ViewModel.TextCaretRunIndex,
+                    caret = ctx.ViewModel.TextCaretOffset,
+                    caretRun = ctx.ViewModel.TextCaretRunIndex,
                     selectionStart = ctx.ViewModel.TextSelectionStart,
                     selectionEnd = ctx.ViewModel.TextSelectionEnd,
                 };
