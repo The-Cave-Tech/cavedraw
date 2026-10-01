@@ -67,11 +67,18 @@ public static class SvgReader
 
         var document = new CadDocument { Name = "Imported SVG" };
         var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var warnings = new HashSet<string>(StringComparer.Ordinal);
 
         // The artboard is the view port, and the view box becomes a transform on the content rather than a change
         // to the artboard - so an artboard-sized object and a view-box-sized file describe the same picture, and
-        // the file's own units survive in the model.
-        (double width, double height, AffineTransform viewBox) = ReadViewBox(root);
+        // the file's own coordinates survive in the model.
+        //
+        // **The port is in points and the content is not.** A user unit is a CSS pixel and the model stores points
+        // (AGENTS.md §8), so the artboard is three quarters of the number the file writes and the transform below
+        // carries the content from the file's units into the model's. Doing it here, once, is what keeps one
+        // physical length from being two different numbers depending on where it was written.
+        (double width, double height, SvgViewport viewport, AffineTransform viewBox) =
+            ReadViewBox(root, warning => warnings.Add(warning));
         if (width <= 0 || height <= 0)
         {
             throw new SvgImportException(
@@ -81,8 +88,8 @@ public static class SvgReader
         Artboard artboard = document.AddArtboard(new Size2D(width, height), "SVG");
         Layer layer = artboard.AddLayer("SVG");
 
-        // The view box applies to everything, so it goes on one group - but only when there is one to apply. A
-        // group that carries the identity would be structure the file does not have.
+        // The view box applies to everything, so it goes on one group - but only when there is something to
+        // apply. A group that carries the identity would be structure the file does not have.
         ArtGroup? viewGroup = IsIdentity(viewBox) ? null : new ArtGroup { Name = "viewBox", Transform = viewBox };
 
         // Every id in the file, indexed before anything is drawn: a `use` may refer to a definition that appears
@@ -94,7 +101,6 @@ public static class SvgReader
         // still stylesheets and still apply. Collecting them by walking the tree as it is read would miss a sheet
         // defined after the elements it styles, which multi-style.svg does.
         SvgStylesheet sheet = SvgStylesheet.Parse(CollectStyles(root), baseDirectory);
-        var warnings = new HashSet<string>(StringComparer.Ordinal);
         SvgGradients gradients = SvgGradients.Collect(root, sheet);
 
         // Filters are document assets: an element refers to one by id, so they are collected once and held on the
@@ -133,6 +139,8 @@ public static class SvgReader
             Sheet = sheet,
             Gradients = gradients,
             Warnings = warnings,
+            Viewport = viewport,
+            BaseDirectory = baseDirectory,
         };
 
         foreach (XElement child in root.Elements())
@@ -304,17 +312,24 @@ public static class SvgReader
     // ------------------------------------------------------------------ the view box
 
     /// <summary>
-    /// The artboard size and the transform the view box implies.
+    /// The artboard size, the viewport a percentage resolves against, and the transform the view box implies.
+    ///
+    /// **The port is measured in the file's own units.** SVG's user unit is a CSS pixel and the page is sized in
+    /// the same units its content is written in - so the declared size is the artboard, the view box is the scale
+    /// between them, and a length anywhere in the file resolves to one number regardless of whether it was written
+    /// as `1in`, `96px` or `72pt`. (The model's own storage unit is the point; carrying the SVG page into points is
+    /// a change to the whole reader and its writer rather than to how a length is read, and is not this change.)
     ///
     /// `preserveAspectRatio` is honoured in its two common forms: **meet** fits the whole view box inside the view
     /// port and leaves space, **slice** fills the view port and crops, and **none** stretches - the one that
     /// changes an object's shape. Reading it wrong scales the artwork by the wrong factor in one axis, which looks
     /// like a font problem and is not one.
     /// </summary>
-    private static (double Width, double Height, AffineTransform Transform) ReadViewBox(XElement root)
+    private static (double Width, double Height, SvgViewport Viewport, AffineTransform Transform) ReadViewBox(
+        XElement root, Action<string> warn)
     {
-        double? width = Length(root.Attribute("width")?.Value);
-        double? height = Length(root.Attribute("height")?.Value);
+        double? width = RootLength(root.Attribute("width")?.Value, "width", warn);
+        double? height = RootLength(root.Attribute("height")?.Value, "height", warn);
         double[]? box = Numbers(root.Attribute("viewBox")?.Value);
 
         if (box is not { Length: 4 })
@@ -326,7 +341,11 @@ public static class SvgReader
             // `svginotf/`: an `svg` element with no width, no height and no view box, holding `<glyph>` definitions
             // and nothing drawable. Refusing those made four corpus files fail to import, and the honest answer is
             // not to invent a size from content that does not exist - it is the default every viewer already uses.
-            return (width ?? DefaultViewport, height ?? DefaultViewport, AffineTransform.Identity);
+            double fallbackWidth = width ?? DefaultViewport;
+            double fallbackHeight = height ?? DefaultViewport;
+
+            return (fallbackWidth, fallbackHeight, new SvgViewport(fallbackWidth, fallbackHeight),
+                AffineTransform.Identity);
         }
 
         double boxWidth = box[2];
@@ -339,33 +358,76 @@ public static class SvgReader
         double viewWidth = width ?? boxWidth;
         double viewHeight = height ?? boxHeight;
 
-        string aspect = root.Attribute("preserveAspectRatio")?.Value?.Trim() ?? "xMidYMid meet";
-        bool stretch = aspect.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("none");
-        bool slice = aspect.Contains("slice", StringComparison.Ordinal);
-
-        double scaleX = viewWidth / boxWidth;
-        double scaleY = viewHeight / boxHeight;
-        double uniform = slice ? Math.Max(scaleX, scaleY) : Math.Min(scaleX, scaleY);
-        double finalX = stretch ? scaleX : uniform;
-        double finalY = stretch ? scaleY : uniform;
-
-        double usedWidth = boxWidth * finalX;
-        double usedHeight = boxHeight * finalY;
-
-        // Where the leftover space goes. The default is centred, which is what xMidYMid means and what every
-        // viewer does when the attribute is absent.
-        double offsetX = aspect.Contains("xMin", StringComparison.Ordinal) ? 0.0
-            : aspect.Contains("xMax", StringComparison.Ordinal) ? viewWidth - usedWidth
-            : (viewWidth - usedWidth) / 2.0;
-        double offsetY = aspect.Contains("YMin", StringComparison.Ordinal) ? 0.0
-            : aspect.Contains("YMax", StringComparison.Ordinal) ? viewHeight - usedHeight
-            : (viewHeight - usedHeight) / 2.0;
+        (double finalX, double finalY, double offsetX, double offsetY) = Fit(
+            viewWidth, viewHeight, boxWidth, boxHeight, root.Attribute("preserveAspectRatio")?.Value);
 
         AffineTransform transform = AffineTransform.CreateTranslation(offsetX, offsetY)
             .Compose(AffineTransform.CreateScale(finalX, finalY))
             .Compose(AffineTransform.CreateTranslation(-box[0], -box[1]));
 
-        return (viewWidth, viewHeight, transform);
+        return (viewWidth, viewHeight, new SvgViewport(viewWidth, viewHeight), transform);
+    }
+
+    /// <summary>
+    /// The view port's declared size, in the file's own units.
+    ///
+    /// A percentage here is **reported rather than substituted**: the width and height of the outermost `svg` ARE
+    /// the viewport, so there is no containing block for a percentage to be a percentage *of*, and the reader's
+    /// fallback - the view box, or CSS's default object size - is a value the file did not write.
+    /// </summary>
+    private static double? RootLength(string? text, string attribute, Action<string> warn)
+    {
+        (double Value, bool IsPercent)? parsed = SvgLength.ParseWithUnit(text, warn);
+        if (parsed is null)
+        {
+            return null;
+        }
+
+        if (parsed.Value.IsPercent)
+        {
+            warn(
+                $"the document's {attribute}=\"{text}\" is a percentage, and a standalone SVG has no " +
+                "containing block to resolve it against");
+            return null;
+        }
+
+        return parsed.Value.Value;
+    }
+
+    /// <summary>
+    /// How a box of content maps into a view port: the scale on each axis, and where the leftover space goes.
+    ///
+    /// One piece of arithmetic serves both the root `viewBox` and an `image`, because they are the same question -
+    /// the file gives a box and a thing that has to fit inside it - and answering it twice is how the two answers
+    /// come to disagree. The default is `xMidYMid meet`, which is what a viewer assumes when the attribute is
+    /// absent: fit everything, centred.
+    /// </summary>
+    private static (double ScaleX, double ScaleY, double OffsetX, double OffsetY) Fit(
+        double viewWidth, double viewHeight, double contentWidth, double contentHeight, string? aspect)
+    {
+        string alignment = string.IsNullOrWhiteSpace(aspect) ? "xMidYMid meet" : aspect.Trim();
+        bool stretch = alignment.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("none");
+        bool slice = alignment.Contains("slice", StringComparison.Ordinal);
+
+        double scaleX = viewWidth / contentWidth;
+        double scaleY = viewHeight / contentHeight;
+        double uniform = slice ? Math.Max(scaleX, scaleY) : Math.Min(scaleX, scaleY);
+        double finalX = stretch ? scaleX : uniform;
+        double finalY = stretch ? scaleY : uniform;
+
+        double usedWidth = contentWidth * finalX;
+        double usedHeight = contentHeight * finalY;
+
+        // Where the leftover space goes. The default is centred, which is what xMidYMid means and what every
+        // viewer does when the attribute is absent.
+        double offsetX = alignment.Contains("xMin", StringComparison.Ordinal) ? 0.0
+            : alignment.Contains("xMax", StringComparison.Ordinal) ? viewWidth - usedWidth
+            : (viewWidth - usedWidth) / 2.0;
+        double offsetY = alignment.Contains("YMin", StringComparison.Ordinal) ? 0.0
+            : alignment.Contains("YMax", StringComparison.Ordinal) ? viewHeight - usedHeight
+            : (viewHeight - usedHeight) / 2.0;
+
+        return (finalX, finalY, offsetX, offsetY);
     }
 
     // ------------------------------------------------------------------ walking the tree
@@ -401,6 +463,9 @@ public static class SvgReader
         /// </summary>
         public required HashSet<string> Warnings { get; init; }
 
+        /// <summary>Reports something the reader could not do, as an <see cref="Action{T}"/> for helpers to take.</summary>
+        public void Warn(string message) => Warnings.Add(message);
+
         /// <summary>Where a shape is added: the group it is inside, or the layer when there is no group.</summary>
         public void Add(LayerItem item)
         {
@@ -412,6 +477,57 @@ public static class SvgReader
             {
                 Layer.AddItem(item);
             }
+        }
+
+        /// <summary>
+        /// The viewport a percentage resolves against, in the file's own units, or null when the document
+        /// establishes none.
+        ///
+        /// Null is a real case and not a defect: a percentage inside a symbol the file never sizes has nothing to
+        /// be a percentage of, and SVG's own answer there is to use the value as if the viewport were the default -
+        /// which is a value the file did not write.
+        /// </summary>
+        public required SvgViewport? Viewport { get; set; }
+
+        /// <summary>The directory a file reference in the document is resolved against, when it came from disk.</summary>
+        public required string? BaseDirectory { get; init; }
+
+        /// <summary>
+        /// A length on a known axis, with a percentage resolved against the viewport.
+        ///
+        /// **A percentage that cannot be resolved is reported.** The reader used to return null for every
+        /// percentage and let the caller's `?? default` stand in - so `x="25%"` imported as the attribute's
+        /// default position, which looks deliberate and is not the file. Reporting it is the difference between a
+        /// gap somebody can act on and a drawing that is quietly wrong.
+        /// </summary>
+        public double? Length(string? text, SvgAxis axis, string attribute)
+        {
+            (double Value, bool IsPercent)? parsed = SvgLength.ParseWithUnit(text, Warn);
+            if (parsed is null)
+            {
+                return null;
+            }
+
+            if (!parsed.Value.IsPercent)
+            {
+                return parsed.Value.Value;
+            }
+
+            if (Viewport is not { } viewport)
+            {
+                Warnings.Add(
+                    $"{attribute}=\"{text}\" is a percentage with no viewport to resolve it against");
+                return null;
+            }
+
+            double reference = axis switch
+            {
+                SvgAxis.X => viewport.Width,
+                SvgAxis.Y => viewport.Height,
+                _ => viewport.Diagonal,
+            };
+
+            return parsed.Value.Value / 100.0 * reference;
         }
     }
 
@@ -433,7 +549,7 @@ public static class SvgReader
         }
 
         PresentationStyle style = PresentationStyle.From(element, context.Style, context.Sheet.DeclarationsFor(
-            element, element.Ancestors().ToArray()));
+            element, element.Ancestors().ToArray()), context.Viewport, context.Warn);
 
         switch (name)
         {
@@ -470,6 +586,24 @@ public static class SvgReader
         // model's paths have no transform of their own: their coordinates are the artboard's.
         AffineTransform own = Transform(element.Attribute("transform")?.Value);
 
+        if (name == "image")
+        {
+            if (ReadImage(element, context, own) is { } image)
+            {
+                image.BlendMode = style.Blend;
+                if (FilterReference(element) is { } imageFilter)
+                {
+                    image.FilterId = imageFilter;
+                }
+
+                CaptureForeign(element, image);
+                context.Add(image);
+                context.Counts["image"] = context.Counts.GetValueOrDefault("image") + 1;
+            }
+
+            return;
+        }
+
         // Anything that reaches here is an element this reader does not know. It is **reported** and then skipped:
         // artwork that quietly went missing is the worst kind of import bug, because the drawing looks deliberate.
         // The known elements are the ones above and the shapes ReadShape handles.
@@ -479,7 +613,7 @@ public static class SvgReader
             return;
         }
 
-        foreach (LayerItem item in ReadShape(element, style, warning => context.Warnings.Add(warning)))
+        foreach (LayerItem item in ReadShape(element, context, style))
         {
             if (item.FilterId is null && FilterReference(element) is { } filterId)
             {
@@ -565,6 +699,8 @@ public static class SvgReader
             Sheet = context.Sheet,
             Gradients = context.Gradients,
             Warnings = context.Warnings,
+            Viewport = context.Viewport,
+            BaseDirectory = context.BaseDirectory,
         };
 
         foreach (XElement child in element.Elements())
@@ -580,23 +716,23 @@ public static class SvgReader
 
     // ------------------------------------------------------------------ shapes
 
-    private static IEnumerable<LayerItem> ReadShape(XElement element, PresentationStyle style, Action<string>? warn = null)
+    private static IEnumerable<LayerItem> ReadShape(XElement element, Context context, PresentationStyle style)
     {
         switch (element.Name.LocalName)
         {
             case "rect":
             {
-                double x = Length(element.Attribute("x")?.Value) ?? 0.0;
-                double y = Length(element.Attribute("y")?.Value) ?? 0.0;
-                double width = Length(element.Attribute("width")?.Value) ?? 0.0;
-                double height = Length(element.Attribute("height")?.Value) ?? 0.0;
+                double x = context.Length(element.Attribute("x")?.Value, SvgAxis.X, "x") ?? 0.0;
+                double y = context.Length(element.Attribute("y")?.Value, SvgAxis.Y, "y") ?? 0.0;
+                double width = context.Length(element.Attribute("width")?.Value, SvgAxis.X, "width") ?? 0.0;
+                double height = context.Length(element.Attribute("height")?.Value, SvgAxis.Y, "height") ?? 0.0;
                 if (width <= 0 || height <= 0)
                 {
                     yield break;
                 }
 
-                double rx = Length(element.Attribute("rx")?.Value) ?? 0.0;
-                double ry = Length(element.Attribute("ry")?.Value) ?? rx;
+                double rx = context.Length(element.Attribute("rx")?.Value, SvgAxis.X, "rx") ?? 0.0;
+                double ry = context.Length(element.Attribute("ry")?.Value, SvgAxis.Y, "ry") ?? rx;
                 rx = Math.Min(rx, width / 2.0);
                 ry = Math.Min(ry, height / 2.0);
 
@@ -630,9 +766,9 @@ public static class SvgReader
 
             case "circle":
             {
-                double cx = Length(element.Attribute("cx")?.Value) ?? 0.0;
-                double cy = Length(element.Attribute("cy")?.Value) ?? 0.0;
-                double r = Length(element.Attribute("r")?.Value) ?? 0.0;
+                double cx = context.Length(element.Attribute("cx")?.Value, SvgAxis.X, "cx") ?? 0.0;
+                double cy = context.Length(element.Attribute("cy")?.Value, SvgAxis.Y, "cy") ?? 0.0;
+                double r = context.Length(element.Attribute("r")?.Value, SvgAxis.Diagonal, "r") ?? 0.0;
                 if (r <= 0)
                 {
                     yield break;
@@ -644,10 +780,10 @@ public static class SvgReader
 
             case "ellipse":
             {
-                double cx = Length(element.Attribute("cx")?.Value) ?? 0.0;
-                double cy = Length(element.Attribute("cy")?.Value) ?? 0.0;
-                double rx = Length(element.Attribute("rx")?.Value) ?? 0.0;
-                double ry = Length(element.Attribute("ry")?.Value) ?? 0.0;
+                double cx = context.Length(element.Attribute("cx")?.Value, SvgAxis.X, "cx") ?? 0.0;
+                double cy = context.Length(element.Attribute("cy")?.Value, SvgAxis.Y, "cy") ?? 0.0;
+                double rx = context.Length(element.Attribute("rx")?.Value, SvgAxis.X, "rx") ?? 0.0;
+                double ry = context.Length(element.Attribute("ry")?.Value, SvgAxis.Y, "ry") ?? 0.0;
                 if (rx <= 0 || ry <= 0)
                 {
                     yield break;
@@ -661,8 +797,12 @@ public static class SvgReader
             {
                 PathItem line = Path(element, style);
                 SubPath sub = line.AddSubPath(closed: false);
-                Add(sub, Length(element.Attribute("x1")?.Value) ?? 0.0, Length(element.Attribute("y1")?.Value) ?? 0.0);
-                Add(sub, Length(element.Attribute("x2")?.Value) ?? 0.0, Length(element.Attribute("y2")?.Value) ?? 0.0);
+                Add(sub,
+                    context.Length(element.Attribute("x1")?.Value, SvgAxis.X, "x1") ?? 0.0,
+                    context.Length(element.Attribute("y1")?.Value, SvgAxis.Y, "y1") ?? 0.0);
+                Add(sub,
+                    context.Length(element.Attribute("x2")?.Value, SvgAxis.X, "x2") ?? 0.0,
+                    context.Length(element.Attribute("y2")?.Value, SvgAxis.Y, "y2") ?? 0.0);
                 yield return line;
                 break;
             }
@@ -690,8 +830,8 @@ public static class SvgReader
             case "path":
             {
                 IReadOnlyList<SubPath> parsed = SvgPathData.Parse(
-            element.Attribute("d")?.Value ?? string.Empty,
-            warn);
+                    element.Attribute("d")?.Value ?? string.Empty,
+                    context.Warn);
                 if (parsed.Count == 0)
                 {
                     yield break;
@@ -844,8 +984,8 @@ public static class SvgReader
             yield break;
         }
 
-        double x = Length(element.Attribute("x")?.Value) ?? 0.0;
-        double y = Length(element.Attribute("y")?.Value) ?? 0.0;
+        double x = context.Length(element.Attribute("x")?.Value, SvgAxis.X, "x") ?? 0.0;
+        double y = context.Length(element.Attribute("y")?.Value, SvgAxis.Y, "y") ?? 0.0;
 
         var group = new ArtGroup
         {
@@ -859,7 +999,7 @@ public static class SvgReader
         {
             Layer = context.Layer,
             Group = group,
-            Style = PresentationStyle.From(element, style),
+            Style = PresentationStyle.From(element, style, viewport: context.Viewport, warn: context.Warn),
             Counts = context.Counts,
             Ids = context.Ids,
             Resolving = context.Resolving,
@@ -867,16 +1007,18 @@ public static class SvgReader
             Sheet = context.Sheet,
             Gradients = context.Gradients,
             Warnings = context.Warnings,
+            Viewport = context.Viewport,
+            BaseDirectory = context.BaseDirectory,
         };
 
         if (target.Name.LocalName == "symbol")
         {
             // A symbol is sized by the `use` that draws it: the use's width and height over the symbol's view box,
             // with the symbol's own width and height - SVG 2's geometry properties - as the fallback.
-            double symbolWidth = Length(element.Attribute("width")?.Value)
-                ?? Length(target.Attribute("width")?.Value) ?? 0.0;
-            double symbolHeight = Length(element.Attribute("height")?.Value)
-                ?? Length(target.Attribute("height")?.Value) ?? 0.0;
+            double symbolWidth = context.Length(element.Attribute("width")?.Value, SvgAxis.X, "width")
+                ?? context.Length(target.Attribute("width")?.Value, SvgAxis.X, "width") ?? 0.0;
+            double symbolHeight = context.Length(element.Attribute("height")?.Value, SvgAxis.Y, "height")
+                ?? context.Length(target.Attribute("height")?.Value, SvgAxis.Y, "height") ?? 0.0;
             double[]? box = Numbers(target.Attribute("viewBox")?.Value);
 
             if (box is { Length: 4 } && box[2] > 0 && box[3] > 0 && symbolWidth > 0 && symbolHeight > 0)
@@ -886,6 +1028,13 @@ public static class SvgReader
                         .CreateScale(symbolWidth / box[2], symbolHeight / box[3])
                         .Compose(AffineTransform.CreateTranslation(-box[0], -box[1])));
             }
+
+            // A symbol is a viewport of its own, and one the file may never size - in which case a percentage
+            // inside it has nothing to be a percentage of, and saying so is better than measuring it against the
+            // document and calling that the answer.
+            inside.Viewport = symbolWidth > 0 && symbolHeight > 0
+                ? new SvgViewport(symbolWidth, symbolHeight)
+                : null;
 
             foreach (XElement child in target.Elements())
             {
@@ -916,69 +1065,111 @@ public static class SvgReader
             .Equals("none", StringComparison.OrdinalIgnoreCase) == true;
     }
 
+    // ------------------------------------------------------------------ images
+
+    /// <summary>
+    /// An `image`: the raster it refers to, placed where the element puts it.
+    ///
+    /// **The bytes come from inside the document or from a file beside it, and from nowhere else.** A reference
+    /// that cannot be resolved - a file that is not there, a URL, a format this reader does not open - is added to
+    /// <see cref="Context.Missing"/> rather than being dropped: the document asked for a picture, and an import
+    /// that says which one it did not get is one somebody can act on. Fetching it from the network is not reading
+    /// the file, so it is never done.
+    ///
+    /// The geometry is the element's box **after `preserveAspectRatio`**, because that is what a viewer draws: the
+    /// box is where the picture is allowed to go, and the picture's own proportions decide how much of it is
+    /// filled.
+    /// </summary>
+    private static ImageItem? ReadImage(XElement element, Context context, AffineTransform own)
+    {
+        XNamespace xlink = "http://www.w3.org/1999/xlink";
+        string? href = element.Attribute("href")?.Value ?? element.Attribute(xlink + "href")?.Value;
+        string name = element.Attribute("id")?.Value ?? "image";
+
+        ImageItem? image = SvgImages.Load(href, context.BaseDirectory, name, out string? problem);
+        if (image is null)
+        {
+            context.Missing.Add(problem ?? $"image '{href}' could not be read");
+            return null;
+        }
+
+        double x = context.Length(element.Attribute("x")?.Value, SvgAxis.X, "x") ?? 0.0;
+        double y = context.Length(element.Attribute("y")?.Value, SvgAxis.Y, "y") ?? 0.0;
+
+        // SVG 2 gives an image with no width or height its intrinsic size; SVG 1.1 simply leaves it undrawn. The
+        // intrinsic size is what a viewer does with the attributes the specification made optional, and it is the
+        // picture's own dimensions rather than a number invented for it.
+        double width = context.Length(element.Attribute("width")?.Value, SvgAxis.X, "width")
+            ?? image.PixelWidth;
+        double height = context.Length(element.Attribute("height")?.Value, SvgAxis.Y, "height")
+            ?? image.PixelHeight;
+
+        if (width <= 0 || height <= 0)
+        {
+            context.Warnings.Add($"image '{name}' has no area, so there is nothing to draw");
+            return null;
+        }
+
+        (double fitX, double fitY, double offsetX, double offsetY) = Fit(
+            width, height, image.PixelWidth, image.PixelHeight,
+            element.Attribute("preserveAspectRatio")?.Value);
+
+        var box = new Rect2D(
+            x + offsetX, y + offsetY, image.PixelWidth * fitX, image.PixelHeight * fitY);
+        image.Placement = Place(box, own, name, context);
+
+        // A flip is state rather than resampled pixels - the samples are the file's bytes and stay that way - and
+        // the determinant is what says whether the transform turns the picture over.
+        if ((own.A * own.D) - (own.B * own.C) < 0)
+        {
+            image.MirrorX = own.A < 0;
+            image.MirrorY = own.D < 0;
+        }
+
+        return image;
+    }
+
+    /// <summary>
+    /// The element's own transform applied to an image's box.
+    ///
+    /// A path's transform is baked into its points; an image has no points, only a rectangle - so a translate or a
+    /// scale moves the rectangle, and a **rotation or skew is reported**, because a rectangle cannot express one
+    /// and quietly drawing the unrotated box would be a picture the file did not ask for.
+    /// </summary>
+    private static Rect2D Place(Rect2D box, AffineTransform transform, string name, Context context)
+    {
+        if (IsIdentity(transform))
+        {
+            return box;
+        }
+
+        if (Math.Abs(transform.B) > 1e-12 || Math.Abs(transform.C) > 1e-12)
+        {
+            context.Warnings.Add(
+                $"image '{name}' is turned or skewed, and the model places an image with a rectangle");
+        }
+
+        Point2D first = transform.Transform(new Point2D(box.X, box.Y));
+        Point2D second = transform.Transform(new Point2D(box.Right, box.Bottom));
+        return Rect2D.FromPoints(first, second);
+    }
+
     // ------------------------------------------------------------------ lengths, numbers, transforms
 
     /// <summary>
-    /// A length in user units.
+    /// A length in the file's own user units, which is what every coordinate inside a document is written in.
     ///
-    /// A unit suffix other than the user unit needs the document's DPI to convert, and assuming 96 would import a
-    /// file authored in millimetres at the wrong size - so a physical unit is read as its number, and the issue
-    /// that needs real unit handling says so.
+    /// **The unit suffix is converted, not ignored.** `1in` is ninety-six user units, `72pt` is ninety-six as well,
+    /// and a bare number is already in user units - so two lengths SVG calls equal come out equal, which they did
+    /// not while the suffix was dropped and `72pt` read as seventy-two. The conversion itself lives in
+    /// <see cref="SvgLength"/>; this is the shorthand for code that has no viewport to offer.
+    ///
+    /// A **percentage returns null here** rather than a number, because what it resolves against depends on the
+    /// axis and the viewport. Every coordinate the reader takes goes through
+    /// <see cref="Context.Length(string?, SvgAxis, string)"/> instead, which has both and reports one it cannot
+    /// resolve rather than substituting the attribute's default.
     /// </summary>
-    internal static double? Length(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return null;
-        }
-
-        string trimmed = text.Trim();
-        if (trimmed.EndsWith('%'))
-        {
-            return null;
-        }
-
-        int end = 0;
-        bool seenDot = false;
-        bool seenExponent = false;
-
-        while (end < trimmed.Length)
-        {
-            char c = trimmed[end];
-            if (char.IsDigit(c))
-            {
-                end++;
-                continue;
-            }
-
-            if (c == '.' && !seenDot && !seenExponent)
-            {
-                seenDot = true;
-                end++;
-                continue;
-            }
-
-            if (c is '+' or '-' && (end == 0 || trimmed[end - 1] is 'e' or 'E'))
-            {
-                end++;
-                continue;
-            }
-
-            if (c is 'e' or 'E' && !seenExponent)
-            {
-                seenExponent = true;
-                end++;
-                continue;
-            }
-
-            break;
-        }
-
-        return end > 0 && double.TryParse(
-            trimmed[..end], NumberStyles.Float, CultureInfo.InvariantCulture, out double value)
-            ? value
-            : null;
-    }
+    internal static double? Length(string? text) => SvgLength.Parse(text);
 
     /// <summary>
     /// Every number in a list, which is what `points`, `viewBox` and `stroke-dasharray` are.

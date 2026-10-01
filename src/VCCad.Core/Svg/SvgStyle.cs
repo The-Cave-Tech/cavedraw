@@ -40,10 +40,17 @@ internal sealed record PresentationStyle(
         StrokeSpec.None);
 
     /// <summary>Reads an element's own paint, with the cascade of attributes, stylesheet and inline style resolved.</summary>
+    /// <param name="viewport">
+    /// What a percentage among the stroke properties is a percentage of. Null when the document establishes no
+    /// viewport, in which case such a percentage is reported rather than replaced by the property's default.
+    /// </param>
+    /// <param name="warn">Where a length the reader cannot resolve is reported.</param>
     public static PresentationStyle From(
         System.Xml.Linq.XElement element,
         PresentationStyle inherited,
-        IReadOnlyDictionary<string, (string Value, bool Important)>? sheet = null)
+        IReadOnlyDictionary<string, (string Value, bool Important)>? sheet = null,
+        SvgViewport? viewport = null,
+        Action<string>? warn = null)
     {
         Dictionary<string, string> inline = ReadStyleAttribute(element);
         Dictionary<string, bool> inlineImportant = ReadStyleImportance(element);
@@ -113,7 +120,7 @@ internal sealed record PresentationStyle(
         bool namedStroke = strokeValue is not null;
         if (strokeValue is not null)
         {
-            stroke = ParseStroke(strokeValue, Value("stroke-opacity"), Value("stroke-width"))
+            stroke = ParseStroke(strokeValue, Value("stroke-opacity"), Value("stroke-width"), viewport, warn)
                 ?? StrokeSpec.None;
         }
 
@@ -121,11 +128,11 @@ internal sealed record PresentationStyle(
         {
             stroke = stroke with
             {
-                Width = Length(Value("stroke-width")) ?? stroke.Width,
+                Width = Length(Value("stroke-width"), viewport, warn) ?? stroke.Width,
                 Cap = ParseCap(Value("stroke-linecap")) ?? stroke.Cap,
                 Join = ParseJoin(Value("stroke-linejoin")) ?? stroke.Join,
                 MiterLimit = Number(Value("stroke-miterlimit")) ?? stroke.MiterLimit,
-                Dash = ParseDash(Value("stroke-dasharray"), Value("stroke-dashoffset")) ?? stroke.Dash,
+                Dash = ParseDash(Value("stroke-dasharray"), Value("stroke-dashoffset"), viewport, warn) ?? stroke.Dash,
             };
 
             // Only when nothing named a paint: naming one already applied the opacity, and applying it twice is how
@@ -236,7 +243,8 @@ internal sealed record PresentationStyle(
         return (FillSpec.Solid(ApplyOpacity(colour, opacity)), null);
     }
 
-    private static StrokeSpec? ParseStroke(string value, string? opacity, string? width)
+    private static StrokeSpec? ParseStroke(
+        string value, string? opacity, string? width, SvgViewport? viewport, Action<string>? warn)
     {
         string trimmed = value.Trim();
         if (trimmed.Equals("none", StringComparison.OrdinalIgnoreCase))
@@ -248,7 +256,7 @@ internal sealed record PresentationStyle(
         return new StrokeSpec(
             true,
             ApplyOpacity(colour, opacity),
-            Length(width) ?? 1.0,
+            Length(width, viewport, warn) ?? 1.0,
             StrokeCap.Butt,
             StrokeJoin.Miter,
             4.0);
@@ -283,7 +291,8 @@ internal sealed record PresentationStyle(
     /// repeated to make it even. Reading it as-is would dash the line with a pattern twice as long as the file
     /// meant.
     /// </summary>
-    private static DashPattern? ParseDash(string? value, string? offset = null)
+    private static DashPattern? ParseDash(
+        string? value, string? offset = null, SvgViewport? viewport = null, Action<string>? warn = null)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Trim().Equals("none", StringComparison.OrdinalIgnoreCase))
         {
@@ -298,14 +307,41 @@ internal sealed record PresentationStyle(
 
         // The phase comes with the pattern: `stroke-dashoffset` decides where in it the line starts, and a dashed
         // line that begins at the beginning instead of where it was drawn is a different picture.
-        double phase = Length(offset) ?? 0.0;
+        double phase = Length(offset, viewport, warn) ?? 0.0;
 
         return numbers.Length % 2 == 0
             ? new DashPattern(numbers, phase)
             : new DashPattern(numbers.Concat(numbers).ToArray(), phase);
     }
 
-    private static double? Length(string? value) => SvgReader.Length(value);
+    /// <summary>
+    /// A stroke property that is a length, with its unit converted and a percentage resolved.
+    ///
+    /// A percentage among the stroke properties is a fraction of the viewport's **diagonal**, which is SVG's own
+    /// rule and the reason a wide stroke keeps its weight in a viewport that is not square. With no viewport to
+    /// measure against there is no answer to give, and the property's default is not it - so that is reported.
+    /// </summary>
+    private static double? Length(string? value, SvgViewport? viewport = null, Action<string>? warn = null)
+    {
+        (double Value, bool IsPercent)? parsed = SvgLength.ParseWithUnit(value, warn);
+        if (parsed is null)
+        {
+            return null;
+        }
+
+        if (!parsed.Value.IsPercent)
+        {
+            return parsed.Value.Value;
+        }
+
+        if (viewport is not { } port)
+        {
+            warn?.Invoke($"'{value}' is a percentage with no viewport to resolve it against");
+            return null;
+        }
+
+        return parsed.Value.Value / 100.0 * port.Diagonal;
+    }
 
     /// <summary>A plain number, which is what `stroke-miterlimit` and `stroke-opacity` are.</summary>
     private static double? Number(string? value)
