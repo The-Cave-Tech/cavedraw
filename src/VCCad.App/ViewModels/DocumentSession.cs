@@ -638,26 +638,41 @@ public sealed class DocumentSession : INotifyPropertyChanged
     private int MoveByDeltas(IReadOnlyList<(LayerItem Item, Vector2D Delta)> moves, string description)
     {
         var edits = new List<IUndoableCommand>();
+        var moved = new HashSet<LayerItem>(ReferenceEqualityComparer.Instance);
         int skipped = 0;
 
         foreach ((LayerItem item, Vector2D delta) in moves)
         {
-            switch (item)
+            // **A container has no geometry of its own** - it is where its contents are, so arranging one
+            // means arranging everything inside it. A group used to fall to the `default` arm and be counted
+            // as skipped: selecting a group and aligning it moved nothing and said so, which is the
+            // "the contents stay behind" half of the report. It moved nothing at all, which is worse.
+            foreach (LayerItem inside in Flatten(item))
             {
-                case PathItem path:
-                    PathItem before = path.GeometrySnapshot();
-                    path.TranslateGeometryBy(delta);
-                    edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot(), description));
-                    break;
+                // A selection can hold a group and one of its own children. Moving that child twice would
+                // double its travel, so each object is translated once however it was reached.
+                if (!moved.Add(inside))
+                {
+                    continue;
+                }
 
-                case TextItem text:
-                    Point2D origin = text.Origin;
-                    edits.Add(new SetTextOriginCommand(text, origin, origin + delta));
-                    break;
+                switch (inside)
+                {
+                    case PathItem path:
+                        PathItem before = path.GeometrySnapshot();
+                        path.TranslateGeometryBy(delta);
+                        edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot(), description));
+                        break;
 
-                default:
-                    skipped++;
-                    break;
+                    case TextItem text:
+                        Point2D origin = text.Origin;
+                        edits.Add(new SetTextOriginCommand(text, origin, origin + delta));
+                        break;
+
+                    default:
+                        skipped++;
+                        break;
+                }
             }
         }
 
@@ -672,6 +687,30 @@ public sealed class DocumentSession : INotifyPropertyChanged
 
         return edits.Count;
     }
+    /// <summary>
+    /// An object and everything inside it, outermost first. A leaf is itself.
+    ///
+    /// Arranging works on what has geometry, and a group does not: it is the sum of its contents' geometry, so
+    /// moving the group means moving all of them.
+    /// </summary>
+    private static IEnumerable<LayerItem> Flatten(LayerItem item)
+    {
+        yield return item;
+
+        if (item is not ArtGroup group)
+        {
+            yield break;
+        }
+
+        foreach (LayerItem child in group.Children)
+        {
+            foreach (LayerItem nested in Flatten(child))
+            {
+                yield return nested;
+            }
+        }
+    }
+
     /// <summary>
     /// Rounds one corner of a path - one undo step. The radius is used unless it is larger than the two
     /// segments meeting at the corner allow, in which case the largest that fits is used and the result
