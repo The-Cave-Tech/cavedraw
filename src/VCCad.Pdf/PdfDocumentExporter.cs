@@ -619,6 +619,14 @@ public static class PdfDocumentExporter
                 string array = string.Join(' ', path.Stroke.Dash.Segments.Select(v => Num(Math.Max(0.0, v * strokeScale))));
                 ops.Add($"[{array}] {Num(path.Stroke.Dash.Offset * strokeScale)} d");
             }
+            else
+            {
+                // **The dash is graphics state, not a property of a path.** Setting it only when a path has one
+                // leaves it set for every path after it, so an undashed stroke that follows a dashed one is
+                // drawn dashed - and the effect is order-dependent, which makes it look like a rendering fault
+                // rather than an export one. Every path states its own dash, including "none".
+                ops.Add("[] 0 d");
+            }
         }
 
         var closed = contours.Where(c => c.IsClosed).ToList();
