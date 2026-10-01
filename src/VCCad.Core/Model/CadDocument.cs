@@ -134,6 +134,14 @@ public sealed class CadDocument
     /// <summary>Every path in the document, in tree order.</summary>
     public IEnumerable<PathItem> AllPaths() => AllItems().OfType<PathItem>();
 
+    /// <summary>
+    /// Every group in the document, in tree order.
+    ///
+    /// Used to find the **instances** - a group carrying a source id - which is how SVG's `use` maps: the link is
+    /// on the group rather than in a table, so finding them means walking the tree.
+    /// </summary>
+    public IEnumerable<ArtGroup> AllGroups() => AllItems().OfType<ArtGroup>();
+
     private static IEnumerable<LayerItem> Walk(IEnumerable<LayerItem> items)
     {
         foreach (LayerItem item in items)

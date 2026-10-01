@@ -3747,6 +3747,7 @@ public static class EditorOperations
                     artboards = result.Document.Artboards.Count,
                     objects = result.Objects,
                     byElement = result.ByElement,
+                    missing = result.Missing,
                 };
             });
 
@@ -3765,6 +3766,7 @@ public static class EditorOperations
                     document = result.Document.Name,
                     objects = result.Objects,
                     byElement = result.ByElement,
+                    missing = result.Missing,
                 };
             });
 

@@ -231,7 +231,10 @@ internal sealed record GroupDto(
     bool IsLocked,
     AffineTransform Transform,
     double Opacity,
-    ItemDto[] Children) : ItemDto;
+    ItemDto[] Children,
+
+    // The definition an instance of this group was made from, when it is one. Absent for an ordinary group.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SourceId = null) : ItemDto;
 
 internal sealed record TextDto(
     Guid Id,
@@ -442,7 +445,8 @@ internal abstract record ItemDto
         g.IsLocked,
         g.Transform,
         g.Opacity,
-        g.Children.Select(From).ToArray());
+        g.Children.Select(From).ToArray(),
+        g.SourceId);
 
     private static FillDto ToFill(FillSpec f)
         => new(
@@ -700,6 +704,7 @@ internal static class ItemDtoExtensions
             IsLocked = g.IsLocked,
             Transform = g.Transform,
             Opacity = g.Opacity,
+            SourceId = g.SourceId,
         };
         group.RestoreIdentity(g.Id);
         foreach (ItemDto child in VccadDocumentSerializer.RequireArray(g.Children, nameof(g.Children)))

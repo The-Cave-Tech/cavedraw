@@ -6,8 +6,11 @@ using VCCad.Geometry;
 
 namespace VCCad.Core.Svg;
 
-/// <summary>What an SVG import produced: the document, and how many objects of each element type it made.</summary>
-public sealed record SvgImportResult(CadDocument Document, IReadOnlyDictionary<string, int> ByElement)
+/// <summary>What an SVG import produced: the document, how many objects of each element type, and what was not found.</summary>
+public sealed record SvgImportResult(
+    CadDocument Document,
+    IReadOnlyDictionary<string, int> ByElement,
+    IReadOnlyList<string> Missing)
 {
     /// <summary>How many objects were imported in total.</summary>
     public int Objects => ByElement.Values.Sum();
@@ -80,12 +83,21 @@ public static class SvgReader
         // The view box applies to everything, so it goes on one group - but only when there is one to apply. A
         // group that carries the identity would be structure the file does not have.
         ArtGroup? viewGroup = IsIdentity(viewBox) ? null : new ArtGroup { Name = "viewBox", Transform = viewBox };
+
+        // Every id in the file, indexed before anything is drawn: a `use` may refer to a definition that appears
+        // after it, and a reader that indexed as it went would find nothing and silently drop the instance.
+        var ids = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        Index(root, ids);
+
         var context = new Context
         {
             Layer = layer,
             Group = viewGroup,
             Style = PresentationStyle.Default,
             Counts = counts,
+            Ids = ids,
+            Resolving = new HashSet<string>(StringComparer.Ordinal),
+            Missing = new List<string>(),
         };
 
         foreach (XElement child in root.Elements())
@@ -98,7 +110,22 @@ public static class SvgReader
             layer.AddItem(viewGroup);
         }
 
-        return new SvgImportResult(document, counts);
+        return new SvgImportResult(document, counts, context.Missing);
+    }
+
+    /// <summary>Indexes every element that has an id, so a reference resolves whichever way round it is written.</summary>
+    private static void Index(XElement element, Dictionary<string, XElement> ids)
+    {
+        string? id = element.Attribute("id")?.Value;
+        if (!string.IsNullOrEmpty(id) && !ids.ContainsKey(id))
+        {
+            ids[id] = element;
+        }
+
+        foreach (XElement child in element.Elements())
+        {
+            Index(child, ids);
+        }
     }
 
     /// <summary>Reads an SVG document from a file.</summary>
@@ -188,6 +215,15 @@ public static class SvgReader
         public required PresentationStyle Style { get; init; }
         public required Dictionary<string, int> Counts { get; init; }
 
+        /// <summary>Every element with an id, so a `use` can find its target wherever it is defined.</summary>
+        public required Dictionary<string, XElement> Ids { get; init; }
+
+        /// <summary>The ids currently being expanded, so a `use` that refers to itself stops rather than recurses.</summary>
+        public required HashSet<string> Resolving { get; init; }
+
+        /// <summary>The ids that were referred to and not found, which are reported rather than dropped.</summary>
+        public required List<string> Missing { get; init; }
+
         /// <summary>Where a shape is added: the group it is inside, or the layer when there is no group.</summary>
         public void Add(LayerItem item)
         {
@@ -238,7 +274,17 @@ public static class SvgReader
             case "metadata":
             case "namedview":
             case "script":
-                // Not drawn here. defs and symbol are read by the issues that instance them.
+                // Not drawn here. A symbol is drawn where it is **used**, not where it is defined, and defs
+                // holds definitions for the issues that instance them.
+                return;
+
+            case "use":
+                foreach (LayerItem used in ReadUse(element, context, style))
+                {
+                    context.Add(used);
+                    context.Counts["use"] = context.Counts.GetValueOrDefault("use") + 1;
+                }
+
                 return;
         }
 
@@ -289,6 +335,9 @@ public static class SvgReader
             Group = group,
             Style = style,
             Counts = context.Counts,
+            Ids = context.Ids,
+            Resolving = context.Resolving,
+            Missing = context.Missing,
         };
 
         foreach (XElement child in element.Elements())
@@ -526,6 +575,100 @@ public static class SvgReader
         sub.Nodes.Add(new PathNode(new Point2D(x, y), inHandle, new Point2D(x, y)));
         _ = rx;
         _ = ry;
+    }
+
+    /// <summary>
+    /// A `use`: an instance of whatever it refers to.
+    ///
+    /// **The instance is a group marked with the id it came from**, not a flattened copy. The geometry inside is the
+    /// definition's content as it was read, so the picture is right, and the link is recorded so an edit to the
+    /// definition can reach every instance - which is what the person who wrote the file meant, and what a copy
+    /// loses while looking identical in one render.
+    ///
+    /// Both reference forms are read: `xlink:href`, which Inkscape writes, and the SVG 2 bare `href`. A target that
+    /// is not there is **reported**, and so is a reference that leads back to itself - a `use` inside the defs it
+    /// refers to would otherwise recurse until the stack ran out.
+    /// </summary>
+    private static IEnumerable<LayerItem> ReadUse(XElement element, Context context, PresentationStyle style)
+    {
+        XNamespace xlink = "http://www.w3.org/1999/xlink";
+        string? href = element.Attribute("href")?.Value ?? element.Attribute(xlink + "href")?.Value;
+
+        string id = href is { Length: > 1 } && href[0] == '#' ? href[1..] : string.Empty;
+        if (id.Length == 0)
+        {
+            context.Missing.Add(href ?? "(no href)");
+            yield break;
+        }
+
+        if (!context.Ids.TryGetValue(id, out XElement? target))
+        {
+            context.Missing.Add(id);
+            yield break;
+        }
+
+        if (!context.Resolving.Add(id))
+        {
+            // A reference that leads back to itself. Reported rather than followed, because following it is a
+            // stack overflow rather than a drawing.
+            context.Missing.Add(id + " (circular)");
+            yield break;
+        }
+
+        double x = Length(element.Attribute("x")?.Value) ?? 0.0;
+        double y = Length(element.Attribute("y")?.Value) ?? 0.0;
+
+        var group = new ArtGroup
+        {
+            Name = element.Attribute("id")?.Value ?? id,
+            SourceId = id,
+            Transform = AffineTransform.CreateTranslation(x, y)
+                .Compose(Transform(element.Attribute("transform")?.Value)),
+        };
+
+        var inside = new Context
+        {
+            Layer = context.Layer,
+            Group = group,
+            Style = PresentationStyle.From(element, style),
+            Counts = context.Counts,
+            Ids = context.Ids,
+            Resolving = context.Resolving,
+            Missing = context.Missing,
+        };
+
+        if (target.Name.LocalName == "symbol")
+        {
+            // A symbol is sized by the `use` that draws it: the use's width and height over the symbol's view box,
+            // with the symbol's own width and height - SVG 2's geometry properties - as the fallback.
+            double symbolWidth = Length(element.Attribute("width")?.Value)
+                ?? Length(target.Attribute("width")?.Value) ?? 0.0;
+            double symbolHeight = Length(element.Attribute("height")?.Value)
+                ?? Length(target.Attribute("height")?.Value) ?? 0.0;
+            double[]? box = Numbers(target.Attribute("viewBox")?.Value);
+
+            if (box is { Length: 4 } && box[2] > 0 && box[3] > 0 && symbolWidth > 0 && symbolHeight > 0)
+            {
+                group.Transform = group.Transform
+                    .Compose(AffineTransform
+                        .CreateScale(symbolWidth / box[2], symbolHeight / box[3])
+                        .Compose(AffineTransform.CreateTranslation(-box[0], -box[1])));
+            }
+
+            foreach (XElement child in target.Elements())
+            {
+                ReadElement(child, inside);
+            }
+        }
+        else
+        {
+            // A shape or a group: read it into this group, which is what makes the instance hold the definition's
+            // content rather than pointing at it from nowhere.
+            ReadElement(target, inside);
+        }
+
+        context.Resolving.Remove(id);
+        yield return group;
     }
 
     private static bool IsHidden(XElement element)

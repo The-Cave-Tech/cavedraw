@@ -40,6 +40,26 @@ public sealed class ArtGroup : LayerItem, IItemContainer
         set => SetField(ref _opacity, MathUtils.Clamp(value, 0.0, 1.0));
     }
 
+    /// <summary>
+    /// The id of the element this group is an **instance** of, or null when it is a group in its own right.
+    ///
+    /// SVG's `use` does not draw a copy of its target: it draws the target, and editing the target changes every
+    /// instance of it. That is what the person who wrote the file meant, and flattening it into copies loses the
+    /// meaning while looking identical in a single render.
+    ///
+    /// The children here are the definition's content as it stood when the file was read - so the geometry is
+    /// right and the link is recorded - and a renderer that re-resolves the id draws the current definition
+    /// instead. Keeping both is what makes the link survive a save and an edit rather than being a promise nothing
+    /// can keep.
+    /// </summary>
+    public string? SourceId
+    {
+        get => _sourceId;
+        set => SetField(ref _sourceId, value);
+    }
+
+    private string? _sourceId;
+
     /// <inheritdoc/>
     public event EventHandler? StructureChanged;
 
@@ -96,6 +116,10 @@ public sealed class ArtGroup : LayerItem, IItemContainer
             IsLocked = IsLocked,
             Transform = _transform,
             Opacity = _opacity,
+
+            // The link to the definition, or a duplicate of an instance would stop being an instance - the same
+            // way a cloned path loses the rest of its stroke stack if the clone forgets to carry it.
+            SourceId = _sourceId,
         };
         copy.AddRangeCloned(_children);
         return copy;

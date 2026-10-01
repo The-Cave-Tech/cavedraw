@@ -3,6 +3,8 @@ using System.Text.Json;
 using VCCad.App.Automation;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
+using VCCad.Core.Serialization;
+using VCCad.Geometry;
 using Xunit;
 
 namespace VCCad.App.Tests;
@@ -80,7 +82,53 @@ public class SvgImportOperationTests
         }
     }
 
-    /// <summary>A malformed file is reported as what is wrong with it, rather than as a failed operation.</summary>
+    /// <summary>
+    /// **A `use` is imported as a link, and the link survives a save.**
+    ///
+    /// The instance carries the id it came from, so an edit to the definition can reach every instance of it.
+    /// A sidecar that dropped the id would turn every instance into an anonymous copy, and the file would look
+    /// identical until somebody edited the definition and only one of them changed.
+    /// </summary>
+    [Fact]
+    public void AnInstanceSurvivesSaveAndReload()
+    {
+        AutomationContext context = Host();
+        string svg =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" " +
+            "width=\"100\" height=\"100\" viewBox=\"0 0 100 100\">" +
+            "<defs><rect id=\"box\" width=\"10\" height=\"10\"/></defs>" +
+            "<use xlink:href=\"#box\" x=\"20\" y=\"30\"/></svg>";
+
+        EditorOperations.Invoke(context, "document.importSvg", Params(new { svgBase64 = Base64(svg) }));
+
+        ArtGroup instance = context.Document.AllGroups().Single(g => g.SourceId is not null);
+        Assert.Equal("box", instance.SourceId);
+
+        CadDocument reloaded = VccadDocumentSerializer.Deserialize(
+            VccadDocumentSerializer.SerializeToBytes(context.Document));
+
+        ArtGroup back = reloaded.AllGroups().Single(g => g.SourceId is not null);
+        Assert.Equal("box", back.SourceId);
+        Assert.Equal(20.0, back.Transform.Transform(new Point2D(0, 0)).X, 6);
+        Assert.Equal(30.0, back.Transform.Transform(new Point2D(0, 0)).Y, 6);
+    }
+
+    /// <summary>A reference to something the file does not contain is reported by the operation, not dropped.</summary>
+    [Fact]
+    public void AMissingReferenceIsReportedByTheOperation()
+    {
+        AutomationContext context = Host();
+        string svg =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"50\" height=\"50\">" +
+            "<use href=\"#nowhere\"/></svg>";
+
+        JsonElement result = JsonSerializer.SerializeToElement(EditorOperations.Invoke(
+            context, "document.importSvg", Params(new { svgBase64 = Base64(svg) })));
+
+        JsonElement missing = result.GetProperty("missing");
+        Assert.Equal(1, missing.GetArrayLength());
+        Assert.Equal("nowhere", missing[0].GetString());
+    }
     [Fact]
     public void AMalformedSvgIsReported()
     {
