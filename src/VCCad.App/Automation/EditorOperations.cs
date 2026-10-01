@@ -2787,6 +2787,64 @@ public static class EditorOperations
                 return DescribeColor();
             });
 
+        Add("color.pickAt",
+            "Pick the colour of the screen at a point, the way the eyedropper does. The point is in screen " +
+            "pixels, and the sampled pixel comes from the screen rather than from this application's " +
+            "rendering, so a colour in another window is picked correctly. Reads what the platform can see and " +
+            "says so when it cannot.",
+            "x:number, y:number",
+            (ctx, p) =>
+            {
+                int x = (int)Math.Round(p.GetDouble("x", 0));
+                int y = (int)Math.Round(p.GetDouble("y", 0));
+                bool supported = Picking.ScreenColour.Sampler.IsSupported;
+
+                if (!Picking.ScreenColour.TrySample(x, y, out ColorRgb colour))
+                {
+                    return new
+                    {
+                        picked = false,
+                        supported,
+                        x,
+                        y,
+                        reason = supported
+                            ? "the point is outside every display"
+                            : "this platform cannot read the screen",
+                    };
+                }
+
+                EditorColorState.Shared.SetPicked(colour);
+                return new
+                {
+                    picked = true,
+                    supported,
+                    x,
+                    y,
+                    r = Math.Round(colour.R, 6),
+                    g = Math.Round(colour.G, 6),
+                    b = Math.Round(colour.B, 6),
+                    hex = HexColor.Format(colour),
+                };
+            });
+
+        Add("color.picked",
+            "The last colour the screen eyedropper chose, and whether this platform can read the screen at " +
+            "all. This is the small circle beside the eyedropper.",
+            "",
+            (ctx, _) =>
+            {
+                ColorRgb? picked = EditorColorState.Shared.LastPicked;
+                return new
+                {
+                    supported = Picking.ScreenColour.Sampler.IsSupported,
+                    hasPicked = picked is not null,
+                    hex = picked is { } c ? HexColor.Format(c) : null,
+                    r = picked is { } rc ? Math.Round(rc.R, 6) : (double?)null,
+                    g = picked is { } gc ? Math.Round(gc.G, 6) : (double?)null,
+                    b = picked is { } bc ? Math.Round(bc.B, 6) : (double?)null,
+                };
+            });
+
         Add("color.recent",
             "The recently used colours, newest first, or clears them. This is the two-column " +
             "swatch pad beside the ring.",

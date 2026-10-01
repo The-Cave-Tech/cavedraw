@@ -44,6 +44,24 @@ public sealed class EditorColorState
     /// <summary>The recent colours, most recent first.</summary>
     public IReadOnlyList<ColorRgb> Recent => _recent;
 
+    /// <summary>
+    /// The last colour the screen picker chose, shown beside the eyedropper as a small filled circle and
+    /// applied by clicking it - the same thing clicking a recent swatch does.
+    ///
+    /// Kept separate from <see cref="Color"/> because it is a **result**, not a selection: a person picks a
+    /// colour to see what it is before deciding to use it.
+    /// </summary>
+    public ColorRgb? LastPicked { get; private set; }
+
+    /// <summary>Records a colour the screen picker chose, and makes it the working colour.</summary>
+    public void SetPicked(ColorRgb color)
+    {
+        LastPicked = color;
+        Model.SetColor(color);
+        Remember(color);
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
     /// <summary>Selects a colour and records it as recent.</summary>
     public void SetColor(ColorRgb color)
     {
