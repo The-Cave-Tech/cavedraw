@@ -32,8 +32,12 @@ internal sealed class SvgGradients
         Dictionary<string, string> Values,
         List<GradientStop> Stops);
 
-    /// <summary>Reads every gradient in the document, so a `url(#id)` can be resolved from anywhere.</summary>
-    public static SvgGradients Collect(XElement root, SvgStylesheet sheet, Action<string>? warn = null)
+    /// <summary>Reads every gradient in the document, so a `url(#id)` can be resolved from anywhere.
+    ///
+    /// There is no warning channel here any more: the one thing this reader used to give up on - a radial's focal
+    /// point - is carried by the model now, so a gradient either reads faithfully or is not a gradient at all.
+    /// </summary>
+    public static SvgGradients Collect(XElement root, SvgStylesheet sheet)
     {
         var gradients = new SvgGradients();
 
@@ -67,19 +71,6 @@ internal sealed class SvgGradients
             foreach (XAttribute attribute in element.Attributes())
             {
                 values[attribute.Name.LocalName] = attribute.Value;
-            }
-
-            // A radial gradient may put its **focal point** somewhere other than its centre - `fx`/`fy` - and the
-            // model has no focal point, so it is dropped. Dropping it silently turns an off-centre highlight into
-            // a centred one, which is a different picture, so it is said.
-            if (name == "radialGradient" &&
-                (values.ContainsKey("fx") || values.ContainsKey("fy")) &&
-                !(string.Equals(values.GetValueOrDefault("fx"), values.GetValueOrDefault("cx"), StringComparison.Ordinal) &&
-                  string.Equals(values.GetValueOrDefault("fy"), values.GetValueOrDefault("cy"), StringComparison.Ordinal)))
-            {
-                warn?.Invoke(
-                    $"radial gradient '{id}' has a focal point (fx/fy); the model has no focal point, so the " +
-                    "gradient is centred on cx/cy instead");
             }
 
             AffineTransform transform = SvgReader.Transform(values.GetValueOrDefault("gradientTransform"));
@@ -303,6 +294,13 @@ internal sealed class SvgGradients
             double radiusX = raw.UserSpace ? (box.Width <= 0 ? r : r / box.Width) : r;
             double radiusY = raw.UserSpace ? (box.Height <= 0 ? r : r / box.Height) : r;
 
+            // `fx`/`fy` are in the same units and the same space as the centre, and the format's default is the
+            // centre itself - so an absent focus is read as the centre and then not kept, rather than being
+            // invented as a coordinate of its own.
+            Point2D? focal = v.ContainsKey("fx") || v.ContainsKey("fy")
+                ? Normalise(Coordinate(v, "fx", cx), Coordinate(v, "fy", cy))
+                : null;
+
             if (!IsIdentity(raw.Transform))
             {
                 // A gradient transform moves the centre and stretches the radii. The model has no matrix of its
@@ -316,6 +314,24 @@ internal sealed class SvgGradients
                     ((edgeX.X - moved.X) * (edgeX.X - moved.X)) + ((edgeX.Y - moved.Y) * (edgeX.Y - moved.Y)));
                 radiusY = Math.Sqrt(
                     ((edgeY.X - moved.X) * (edgeY.X - moved.X)) + ((edgeY.Y - moved.Y) * (edgeY.Y - moved.Y)));
+
+                // The focus is moved with the gradient it belongs to. It is clamped below rather than here,
+                // because the clamp is only meaningful against the radii the model ends up holding.
+                if (focal is { } beforeTransform)
+                {
+                    focal = raw.Transform.Transform(beforeTransform);
+                }
+            }
+
+            // A focal point that lands on the centre is the picture a gradient with no focal point paints, so it
+            // is not kept: the writer would then have to invent an `fx` for a file that named one meaning nothing.
+            if (focal is { } somewhere && somewhere != centre)
+            {
+                focal = ClampToEllipse(somewhere, centre, radiusX, radiusY);
+            }
+            else
+            {
+                focal = null;
             }
 
             return new GradientSpec
@@ -326,6 +342,7 @@ internal sealed class SvgGradients
                 Center = centre,
                 RadiusX = radiusX,
                 RadiusY = radiusY,
+                FocalPoint = focal,
             };
         }
 
@@ -365,6 +382,11 @@ internal sealed class SvgGradients
     /// SVG writes gradient coordinates as either, and both mean the same thing: `50%` and `0.5` are the middle. A
     /// reader that took the number and ignored the sign of a percentage would put every `50%` gradient at the
     /// fifty-times-too-far edge of the shape.
+    ///
+    /// The sign is stripped before the number is read, because <see cref="SvgReader.Length"/> answers in USER
+    /// UNITS and therefore refuses a percentage outright - it returns null, and this method then falls back to the
+    /// default. That is how `cx="25%"` used to import as a centred gradient: not a missing feature, a fallback
+    /// standing in for a value the file did write.
     /// </summary>
     private static double Coordinate(Dictionary<string, string> values, string name, double fallback)
     {
@@ -375,13 +397,47 @@ internal sealed class SvgGradients
 
         string trimmed = text.Trim();
         bool percent = trimmed.EndsWith('%');
-        double? value = SvgReader.Length(trimmed);
+        double? value = SvgReader.Length(percent ? trimmed[..^1] : trimmed);
         if (value is null)
         {
             return fallback;
         }
 
         return percent ? value.Value / 100.0 : value.Value;
+    }
+
+    /// <summary>
+    /// Moves a focal point that lies outside its radial onto the radial's edge, along the line from the centre.
+    ///
+    /// This is SVG's own rule, stated for a circle, and it is applied here to the ellipse the model can hold.
+    /// The two are the same rule: `r` is one length, so an ellipse only ever arises from the shape's box, and
+    /// measuring the focus in units of each radius is measuring it in the gradient's own coordinates.
+    ///
+    /// **Clamped, not discarded.** A file that puts its highlight far out to the upper left means it to be seen
+    /// to the upper left; the nearest point the shading can represent is on the edge in that direction. Dropping
+    /// the point would recentre the highlight, which is not the closest thing to the file - it is a different
+    /// picture that happens to be easier to draw.
+    /// </summary>
+    private static Point2D ClampToEllipse(Point2D point, Point2D centre, double radiusX, double radiusY)
+    {
+        // A degenerate radial has no interior to be inside of, and the centre is the only point it can mean.
+        if (!(radiusX > 0) || !(radiusY > 0) ||
+            !double.IsFinite(radiusX) || !double.IsFinite(radiusY))
+        {
+            return centre;
+        }
+
+        double dx = (point.X - centre.X) / radiusX;
+        double dy = (point.Y - centre.Y) / radiusY;
+        double length = Math.Sqrt((dx * dx) + (dy * dy));
+
+        if (!double.IsFinite(length) || length <= 1.0)
+        {
+            return point;
+        }
+
+        double scale = 1.0 / length;
+        return new Point2D(centre.X + (dx * scale * radiusX), centre.Y + (dy * scale * radiusY));
     }
 
     private static bool IsIdentity(AffineTransform t)

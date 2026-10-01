@@ -155,6 +155,21 @@ public sealed record GradientSpec
     /// <summary>Vertical radius as a fraction of the object's height. Equal to RadiusX for a circle.</summary>
     public double RadiusY { get; init; } = 0.5;
 
+    /// <summary>
+    /// Radial **focal point** - where the highlight sits - normalised to the object bounds like
+    /// <see cref="Center"/>, or null when the gradient has none.
+    ///
+    /// Null is a real state rather than a zero. A radial's focus defaults to its centre, so a file that
+    /// names no focal point paints exactly what a file naming the centre does; storing the centre for the
+    /// first would put a coordinate in the model the file never wrote, and the writer would then emit it as
+    /// though the file had. That is the difference between reflecting a document and inventing one.
+    ///
+    /// A focal point belongs inside the radial's ellipse, which is what the SVG reader guarantees before the
+    /// model sees one: an outside focus is moved to the edge of the circle along the line from the centre,
+    /// because discarding it would recentre the highlight and a different picture is not a safe fallback.
+    /// </summary>
+    public Point2D? FocalPoint { get; init; }
+
     /// <summary>Rotation of an elliptical radial, in degrees.</summary>
     public double Rotation { get; init; }
 

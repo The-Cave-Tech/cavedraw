@@ -95,7 +95,7 @@ public static class SvgReader
         // defined after the elements it styles, which multi-style.svg does.
         SvgStylesheet sheet = SvgStylesheet.Parse(CollectStyles(root), baseDirectory);
         var warnings = new HashSet<string>(StringComparer.Ordinal);
-        SvgGradients gradients = SvgGradients.Collect(root, sheet, warning => warnings.Add(warning));
+        SvgGradients gradients = SvgGradients.Collect(root, sheet);
 
         // Filters are document assets: an element refers to one by id, so they are collected once and held on the
         // document rather than copied into every element that uses them.

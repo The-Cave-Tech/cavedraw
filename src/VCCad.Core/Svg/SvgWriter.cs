@@ -374,6 +374,16 @@ public static class SvgWriter
                 element.Add(new XAttribute("cx", Number(gradient.Center.X)));
                 element.Add(new XAttribute("cy", Number(gradient.Center.Y)));
                 element.Add(new XAttribute("r", Number(Math.Max(gradient.RadiusX, gradient.RadiusY))));
+
+                // Written only when it is somewhere other than the centre. `fx`/`fy` default to `cx`/`cy`, so
+                // spelling out a centred focus would put a coordinate in the file that the document does not
+                // have - and a document that names no focus would grow two attributes on every export.
+                if (gradient.FocalPoint is { } focus &&
+                    (focus.X != gradient.Center.X || focus.Y != gradient.Center.Y))
+                {
+                    element.Add(new XAttribute("fx", Number(focus.X)));
+                    element.Add(new XAttribute("fy", Number(focus.Y)));
+                }
             }
             else
             {
@@ -905,7 +915,8 @@ public static class SvgWriter
             }
 
             if (a.Start != b.Start || a.End != b.End || a.Center != b.Center ||
-                Math.Abs(a.RadiusX - b.RadiusX) > 1e-9 || Math.Abs(a.RadiusY - b.RadiusY) > 1e-9)
+                Math.Abs(a.RadiusX - b.RadiusX) > 1e-9 || Math.Abs(a.RadiusY - b.RadiusY) > 1e-9 ||
+                a.FocalPoint != b.FocalPoint)
             {
                 return false;
             }
@@ -934,6 +945,7 @@ public static class SvgWriter
             hash.Add(gradient.Start);
             hash.Add(gradient.End);
             hash.Add(gradient.Center);
+            hash.Add(gradient.FocalPoint);
             foreach (GradientStop stop in gradient.Stops)
             {
                 hash.Add(stop);
