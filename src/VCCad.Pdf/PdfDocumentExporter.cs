@@ -765,6 +765,22 @@ public static class PdfDocumentExporter
 
             double strokeWidth = Math.Max(0.0, stroke.Width * strokeScale);
 
+            // A stroke that varies in width is drawn as its **outline filled**, not stroked: PDF has one width
+            // per stroke, so there is no variable-width stroke to write. Filling the region the stroke covers is
+            // not an approximation of it - it is the same region, and the outline is what the canvas fills too.
+            //
+            // Note this sets the **fill** colour, because the outline is filled. The stroke's own colour is what
+            // it is filled with, and none of the stroke graphics state below applies.
+            if (stroke.HasWidthProfile)
+            {
+                ops.Add(ColorOperator(
+                    stroke.Color,
+                    ReferenceEquals(stroke, path.Strokes[0]) ? path.SourceStrokeCmyk : null,
+                    stroke: false));
+                WriteProfileOutline(ops, path, stroke, toDoc, strokeScale, opacity, alphaStates);
+                continue;
+            }
+
             // The original ink values belong to the item rather than to a stroke, so they describe the first
             // one. Writing them for every stroke would paint the later ones in a colour they never had.
             ops.Add(ColorOperator(
@@ -1272,6 +1288,63 @@ public static class PdfDocumentExporter
         }
 
         return count;
+    }
+
+    /// <summary>
+    /// Writes a variable-width stroke as the region it covers, filled.
+    ///
+    /// PDF has one width per stroke, so a stroke that varies along its length cannot be written as a stroke.
+    /// It is written as what it *is*: the outline filled. That is not an approximation - the outline is the same
+    /// region a viewer would paint - and it is filled with the **nonzero** rule, which is what makes the
+    /// overlapping corners of a mitred outline fill rather than cancel.
+    ///
+    /// The profile's widths are in the same units as the stroke's own width, so they are scaled by the same
+    /// factor the stroked path would have been.
+    /// </summary>
+    private static void WriteProfileOutline(
+        List<string> ops,
+        PathItem path,
+        StrokeSpec stroke,
+        AffineTransform toDoc,
+        double strokeScale,
+        double opacity,
+        PdfAlphaStates? alphaStates = null)
+    {
+        WidthProfileSpec profile = stroke.WidthProfile!;
+        WidthProfileSpec scaled = strokeScale switch
+        {
+            1.0 => profile,
+            _ => new WidthProfileSpec(
+                profile.Name,
+                profile.Points.Select(p => new WidthPoint(
+                    p.Position, p.LeftWidth * strokeScale, p.RightWidth * strokeScale, p.Interpolation))),
+        };
+
+        IReadOnlyList<IReadOnlyList<Point2D>> loops = PathOffset.Outline(
+            PathFlattener.FlattenForStroke(path), scaled, stroke.Width * strokeScale);
+
+        if (loops.Count == 0)
+        {
+            return;
+        }
+
+        if (alphaStates is { HasTransparency: true })
+        {
+            ops.Add($"{alphaStates.NameFor(stroke.Color.A * opacity)} gs");
+        }
+
+        foreach (IReadOnlyList<Point2D> loop in loops)
+        {
+            for (int i = 0; i < loop.Count; i++)
+            {
+                Point2D point = toDoc.Transform(loop[i]);
+                ops.Add($"{Num(point.X)} {Num(point.Y)} {(i == 0 ? "m" : "l")}");
+            }
+
+            ops.Add("h");
+        }
+
+        ops.Add("f");
     }
 
     /// <summary>Writes the raw geometry of several contours into the current path.</summary>

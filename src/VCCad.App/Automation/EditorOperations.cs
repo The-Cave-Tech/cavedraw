@@ -1613,6 +1613,39 @@ public static class EditorOperations
             return Summary(ctx);
         });
 
+        Add("style.setWidthProfile",
+            "Give the selected paths' strokes a width profile - a stroke whose width changes along its length, " +
+            "and can change differently on each side. points is [{position, left, right, interpolation?}], where " +
+            "position runs 0 at the start of the path to 1 at the end and left/right are the widths on each " +
+            "side. An empty points list clears the profile and leaves the stroke's own width, which is what " +
+            "removing a profile does. Every stroke in the stack is given it, like style.setStroke. One undo " +
+            "step per path.",
+            "points:[{position:number, left:number, right:number, interpolation?:linear|cubic}], name?:string",
+            (ctx, p) =>
+            {
+                List<WidthPoint> points = ReadWidthPoints(p);
+                string name = p.GetString("name") is { Length: > 0 } given ? given : "Profile";
+                int changed = 0;
+
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    var stack = path.Strokes.ToList();
+                    for (int i = 0; i < stack.Count; i++)
+                    {
+                        // An empty list clears rather than setting an empty profile, so "no profile" and "a
+                        // profile that says nothing" are one state rather than two that behave the same.
+                        stack[i] = points.Count == 0
+                            ? stack[i] with { WidthProfile = null }
+                            : stack[i] with { WidthProfile = new WidthProfileSpec(name, points) };
+                    }
+
+                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Width profile"));
+                    changed++;
+                }
+
+                return new { changed, points = points.Count };
+            });
+
         Add("style.strokes",
             "The stroke stack on each selected path, bottom to top: every stroke's colour, width, cap, join, " +
             "miter limit, alignment and dash. What a driver reads to check a path that has more than one " +
@@ -4880,6 +4913,47 @@ public static class EditorOperations
         };
     }
 
+    /// <summary>
+    /// The width points a caller sent, or an empty list when they sent none.
+    ///
+    /// A missing or malformed point is skipped rather than defaulting to a width of zero: a point at position
+    /// with no width is a request to *pin the stroke shut* at that spot, and inventing one from a typo would
+    /// pinch the drawing. Fewer points than asked for is a visible, reportable difference; a pinch in the middle
+    /// of a line is not.
+    /// </summary>
+    private static List<WidthPoint> ReadWidthPoints(JsonElement p)
+    {
+        var points = new List<WidthPoint>();
+        if (p.ValueKind != JsonValueKind.Object ||
+            !p.TryGetProperty("points", out JsonElement array) ||
+            array.ValueKind != JsonValueKind.Array)
+        {
+            return points;
+        }
+
+        foreach (JsonElement entry in array.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.Object ||
+                !entry.TryGetProperty("position", out JsonElement position) ||
+                !entry.TryGetProperty("left", out JsonElement left) ||
+                !entry.TryGetProperty("right", out JsonElement right))
+            {
+                continue;
+            }
+
+            WidthInterpolation interpolation = entry.TryGetProperty("interpolation", out JsonElement kind) &&
+                                              kind.ValueKind == JsonValueKind.String &&
+                                              string.Equals(kind.GetString(), "cubic", StringComparison.OrdinalIgnoreCase)
+                ? WidthInterpolation.Cubic
+                : WidthInterpolation.Linear;
+
+            points.Add(new WidthPoint(
+                position.GetDouble(), left.GetDouble(), right.GetDouble(), interpolation));
+        }
+
+        return points;
+    }
+
     /// <summary>One stroke as a caller reads it: every member that decides what it looks like.</summary>
     private static object DescribeStroke(StrokeSpec stroke) => new
     {
@@ -4895,6 +4969,19 @@ public static class EditorOperations
         alignment = stroke.Alignment.ToString().ToLowerInvariant(),
         dash = stroke.Dash.IsEmpty ? null : stroke.Dash.Segments.ToArray(),
         dashOffset = Math.Round(stroke.Dash.Offset, 4),
+        profile = stroke.HasWidthProfile
+            ? new
+            {
+                name = stroke.WidthProfile!.Name,
+                points = stroke.WidthProfile.Points.Select(point => new
+                {
+                    position = Math.Round(point.Position, 6),
+                    left = Math.Round(point.LeftWidth, 4),
+                    right = Math.Round(point.RightWidth, 4),
+                    interpolation = point.Interpolation.ToString().ToLowerInvariant(),
+                }).ToArray(),
+            }
+            : null,
     };
 
     /// <summary>

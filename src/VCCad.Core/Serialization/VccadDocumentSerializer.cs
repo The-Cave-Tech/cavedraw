@@ -92,7 +92,23 @@ internal sealed record GradientDto(
     FreeformMode FreeformMode,
     FreeformLineDto[] Lines);
 
-internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, StrokeCap Cap, StrokeJoin Join, double MiterLimit, StrokeAlignment Alignment, double[]? Dash = null, double DashOffset = 0.0);
+internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, StrokeCap Cap, StrokeJoin Join, double MiterLimit, StrokeAlignment Alignment, double[]? Dash = null, double DashOffset = 0.0,
+
+    // A width profile on the stroke, when it has one. Absent for an ordinary stroke, so nothing that has one
+    // changes on the way out - the same rule the stroke stack and the gradients follow.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    WidthProfileDto? WidthProfile = null);
+
+/// <summary>
+/// A width profile on the wire: its name and its width points, in order.
+///
+/// The name travels with it because a profile is an asset a person picks by name, and one that came back
+/// nameless would be a profile nobody could find again.
+/// </summary>
+internal sealed record WidthProfileDto(string Name, WidthPointDto[] Points);
+
+internal sealed record WidthPointDto(
+    double Position, double Left, double Right, WidthInterpolation Interpolation = WidthInterpolation.Linear);
 
 internal sealed record NodeDto(Point2D Anchor, Point2D InHandle, Point2D OutHandle);
 
@@ -434,7 +450,13 @@ internal abstract record ItemDto
     private static StrokeDto ToStroke(StrokeSpec s)
         => new(s.IsVisible, s.IsVisible ? new ColorDto(s.Color.R, s.Color.G, s.Color.B, s.Color.A) : null,
             s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment,
-            s.Dash.IsEmpty ? null : s.Dash.Segments.ToArray(), s.Dash.Offset);
+            s.Dash.IsEmpty ? null : s.Dash.Segments.ToArray(), s.Dash.Offset,
+            s.HasWidthProfile
+                ? new WidthProfileDto(
+                    s.WidthProfile!.Name,
+                    s.WidthProfile.Points.Select(p => new WidthPointDto(
+                        p.Position, p.LeftWidth, p.RightWidth, p.Interpolation)).ToArray())
+                : null);
 }
 
 /// <summary>Explicit restoration from DTO back into a live model graph.</summary>
@@ -815,8 +837,17 @@ internal static class ItemDtoExtensions
         => s.Visible && s.Color is not null
             ? new StrokeSpec(true, new ColorRgb(s.Color.R, s.Color.G, s.Color.B, s.Color.A),
                 s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment,
-                new DashPattern(s.Dash ?? Array.Empty<double>(), s.DashOffset))
+                new DashPattern(s.Dash ?? Array.Empty<double>(), s.DashOffset),
+                s.WidthProfile?.ToModel())
             : StrokeSpec.None;
+
+    private static WidthProfileSpec? ToModel(this WidthProfileDto? dto)
+        => dto is null
+            ? null
+            : new WidthProfileSpec(
+                dto.Name,
+                (dto.Points ?? Array.Empty<WidthPointDto>()).Select(p => new WidthPoint(
+                    p.Position, p.Left, p.Right, p.Interpolation)));
 }
 
 internal sealed record ArtboardDto(

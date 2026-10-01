@@ -235,7 +235,13 @@ public readonly struct DashPattern : IEquatable<DashPattern>
 /// <summary>
 /// Immutable stroke specification for a path: visibility, colour, geometric width
 /// (in points, unscaled by any group transform), end caps, joins, miter limit,
-/// dash pattern and alignment (centre/inside/outside).
+/// dash pattern, alignment (centre/inside/outside) and an optional width profile.
+///
+/// A [WidthProfile] makes the stroke's width vary along the path, and can vary it differently on each side.
+/// It is added rather than replacing [Width]: a stroke with a profile still has a width, which the profile
+/// **replaces where it says something**, so a profile is a modulation of an ordinary stroke rather than a
+/// separate kind of thing. That is what makes the two compositional - clearing a profile leaves a stroke
+/// exactly as it was, and setting one on a stroke that has no width still draws nothing.
 /// </summary>
 public sealed record StrokeSpec(
     bool IsVisible,
@@ -245,7 +251,8 @@ public sealed record StrokeSpec(
     StrokeJoin Join,
     double MiterLimit,
     StrokeAlignment Alignment = StrokeAlignment.Center,
-    DashPattern Dash = default)
+    DashPattern Dash = default,
+    WidthProfileSpec? WidthProfile = null)
 {
     /// <summary>Convenience: no visible stroke.</summary>
     public static StrokeSpec None { get; } =
@@ -254,6 +261,15 @@ public sealed record StrokeSpec(
     /// <summary>A 1pt solid stroke, the classic vector-editor default.</summary>
     public static StrokeSpec Hairline(ColorRgb color)
         => new(true, color, 1.0, StrokeCap.Butt, StrokeJoin.Miter, 4.0);
+
+    /// <summary>
+    /// Whether the stroke varies in width along the path.
+    ///
+    /// A profile with no points is not one: it says nothing about width, so the stroke is an ordinary one and
+    /// the renderers take the plain path. Without that, an empty profile would send every stroke down the
+    /// outline route to draw exactly what it drew before.
+    /// </summary>
+    public bool HasWidthProfile => WidthProfile is { IsEmpty: false };
 
     /// <summary>True when a stroke is visible and has positive width.</summary>
     public bool HasVisibleOutline => IsVisible && Width > 0.0;
