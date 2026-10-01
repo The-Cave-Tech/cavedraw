@@ -1667,7 +1667,9 @@ public static class EditorOperations
 
         Add("style.setStroke", "Stroke the selected paths.",
             "color:[r,g,b], width:number, cap?:butt|round|square, join?:miter|round|bevel, miterLimit?, " +
-            "alignment?:center|inside|outside, dash?:number[], index?:number",
+            "alignment?:center|inside|outside, dash?:number[], index?:number. index edits one stroke of the stack " +
+            "and an omitted member is left as that stroke has it; without index the whole path is restroked and an " +
+            "omitted member takes the default named above.",
             (ctx, p) =>
             {
                 // Only when it was actually given: ParseColor reports its fallback for a parameter that is
@@ -1695,8 +1697,20 @@ public static class EditorOperations
 
                 if (index is { } at)
                 {
-                    ctx.Session.ApplyStrokeAt(
-                        at, p.GetDouble("width", 1), cap, join, p.GetDouble("miterLimit", 4), alignment, dash, color);
+                    // **An omitted member is left as the stroke has it.** Naming one member of one stroke must not
+                    // reset the others to this operation's defaults: a width of 8 becoming 1 because the caller only
+                    // asked for a round cap is the driver having to supply every member a person never touched. The
+                    // un-indexed call below is deliberately different, because there the defaults *are* the request -
+                    // it replaces the stack rather than editing a member of it.
+                    ctx.Session.ApplyStrokeFieldsAt(
+                        at,
+                        Given(p, "width") ? p.GetDouble("width") : null,
+                        Given(p, "cap") ? cap : null,
+                        Given(p, "join") ? join : null,
+                        Given(p, "miterLimit") ? p.GetDouble("miterLimit") : null,
+                        Given(p, "alignment") ? alignment : null,
+                        dash,
+                        color);
                 }
                 else
                 {
@@ -1719,13 +1733,28 @@ public static class EditorOperations
             "side. A negative width is clamped at zero, the way the canvas clamps a dragged grip: a negative " +
             "half-width would put the offset edge across the centreline and draw the stroke inside out. " +
             "An empty points list clears the profile and leaves the stroke's own width, which is what " +
-            "removing a profile does. Every stroke in the stack is given it, like style.setStroke. One undo " +
-            "step per path.",
-            "points:[{position:number, left:number, right:number, interpolation?:linear|cubic}], name?:string",
+            "removing a profile does. strokeIndex picks one stroke of the stack, counted from the bottom, and " +
+            "defaults to every stroke; a path whose stack is shorter is skipped. One undo step per path.",
+            "points:[{position:number, left:number, right:number, interpolation?:linear|cubic}], name?:string, " +
+            "strokeIndex?:number",
             (ctx, p) =>
             {
                 List<WidthPoint> points = ReadWidthPoints(p);
                 string name = p.GetString("name") is { Length: > 0 } given ? given : "Profile";
+
+                // Through the session, so the stroke pane's type box and this operation write one profile the same
+                // way rather than two ways that agree until somebody changes one of them.
+                if (OptionalStrokeIndex(p) is { } at)
+                {
+                    WidthProfileSpec? profile = points.Count == 0 ? null : new WidthProfileSpec(name, points);
+                    return new
+                    {
+                        changed = ctx.Session.SetWidthProfileAt(at, profile),
+                        points = points.Count,
+                        strokeIndex = at,
+                    };
+                }
+
                 int changed = 0;
 
                 foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
@@ -1890,8 +1919,9 @@ public static class EditorOperations
             "Give the selected paths' strokes a tablet response. target is width (the default), opacity, " +
             "scatterScale, calligraphicAngle or smoothing. preset is linear, soft, hard or exponential, or pass " +
             "curve:[x1,y1,x2,y2] for a custom one - the two control points of a curve from (0,0) to (1,1), the " +
-            "same four numbers a curve editor drags. One undo step per path.",
-            "target?:string, preset?:string, curve?:[x1,y1,x2,y2]",
+            "same four numbers a curve editor drags. strokeIndex picks one stroke of the stack, counted from the " +
+            "bottom, and defaults to every stroke; a path whose stack is shorter is skipped. One undo step per path.",
+            "target?:string, preset?:string, curve?:[x1,y1,x2,y2], strokeIndex?:number",
             (ctx, p) =>
             {
                 string targetName = p.GetString("target") ?? "width";
@@ -1908,6 +1938,19 @@ public static class EditorOperations
                 };
 
                 DynamicsCurve curve = ReadDynamicsCurve(p);
+
+                // Through the session, so a panel's checkbox and this operation run one implementation - and the
+                // other targets are carried over there, which is what makes this an edit of one target rather than
+                // a rebuild of the whole response.
+                if (OptionalStrokeIndex(p) is { } at)
+                {
+                    return new
+                    {
+                        target = target.ToString(),
+                        changed = ctx.Session.SetDynamicsAt(at, target, enabled: true, curve),
+                        strokeIndex = at,
+                    };
+                }
 
                 int changed = 0;
                 foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
@@ -1933,23 +1976,35 @@ public static class EditorOperations
                 return new { target = target.ToString(), changed };
             });
 
-        Add("style.clearDynamics", "Remove the tablet response from the selected paths' strokes.", "", (ctx, _) =>
-        {
-            int changed = 0;
-            foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+        Add("style.clearDynamics",
+            "Remove the tablet response from the selected paths' strokes. strokeIndex picks one stroke of the stack, " +
+            "counted from the bottom, and defaults to every stroke; a path whose stack is shorter is skipped. One " +
+            "undo step per path.",
+            "strokeIndex?:number",
+            (ctx, p) =>
             {
-                var stack = path.Strokes.ToList();
-                for (int i = 0; i < stack.Count; i++)
+                // Through the session, so the pane's button and this clear the same way - and so one stroke can be
+                // named instead of every stroke of the selection.
+                if (OptionalStrokeIndex(p) is { } at)
                 {
-                    stack[i] = stack[i] with { Dynamics = null };
+                    return new { changed = ctx.Session.ClearDynamicsAt(at), strokeIndex = at };
                 }
 
-                ctx.Session.Execute(new SetStrokesCommand(path, stack, "Clear tablet dynamics"));
-                changed++;
-            }
+                int changed = 0;
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    var stack = path.Strokes.ToList();
+                    for (int i = 0; i < stack.Count; i++)
+                    {
+                        stack[i] = stack[i] with { Dynamics = null };
+                    }
 
-            return new { changed };
-        });
+                    ctx.Session.Execute(new SetStrokesCommand(path, stack, "Clear tablet dynamics"));
+                    changed++;
+                }
+
+                return new { changed };
+            });
 
         Add("object.setBlendMode",
             "How the selected objects combine with what is drawn beneath them. mode is a CSS mix-blend-mode name " +
@@ -2518,13 +2573,26 @@ public static class EditorOperations
             });
 
         Add("profile.apply",
-            "Apply a stored profile to the selected paths' strokes. One undo step per path.",
-            "name:string",
+            "Apply a stored profile to the selected paths' strokes. strokeIndex picks one stroke of the stack, " +
+            "counted from the bottom, and defaults to every stroke; a path whose stack is shorter is skipped. One " +
+            "undo step per path.",
+            "name:string, strokeIndex?:number",
             (ctx, p) =>
             {
                 string name = p.GetString("name") ?? string.Empty;
                 WidthProfileSpec profile = ctx.Document.FindProfile(name)
                     ?? throw new EditorOperationException($"there is no profile called '{name}'");
+
+                // Through the session, so a panel applying a library profile and this run one implementation.
+                if (OptionalStrokeIndex(p) is { } at)
+                {
+                    return new
+                    {
+                        applied = name,
+                        paths = ctx.Session.SetWidthProfileAt(at, profile),
+                        strokeIndex = at,
+                    };
+                }
 
                 int changed = 0;
                 foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
@@ -2751,7 +2819,9 @@ public static class EditorOperations
             "or explicitly mixed. A panel editing a selection has to show one value per member, and showing the " +
             "first path's value as though it were everyone's is how a person types a number and believes it " +
             "describes what they selected. index picks the stroke in the stack, counted from the bottom, and " +
-            "defaults to the top.",
+            "defaults to the top. Width, cap, join, miter limit, alignment, dash, width profile and tablet " +
+            "dynamics are each reported with their own mixed flag, so a member one path disagrees about does not " +
+            "hide the members the rest agree on; a path with no stroke at that index is a gap, not a disagreement.",
             "index?:number",
             (ctx, p) =>
             {
@@ -2779,6 +2849,12 @@ public static class EditorOperations
                     miterMixed = summary.MiterMixed,
                     alignment = summary.Alignment?.ToString(),
                     alignmentMixed = summary.AlignmentMixed,
+                    dash = summary.Dash is { IsEmpty: false } dash ? dash.Segments.ToArray() : null,
+                    dashMixed = summary.DashMixed,
+                    profile = DescribeWidthProfile(summary.WidthProfile),
+                    profileMixed = summary.WidthProfileMixed,
+                    dynamics = DescribeDynamics(summary.Dynamics),
+                    dynamicsMixed = summary.DynamicsMixed,
                 };
             });
 
@@ -6760,6 +6836,16 @@ public static class EditorOperations
         => string.IsNullOrEmpty(name) ? null : name;
 
     /// <summary>
+    /// Whether the caller named this parameter at all.
+    ///
+    /// The distinction a default cannot carry: `GetDouble("width", 1)` answers 1 for a request that gave no width,
+    /// and for a request that gave a width of 1 - so an edit that must leave an unnamed member alone has to ask
+    /// whether the member was there rather than what it reads as.
+    /// </summary>
+    private static bool Given(JsonElement p, string name)
+        => p.ValueKind == JsonValueKind.Object && p.TryGetProperty(name, out _);
+
+    /// <summary>
     /// The stroke a caller named, or null when they named none.
     ///
     /// The two are genuinely different requests: none means every stroke of the stack, which is what these
@@ -6767,9 +6853,7 @@ public static class EditorOperations
     /// with a path whose stack is shorter skipped as a gap rather than clamped onto a stroke nobody named.
     /// </summary>
     private static int? OptionalStrokeIndex(JsonElement p)
-        => p.ValueKind == JsonValueKind.Object && p.TryGetProperty("strokeIndex", out _)
-            ? (int)p.GetLong("strokeIndex", 0)
-            : null;
+        => Given(p, "strokeIndex") ? (int)p.GetLong("strokeIndex", 0) : null;
 
     /// <summary>
     /// Reads the parameters an effect kind declares out of the request, by the names the declaration gives them.
@@ -6892,19 +6976,7 @@ public static class EditorOperations
         alignment = stroke.Alignment.ToString().ToLowerInvariant(),
         dash = stroke.Dash.IsEmpty ? null : stroke.Dash.Segments.ToArray(),
         dashOffset = Math.Round(stroke.Dash.Offset, 4),
-        profile = stroke.HasWidthProfile
-            ? new
-            {
-                name = stroke.WidthProfile!.Name,
-                points = stroke.WidthProfile.Points.Select(point => new
-                {
-                    position = Math.Round(point.Position, 6),
-                    left = Math.Round(point.LeftWidth, 4),
-                    right = Math.Round(point.RightWidth, 4),
-                    interpolation = point.Interpolation.ToString().ToLowerInvariant(),
-                }).ToArray(),
-            }
-            : null,
+        profile = DescribeWidthProfile(stroke.WidthProfile),
         effects = stroke.HasEffects
             ? stroke.AllEffects.Select(effect => new
             {
@@ -6927,22 +6999,50 @@ public static class EditorOperations
                     : null,
             }).ToArray()
             : null,
-        dynamics = stroke.HasDynamics
+        dynamics = DescribeDynamics(stroke.Dynamics),
+    };
+
+    /// <summary>
+    /// A width profile as a caller reads it, or null when the stroke has none.
+    ///
+    /// Shared with `style.commonStroke`, so a panel reading one stroke's profile and a driver reading what a
+    /// selection agrees on cannot describe the same profile two different ways.
+    /// </summary>
+    private static object? DescribeWidthProfile(WidthProfileSpec? profile)
+        => profile is { IsEmpty: false }
+            ? new
+            {
+                name = profile.Name,
+                points = profile.Points.Select(point => new
+                {
+                    position = Math.Round(point.Position, 6),
+                    left = Math.Round(point.LeftWidth, 4),
+                    right = Math.Round(point.RightWidth, 4),
+                    interpolation = point.Interpolation.ToString().ToLowerInvariant(),
+                }).ToArray(),
+            }
+            : null;
+
+    /// <summary>
+    /// A tablet response as a caller reads it: the targets that are switched on, with their curves - null when
+    /// nothing varies, which is the state an ordinary stroke records.
+    /// </summary>
+    private static object? DescribeDynamics(DynamicsSpec? dynamics)
+        => dynamics is { IsEmpty: false }
             ? Enum.GetValues<DynamicsTarget>()
-                .Where(target => stroke.Dynamics!.For(target).Enabled)
+                .Where(target => dynamics.For(target).Enabled)
                 .Select(target => new
                 {
                     target = target.ToString(),
                     curve = new[]
                     {
-                        stroke.Dynamics!.For(target).Curve.X1,
-                        stroke.Dynamics!.For(target).Curve.Y1,
-                        stroke.Dynamics!.For(target).Curve.X2,
-                        stroke.Dynamics!.For(target).Curve.Y2,
+                        dynamics.For(target).Curve.X1,
+                        dynamics.For(target).Curve.Y1,
+                        dynamics.For(target).Curve.X2,
+                        dynamics.For(target).Curve.Y2,
                     },
                 }).ToArray()
-            : null,
-    };
+            : null;
 
     /// <summary>
     /// A stroke built from the parameters given, falling back to <paramref name="basis"/> for the rest.

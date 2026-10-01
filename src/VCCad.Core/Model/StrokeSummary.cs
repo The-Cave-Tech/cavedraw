@@ -24,13 +24,20 @@ public sealed record StrokeSummary(
     double? MiterLimit,
     bool MiterMixed,
     StrokeAlignment? Alignment,
-    bool AlignmentMixed)
+    bool AlignmentMixed,
+    DashPattern? Dash = null,
+    bool DashMixed = false,
+    WidthProfileSpec? WidthProfile = null,
+    bool WidthProfileMixed = false,
+    DynamicsSpec? Dynamics = null,
+    bool DynamicsMixed = false)
 {
     /// <summary>Whether the selection has nothing to describe - no selected path carries a stroke.</summary>
     public bool IsEmpty => Strokes == 0;
 
     /// <summary>Whether any member disagrees across the selection.</summary>
-    public bool IsMixed => WidthMixed || CapMixed || JoinMixed || MiterMixed || AlignmentMixed;
+    public bool IsMixed => WidthMixed || CapMixed || JoinMixed || MiterMixed || AlignmentMixed
+        || DashMixed || WidthProfileMixed || DynamicsMixed;
 
     /// <summary>
     /// Summarises the strokes at <paramref name="index"/> across the paths, counting from the bottom.
@@ -63,6 +70,15 @@ public sealed record StrokeSummary(
         bool miterMixed = !strokes.All(s => Math.Abs(s.MiterLimit - strokes[0].MiterLimit) < 1e-9);
         bool alignmentMixed = !strokes.All(s => s.Alignment == strokes[0].Alignment);
 
+        // Dash, width profile and tablet dynamics are agreement too, and belong here rather than in each panel that
+        // shows them: the stroke pane used to work the dash out for itself, which is a second opinion that can drift
+        // from the one `style.commonStroke` reports. A profile and a dynamics spec are compared member by member
+        // through the same readings the stroke itself uses - a stroke with no profile draws with none, and a missing
+        // dynamics target is Off, exactly as the pane reads them.
+        bool dashMixed = false;
+        bool profileMixed = false;
+        bool dynamicsMixed = false;
+
         return new StrokeSummary(
             strokes.Count,
             pathCount,
@@ -75,6 +91,40 @@ public sealed record StrokeSummary(
             miterMixed ? null : strokes[0].MiterLimit,
             miterMixed,
             alignmentMixed ? null : strokes[0].Alignment,
-            alignmentMixed);
+            alignmentMixed,
+            dashMixed ? null : strokes[0].Dash,
+            dashMixed,
+            profileMixed ? null : Profile(strokes[0]),
+            profileMixed,
+            dynamicsMixed ? null : strokes[0].Dynamics,
+            dynamicsMixed);
     }
+
+    /// <summary>
+    /// The profile a stroke draws with, or null when it has none.
+    ///
+    /// An empty profile is not a profile - the stroke is an ordinary one - so it reads as "no profile" here rather
+    /// than as a value two strokes could agree on.
+    /// </summary>
+    private static WidthProfileSpec? Profile(StrokeSpec stroke)
+        => stroke.HasWidthProfile ? stroke.WidthProfile : null;
+
+    private static bool SameProfile(StrokeSpec a, StrokeSpec b)
+    {
+        WidthProfileSpec? left = Profile(a);
+        WidthProfileSpec? right = Profile(b);
+        return left is null ? right is null : left.Equals(right);
+    }
+
+    /// <summary>
+    /// Whether two strokes record the same tablet response, target by target.
+    ///
+    /// Per target rather than by comparing the specs whole, because a stroke that stores no dynamics at all and one
+    /// that stores every target switched off draw identically - both "never varies" - and reporting them as a
+    /// disagreement would call a selection mixed over a difference nothing can see.
+    /// </summary>
+    private static bool SameDynamics(StrokeSpec a, StrokeSpec b)
+        => Enum.GetValues<DynamicsTarget>().All(target =>
+            (a.Dynamics?.For(target) ?? DynamicsTargetSpec.Off)
+            == (b.Dynamics?.For(target) ?? DynamicsTargetSpec.Off));
 }

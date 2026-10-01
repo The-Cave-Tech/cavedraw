@@ -2241,9 +2241,9 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// the appearance stack already makes about strokes, applied to the fields within one.
     ///
     /// <see cref="ApplyStrokeAt"/> delegates here, so a person's field and a driver's `style.setStroke` run the
-    /// **same** code rather than two that agree until somebody changes one of them. `style.setStroke` cannot yet
-    /// ask for a partial edit - an omitted member arrives as its default and overwrites - which is a registry
-    /// follow-up rather than something this method should work around.
+    /// **same** code rather than two that agree until somebody changes one of them. A caller that names a stroke
+    /// index reaches this method with only the members they gave, so an omitted member is left as the stroke has it
+    /// rather than taking the default that means something to the un-indexed call.
     ///
     /// One <see cref="SetStrokesCommand"/> per path and a composite across the selection, so a gesture is one undo
     /// step; a request that changes nothing on a path adds no command at all, because an undo step that undoes to
@@ -2298,8 +2298,8 @@ public sealed class DocumentSession : INotifyPropertyChanged
     ///
     /// The stroke is named by index for the reason <see cref="ApplyStrokeAt"/> names it: with a stack there is no
     /// such thing as "the stroke" on a selection, and a panel describing stroke 2 of 3 must not give the profile to
-    /// strokes 1 and 3. `style.setWidthProfile` writes every stroke of every selected path, so it cannot reach the
-    /// stroke an inspector describes - a registry follow-up, not a reason for a click handler to write the model.
+    /// strokes 1 and 3. `style.setWidthProfile` reaches this method when it is given a `strokeIndex`, and writes
+    /// every stroke itself when it is not - the two behaviours a caller chooses between by naming an index at all.
     ///
     /// Null clears, because that is the state the model uses for "no profile" - an empty profile is the same thing
     /// spelled differently, and the type's own comment says so. The stroke keeps its own width either way: a
@@ -2344,8 +2344,8 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// also why an untouched target is left alone rather than compared.
     ///
     /// A path already carrying exactly this response is skipped, so a panel refresh cannot put an empty undo step on
-    /// the stack. `style.setDynamics` writes every stroke of every selected path and so cannot reach the one an
-    /// inspector describes - a registry follow-up.
+    /// the stack. `style.setDynamics` reaches this method when it is given a `strokeIndex`, and writes every stroke
+    /// itself when it is not.
     /// </summary>
     public int SetDynamicsAt(int index, DynamicsTarget target, bool enabled, DynamicsCurve curve)
     {
@@ -2379,6 +2379,45 @@ public sealed class DocumentSession : INotifyPropertyChanged
         }
 
         ExecuteIfAny(edits, "Tablet dynamics");
+        return edits.Count;
+    }
+
+    /// <summary>
+    /// Removes the tablet response from **one stroke** of every selected path, and reports how many paths changed.
+    ///
+    /// Null rather than a spec with every target off: the model's own comment says the two are different - null
+    /// stores nothing, an all-off spec stores a decision - and clearing a response removes it rather than recording
+    /// that it was switched off. The indexed half of `style.clearDynamics`, for the reason
+    /// <see cref="SetDynamicsAt"/> is the indexed half of `style.setDynamics`: the stroke a panel describes is one
+    /// member of the stack, and clearing every member instead is the opposite of naming one.
+    /// </summary>
+    public int ClearDynamicsAt(int index)
+    {
+        if (index < 0)
+        {
+            return 0;
+        }
+
+        var edits = new List<IUndoableCommand>();
+        foreach (PathItem path in SelectedPaths().ToList())
+        {
+            if (index >= path.Strokes.Count)
+            {
+                continue;
+            }
+
+            var stack = path.Strokes.ToList();
+            StrokeSpec before = stack[index];
+            if (before.Dynamics is null)
+            {
+                continue;
+            }
+
+            stack[index] = before with { Dynamics = null };
+            edits.Add(new SetStrokesCommand(path, stack, "Clear tablet dynamics"));
+        }
+
+        ExecuteIfAny(edits, "Clear tablet dynamics");
         return edits.Count;
     }
 

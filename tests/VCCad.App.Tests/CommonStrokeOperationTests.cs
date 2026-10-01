@@ -15,14 +15,16 @@ public class CommonStrokeOperationTests
 {
     private static JsonElement Params(object value) => JsonSerializer.SerializeToElement(value);
 
-    private static PathItem Path(double width, StrokeCap cap = StrokeCap.Butt)
+    private static PathItem Path(double width, StrokeCap cap = StrokeCap.Butt, DashPattern? dash = null,
+        WidthProfileSpec? profile = null, DynamicsSpec? dynamics = null)
     {
         var path = new PathItem { Name = "line", Fill = FillSpec.None };
         SubPath sub = path.AddSubPath(closed: false);
         sub.Nodes.Add(new PathNode(new Point2D(0, 0)));
         sub.Nodes.Add(new PathNode(new Point2D(10, 0)));
         path.Strokes.Clear();
-        path.Strokes.Add(new StrokeSpec(true, ColorRgb.Black, width, cap, StrokeJoin.Miter, 4));
+        path.Strokes.Add(new StrokeSpec(true, ColorRgb.Black, width, cap, StrokeJoin.Miter, 4,
+            Dash: dash ?? DashPattern.None, WidthProfile: profile, Dynamics: dynamics));
         return path;
     }
 
@@ -74,5 +76,55 @@ public class CommonStrokeOperationTests
 
         Assert.True(reported.GetProperty("empty").GetBoolean());
         Assert.Equal(0, reported.GetProperty("strokes").GetInt32());
+    }
+
+    /// <summary>
+    /// **Dash, width profile and tablet dynamics are reported by the registry**, each with its own mixed flag, so a
+    /// driver can learn what the stroke pane used to work out for itself. A disagreement on one of them does not
+    /// blank the members the selection agrees on.
+    /// </summary>
+    [Fact]
+    public void ADisagreeingDashProfileAndDynamicsAreReportedThroughTheRegistry()
+    {
+        (_, JsonElement reported) = With(
+            Path(5, dash: new DashPattern(new[] { 4.0, 2.0 }), profile: WidthProfileSpec.Taper(1, 5),
+                dynamics: DynamicsSpec.PressureToWidth(DynamicsPreset.Linear)),
+            Path(5, dash: new DashPattern(new[] { 1.0, 1.0 }), profile: WidthProfileSpec.Constant(3),
+                dynamics: DynamicsSpec.PressureToWidth(DynamicsPreset.Soft)));
+
+        Assert.True(reported.GetProperty("dashMixed").GetBoolean());
+        Assert.True(reported.GetProperty("profileMixed").GetBoolean());
+        Assert.True(reported.GetProperty("dynamicsMixed").GetBoolean());
+        Assert.True(reported.GetProperty("mixed").GetBoolean());
+
+        // Mixed means no common value, not the first path's.
+        Assert.Equal(JsonValueKind.Null, reported.GetProperty("dash").ValueKind);
+        Assert.Equal(JsonValueKind.Null, reported.GetProperty("profile").ValueKind);
+        Assert.Equal(JsonValueKind.Null, reported.GetProperty("dynamics").ValueKind);
+
+        Assert.False(reported.GetProperty("widthMixed").GetBoolean());
+        Assert.Equal(5.0, reported.GetProperty("width").GetDouble(), 6);
+    }
+
+    /// <summary>A selection that agrees reports the dash, the profile and the response themselves.</summary>
+    [Fact]
+    public void AnAgreeingDashProfileAndDynamicsAreReportedThroughTheRegistry()
+    {
+        (_, JsonElement reported) = With(
+            Path(5, dash: new DashPattern(new[] { 4.0, 2.0 }), profile: WidthProfileSpec.Taper(1, 5),
+                dynamics: DynamicsSpec.PressureToWidth()),
+            Path(5, dash: new DashPattern(new[] { 4.0, 2.0 }), profile: WidthProfileSpec.Taper(1, 5),
+                dynamics: DynamicsSpec.PressureToWidth()));
+
+        Assert.False(reported.GetProperty("mixed").GetBoolean());
+        Assert.False(reported.GetProperty("dashMixed").GetBoolean());
+        Assert.False(reported.GetProperty("profileMixed").GetBoolean());
+        Assert.False(reported.GetProperty("dynamicsMixed").GetBoolean());
+
+        Assert.Equal(
+            new[] { 4.0, 2.0 },
+            reported.GetProperty("dash").EnumerateArray().Select(e => e.GetDouble()).ToArray());
+        Assert.Equal("Taper", reported.GetProperty("profile").GetProperty("name").GetString());
+        Assert.Equal("Width", reported.GetProperty("dynamics")[0].GetProperty("target").GetString());
     }
 }
