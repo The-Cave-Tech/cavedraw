@@ -53,12 +53,11 @@ internal static class FilterRasteriser
         double opacity,
         List<string> notes)
     {
-        if (Unsupported(filter) is { } unsupported)
+        if (Unsupported(filter, path) is { } unsupported)
         {
             notes.Add(
-                $"the filter '{filter.Name}' is not written: it reads {unsupported}, and the export has no raster " +
-                "of that to hand it - the object is exported unfiltered rather than through a filter evaluated " +
-                "against nothing.");
+                $"the filter '{filter.Name}' is not written: {unsupported} - the object is exported unfiltered " +
+                "rather than through a filter evaluated against a picture the file did not ask for.");
             return null;
         }
 
@@ -115,12 +114,16 @@ internal static class FilterRasteriser
         var covered = new Rect2D(originX, originY, pixelsWide / scale, pixelsHigh / scale);
 
         var buffer = new FilterBuffer(pixelsWide, pixelsHigh);
-        RasteriseInto(buffer, path, toWorld, originX, originY, scale, path.Opacity * opacity);
+        double alpha = path.Opacity * opacity;
+        RasteriseInto(buffer, path, toWorld, originX, originY, scale, alpha);
+
+        FilterSources? sources = SourcePictures(
+            path, filter, toWorld, originX, originY, scale, pixelsWide, pixelsHigh, alpha);
 
         FilterBuffer filtered;
         try
         {
-            filtered = engine.EvaluateInPlace(buffer, null, objectBounds);
+            filtered = engine.EvaluateInPlace(buffer, sources, objectBounds);
         }
         catch (ArgumentOutOfRangeException exception)
         {
@@ -128,6 +131,9 @@ internal static class FilterRasteriser
             return null;
         }
 
+        // Every renderer-supplied input this build can produce has been handed over, so anything the engine had to
+        // leave out is a genuine gap rather than an omission here - and saying which one it was is the difference
+        // between a reported approximation and a picture nobody can explain.
         if (engine.UnsuppliedSourceInputs.Count > 0)
         {
             notes.Add(
@@ -163,23 +169,103 @@ internal static class FilterRasteriser
     }
 
     /// <summary>
-    /// The renderer-supplied input this graph reads that cannot be produced here, or null.
+    /// What about this object the rasteriser cannot draw faithfully, as a phrase for the export note, or null.
     ///
-    /// Only <c>BackgroundImage</c>: the fill and the stroke are rasterised from the path itself, and
-    /// <c>SourceGraphic</c>/<c>SourceAlpha</c> are that picture. Everything behind the object is not - the
-    /// exporter draws items one at a time and has no backdrop to give.
+    /// Two things. The picture **behind** the object, because the exporter draws one item at a time and has no
+    /// backdrop raster to hand over. And a fill that is not one colour: a gradient is written as a shading and a
+    /// hatch as clipped line art, and neither has a single colour to composite, so the shape's own pixels could
+    /// not be produced and the graph would be evaluated against a picture the file did not ask for.
+    ///
+    /// <c>SourceGraphic</c> and <c>SourceAlpha</c> are always available, and so are <c>FillPaint</c> and
+    /// <c>StrokePaint</c>, which are rasterised from the path itself (<see cref="SourcePictures"/>).
     /// </summary>
-    private static string? Unsupported(FilterSpec filter)
+    private static string? Unsupported(FilterSpec filter, PathItem path)
     {
         foreach (string name in filter.SourceInputsRead)
         {
             if (name == "BackgroundImage")
             {
-                return name;
+                return "it reads BackgroundImage, which is the picture behind the object, and the export draws one " +
+                       "item at a time with no backdrop to hand it";
             }
         }
 
+        if (path.Fill.IsVisible && (path.Fill.Gradient is not null || path.Fill.Hatch is not null))
+        {
+            return path.Fill.Gradient is not null
+                ? "the shape is filled with a gradient, which this exporter writes as a shading rather than as a " +
+                  "colour it can rasterise"
+                : "the shape is filled with a hatch, which this exporter writes as clipped line art rather than as " +
+                  "a colour it can rasterise";
+        }
+
         return null;
+    }
+
+    /// <summary>
+    /// The fill and stroke pictures a graph reads, or null when it reads neither.
+    ///
+    /// SVG names <c>FillPaint</c> and <c>StrokePaint</c> as the shape drawn in its own fill and its own stroke.
+    /// They are facts only a renderer holds: the pixels of a filled and stroked shape are the two painted
+    /// together, so there is no way back from them to either one, which is why the engine takes them from the
+    /// caller rather than deriving them. The canvas hands both over for exactly this reason, so a graph that reads
+    /// one has to be given the same picture here or the file and the drawing disagree where the effect is.
+    ///
+    /// A shape with no fill has a **transparent** FillPaint rather than a missing one - SVG's `none` is a paint
+    /// like any other - and the engine is told so, which is why an empty picture is supplied rather than left out.
+    /// </summary>
+    private static FilterSources? SourcePictures(
+        PathItem path,
+        FilterSpec filter,
+        AffineTransform toWorld,
+        double originX,
+        double originY,
+        double scale,
+        int width,
+        int height,
+        double alpha)
+    {
+        bool wantsFill = false;
+        bool wantsStroke = false;
+
+        foreach (string name in filter.SourceInputsRead)
+        {
+            wantsFill |= name == "FillPaint";
+            wantsStroke |= name == "StrokePaint";
+        }
+
+        if (!wantsFill && !wantsStroke)
+        {
+            return null;
+        }
+
+        return new FilterSources
+        {
+            FillPaint = wantsFill
+                ? Paint(path, toWorld, originX, originY, scale, width, height, alpha, fill: true, strokes: false)
+                : null,
+            StrokePaint = wantsStroke
+                ? Paint(path, toWorld, originX, originY, scale, width, height, alpha, fill: false, strokes: true)
+                : null,
+        };
+    }
+
+    /// <summary>One half of the shape's paint, over the region.</summary>
+    private static FilterBuffer Paint(
+        PathItem path,
+        AffineTransform toWorld,
+        double originX,
+        double originY,
+        double scale,
+        int width,
+        int height,
+        double alpha,
+        bool fill,
+        bool strokes)
+    {
+        var buffer = new FilterBuffer(Math.Max(1, width), Math.Max(1, height));
+        RasteriseInto(buffer, path, toWorld, originX, originY, scale, alpha, fill, strokes);
+        return buffer;
     }
 
     /// <summary>The region the filter is evaluated over, in world units.
@@ -218,6 +304,12 @@ internal static class FilterRasteriser
     ///
     /// The fill and the strokes get their **own** masks and are composited in turn, because they are painted in
     /// their own colours - one mask in one colour would paint a blue fill under a red stroke blue.
+    ///
+    /// Either half can be asked for alone, which is what SVG's `FillPaint` and `StrokePaint` are: the shape drawn
+    /// in its own fill, and the shape drawn in its own stroke. A renderer is the only thing that can produce them
+    /// - the pixels of the two painted together do not separate back into them - and the canvas hands both over
+    /// for the same reason, so a graph reading one has to be given the same picture here or the export and the
+    /// canvas disagree exactly where the effect is.
     /// </summary>
     private static void RasteriseInto(
         FilterBuffer buffer,
@@ -226,9 +318,11 @@ internal static class FilterRasteriser
         double originX,
         double originY,
         double scale,
-        double alpha)
+        double alpha,
+        bool fill = true,
+        bool strokes = true)
     {
-        if (path.Fill.IsVisible && path.Fill.Gradient is null && path.Fill.Hatch is null)
+        if (fill && path.Fill.IsVisible && path.Fill.Gradient is null && path.Fill.Hatch is null)
         {
             List<VectorRasteriser.Polygon> filled = FillPolygons(path, toWorld, originX, originY, scale);
             if (filled.Count > 0)
@@ -237,6 +331,11 @@ internal static class FilterRasteriser
                 VectorRasteriser.Fill(mask, filled, path.Fill.Rule);
                 VectorRasteriser.Composite(buffer, mask, path.Fill.Color, alpha * path.Fill.Color.A);
             }
+        }
+
+        if (!strokes)
+        {
+            return;
         }
 
         foreach (StrokeSpec stroke in path.Strokes)

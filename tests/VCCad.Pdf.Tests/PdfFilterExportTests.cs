@@ -256,6 +256,110 @@ public class PdfFilterExportTests
     // ------------------------------------------------------------------ the honest refusals
 
     /// <summary>
+    /// **`FillPaint` is supplied, not read as transparent.** SVG names it as the shape drawn in its own fill, and a
+    /// renderer is the only thing that can produce it: the pixels of a filled and stroked shape are the two painted
+    /// together, so there is no way back from them to either one - which is why the engine takes it from the caller
+    /// rather than deriving it. The canvas hands it over (`FilterCanvasTests` pins that half), so an export that
+    /// left it out would draw a filter evaluated against nothing and disagree with the drawing exactly where the
+    /// effect is.
+    ///
+    /// Asserted on the **samples** rather than on the note, because "the export mentions FillPaint" and "the export
+    /// drew the fill" are different claims and only the second one is a picture.
+    /// </summary>
+    [Fact]
+    public void AFilterReadingTheFillPaintIsGivenTheShapesOwnFill()
+    {
+        if (!Flipped)
+        {
+            return;
+        }
+
+        CadDocument document = Document();
+        PathItem shape = document.AllPaths().Single();
+        shape.Fill = FillSpec.Solid(new ColorRgb(1, 0, 0));
+
+        document.AddFilter(new FilterSpec("filling", new[]
+        {
+            FilterPrimitive.Combine("in", "FillPaint", "SourceAlpha"),
+        }));
+
+        shape.FilterId = "filling";
+
+        byte[] pdf = PdfDocumentExporter.Export(document, out IReadOnlyList<string> notes);
+
+        // Supplied rather than omitted, so there is nothing left to report.
+        Assert.DoesNotContain(notes, note => note.Contains("FillPaint", StringComparison.Ordinal));
+
+        PdfDrawing.ImageObject picture = Assert.Single(Images(pdf), image => image.Is("DeviceRGB"));
+
+        int red = 0;
+        int green = 0;
+        for (int i = 0; i + 2 < picture.Samples.Length; i += 3)
+        {
+            red = Math.Max(red, picture.Samples[i]);
+            green = Math.Max(green, picture.Samples[i + 1]);
+        }
+
+        // Reading the fill as transparency would leave every sample at zero and the claim below would fail.
+        Assert.True(red > 200, $"the fill's own colour never reached the pixels: red peaked at {red}");
+        Assert.True(green < 40, $"the picture is not the fill's colour: green peaked at {green}");
+    }
+
+    /// <summary>
+    /// A fill that is **not one colour** cannot be rasterised into the graph's input: this exporter writes a
+    /// gradient as a shading, which has no single colour to composite, so the shape's own pixels could not be
+    /// produced at all. The artwork is therefore exported as the vectors it really is - unfiltered - and the reason
+    /// is reported. A filtered picture with the fill missing would be the worse lie, because the shape itself would
+    /// go missing rather than merely its effect.
+    /// </summary>
+    [Fact]
+    public void AFilteredShapeWithAGradientFillIsReportedRatherThanDrawnWithoutIt()
+    {
+        if (!Flipped)
+        {
+            return;
+        }
+
+        CadDocument document = Document();
+        PathItem shape = document.AllPaths().Single();
+        shape.Fill = shape.Fill with
+        {
+            Gradient = new GradientSpec
+            {
+                Kind = GradientKind.Linear,
+                Stops = new[]
+                {
+                    new GradientStop(0.0, new ColorRgb(1, 0, 0)),
+                    new GradientStop(1.0, new ColorRgb(0, 0, 1)),
+                },
+            },
+        };
+
+        document.AddFilter(new FilterSpec("soft", new[]
+        {
+            FilterPrimitive.Blur(6, input: "SourceGraphic"),
+        }));
+
+        shape.FilterId = "soft";
+
+        byte[] pdf = PdfDocumentExporter.Export(document, out IReadOnlyList<string> notes);
+
+        Assert.Contains(notes, note => note.Contains("gradient", StringComparison.OrdinalIgnoreCase));
+
+        // "Exported unfiltered" is not a phrase to take on trust: the page has to draw what the same document
+        // draws with no filter on it, gradient and all.
+        CadDocument plain = Document();
+        PathItem plainShape = plain.AllPaths().Single();
+        plainShape.Fill = shape.Fill;
+        plain.AddFilter(new FilterSpec("soft", new[]
+        {
+            FilterPrimitive.Blur(6, input: "SourceGraphic"),
+        }));
+
+        Assert.Equal(Operators(PdfDocumentExporter.Export(plain)), Operators(pdf));
+    }
+
+    /// <summary>
     /// A graph that reads the picture behind the object cannot be written honestly: the exporter walks items one at
     /// a time and has no backdrop raster to hand over, so the input would read as transparent and the page would
     /// show a filter that was evaluated against nothing. The artwork is exported unfiltered **and the reason is
