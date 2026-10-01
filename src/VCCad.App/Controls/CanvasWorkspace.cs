@@ -360,13 +360,13 @@ public sealed class CanvasWorkspace : Control
     public void ZoomIn()
     {
         _userAdjustedZoom = true;
-        ZoomAtCenter(Zoom * 1.25);
+        ZoomAtCenter(Zoom * ButtonZoomStep);
     }
 
     public void ZoomOut()
     {
         _userAdjustedZoom = true;
-        ZoomAtCenter(Zoom / 1.25);
+        ZoomAtCenter(Zoom / ButtonZoomStep);
     }
 
     public void ZoomToActualSize()
@@ -1165,10 +1165,25 @@ public sealed class CanvasWorkspace : Control
 
     /// <summary>How much one notch of the wheel zooms. 10% is the conventional step and, applied once
     /// per click rather than per event, it is small enough to land on a seam.</summary>
-    private const double ZoomStepPerNotch = 1.1;
+    internal const double ZoomStepPerNotch = 1.1;
 
-    /// <summary>How far one notch of the wheel pans, in screen pixels.</summary>
-    private const double PanPerNotchPixels = 60.0;
+    /// <summary>
+    /// How far one notch of the wheel pans, in screen pixels.
+    ///
+    /// Raised from 60 when the burst collapsing landed: collapsing a click's six events into one step was
+    /// right, and it left one click scrolling a sixth as far as it used to. 60 was then too little to move
+    /// around a twelve-page pattern with, so the step is larger while the collapsing stays. Kept separate
+    /// from the zoom step on purpose - tuning the scroll must not move Ctrl+wheel.
+    /// </summary>
+    internal const double PanPerNotchPixels = 90.0;
+
+    /// <summary>
+    /// How much one press of the toolbar's + / - zooms.
+    ///
+    /// Deliberately larger than a wheel notch: a button is a deliberate step further, and a notch is a fine
+    /// adjustment. Two named constants rather than one, so tuning either cannot move the other by surprise.
+    /// </summary>
+    internal const double ButtonZoomStep = 1.25;
 
     private Point _lastPan;
 
