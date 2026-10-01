@@ -3758,6 +3758,52 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
+    /// <summary>
+    /// Draws a hatch fill: its line families, in the object's **stroke** colour, clipped to the object.
+    ///
+    /// The clipping happened in the generator - every segment handed back is already inside the region, holes
+    /// and concavities included - so this only strokes what it is given. That is deliberate: the same segments
+    /// are what an export writes, so a rendering fault cannot come from a second clipping implementation
+    /// disagreeing with the first.
+    /// </summary>
+    private void PaintHatch(DrawingContext context, PathItem path, HatchSpec hatch, double opacity)
+    {
+        IReadOnlyList<FlattenedOutline> outlines = PathFlattener.Flatten(path);
+        if (outlines.Count == 0)
+        {
+            return;
+        }
+
+        // A hatch is hatching, not a filled shape: its lines take the stroke's colour, which is the colour that
+        // belongs to a line. The thickness keeps the same minimum the stroke does, so a hatch stays visible at
+        // any zoom rather than fading to nothing.
+        IBrush brush = ToBrush(path.Stroke.Color, opacity);
+        const double MinDevicePixels = 0.75;
+        double floor = MinDevicePixels / Math.Max(_layout.Zoom, 1e-6);
+
+        foreach (HatchSegment segment in HatchGenerator.Segments(
+                     hatch, outlines, path.Fill.Rule, path.BoundingBox()))
+        {
+            var pen = new Pen(
+                brush,
+                thickness: Math.Max(segment.Line.Width, floor),
+                lineCap: ToLineCap(segment.Line.Cap));
+
+            if (!segment.Line.Dash.IsEmpty)
+            {
+                double factor = segment.Line.Width > 0 ? pen.Thickness / segment.Line.Width : 1.0;
+                pen.DashStyle = new DashStyle(
+                    segment.Line.Dash.Segments.Select(d => Math.Max(0.01, d * factor)).ToArray(),
+                    segment.Line.Dash.Offset * factor);
+            }
+
+            context.DrawLine(
+                pen,
+                new Point(segment.A.X, segment.A.Y),
+                new Point(segment.B.X, segment.B.Y));
+        }
+    }
+
     private void PaintPath(DrawingContext context, PathItem path, double opacity)
     {
         bool anyClosed = path.SubPaths.Any(sp => sp.IsClosed);
@@ -3805,6 +3851,11 @@ public sealed class CanvasWorkspace : Control
         if (fillVisible)
         {
             PaintFill(context, path, geometry, opacity);
+
+            if (path.Fill.Hatch is { } hatch)
+            {
+                PaintHatch(context, path, hatch, opacity);
+            }
         }
 
         if (!strokeVisible)

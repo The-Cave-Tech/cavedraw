@@ -113,8 +113,20 @@ public sealed record FillSpec(
     bool IsVisible,
     ColorRgb Color,
     FillRule Rule,
-    GradientSpec? Gradient = null)
+    GradientSpec? Gradient = null,
+    HatchSpec? Hatch = null)
 {
+    /// <summary>
+    /// A hatch fill. The colour is the fallback used wherever a hatch cannot be drawn - a solid swatch, a
+    /// thumbnail, a format with no way to express one - and the lines themselves are drawn in the object's
+    /// **stroke** colour, which is what makes a hatch read as hatching rather than as a filled shape.
+    /// </summary>
+    public static FillSpec WithHatch(
+        HatchSpec hatch,
+        FillRule rule = FillRule.NonZero,
+        ColorRgb? flattened = null)
+        => new(true, flattened ?? ColorRgb.Black, rule, null, hatch);
+
     /// <summary>Convenience: an invisible fill ("none").</summary>
     public static FillSpec None { get; } = new(false, ColorRgb.White, FillRule.NonZero);
 
