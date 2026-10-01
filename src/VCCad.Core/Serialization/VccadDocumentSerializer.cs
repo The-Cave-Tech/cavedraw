@@ -129,7 +129,19 @@ internal sealed record DynamicsTargetDto(bool Enabled, double X1, double Y1, dou
 
 /// <summary>One outline effect on the wire: its kind, its parameters, and the seed its randomness comes from.</summary>
 internal sealed record OutlineEffectDto(
-    OutlineEffectKind Kind, double Size, double Detail, int Seed);
+    OutlineEffectKind Kind, double Size, double Detail, int Seed,
+
+    // The parameters the outline effects gained. Optional, and absent when they hold their default, so a document
+    // that names none does not grow members it never had - the rule the stroke stack, the gradients and the raster
+    // effects already follow. Writing the defaults on every save would be inventing data.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Ridges = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Smooth = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] OutlineJoin? Join = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Density = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Overlap = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Width = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Curviness = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Scatter = null);
 
 /// <summary>One raster effect on the wire, with its tint absent when it takes the stroke's own colour.</summary>
 internal sealed record RasterEffectDto(
@@ -593,7 +605,19 @@ internal abstract record ItemDto
                         p.Position, p.LeftWidth, p.RightWidth, p.Interpolation)).ToArray())
                 : null,
             s.HasEffects
-                ? s.AllEffects.Select(e => new OutlineEffectDto(e.Kind, e.Size, e.Detail, e.Seed)).ToArray()
+                ? s.AllEffects.Select(e => new OutlineEffectDto(
+                    e.Kind,
+                    e.Size,
+                    e.Detail,
+                    e.Seed,
+                    e.Ridges == 1 ? null : e.Ridges,
+                    e.Smooth ? true : null,
+                    e.Join == OutlineJoin.Miter ? null : e.Join,
+                    e.Density == 1.0 ? null : e.Density,
+                    e.Overlap == 0 ? null : e.Overlap,
+                    e.Width == 0 ? null : e.Width,
+                    e.Curviness == 0 ? null : e.Curviness,
+                    e.Scatter == 0 ? null : e.Scatter)).ToArray()
                 : null,
             s.HasRasterEffects
                 ? s.AllRasterEffects.Select(e => new RasterEffectDto(
@@ -1073,7 +1097,17 @@ internal static class ItemDtoExtensions
     /// </summary>
     private static EffectStack? ToEffects(OutlineEffectDto[]? effects)
         => effects is { Length: > 0 }
-            ? new EffectStack(effects.Select(e => new OutlineEffectSpec(e.Kind, e.Size, e.Detail, e.Seed)))
+            ? new EffectStack(effects.Select(e => new OutlineEffectSpec(e.Kind, e.Size, e.Detail, e.Seed)
+            {
+                Ridges = e.Ridges ?? 1,
+                Smooth = e.Smooth ?? false,
+                Join = e.Join ?? OutlineJoin.Miter,
+                Density = e.Density ?? 1.0,
+                Overlap = e.Overlap ?? 0,
+                Width = e.Width ?? 0,
+                Curviness = e.Curviness ?? 0,
+                Scatter = e.Scatter ?? 0,
+            }))
             : null;
 
     private static WidthProfileSpec? ToModel(this WidthProfileDto? dto)
