@@ -118,8 +118,8 @@ internal static class FilterRenderer
 
         FilterBuffer source = Rasterise(paint);
 
-        // The source inputs the graph reads, and only those: a fill-only picture of a shape that is not painted
-        // from a reachable closure is impossible to invent, and one nobody reads is an allocation for nothing.
+        // The source inputs the graph reads, and only those: a picture no step reads is an extra region-sized
+        // allocation per filtered object, and the region is allowed to be large.
         FilterBuffer? fill = fillPaint is not null && Reads(filters, "FillPaint") ? Rasterise(fillPaint) : null;
         FilterBuffer? stroke = strokePaint is not null && Reads(filters, "StrokePaint") ? Rasterise(strokePaint) : null;
 
