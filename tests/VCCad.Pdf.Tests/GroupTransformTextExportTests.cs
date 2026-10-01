@@ -54,6 +54,17 @@ public class GroupTransformTextExportTests
         "<text x=\"0\" y=\"10\" font-size=\"10\">Hi</text></svg>";
 
     /// <summary>
+    /// A group that turns as well as moves: `translate(40,40) rotate(90)`.
+    ///
+    /// This is the case a frame that carried only the translation and the scale would still get wrong - the
+    /// composition's third and fourth coefficients are the ones that bring the rotation, and a text matrix is where
+    /// they have to land. The local baseline (0,10) maps to (22.5, 30) pt and the face stays 7.5pt, because a
+    /// rotation does not scale.
+    /// </summary>
+    private const string Rotated = Header +
+        "<g transform=\"translate(40,40) rotate(90)\"><text x=\"0\" y=\"10\" font-size=\"10\">Hi</text></g></svg>";
+
+    /// <summary>
     /// The text of an SVG, and the same text as the exported PDF hands it back to a reader.
     ///
     /// Both halves come from the file that was written rather than from the model: the "exported" half is what
@@ -149,6 +160,28 @@ public class GroupTransformTextExportTests
         Assert.Equal(7.5, canvas.Y, 6);
 
         AssertPlaced("text in the root unit-conversion group", canvas, 7.5, exported);
+    }
+
+    /// <summary>
+    /// A **rotated** group turns the text with it, and does not scale it.
+    ///
+    /// A placement that carried the frame's translation and scale but not its rotation would put this block at the
+    /// right distance in the wrong direction, which is why the assertion is on both components of the baseline.
+    /// The composition lands in the text matrix's third and fourth coefficients - the same six numbers a `cm`
+    /// writes - so a rotation needs no separate rule and nothing about it is left unexpressed (issue #164, point 4).
+    /// </summary>
+    [Fact]
+    public void TextInARotatedGroupIsTurnedByThatGroup()
+    {
+        if (!StandardFontFixture.Available) { return; }
+
+        (TextItem source, TextItem exported) = RoundTrip(Rotated);
+
+        Point2D canvas = SelectionEngine.ToWorld(source).Transform(Placed(source).Baseline);
+        Assert.Equal(22.5, canvas.X, 6);
+        Assert.Equal(30.0, canvas.Y, 6);
+
+        AssertPlaced("text in a rotated group", canvas, 7.5, exported);
     }
 
     /// <summary>The operators of the page, decoded.</summary>
