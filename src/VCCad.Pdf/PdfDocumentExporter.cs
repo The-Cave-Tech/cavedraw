@@ -709,6 +709,61 @@ public static class PdfDocumentExporter
             }
         }
 
+        // --- Hatch: the clipped line art, not a native pattern ---------------
+        // A PDF has no need to carry a hatch as a pattern. The lines clipped to the path **are** what the file
+        // should contain, and they are the same segments the canvas draws, so the two cannot disagree about the
+        // shape - which is the whole reason the generator does the clipping rather than the renderer.
+        if (fillVisible && path.Fill.Hatch is { } hatch && contours.Count > 0)
+        {
+            IReadOnlyList<HatchSegment> hatchSegments = HatchGenerator.Segments(
+                hatch, PathFlattener.Flatten(path), path.Fill.Rule, path.BoundingBox());
+
+            if (hatchSegments.Count > 0)
+            {
+                ops.Add("q");
+                WriteContours(ops, contours);
+                ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "W* n" : "W n");
+
+                if (alphaStates.HasTransparency)
+                {
+                    ops.Add($"{alphaStates.NameFor(path.Stroke.Color.A * opacity)} gs");
+                }
+
+                ops.Add(ColorOperator(path.Stroke.Color, path.SourceStrokeCmyk, stroke: true));
+
+                // One stroke per family rather than per line: the width and the dash belong to the family, and a
+                // hatch of two hundred lines should be two hundred `l` operators, not two hundred `S` operators.
+                foreach (HatchLineSpec family in hatch.Lines)
+                {
+                    List<HatchSegment> familySegments = hatchSegments.Where(s => s.Line == family).ToList();
+                    if (familySegments.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    ops.Add($"{Num(Math.Max(0.0, family.Width * strokeScale))} w");
+                    if (!family.Dash.IsEmpty)
+                    {
+                        string array = string.Join(
+                            ' ', family.Dash.Segments.Select(v => Num(Math.Max(0.0, v * strokeScale))));
+                        ops.Add($"[{array}] {Num(family.Dash.Offset * strokeScale)} d");
+                    }
+
+                    foreach (HatchSegment segment in familySegments)
+                    {
+                        Point2D a = toDoc.Transform(segment.A);
+                        Point2D b = toDoc.Transform(segment.B);
+                        ops.Add($"{Num(a.X)} {Num(a.Y)} m {Num(b.X)} {Num(b.Y)} l");
+                    }
+
+                    ops.Add("S");
+                    ops.Add("[] 0 d");
+                }
+
+                ops.Add("Q");
+            }
+        }
+
         if (!strokeVisible)
         {
             return;

@@ -16,6 +16,20 @@
         <TextBlock Text="RECENT" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
                    Foreground="{DynamicResource VcTextDim}"/>
         <WrapPanel x:Name="SwatchPad" Width="44" ItemWidth="22" ItemHeight="22"/>
+
+        <!-- A hatch is a fill, so it lives with the fills. The lines take the object's stroke colour, which
+             is what the lettering under the buttons says, because hatching in the fill's own colour would
+             read as a solid shape. -->
+        <TextBlock Text="HATCH" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
+                   Margin="0,4,0,0" Foreground="{DynamicResource VcTextDim}"/>
+        <StackPanel Orientation="Horizontal" Spacing="2">
+          <Button x:Name="Hatch45" Content="/" Width="20" Height="20" Padding="0"
+                  FontSize="{DynamicResource VcFontSize}" ToolTip.Tip="Hatch at 45 degrees, in the stroke colour"/>
+          <Button x:Name="HatchCross" Content="X" Width="20" Height="20" Padding="0"
+                  FontSize="{DynamicResource VcFontSize}" ToolTip.Tip="Cross-hatch, in the stroke colour"/>
+          <Button x:Name="HatchNone" Content="-" Width="20" Height="20" Padding="0"
+                  FontSize="{DynamicResource VcFontSize}" ToolTip.Tip="Take the hatch off"/>
+        </StackPanel>
       </StackPanel>
     </Grid>
 

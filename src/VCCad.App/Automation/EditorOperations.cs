@@ -1492,6 +1492,62 @@ public static class EditorOperations
             return Summary(ctx);
         });
 
+        Add("style.setHatch",
+            "Fill the selected paths with a hatch: families of parallel lines, drawn in the object's stroke " +
+            "colour and clipped to the path's own outline - holes and concavities included. One family is an " +
+            "angle and a spacing; `cross` adds the same family at right angles. `clear` takes the hatch off " +
+            "again without disturbing the colour behind it.",
+            "angle?:number (default 45), spacing?:number (default 4), width?:number (default 1), " +
+            "cross?:bool, dashes?:number[] (default solid), rule?:nonzero|evenodd, clear?:bool",
+            (ctx, p) =>
+            {
+                bool clear = p.GetBool("clear", false);
+                double angle = p.GetDouble("angle", 45);
+                double spacing = p.GetDouble("spacing", 4);
+                double width = p.GetDouble("width", 1);
+                bool cross = p.GetBool("cross", false);
+
+                DashPattern dash = p.TryGetProperty("dashes", out JsonElement d) && d.ValueKind == JsonValueKind.Array
+                    ? new DashPattern(d.EnumerateArray().Select(e => e.GetDouble()).ToArray(), 0)
+                    : default;
+
+                FillRule rule = string.Equals(p.GetString("rule"), "evenodd", StringComparison.OrdinalIgnoreCase)
+                    ? FillRule.EvenOdd
+                    : FillRule.NonZero;
+
+                HatchSpec? hatch = clear
+                    ? null
+                    : cross
+                        ? HatchSpec.Cross(spacing)
+                        : HatchSpec.Single(angle, spacing, width, dash);
+
+                if (hatch is not null && cross)
+                {
+                    // The cross factory does not carry the weight or the dash, so the drawn width is applied
+                    // to both families here rather than leaving `width` silently ignored on that path.
+                    hatch = new HatchSpec(hatch.Lines
+                        .Select(l => l with { Width = width, Dash = dash })
+                        .ToArray());
+                }
+
+                int changed = 0;
+                foreach (PathItem path in ctx.Session.SelectedPaths())
+                {
+                    FillSpec next = hatch is null
+                        ? path.Fill with { Hatch = null }
+                        : new FillSpec(true, path.Fill.Color, rule, null, hatch);
+                    ctx.Session.Execute(new SetFillCommand(path, next, path.Fill));
+                    changed++;
+                }
+
+                return new
+                {
+                    changed,
+                    hatched = hatch is not null,
+                    families = hatch?.Lines.Count ?? 0,
+                };
+            });
+
         Add("style.setFillRule",
             "Set how the selected paths' fills decide what is inside their outline, leaving each " +
             "path's colour and gradient alone. style.setFill can do this too, but only by also " +

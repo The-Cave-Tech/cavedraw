@@ -33,7 +33,27 @@ internal sealed record FillDto(
     bool Visible,
     ColorDto? Color,
     FillRule Rule,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GradientDto? Gradient = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GradientDto? Gradient = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HatchDto? Hatch = null);
+
+/// <summary>
+/// One family of parallel lines in a hatch, as it travels in the sidecar.
+///
+/// Every member is written, including the ones that are usually default, because a hatch is only worth
+/// round-tripping exactly: an angle that comes back as zero is a differently-hatched drawing.
+/// </summary>
+internal sealed record HatchLineDto(
+    double AngleDegrees,
+    double OffsetX,
+    double OffsetY,
+    double Spacing,
+    double Width,
+    double[] Dash,
+    double DashOffset,
+    StrokeCap Cap);
+
+/// <summary>A hatch paint as it travels in the sidecar.</summary>
+internal sealed record HatchDto(HatchLineDto[] Lines);
 
 /// <summary>One stop of a gradient ramp, as it travels in the sidecar.</summary>
 internal sealed record GradientStopDto(
@@ -369,7 +389,8 @@ internal abstract record ItemDto
             f.IsVisible,
             f.IsVisible ? ToColor(f.Color) : null,
             f.Rule,
-            ToGradient(f.Gradient));
+            ToGradient(f.Gradient),
+            ToHatch(f.Hatch));
 
     private static GradientDto? ToGradient(GradientSpec? g)
         => g is null
@@ -389,6 +410,15 @@ internal abstract record ItemDto
                 g.Points.Select(p => new FreeformPointDto(p.Position, ToColor(p.Color), p.Opacity)).ToArray(),
                 g.FreeformMode,
                 g.Lines.Select(l => new FreeformLineDto(l.From, l.To)).ToArray());
+
+    private static HatchDto? ToHatch(HatchSpec? hatch)
+        => hatch is null
+            ? null
+            : new HatchDto(hatch.Lines
+                .Select(l => new HatchLineDto(
+                    l.AngleDegrees, l.OffsetX, l.OffsetY, l.Spacing, l.Width,
+                    l.Dash.Segments.ToArray(), l.Dash.Offset, l.Cap))
+                .ToArray());
 
     private static ColorDto ToColor(ColorRgb c) => new(c.R, c.G, c.B, c.A);
 
@@ -568,9 +598,24 @@ internal static class ItemDtoExtensions
         return group;
     }
 
+    /// <summary>Rebuilds a hatch line by line. A family with no spacing has no repetitions and is dropped.</summary>
+    private static HatchSpec ToModel(this HatchDto h)
+        => new(h.Lines
+            .Where(l => l.Spacing > 0)
+            .Select(l => new HatchLineSpec(
+                l.AngleDegrees,
+                l.OffsetX,
+                l.OffsetY,
+                l.Spacing,
+                l.Width,
+                new DashPattern(l.Dash, l.DashOffset),
+                l.Cap))
+            .ToArray());
+
     private static FillSpec ToModel(this FillDto f)
     {
         GradientSpec? gradient = f.Gradient?.ToModel();
+        HatchSpec? hatch = f.Hatch?.ToModel();
 
         // A fill is only "none" when it is invisible and there is no gradient behind it.
         // A gradient on an invisible fill is kept: switching a fill off and on again must
@@ -580,7 +625,17 @@ internal static class ItemDtoExtensions
             ColorRgb gradientColor = f.Color is null
                 ? ColorRgb.White
                 : new ColorRgb(f.Color.R, f.Color.G, f.Color.B, f.Color.A);
-            return new FillSpec(f.Visible, gradientColor, f.Rule, gradient);
+            return new FillSpec(f.Visible, gradientColor, f.Rule, gradient, hatch);
+        }
+
+        // A hatch on an invisible fill is kept for the same reason a gradient is: turning the fill off and on
+        // again must not lose the paint configured behind it.
+        if (hatch is not null)
+        {
+            ColorRgb hatchColor = f.Color is null
+                ? ColorRgb.White
+                : new ColorRgb(f.Color.R, f.Color.G, f.Color.B, f.Color.A);
+            return new FillSpec(f.Visible, hatchColor, f.Rule, null, hatch);
         }
 
         return f.Visible && f.Color is not null

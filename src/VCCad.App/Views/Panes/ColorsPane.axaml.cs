@@ -45,6 +45,13 @@ public partial class ColorsPane : UserControl
         Wheel.ColorCommitted += (_, _) => CommitLive();
         OpacityBar.ValueChanged += (_, _) => OnOpacityChanged();
         OpacityBar.Commit += (_, _) => CommitLive();
+
+        // The hatch buttons go through the operation registry rather than setting a fill here, so a hatch set
+        // from this pane and one set by a driver are the same code doing the same thing - the capability-parity
+        // rule, and the reason there is no second implementation to drift.
+        Hatch45.Click += (_, _) => ApplyHatch("""{"angle":45,"spacing":4,"width":0.5}""");
+        HatchCross.Click += (_, _) => ApplyHatch("""{"cross":true,"spacing":4,"width":0.5}""");
+        HatchNone.Click += (_, _) => ApplyHatch("""{"clear":true}""");
         HexBox.KeyDown += (_, e) =>
         {
             if (e.Key == Key.Enter)
@@ -293,6 +300,37 @@ public partial class ColorsPane : UserControl
     /// the editor's current fill/stroke — that is what the ring and circle stand for, so it
     /// has to follow the picker whether or not anything is selected.
     /// </summary>
+    /// <summary>
+    /// Applies a hatch to the selection through the operation registry.
+    ///
+    /// The registry, not a fill assignment here: a hatch set by a click and a hatch set by a driver are then the
+    /// same code doing the same thing, which is the capability-parity rule and the reason there is no second
+    /// implementation to drift from the first.
+    /// </summary>
+    private void ApplyHatch(string parameters)
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        try
+        {
+            EditorOperations.Invoke(
+                new AutomationContext { ViewModel = _vm },
+                "style.setHatch",
+                System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(parameters));
+        }
+        catch (EditorOperationException)
+        {
+            // Nothing selected, or nothing hatchable. A button that does nothing is better than an exception
+            // thrown out of a click handler, which surfaces as a crash rather than as a refusal.
+            return;
+        }
+
+        Refresh();
+    }
+
     private void ApplyLive()
     {
         if (_vm is null || _syncing)
