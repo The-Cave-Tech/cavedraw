@@ -57,6 +57,45 @@ public class GradientSerializationTests
         AssertLinesEqual(gradient.Lines, got.Lines);
     }
 
+    /// <summary>
+    /// **The radial focal point survives the sidecar.** It was read and written for SVG and then dropped here, which
+    /// made the save the one place a document could lose it: a file that focused its gradient reopened unfocused.
+    /// The sidecar is the lossless store, so a value the model holds and it discards is a defect in the store rather
+    /// than a missing nicety.
+    /// </summary>
+    [Fact]
+    public void ARadialFocalPointSurvivesTheSidecar()
+    {
+        GradientSpec gradient = FullyPopulated(GradientKind.Radial) with { FocalPoint = new Point2D(0.2, 0.45) };
+
+        CadDocument back = VccadDocumentSerializer.Deserialize(
+            VccadDocumentSerializer.Serialize(DocumentWithGradient(gradient)));
+
+        GradientSpec? got = FillOf(back).Gradient;
+        Assert.NotNull(got);
+        Assert.NotNull(got!.FocalPoint);
+        Assert.Equal(0.2, got.FocalPoint!.Value.X, 9);
+        Assert.Equal(0.45, got.FocalPoint!.Value.Y, 9);
+    }
+
+    /// <summary>
+    /// And a gradient that named no focus still names none. Null is not the same as the centre: writing the centre
+    /// would invent a coordinate the file never wrote, which is the rule this document follows for every member it
+    /// adds, so the member has to be genuinely absent rather than merely equal to its default.
+    /// </summary>
+    [Fact]
+    public void AGradientWithNoFocalPointStaysUnfocused()
+    {
+        GradientSpec gradient = FullyPopulated(GradientKind.Radial) with { FocalPoint = null };
+
+        string json = VccadDocumentSerializer.Serialize(DocumentWithGradient(gradient));
+        Assert.DoesNotContain("FocalPoint", json, StringComparison.OrdinalIgnoreCase);
+
+        GradientSpec? got = FillOf(VccadDocumentSerializer.Deserialize(json)).Gradient;
+        Assert.NotNull(got);
+        Assert.Null(got!.FocalPoint);
+    }
+
     [Theory]
     [InlineData(GradientKind.Linear)]
     [InlineData(GradientKind.Radial)]

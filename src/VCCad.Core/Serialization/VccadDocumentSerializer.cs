@@ -90,7 +90,13 @@ internal sealed record GradientDto(
     double Angle,
     FreeformPointDto[] Points,
     FreeformMode FreeformMode,
-    FreeformLineDto[] Lines);
+    FreeformLineDto[] Lines,
+
+    // The radial focal point, when the file names one. Absent means the file named none, which is not the same as
+    // storing the centre - that would invent a coordinate the file never wrote, and it is the rule the rest of this
+    // document follows for every member it adds.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    Point2D? FocalPoint = null);
 
 internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, StrokeCap Cap, StrokeJoin Join, double MiterLimit, StrokeAlignment Alignment, double[]? Dash = null, double DashOffset = 0.0,
 
@@ -552,7 +558,8 @@ internal abstract record ItemDto
                 g.Angle,
                 g.Points.Select(p => new FreeformPointDto(p.Position, ToColor(p.Color), p.Opacity)).ToArray(),
                 g.FreeformMode,
-                g.Lines.Select(l => new FreeformLineDto(l.From, l.To)).ToArray());
+                g.Lines.Select(l => new FreeformLineDto(l.From, l.To)).ToArray(),
+                g.FocalPoint);
 
     private static HatchDto? ToHatch(HatchSpec? hatch)
         => hatch is null
@@ -878,6 +885,7 @@ internal static class ItemDtoExtensions
                     p.Opacity))
                 .ToArray(),
             Lines = lines.Select(l => (l.From, l.To)).ToArray(),
+            FocalPoint = g.FocalPoint,
         };
 
         return stops.Length == 0
@@ -917,6 +925,13 @@ internal static class ItemDtoExtensions
         RequireFinite(g.RadiusY, "RadiusY");
         RequireFinite(g.Rotation, "Rotation");
         RequireFinite(g.Angle, "Angle");
+
+        // Optional, but when a file gives one it has to be a real number: a NaN survives arithmetic silently and
+        // lands nowhere, which is the failure this guard exists for everywhere else.
+        if (g.FocalPoint is { } focal)
+        {
+            RequireFinite(focal, "FocalPoint");
+        }
 
         FreeformPointDto[] points = g.Points ?? Array.Empty<FreeformPointDto>();
         for (int i = 0; i < points.Length; i++)
