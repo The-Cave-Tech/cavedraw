@@ -50,11 +50,22 @@ public partial class EditorView : UserControl
     public Controls.CanvasWorkspace WorkspaceControl => Workspace;
 
     /// <summary>
-    /// The dockable panes and whether each is open — the Windows menu's content.
-    /// Exposed so pane visibility is an operation rather than a menu-only action.
+    /// The dockable panes, with the tabs each holds - the Windows menu's content.
+    ///
+    /// **Panels, with their tabs**, rather than one flat entry per tab. It used to be flat, which made a panel with
+    /// four tabs look like four panes: hiding one hid one tab, and there was no way to say "hide the colour panel".
+    /// A driver that wants the Align tab can now see which panel it is in and which tab is showing.
     /// </summary>
-    public IReadOnlyList<(string Id, string Title, bool IsOpen)> Panes
-        => _tabDefs.Select(kv => (kv.Key, kv.Value.Title, _manager.IsTabOpen(kv.Key))).ToArray();
+    public IReadOnlyList<(string Id, string Title, bool IsOpen, PaneTabInfo[] Tabs)> Panes
+        => _manager.Panels()
+            .Select(panel => (
+                panel.Id,
+                panel.Title,
+                panel.IsVisible,
+                panel.Tabs
+                    .Select(tab => new PaneTabInfo(tab.Id, tab.Title, tab.IsOpen, panel.ActiveTab?.Id == tab.Id))
+                    .ToArray()))
+            .ToArray();
 
     /// <summary>
     /// The panels that can be resized, with their current arrangement. A panel is either
@@ -78,6 +89,15 @@ public partial class EditorView : UserControl
     /// </summary>
     public bool SetPaneOpen(string pane, bool? visible)
     {
+        // A **panel** first, then a tab. Hiding "the Arrange panel" is one request and hiding its "Pathfinder" tab
+        // is another, and a caller that could only name tabs could not make the first - which is the whole point of
+        // grouping them.
+        if (_manager.SetPanelOpen(pane, visible) is { } panelOpen)
+        {
+            RefreshWindowMenu();
+            return panelOpen;
+        }
+
         string? id = _tabDefs.Keys.FirstOrDefault(k => string.Equals(k, pane, StringComparison.OrdinalIgnoreCase));
         if (id is null)
         {
@@ -99,6 +119,29 @@ public partial class EditorView : UserControl
 
     private Func<bool>? _diagnosticsVisible;
     private Action? _toggleDiagnostics;
+
+    /// <summary>
+    /// Shows a tab inside its panel, by id or title, and makes it the one showing.
+    ///
+    /// Opening a tab that is **already open** is what "select this tab" means, and it is the case that used to do
+    /// nothing: a panel with four tabs could be told which to open but not which to look at, so a driver asking for
+    /// the Align tab got whichever tab happened to be showing.
+    /// </summary>
+    public bool SetPaneTab(string tab)
+    {
+        string? id = _tabDefs.Keys.FirstOrDefault(k => string.Equals(k, tab, StringComparison.OrdinalIgnoreCase))
+            ?? _tabDefs.FirstOrDefault(kv =>
+                string.Equals(kv.Value.Title, tab, StringComparison.OrdinalIgnoreCase)).Key;
+
+        if (id is null || !_manager.SetActiveTab(id))
+        {
+            throw new ArgumentException(
+                $"Unknown tab '{tab}'. Known tabs: {string.Join(", ", _tabDefs.Select(kv => kv.Value.Title))}.");
+        }
+
+        RefreshWindowMenu();
+        return true;
+    }
 
     /// <summary>
     /// Adds the diagnostics overlay to the Windows menu, so it is toggled the same
@@ -347,32 +390,27 @@ public partial class EditorView : UserControl
         objectsPanel.Tabs.Add(new DockTab { Id = "objects", Title = "Layers", PanelId = "objects", DefaultSide = DockSide.Right, ContentFactory = () => objects, IsOpen = true });
         objectsPanel.ActiveTabId = "objects";
 
-        var transformPanel = new DockPanelModel { Id = "transform", Title = "Transform", Side = DockSide.Right };
-        transformPanel.Tabs.Add(new DockTab { Id = "transform", Title = "Transform", PanelId = "transform", DefaultSide = DockSide.Right, ContentFactory = () => transform, IsOpen = true });
-        transformPanel.ActiveTabId = "transform";
+        // Transform, Pathfinder and Align are **tabs of one panel**, following the colour panel's pattern rather
+        // than inventing a second one. They are three views of the same thing - what to do to the selection - and
+        // they are used one at a time: a person transforms, or booleans, or aligns, and then looks at the canvas
+        // again. Stacked as three panels of their own they took half the dock between them and pushed the list of
+        // objects off the bottom, which is why Transform was the one that ended up scrolled out of reach.
+        //
+        // The tab ids do not change. They are what the Windows menu and `pane.set` name, so a person who knows
+        // where Pathfinder was still finds it, and the id now selects the tab rather than opening a panel.
+        var arrangePanel = new DockPanelModel { Id = "arrange", Title = "Arrange", Side = DockSide.Right };
+        arrangePanel.Tabs.Add(new DockTab { Id = "transform", Title = "Transform", PanelId = "arrange", DefaultSide = DockSide.Right, ContentFactory = () => transform, IsOpen = true });
+        arrangePanel.Tabs.Add(new DockTab { Id = "pathfinder", Title = "Pathfinder", PanelId = "arrange", DefaultSide = DockSide.Right, ContentFactory = () => pathfinder });
+        arrangePanel.Tabs.Add(new DockTab { Id = "align", Title = "Align", PanelId = "arrange", DefaultSide = DockSide.Right, ContentFactory = () => arrange });
+        arrangePanel.ActiveTabId = "transform";
 
-        // Likewise: Transform is a handful of numeric fields, so it takes what it needs and
-        // leaves the rest to Layers.
-        transformPanel.IsStretchable = false;
-        transformPanel.Height = 142;
-
-        // The Pathfinder is a handful of buttons, so it takes only what it needs - like Transform - and
-        // leaves the rest of the column to the list of objects a person actually scrolls.
-        var pathfinderPanel = new DockPanelModel { Id = "pathfinder", Title = "Pathfinder", Side = DockSide.Right };
-        pathfinderPanel.Tabs.Add(new DockTab { Id = "pathfinder", Title = "Pathfinder", PanelId = "pathfinder", DefaultSide = DockSide.Right, ContentFactory = () => pathfinder, IsOpen = true });
-        pathfinderPanel.ActiveTabId = "pathfinder";
-        pathfinderPanel.IsStretchable = false;
-        pathfinderPanel.Height = 118;
-
-        // Align sits under the Pathfinder: both are selection-wide arrangement, and the two together are
-        // the row of buttons a person reaches for while laying something out.
-        var arrangePanel = new DockPanelModel { Id = "arrange", Title = "Align", Side = DockSide.Right };
-        arrangePanel.Tabs.Add(new DockTab { Id = "arrange", Title = "Align", PanelId = "arrange", DefaultSide = DockSide.Right, ContentFactory = () => arrange, IsOpen = true });
-        arrangePanel.ActiveTabId = "arrange";
+        // Fixed, and tall enough for the tallest of the three. A tab strip does not change how much room the
+        // contents need - the Align grid is the biggest of them - so sizing the panel to the smallest would clip
+        // the one a person switched to.
         arrangePanel.IsStretchable = false;
         arrangePanel.Height = 190;
 
-        foreach (DockPanelModel panel in new[] { appearance, objectsPanel, transformPanel, pathfinderPanel, arrangePanel })
+        foreach (DockPanelModel panel in new[] { appearance, objectsPanel, arrangePanel })
         {
             _manager.RegisterPanel(panel);
             foreach (DockTab tab in panel.Tabs)

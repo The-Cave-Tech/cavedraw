@@ -170,6 +170,50 @@ public sealed class DockManager
             .Select(p => (p.Id, p.Title, p.IsStretchable, p.Height, p.Weight))
             .ToArray();
 
+    /// <summary>
+    /// Every registered panel, hidden ones included, so a caller can see the tabs each holds and which is showing.
+    ///
+    /// Hidden panels are included because "which panel holds the Align tab" is a question worth answering when the
+    /// panel is closed - and a list that omitted them would make a driver's view of the shell depend on its state.
+    /// </summary>
+    public IReadOnlyList<DockPanelModel> Panels() => _panels.Values.ToArray();
+
+    /// <summary>Makes a tab the showing one in its panel, opening it if it was closed.</summary>
+    public bool SetActiveTab(string tabId)
+    {
+        if (!_tabs.TryGetValue(tabId, out DockTab? tab))
+        {
+            return false;
+        }
+
+        SetTabOpen(tabId, true);
+        return true;
+    }
+
+    /// <summary>
+    /// Shows or hides a whole panel, by id or title, or null when there is no such panel.
+    ///
+    /// Different from a tab: with four tabs in a panel, hiding "the colour panel" and hiding "its Swatches tab" are
+    /// two requests, and a caller that could only name tabs had no way to make the first one.
+    /// </summary>
+    public bool? SetPanelOpen(string panel, bool? visible)
+    {
+        DockPanelModel? model = FindPanel(panel);
+        if (model is null)
+        {
+            return null;
+        }
+
+        bool open = visible ?? !model.IsVisible;
+        foreach (DockTab tab in model.Tabs)
+        {
+            tab.IsOpen = open;
+        }
+
+        Build();
+        return open;
+    }
+
     /// <summary>Makes a panel fixed at a pixel height, or stretchable again.</summary>
     public bool SetPanelStretchable(string pane, bool stretchable, double? height)
     {

@@ -142,8 +142,9 @@ public partial class App : Application
                 CenterOn: (x, y) => workspace.CenterOn(new VCCad.Geometry.Point2D(x, y)),
                 GetViewCenter: () => (workspace.ViewCenter.X, workspace.ViewCenter.Y)),
             host: new HostActions(
-                Panes: () => view.Panes.Select(p => new PaneInfo(p.Id, p.Title, p.IsOpen)).ToArray(),
+                Panes: () => view.Panes.Select(p => new PaneInfo(p.Id, p.Title, p.IsOpen, p.Tabs)).ToArray(),
                 SetPaneOpen: view.SetPaneOpen,
+                SetPaneTab: view.SetPaneTab,
                 PanelSizes: () => view.PanelSizes
                     .Select(s => new PaneSize(s.Id, s.Title, s.Stretchable, s.Height, s.Weight))
                     .ToArray(),

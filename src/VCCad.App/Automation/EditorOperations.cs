@@ -93,7 +93,15 @@ public sealed class AutomationContext
 /// <param name="Id">Stable id used by the dock manager.</param>
 /// <param name="Title">Title shown in the Windows menu and on the tab.</param>
 /// <param name="IsOpen">Whether it is currently shown.</param>
-public sealed record PaneInfo(string Id, string Title, bool IsOpen);
+/// <param name="Tabs">The tabs it holds, in order, and which of them is showing.</param>
+public sealed record PaneInfo(string Id, string Title, bool IsOpen, IReadOnlyList<PaneTabInfo> Tabs);
+
+/// <summary>One tab inside a pane, and whether it is the one showing.</summary>
+/// <param name="Id">Tab id, which is what a caller names to select it.</param>
+/// <param name="Title">Title shown on the tab.</param>
+/// <param name="IsOpen">Whether the tab is open at all.</param>
+/// <param name="Active">Whether it is the tab currently showing.</param>
+public sealed record PaneTabInfo(string Id, string Title, bool IsOpen, bool Active);
 
 /// <summary>How a docked panel is sized: fixed by pixel height, or sharing the slack.</summary>
 /// <param name="Id">Panel id.</param>
@@ -113,6 +121,7 @@ public sealed record PaneSize(string Id, string Title, bool Stretchable, double 
 public sealed record HostActions(
     Func<IReadOnlyList<PaneInfo>> Panes,
     Func<string, bool?, bool> SetPaneOpen,
+    Func<string, bool> SetPaneTab,
     Func<IReadOnlyList<PaneSize>> PanelSizes,
     Func<string, bool, double?, bool> SetPaneStretchable,
     Func<string, double, bool> SetPaneSize,
@@ -4225,6 +4234,14 @@ public static class EditorOperations
                         stretchable = sizes.TryGetValue(p.Id, out var s) ? s.Stretchable : (bool?)null,
                         height = sizes.TryGetValue(p.Id, out var h) ? Math.Round(h.Height, 1) : (double?)null,
                         weight = sizes.TryGetValue(p.Id, out var w) ? Math.Round(w.Weight, 1) : (double?)null,
+                        activeTab = p.Tabs.FirstOrDefault(t => t.Active)?.Id,
+                        tabs = p.Tabs.Select(t => new
+                        {
+                            id = t.Id,
+                            title = t.Title,
+                            open = t.IsOpen,
+                            active = t.Active,
+                        }).ToArray(),
                     })
                     .ToArray();
             });
@@ -4281,6 +4298,26 @@ public static class EditorOperations
 
                 bool open = RequireHost(ctx).SetPaneOpen(pane, visible);
                 return new { pane, open };
+            });
+
+        Add("pane.setTab",
+            "Show a tab inside a docked panel and make it the one showing, by tab id or title. `pane.set` opens a " +
+            "pane; this selects a tab **within** one, which is the difference between finding the Arrange panel and " +
+            "looking at its Align tab. Reports the pane and the tab that ended up showing.",
+            "tab:string",
+            (ctx, p) =>
+            {
+                string tab = p.GetString("tab")
+                    ?? throw new EditorOperationException("Parameter 'tab' is required.");
+
+                RequireHost(ctx).SetPaneTab(tab);
+
+                return RequireHost(ctx).Panes()
+                    .SelectMany(pane => pane.Tabs
+                        .Where(t => t.Active)
+                        .Select(t => new { pane = pane.Id, tab = t.Id, title = t.Title }))
+                    .FirstOrDefault(t => string.Equals(t.tab, tab, StringComparison.OrdinalIgnoreCase))
+                    ?? new { pane = string.Empty, tab, title = string.Empty };
             });
 
         Add("app.exit", "Close the application, as File → Exit would.", "",
