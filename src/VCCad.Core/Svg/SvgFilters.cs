@@ -43,9 +43,27 @@ internal sealed class SvgFilters
             var primitives = new List<FilterPrimitive>();
             foreach (XElement child in element.Elements())
             {
-                if (ReadPrimitive(child) is { } primitive)
+                if (ReadPrimitive(child) is not { } primitive)
                 {
-                    primitives.Add(primitive);
+                    // A primitive this build does not read is **said**, not skipped quietly: a filter is a graph,
+                    // so a step that does nothing silently changes what every step after it receives - and the
+                    // shape comes out looking as though nobody had asked for a filter at all.
+                    warn?.Invoke($"filter '{id}' uses a primitive this build does not read: {child.Name.LocalName}");
+                    continue;
+                }
+
+                primitives.Add(primitive);
+
+                // `stdDeviation` may carry two numbers, one per axis, and the model has a single radius. Using the
+                // first is an approximation, and an approximation nobody is told about is a blur that is wrong in
+                // one direction with nothing to explain it.
+                if (primitive.Kind == FilterPrimitiveKind.GaussianBlur &&
+                    child.Attribute("stdDeviation")?.Value
+                        .Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries).Length > 1)
+                {
+                    warn?.Invoke(
+                        $"filter '{id}' gives a two-value stdDeviation; the model has one radius, and the first " +
+                        "value is used for both axes");
                 }
             }
 
