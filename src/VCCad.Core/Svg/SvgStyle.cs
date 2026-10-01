@@ -101,24 +101,38 @@ internal sealed record PresentationStyle(
                 : FillRule.NonZero };
         }
 
-        // Paint is only replaced when the element names one; `stroke-width` and the dash list refine a stroke that
-        // may have been inherited, which is why they are read even when `stroke` itself is absent.
+        // Paint is only replaced when the element names one; the other stroke members refine whichever stroke is in
+        // force, whether it was inherited or named **here**.
+        //
+        // This used to refine only the inherited case, so an element that said `stroke="#000"
+        // stroke-linecap="round"` lost the cap, the join, the miter limit and the dash - the paint was read and
+        // everything describing how it was laid down was not. Nothing in the corpus happens to write both together,
+        // so no corpus test could see it. The SVG exporter's round trip did, on its first run.
         string? strokeValue = Value("stroke");
+        bool namedStroke = strokeValue is not null;
         if (strokeValue is not null)
         {
             stroke = ParseStroke(strokeValue, Value("stroke-opacity"), Value("stroke-width"))
                 ?? StrokeSpec.None;
         }
-        else if (stroke.HasVisibleOutline)
+
+        if (stroke.HasVisibleOutline)
         {
             stroke = stroke with
             {
                 Width = Length(Value("stroke-width")) ?? stroke.Width,
                 Cap = ParseCap(Value("stroke-linecap")) ?? stroke.Cap,
                 Join = ParseJoin(Value("stroke-linejoin")) ?? stroke.Join,
-                Dash = ParseDash(Value("stroke-dasharray")) ?? stroke.Dash,
-                Color = ApplyOpacity(stroke.Color, Value("stroke-opacity")),
+                MiterLimit = Number(Value("stroke-miterlimit")) ?? stroke.MiterLimit,
+                Dash = ParseDash(Value("stroke-dasharray"), Value("stroke-dashoffset")) ?? stroke.Dash,
             };
+
+            // Only when nothing named a paint: naming one already applied the opacity, and applying it twice is how
+            // a half-transparent stroke becomes a quarter-transparent one.
+            if (!namedStroke)
+            {
+                stroke = stroke with { Color = ApplyOpacity(stroke.Color, Value("stroke-opacity")) };
+            }
         }
 
         string? opacity = Value("opacity");
@@ -261,7 +275,7 @@ internal sealed record PresentationStyle(
     /// repeated to make it even. Reading it as-is would dash the line with a pattern twice as long as the file
     /// meant.
     /// </summary>
-    private static DashPattern? ParseDash(string? value)
+    private static DashPattern? ParseDash(string? value, string? offset = null)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Trim().Equals("none", StringComparison.OrdinalIgnoreCase))
         {
@@ -274,10 +288,21 @@ internal sealed record PresentationStyle(
             return null;
         }
 
+        // The phase comes with the pattern: `stroke-dashoffset` decides where in it the line starts, and a dashed
+        // line that begins at the beginning instead of where it was drawn is a different picture.
+        double phase = Length(offset) ?? 0.0;
+
         return numbers.Length % 2 == 0
-            ? new DashPattern(numbers)
-            : new DashPattern(numbers.Concat(numbers).ToArray());
+            ? new DashPattern(numbers, phase)
+            : new DashPattern(numbers.Concat(numbers).ToArray(), phase);
     }
 
     private static double? Length(string? value) => SvgReader.Length(value);
+
+    /// <summary>A plain number, which is what `stroke-miterlimit` and `stroke-opacity` are.</summary>
+    private static double? Number(string? value)
+        => double.TryParse(value?.Trim(), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out double parsed)
+            ? parsed
+            : null;
 }

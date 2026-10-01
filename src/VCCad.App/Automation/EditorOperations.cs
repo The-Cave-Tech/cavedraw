@@ -3758,6 +3758,48 @@ public static class EditorOperations
                 File.WriteAllBytes(path, pdf);
                 return new { saved = path, bytes = pdf.Length };
             });
+        Add("document.exportSvg",
+            "Export the active document as SVG. page selects one artboard, counted from zero, and without it the " +
+            "whole document is written with each artboard in its place. Returns the SVG as base64, so a driver can " +
+            "send it on or write it itself.",
+            "page?:number",
+            (ctx, p) =>
+            {
+                int? page = p.ValueKind == JsonValueKind.Object && p.TryGetProperty("page", out _)
+                    ? (int)p.GetLong("page", 0)
+                    : null;
+
+                string svg = ctx.ViewModel.ExportSvg(page);
+                return new
+                {
+                    svgBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(svg)),
+                    characters = svg.Length,
+                    page,
+                };
+            });
+
+        Add("document.saveSvgToFile",
+            "Write the active document's SVG to disk (no dialog).",
+            "path:string, page?:number",
+            (ctx, p) =>
+            {
+                string path = p.GetString("path")
+                    ?? throw new EditorOperationException("Parameter 'path' is required.");
+                int? page = p.ValueKind == JsonValueKind.Object && p.TryGetProperty("page", out _)
+                    ? (int)p.GetLong("page", 0)
+                    : null;
+
+                string svg = ctx.ViewModel.ExportSvg(page);
+                string? directory = Path.GetDirectoryName(Path.GetFullPath(path));
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                File.WriteAllText(path, svg);
+                return new { saved = path, characters = svg.Length };
+            });
+
         // The status bar shows a padlock for a protected file; this is the same facts without the
         // chrome, because the assistant has to be able to read what the person can see (§1.1).
         Add("document.security", "What the open document's file was protected with, and what it permits.", "",

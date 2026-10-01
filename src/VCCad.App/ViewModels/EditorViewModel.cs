@@ -237,6 +237,14 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         return session;
     }
 
+    /// <summary>
+    /// Exports the active document as SVG, or one page of it.
+    ///
+    /// The writer is in Core, like the reader: it produces a string from a model, and having the view model in the
+    /// way would mean the exporter's tests needed one.
+    /// </summary>
+    public string ExportSvg(int? page = null) => VCCad.Core.Svg.SvgWriter.Write(ActiveSession.Document, page);
+
     /// <summary>Whether the active document has changes that are not on disk.</summary>
     public bool IsActiveModified => _active.IsModified;
 

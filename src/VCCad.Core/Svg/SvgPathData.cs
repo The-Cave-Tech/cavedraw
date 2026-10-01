@@ -238,6 +238,17 @@ internal static class SvgPathData
                 {
                     if (current is not null)
                     {
+                        // A closing **curve** is written as a segment back to where the subpath began and then `Z`.
+                        // The model keeps that closing segment as the first node's incoming handle, so the last node
+                        // is folded back into it - otherwise every round trip grows the path by a node, and the
+                        // geometry stays right while the structure slowly drifts.
+                        if (current.Nodes.Count > 2 &&
+                            current.Nodes[^1].Anchor.NearlyEquals(current.Nodes[0].Anchor, 1e-9))
+                        {
+                            current.Nodes[0].InHandle = current.Nodes[^1].InHandle;
+                            current.Nodes.RemoveAt(current.Nodes.Count - 1);
+                        }
+
                         current.IsClosed = true;
                     }
 
