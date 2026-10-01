@@ -260,18 +260,27 @@ public class StrokePaneSectionTests
     public void ChoosingTheCurveLandsOnTheInspectedStrokeAndKeepsTheOtherTargets()
     {
         var viewModel = new EditorViewModel();
-        PathItem path = Line(viewModel, Stroke(4) with
+        var response = new DynamicsSpec(Enum.GetValues<DynamicsTarget>().Select(target => target switch
         {
-            Dynamics = DynamicsSpec.PressureToWidth(DynamicsPreset.Soft),
-        });
+            DynamicsTarget.Width => new DynamicsTargetSpec(true, DynamicsCurve.FromPreset(DynamicsPreset.Soft)),
+            DynamicsTarget.Opacity => new DynamicsTargetSpec(true, DynamicsCurve.FromPreset(DynamicsPreset.Hard)),
+            _ => DynamicsTargetSpec.Off,
+        }));
+
+        PathItem path = Line(viewModel, Stroke(4) with { Dynamics = response });
         StrokePane pane = Pane(viewModel, 0, path);
 
-        Combo(pane, "DynamicsWidthCurve").SelectedIndex = 2; // Hard
+        Combo(pane, "DynamicsWidthCurve").SelectedIndex = 3; // Exponential
         Settle();
 
         DynamicsTargetSpec width = path.Strokes[0].Dynamics!.For(DynamicsTarget.Width);
         Assert.True(width.Enabled);
-        Assert.Equal(DynamicsCurve.FromPreset(DynamicsPreset.Hard), width.Curve);
+        Assert.Equal(DynamicsCurve.FromPreset(DynamicsPreset.Exponential), width.Curve);
+
+        // The target that was not touched is exactly as it was.
+        DynamicsTargetSpec opacity = path.Strokes[0].Dynamics!.For(DynamicsTarget.Opacity);
+        Assert.True(opacity.Enabled);
+        Assert.Equal(DynamicsCurve.FromPreset(DynamicsPreset.Hard), opacity.Curve);
     }
 
     /// <summary>Unchecking a target stores that decision without disturbing the others.</summary>
