@@ -52,21 +52,27 @@ public class WidthProfileExportTests
     /// <summary>
     /// The outline is the region the stroke covers, so its extent is the widest part of the profile and not the
     /// stroke's own width. A 20-wide taper is 20 across at its fat end, ten either side of the centreline.
+    ///
+    /// Asserted as the **exact set of points** rather than by looking for a coordinate somewhere in the stream.
+    /// The looser version of this test passed while the outline was somewhere else entirely, because a content
+    /// stream contains numbers from more than one source and one of them happened to match.
     /// </summary>
     [Fact]
     public void TheOutlineIsAsWideAsTheProfile()
     {
         string content = Export(Line(WidthProfileSpec.Taper(20, 0)));
 
-        // The path runs along y=400 in document space, and the exporter flips Y per artboard, so the fat end is
-        // ten points either side of it: 390 and 410.
-        var ys = Regex.Matches(content, @"([-\d.]+) ([-\d.]+) [ml]")
-            .Select(m => double.Parse(m.Groups[2].Value))
-            .ToList();
-
-        Assert.Contains(ys, y => Math.Abs(y - 390.0) < 0.01);
-        Assert.Contains(ys, y => Math.Abs(y - 410.0) < 0.01);
+        // The path runs from (40,400) to (300,400). The taper is 20 across at that end and closes to nothing at
+        // the far end, so the four points are the band's corners.
+        Assert.Equal(
+            new[] { (40.0, 390.0), (300.0, 400.0), (300.0, 400.0), (40.0, 410.0) },
+            WrittenPoints(content).ToArray());
     }
+
+    /// <summary>The points a content stream draws, in order, as (x, y).</summary>
+    private static IEnumerable<(double X, double Y)> WrittenPoints(string content)
+        => Regex.Matches(content, @"([-\d.]+) ([-\d.]+) [ml]")
+            .Select(m => (double.Parse(m.Groups[1].Value), double.Parse(m.Groups[2].Value)));
 
     /// <summary>An ordinary stroke is written exactly as before: the profile is additive, not a replacement.</summary>
     [Fact]
@@ -87,6 +93,28 @@ public class WidthProfileExportTests
 
         Assert.Contains("1 0 0 RG", content);
         Assert.Contains("8 w", content);
+    }
+
+    /// <summary>
+    /// **The same outline reaches the PDF as reaches the canvas.** The exported points are the shared builder's,
+    /// in the same coordinates - so the two renderers are drawing one geometry rather than two that agree by
+    /// luck. The assertion is over the whole set, so a point from anywhere else in the stream cannot satisfy it.
+    /// </summary>
+    [Fact]
+    public void TheWrittenOutlineIsTheSharedBuildersGeometry()
+    {
+        PathItem path = Line(WidthProfileSpec.Constant(10));
+        string content = Export(path);
+
+        IReadOnlyList<Point2D> shared = StrokeOutlineBuilder.Outline(path, path.Stroke)[0];
+        var written = WrittenPoints(content).ToArray();
+
+        Assert.Equal(shared.Count, written.Length);
+        for (int i = 0; i < shared.Count; i++)
+        {
+            Assert.Equal(shared[i].X, written[i].X, 6);
+            Assert.Equal(shared[i].Y, written[i].Y, 6);
+        }
     }
 
     private static string Inflate(byte[] pdf)

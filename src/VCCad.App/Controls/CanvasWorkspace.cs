@@ -3962,8 +3962,10 @@ public sealed class CanvasWorkspace : Control
     /// </summary>
     internal static IReadOnlyList<IReadOnlyList<Point2D>> ProfileLoops(PathItem path, StrokeSpec stroke)
     {
-        IReadOnlyList<IReadOnlyList<Point2D>> loops = PathOffset.Outline(
-            PathFlattener.FlattenForStroke(path), stroke.WidthProfile, stroke.Width, stroke.MiterLimit);
+        // The geometry comes from the shared builder rather than from this file: the canvas and the exporter
+        // must agree about what a stroke covers, and two implementations of offsetting a path differ at exactly
+        // the corners a person looks at when they compare the two.
+        IReadOnlyList<IReadOnlyList<Point2D>> loops = StrokeOutlineBuilder.Outline(path, stroke);
 
         Vector2D offset = path.ArtboardOffset();
         if (offset.X == 0 && offset.Y == 0)

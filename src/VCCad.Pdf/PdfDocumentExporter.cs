@@ -763,7 +763,10 @@ public static class PdfDocumentExporter
                 continue;
             }
 
-            double strokeWidth = Math.Max(0.0, stroke.Width * strokeScale);
+            // What this stroke is drawn as is decided in one place, in the model, so the canvas and this writer
+            // cannot come to different conclusions about a stroke that varies along its length.
+            StrokeRenderPlan plan = StrokeOutlineBuilder.Plan(path, stroke, strokeScale);
+            double strokeWidth = plan.Width;
 
             // A stroke that varies in width is drawn as its **outline filled**, not stroked: PDF has one width
             // per stroke, so there is no variable-width stroke to write. Filling the region the stroke covers is
@@ -771,13 +774,13 @@ public static class PdfDocumentExporter
             //
             // Note this sets the **fill** colour, because the outline is filled. The stroke's own colour is what
             // it is filled with, and none of the stroke graphics state below applies.
-            if (stroke.HasWidthProfile)
+            if (plan.IsOutline)
             {
                 ops.Add(ColorOperator(
                     stroke.Color,
                     ReferenceEquals(stroke, path.Strokes[0]) ? path.SourceStrokeCmyk : null,
                     stroke: false));
-                WriteProfileOutline(ops, path, stroke, toDoc, strokeScale, opacity, alphaStates);
+                WriteOutline(ops, plan.Outlines, toDoc, stroke, opacity, alphaStates);
                 continue;
             }
 
@@ -1291,38 +1294,23 @@ public static class PdfDocumentExporter
     }
 
     /// <summary>
-    /// Writes a variable-width stroke as the region it covers, filled.
+    /// Writes the outlines a stroke covers, filled.
     ///
-    /// PDF has one width per stroke, so a stroke that varies along its length cannot be written as a stroke.
-    /// It is written as what it *is*: the outline filled. That is not an approximation - the outline is the same
-    /// region a viewer would paint - and it is filled with the **nonzero** rule, which is what makes the
+    /// PDF has one width per stroke, so a stroke that varies along its length cannot be written as a stroke. It
+    /// is written as what it *is*: the region filled, with the **nonzero** rule, which is what makes the
     /// overlapping corners of a mitred outline fill rather than cancel.
     ///
-    /// The profile's widths are in the same units as the stroke's own width, so they are scaled by the same
-    /// factor the stroked path would have been.
+    /// The outlines come from <see cref="StrokeOutlineBuilder"/> already scaled, so this only places and fills
+    /// them - the geometry is not decided here, because the canvas has to decide it the same way.
     /// </summary>
-    private static void WriteProfileOutline(
+    private static void WriteOutline(
         List<string> ops,
-        PathItem path,
-        StrokeSpec stroke,
+        IReadOnlyList<IReadOnlyList<Point2D>> loops,
         AffineTransform toDoc,
-        double strokeScale,
+        StrokeSpec stroke,
         double opacity,
         PdfAlphaStates? alphaStates = null)
     {
-        WidthProfileSpec profile = stroke.WidthProfile!;
-        WidthProfileSpec scaled = strokeScale switch
-        {
-            1.0 => profile,
-            _ => new WidthProfileSpec(
-                profile.Name,
-                profile.Points.Select(p => new WidthPoint(
-                    p.Position, p.LeftWidth * strokeScale, p.RightWidth * strokeScale, p.Interpolation))),
-        };
-
-        IReadOnlyList<IReadOnlyList<Point2D>> loops = PathOffset.Outline(
-            PathFlattener.FlattenForStroke(path), scaled, stroke.Width * strokeScale, stroke.MiterLimit);
-
         if (loops.Count == 0)
         {
             return;

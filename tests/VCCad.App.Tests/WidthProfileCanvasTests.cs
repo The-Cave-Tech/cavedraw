@@ -39,8 +39,20 @@ public class WidthProfileCanvasTests
     public void TheOutlineIsAsWideAsTheProfile()
     {
         (_, PathItem path) = Host();
+        StrokeSpec stroke = Stroked(WidthProfileSpec.Constant(10));
 
-        IReadOnlyList<Point2D> points = CanvasWorkspace.ProfileLoops(path, Stroked(WidthProfileSpec.Constant(10)))[0];
+        IReadOnlyList<Point2D> points = CanvasWorkspace.ProfileLoops(path, stroke)[0];
+        IReadOnlyList<Point2D> shared = StrokeOutlineBuilder.Outline(path, stroke)[0];
+
+        // **The canvas draws the shared builder's geometry**, point for point - not a second implementation of
+        // offsetting that happens to look the same until the corners. On an artboard at the origin the two must
+        // be identical, which is what makes this an agreement test rather than a smoke test.
+        Assert.Equal(shared.Count, points.Count);
+        for (int i = 0; i < shared.Count; i++)
+        {
+            Assert.Equal(shared[i].X, points[i].X, 9);
+            Assert.Equal(shared[i].Y, points[i].Y, 9);
+        }
 
         // A constant ten-wide stroke on a horizontal line is five above and five below.
         Assert.Equal(-5.0, points.Min(p => p.Y), 3);
