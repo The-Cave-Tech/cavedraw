@@ -38,6 +38,9 @@ public class SessionJournalTests
     [InlineData("history.search")]
     [InlineData("app.operations")]
     [InlineData("image.exportPng")]
+    [InlineData("filter.list")]
+    [InlineData("filter.kinds")]
+    [InlineData("filter.read")]
     public void ReadingIsNotAnEdit(string name)
     {
         Assert.False(SessionJournal.IsMutation(name), $"{name} must not be journaled");
@@ -55,6 +58,11 @@ public class SessionJournalTests
     [InlineData("layer.add")]
     [InlineData("document.new")]
     [InlineData("document.importPdf")]
+    [InlineData("filter.create")]
+    [InlineData("filter.addPrimitive")]
+    [InlineData("filter.setPrimitiveParameter")]
+    [InlineData("filter.connectPrimitive")]
+    [InlineData("filter.delete")]
     public void EditingIsAnEdit(string name)
     {
         Assert.True(SessionJournal.IsMutation(name), $"{name} must be journaled");
