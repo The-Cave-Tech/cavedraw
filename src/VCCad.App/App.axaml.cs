@@ -44,11 +44,13 @@ public partial class App : Application
                 var root = new Panel();
                 root.Children.Add(view);
 
+                (int Width, int Height) size = DesktopStartup.Options.WindowSize ?? (960, 900);
+
                 var window = new Window
                 {
                     Title = "VCCad",
-                    Width = 960,
-                    Height = 900,
+                    Width = size.Width,
+                    Height = size.Height,
                     Content = root,
                 };
 

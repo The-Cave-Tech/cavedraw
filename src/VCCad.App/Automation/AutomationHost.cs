@@ -796,6 +796,30 @@ public sealed class DesktopStartupOptions
     /// <summary>Do not dock the window to the right half of the screen.</summary>
     public bool NoDock { get; set; }
 
+    /// <summary>
+    /// The window size asked for on the command line, or null for the default.
+    ///
+    /// The window is the frame of every recording, screenshot and `ui.dump`, so a driver wanting a wide, short
+    /// frame for a landscape page has to be able to ask for one. Docking fits the window to half the screen,
+    /// which is the wrong answer when a size was asked for by hand - so giving a size turns docking off rather
+    /// than being quietly overruled by it.
+    /// </summary>
+    public (int Width, int Height)? WindowSize { get; set; }
+
+    /// <summary>Whether a size string is WxH in whole pixels, and what it says.</summary>
+    public static bool TryParseSize(string? text, out int width, out int height)
+    {
+        width = 0;
+        height = 0;
+
+        string[] parts = (text ?? string.Empty).Split('x', 'X');
+        return parts.Length == 2
+               && int.TryParse(parts[0], out width)
+               && int.TryParse(parts[1], out height)
+               && width > 0
+               && height > 0;
+    }
+
     /// <summary>Print usage and exit.</summary>
     public bool ShowHelp { get; set; }
 
@@ -879,6 +903,24 @@ public sealed class DesktopStartupOptions
                 case "--no-dock":
                     options.NoDock = true;
                     break;
+                case "--size":
+                {
+                    string? sizeText = Next();
+                    if (DesktopStartupOptions.TryParseSize(sizeText, out int sizeWidth, out int sizeHeight))
+                    {
+                        options.WindowSize = (sizeWidth, sizeHeight);
+
+                        // A size that was asked for by hand beats half a screen.
+                        options.NoDock = true;
+                    }
+                    else
+                    {
+                        options.ArgumentError =
+                            $"--size needs WxH in pixels, e.g. 1920x1200, got '{sizeText ?? "(nothing)"}'";
+                    }
+
+                    break;
+                }
                 case "--model":
                     options.Llm.Model = Next() ?? options.Llm.Model;
                     break;
@@ -929,6 +971,9 @@ public sealed class DesktopStartupOptions
           --history-dir DIR   where the interaction diary is stored
                               (default %APPDATA%\VCCad\history, env VCCAD_HISTORY_DIR)
           --no-dock           do not dock the window to the right half of the screen
+          --size WxH          window size in pixels, e.g. --size 1920x1200
+                              (turns docking off: a size asked for by hand beats
+                               half a screen)
           --name NAME         name this instance and publish its endpoint to
                               %APPDATA%\VCCad\instances\NAME.json
                               (binds an arbitrary free port unless --port pins one;
