@@ -64,6 +64,48 @@ public sealed class CadDocument
     public WidthProfileSpec? FindProfile(string name)
         => _widthProfiles.FirstOrDefault(p => p.Name == name);
 
+    /// <summary>Adds a profile to the library, or replaces the one with that name. Returns the profile added.</summary>
+    public WidthProfileSpec AddWidthProfile(WidthProfileSpec profile)
+    {
+        int existing = _widthProfiles.FindIndex(p => p.Name == profile.Name);
+        if (existing >= 0)
+        {
+            _widthProfiles[existing] = profile;
+        }
+        else
+        {
+            _widthProfiles.Add(profile);
+        }
+
+        return profile;
+    }
+
+    /// <summary>Removes a profile from the library, reporting whether it was there.</summary>
+    public bool RemoveWidthProfile(string name)
+        => _widthProfiles.RemoveAll(p => p.Name == name) > 0;
+
+    /// <summary>
+    /// The strokes that name a profile the document does not have.
+    ///
+    /// A stroke holds its profile as a value, so it can still be drawn - but a name that resolves to nothing means
+    /// a document has been edited or merged in a way that lost the asset, and the issue is explicit that this is
+    /// a **reported** condition rather than a silent default. Silently drawing the stroke at its own width would
+    /// make a lost asset look like a design decision.
+    /// </summary>
+    public IEnumerable<(PathItem Path, string Name)> MissingWidthProfiles()
+    {
+        foreach (PathItem path in AllPaths())
+        {
+            foreach (StrokeSpec stroke in path.Strokes)
+            {
+                if (stroke.WidthProfile is { } profile && FindProfile(profile.Name) is null)
+                {
+                    yield return (path, profile.Name);
+                }
+            }
+        }
+    }
+
     /// <summary>
     /// Every item in the document, artboards and pasteboard alike, in tree order.
     ///

@@ -448,7 +448,17 @@ internal abstract record ItemDto
     private static ColorDto ToColor(ColorRgb c) => new(c.R, c.G, c.B, c.A);
 
     private static StrokeDto ToStroke(StrokeSpec s)
-        => new(s.IsVisible, s.IsVisible ? new ColorDto(s.Color.R, s.Color.G, s.Color.B, s.Color.A) : null,
+        => new(
+            s.IsVisible,
+
+            // The colour is written when the stroke is visible, and also when it is invisible but carries one
+            // worth keeping. An invisible stroke is a real member of a stack with real settings, and writing
+            // null for it means it comes back black - the settings survive a save and the colour does not. A
+            // plain "no stroke" is invisible *and* black, and stays null, which is what leaves the bytes of an
+            // unstroked path exactly as they were.
+            s.IsVisible || s.Color != ColorRgb.Black
+                ? new ColorDto(s.Color.R, s.Color.G, s.Color.B, s.Color.A)
+                : null,
             s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment,
             s.Dash.IsEmpty ? null : s.Dash.Segments.ToArray(), s.Dash.Offset,
             s.HasWidthProfile
@@ -833,13 +843,33 @@ internal static class ItemDtoExtensions
         }
     }
 
+    /// <summary>
+    /// A stroke read back from the file.
+    ///
+    /// **An invisible stroke keeps its width, caps and joins.** It used to collapse to <see cref="StrokeSpec.None"/>,
+    /// which threw them away - and once a path can carry a stack, an invisible stroke is a real member with real
+    /// settings that a person is about to switch back on. Losing them means the stroke comes back a hairline.
+    ///
+    /// The colour is the one member this cannot preserve: an absent colour is how the format says "no stroke", so
+    /// a colour on an invisible stroke is not written and therefore cannot be read back. Keeping it would mean
+    /// writing a colour where the format has always written null, changing the bytes of every document with an
+    /// unstroked path - which is most of them.
+    /// </summary>
     private static StrokeSpec ToModel(this StrokeDto s)
-        => s.Visible && s.Color is not null
-            ? new StrokeSpec(true, new ColorRgb(s.Color.R, s.Color.G, s.Color.B, s.Color.A),
+        => s.Color is null
+            ? StrokeSpec.None with
+            {
+                Width = s.Width,
+                Cap = s.Cap,
+                Join = s.Join,
+                MiterLimit = s.MiterLimit,
+                Alignment = s.Alignment,
+                Dash = new DashPattern(s.Dash ?? Array.Empty<double>(), s.DashOffset),
+            }
+            : new StrokeSpec(s.Visible, new ColorRgb(s.Color.R, s.Color.G, s.Color.B, s.Color.A),
                 s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment,
                 new DashPattern(s.Dash ?? Array.Empty<double>(), s.DashOffset),
-                s.WidthProfile?.ToModel())
-            : StrokeSpec.None;
+                s.WidthProfile?.ToModel());
 
     private static WidthProfileSpec? ToModel(this WidthProfileDto? dto)
         => dto is null

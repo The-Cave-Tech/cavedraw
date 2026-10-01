@@ -1846,6 +1846,22 @@ public static class EditorOperations
                 }, "Remove width point");
             });
 
+        Add("profile.missing",
+            "Every stroke in the document that names a width profile the document does not have, with the path it " +
+            "is on and the name it asked for. A stroke holds its profile as a value, so it still draws - which is " +
+            "exactly why this is worth asking: a name that resolves to nothing means an asset was lost in an edit " +
+            "or a merge, and reporting it is the difference between a known gap and a drawing that quietly looks " +
+            "like someone meant it.",
+            "",
+            (ctx, _) => ctx.Document.MissingWidthProfiles()
+                .Select(missing => new
+                {
+                    itemId = missing.Path.Id,
+                    name = missing.Path.Name,
+                    profile = missing.Name,
+                })
+                .ToArray());
+
         Add("style.strokes",
             "The stroke stack on each selected path, bottom to top: every stroke's colour, width, cap, join, " +
             "miter limit, alignment and dash. What a driver reads to check a path that has more than one " +

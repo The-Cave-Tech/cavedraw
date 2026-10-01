@@ -55,6 +55,54 @@ public sealed record WidthProfileSpec
         Points = points.OrderBy(p => p.Position).ToArray();
     }
 
+    /// <summary>
+    /// Two profiles are the same when their name and every point are the same.
+    ///
+    /// Written out rather than left to the record, because the record would compare the <c>Points</c> **array by
+    /// reference**: two profiles read from the same file would differ from each other, and every round-trip test
+    /// built on equality would fail for a reason that has nothing to do with the round trip. `DashPattern` does
+    /// the same thing for the same reason.
+    /// </summary>
+    public bool Equals(WidthProfileSpec? other)
+    {
+        if (other is null)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(this, other))
+        {
+            return true;
+        }
+
+        if (Name != other.Name || Points.Count != other.Points.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < Points.Count; i++)
+        {
+            if (Points[i] != other.Points[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Name);
+        foreach (WidthPoint point in Points)
+        {
+            hash.Add(point);
+        }
+
+        return hash.ToHashCode();
+    }
+
     /// <summary>The name this asset is known by, which is what a person picks it by.</summary>
     public string Name { get; init; }
 

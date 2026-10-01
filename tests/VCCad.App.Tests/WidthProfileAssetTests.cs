@@ -174,6 +174,35 @@ public class WidthProfileAssetTests
             () => EditorOperations.Invoke(context, "profile.delete", Params(new { name = "Nothing" })));
     }
 
+    /// <summary>
+    /// **A reference to an asset the document does not have is reported, not silently defaulted.**
+    ///
+    /// A stroke holds its profile as a value, so it keeps drawing after the asset is gone - which is exactly why
+    /// this needs saying out loud. Silently drawing it at its own width would make a lost asset look like a design
+    /// decision, and nobody would know to look.
+    /// </summary>
+    [Fact]
+    public void AStrokeNamingAMissingProfileIsReported()
+    {
+        (AutomationContext context, CadDocument document, PathItem path) = Host();
+        EditorOperations.Invoke(context, "profile.create", Params(new { name = "Brush 4", points = TwoPoints() }));
+        EditorOperations.Invoke(context, "profile.apply", Params(new { name = "Brush 4" }));
+
+        Assert.Empty(JsonSerializer.Deserialize<JsonElement[]>(
+            JsonSerializer.Serialize(EditorOperations.Invoke(context, "profile.missing", default)))!);
+
+        // Reach past the operation to make the reference dangle, which is the state a merged or hand-edited
+        // document arrives in: the stroke still names a profile the library no longer has.
+        document.RemoveWidthProfile("Brush 4");
+
+        JsonElement[] missing = JsonSerializer.Deserialize<JsonElement[]>(
+            JsonSerializer.Serialize(EditorOperations.Invoke(context, "profile.missing", default)))!;
+
+        JsonElement report = Assert.Single(missing);
+        Assert.Equal("Brush 4", report.GetProperty("profile").GetString());
+        Assert.Equal(path.Id.ToString(), report.GetProperty("itemId").GetString());
+    }
+
     /// <summary>The library is part of the document, so it has to survive a round trip.</summary>
     [Fact]
     public void TheLibrarySurvivesSaveAndReload()
