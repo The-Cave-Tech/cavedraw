@@ -74,6 +74,10 @@
         <Button x:Name="MoveEffectDownButton" Grid.Column="4" Content="Down" HorizontalAlignment="Stretch"/>
       </Grid>
 
+      <!-- Built from the registry whenever a row is selected: one control per parameter the kind declares, so a new
+           effect gets its editors by existing rather than by the panel knowing what it takes. -->
+      <StackPanel x:Name="EffectParameters" Spacing="4"/>
+
       <!-- What the PDF export will leave out, from the same list the exporter is checked against. A person should
            learn it here rather than by opening the exported file and finding the effect missing. -->
       <TextBlock x:Name="ExportWarning" IsVisible="False" TextWrapping="Wrap"

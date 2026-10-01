@@ -49,9 +49,102 @@ public partial class StrokePane : UserControl
             EffectKindBox.Items.Add(definition.Kind);
         }
 
+        EffectList.SelectionChanged += (_, _) => BuildEffectEditors();
         EffectKindBox.SelectedIndex = 0;
         AddEffectButton.Click += OnAddEffect;
         RemoveEffectButton.Click += OnRemoveEffect;
+    }
+
+    /// <summary>
+    /// Builds one control per parameter the selected effect's kind declares.
+    ///
+    /// The controls come from the **registry**, which is the requirement this issue names: the panel asks what the
+    /// effect takes rather than knowing, so an effect that declares a new parameter gets an editor for it without
+    /// anyone touching this file. Only numbers and whole numbers are built, because those are what
+    /// `SetEffectParameter` accepts - a colour is not a number and is not claimed here.
+    /// </summary>
+    private void BuildEffectEditors()
+    {
+        EffectParameters.Children.Clear();
+
+        if (_vm is null || EffectList.SelectedIndex < 0 || EffectList.SelectedIndex >= _effectRows.Count)
+        {
+            return;
+        }
+
+        EffectRow row = _effectRows[EffectList.SelectedIndex];
+        EffectDefinition? definition = EffectRegistry.Find(row.Label);
+        if (definition is null)
+        {
+            return;
+        }
+
+        foreach (EffectParameter parameter in definition.Parameters)
+        {
+            if (parameter.Kind == EffectParameterKind.Color)
+            {
+                continue;
+            }
+
+            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+
+            var label = new TextBlock
+            {
+                Text = parameter.Name,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                Margin = new Avalonia.Thickness(0, 0, 6, 0),
+            };
+
+            var box = new TextBox
+            {
+                Text = (_vm.ActiveSession.EffectParameterValue(row.Raster, row.Index, parameter.Name) ?? parameter.Default)
+                    .ToString("0.####", CultureInfo.InvariantCulture),
+                Tag = parameter.Name,
+            };
+
+            // One handler for every box, because the name travels on the control rather than in a closure per
+            // parameter - which is what keeps this loop something that can be read.
+            box.KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Enter)
+                {
+                    CommitEffectParameter(box);
+                    e.Handled = true;
+                }
+            };
+            box.LostFocus += (_, _) => CommitEffectParameter(box);
+
+            Grid.SetColumn(label, 0);
+            Grid.SetColumn(box, 1);
+            grid.Children.Add(label);
+            grid.Children.Add(box);
+            EffectParameters.Children.Add(grid);
+        }
+    }
+
+    /// <summary>Writes one edited parameter back, through the session method the operation calls.</summary>
+    private void CommitEffectParameter(TextBox box)
+    {
+        if (_vm is null || _syncing || box.Tag is not string name ||
+            EffectList.SelectedIndex < 0 || EffectList.SelectedIndex >= _effectRows.Count)
+        {
+            return;
+        }
+
+        if (!double.TryParse(box.Text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
+        {
+            return;
+        }
+
+        EffectRow row = _effectRows[EffectList.SelectedIndex];
+        if (_vm.ActiveSession.SetEffectParameter(row.Raster, row.Index, name, value) > 0)
+        {
+            // Re-reads the effect, so a value that was clamped - an opacity over one, a detail under one - shows
+            // as what it became rather than as what was typed.
+            _syncing = true;
+            BuildEffectEditors();
+            _syncing = false;
+        }
     }
 
     /// <summary>

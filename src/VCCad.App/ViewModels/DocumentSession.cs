@@ -1756,6 +1756,62 @@ public sealed class DocumentSession : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// The current value of one effect parameter, by the name the registry declares it under, or null when the
+    /// effect does not take it.
+    ///
+    /// The counterpart of <see cref="SetEffectParameter"/>, and deliberately in the same file: between them they are
+    /// the whole of what a panel needs to show a control per declared parameter and write it back, and the names
+    /// they answer to are the registry's rather than the panel's. Colours are not here, for the same reason they
+    /// are not in the setter.
+    /// </summary>
+    public double? EffectParameterValue(bool raster, int index, string name)
+    {
+        foreach (PathItem path in SelectedPaths())
+        {
+            for (int i = 0; i < path.Strokes.Count; i++)
+            {
+                StrokeSpec stroke = path.Strokes[i];
+                if (raster)
+                {
+                    if (stroke.AllRasterEffects is not { } effects || index < 0 || index >= effects.Count)
+                    {
+                        continue;
+                    }
+
+                    RasterEffectSpec effect = effects[index];
+                    return name switch
+                    {
+                        "radius" => effect.Radius,
+                        "offsetX" => effect.OffsetX,
+                        "offsetY" => effect.OffsetY,
+                        "opacity" => effect.Opacity,
+                        _ => null,
+                    };
+                }
+                else
+                {
+                    var effects = stroke.AllEffects.ToList();
+                    if (index < 0 || index >= effects.Count)
+                    {
+                        continue;
+                    }
+
+                    OutlineEffectSpec effect = effects[index];
+                    return name switch
+                    {
+                        "size" => effect.Size,
+                        "detail" => effect.Detail,
+                        "seed" => effect.Seed,
+                        _ => null,
+                    };
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Sets one parameter of one effect, by the name the **registry** declares it under.
     ///
     /// The name being the registry's is what lets a panel build its editors from the declaration rather than from a
