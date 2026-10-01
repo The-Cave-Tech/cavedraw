@@ -45,15 +45,6 @@ public sealed record StrokeRenderPlan(
 public static class StrokeOutlineBuilder
 {
     /// <summary>
-    /// How much of a round cap's half turn one straight piece covers.
-    ///
-    /// The cap is sampled rather than emitted as an arc because everything downstream of here - the effects,
-    /// the PDF writer - works on points; the same step the round corner of an offset path uses, so a cap and a
-    /// corner of the same radius are faceted the same way.
-    /// </summary>
-    private const double CapStep = Math.PI / 12.0;
-
-    /// <summary>
     /// Resolves a stroke to the geometry that draws it.
     ///
     /// <paramref name="scale"/> is the renderer's own scale factor - the group transform's scale, for the
@@ -98,9 +89,13 @@ public static class StrokeOutlineBuilder
         double width = stroke.Width * scale;
         IReadOnlyList<FlattenedOutline> flattened = PathFlattener.FlattenForStroke(path);
 
+        // The stroke's own cap and join travel with the outline, because nothing downstream can supply them:
+        // the canvas, the PDF writer and the SVG writer all fill these loops and no other geometry, so a filled
+        // region without its stroke's ends and corners is a different picture in all three at once - and this is
+        // the one place that can put them back for all three.
         IReadOnlyList<IReadOnlyList<Point2D>> outlines = Dashing(stroke.Dash, scale)
             ? DashedOutline(flattened, profile, width, stroke, scale)
-            : PathOffset.Outline(flattened, profile, width, stroke.MiterLimit);
+            : PathOffset.Outline(flattened, profile, width, stroke.MiterLimit, stroke.Cap, stroke.Join);
 
         // The effects come **after** the outline exists, because that is what they reshape. Applying them to the
         // path instead would mean each effect having to know about widths and joins, and two renderers could then
@@ -117,7 +112,7 @@ public static class StrokeOutlineBuilder
     ///
     /// Public because every caller that has to **decide** whether a stroke reaches the pen or the outline is
     /// asking this question, and a second reading of the rule drifts from this one: an all-zero pattern read as
-    /// a dash takes the outline route, where the ends are squared, instead of the pen's own caps.
+    /// a dash leaves no on-interval at all, so the stroke the pen would have drawn solid inks nothing.
     /// </summary>
     public static bool Dashing(DashPattern dash, double scale = 1.0)
     {
@@ -166,14 +161,18 @@ public static class StrokeOutlineBuilder
                 WidthProfileSpec? runProfile = run.Capped ? RunProfile(profile, run) : profile;
 
                 IReadOnlyList<IReadOnlyList<Point2D>> loops =
-                    PathOffset.Outline(new[] { run.Shape }, runProfile, width, stroke.MiterLimit);
+                    PathOffset.Outline(
+                        new[] { run.Shape }, runProfile, width, stroke.MiterLimit, stroke.Cap, stroke.Join);
 
                 if (loops.Count == 0)
                 {
                     continue;
                 }
 
-                result.Add(run.Capped ? Capped(loops[0], run, runProfile, width, stroke.Cap) : loops[0]);
+                // A dash has two ends where the path had one, so the cap is the same answer the undashed
+                // outline takes from `PathOffset` - a dash is a run of the stroke, and its ends are the stroke's.
+                // A run that spans a whole closed loop has no ends at all, which `run.Shape` being closed says.
+                result.Add(loops[0]);
             }
         }
 
@@ -431,107 +430,6 @@ public static class StrokeOutlineBuilder
         }
 
         return profile.Points[^1].Interpolation;
-    }
-
-    /// <summary>
-    /// Adds the stroke's caps to the two ends of one dash.
-    ///
-    /// A dash has two ends and a stroke ends in its cap, so a dashed round-capped line drawn without this has
-    /// every dash squared off - the dash is right and the stroke it came from is not. Only a dash's runs are
-    /// capped here: the ends of a path that is not dashed are the plain outline's business, and that is not a
-    /// behaviour this change is entitled to alter.
-    /// </summary>
-    private static IReadOnlyList<Point2D> Capped(
-        IReadOnlyList<Point2D> loop, DashRun run, WidthProfileSpec? profile, double width, StrokeCap cap)
-    {
-        if (cap == StrokeCap.Butt)
-        {
-            return loop;
-        }
-
-        IReadOnlyList<Point2D> points = run.Shape.Points;
-        int n = points.Count;
-        if (n < 2 || loop.Count != n * 2)
-        {
-            return loop;
-        }
-
-        // The loop is the left side out and the right side back, so the end cap sits between left(end) and
-        // right(end) and the start cap between right(start) and left(start) - which wraps, and is appended.
-        (double startLeft, double startRight) = PathOffset.WidthsAt(profile, width, 0.0);
-        (double endLeft, double endRight) = PathOffset.WidthsAt(profile, width, 1.0);
-
-        IReadOnlyList<Point2D> end = CapPoints(
-            loop[n - 1], loop[n], Unit(points[^1] - points[^2]), (endLeft + endRight) / 2.0, cap);
-        IReadOnlyList<Point2D> start = CapPoints(
-            loop[^1], loop[0], Unit(points[0] - points[1]), (startLeft + startRight) / 2.0, cap);
-
-        var capped = new List<Point2D>(loop);
-        capped.InsertRange(n, end);
-        capped.AddRange(start);
-        return capped;
-    }
-
-    /// <summary>
-    /// The points a cap adds between the two sides of a dash's end, in the order the contour travels.
-    ///
-    /// Butt adds nothing, because the two sides already meet the end squarely. Square projects them by half the
-    /// width, so the end is a rectangle past the line. Round is the half turn about the end's midpoint which
-    /// bulges along the direction of travel, sampled into points - the other half turn would carve a bite out of
-    /// the dash instead, which is the mistake the sweep test below exists to prevent.
-    ///
-    /// A cap is symmetric, so where a profile is wider on one side of the path than the other the two halves are
-    /// averaged: there is no cap that is half a round end and half a square one, and an average keeps the end
-    /// where the person drew it rather than pushing it to one side of the line.
-    /// </summary>
-    private static IReadOnlyList<Point2D> CapPoints(
-        Point2D from, Point2D to, Vector2D forward, double half, StrokeCap cap)
-    {
-        if (half <= 0.0)
-        {
-            return Array.Empty<Point2D>();
-        }
-
-        if (cap == StrokeCap.Square)
-        {
-            return new[] { from + (forward * half), to + (forward * half) };
-        }
-
-        var centre = new Point2D((from.X + to.X) / 2.0, (from.Y + to.Y) / 2.0);
-        double radius = Distance(from, to) / 2.0;
-        if (radius <= 0.0)
-        {
-            return Array.Empty<Point2D>();
-        }
-
-        double first = Math.Atan2(from.Y - centre.Y, from.X - centre.X);
-        double sweep = Math.Atan2(to.Y - centre.Y, to.X - centre.X) - first;
-        while (sweep > Math.PI)
-        {
-            sweep -= Math.PI * 2.0;
-        }
-
-        while (sweep <= -Math.PI)
-        {
-            sweep += Math.PI * 2.0;
-        }
-
-        double middle = first + (sweep / 2.0);
-        if ((Math.Cos(middle) * forward.X) + (Math.Sin(middle) * forward.Y) < 0.0)
-        {
-            sweep += sweep > 0.0 ? -Math.PI * 2.0 : Math.PI * 2.0;
-        }
-
-        int steps = Math.Max(2, (int)Math.Ceiling(Math.Abs(sweep) / CapStep));
-        var arc = new List<Point2D>(steps - 1);
-        for (int k = 1; k < steps; k++)
-        {
-            double angle = first + (sweep * k / steps);
-            arc.Add(new Point2D(
-                centre.X + (Math.Cos(angle) * radius), centre.Y + (Math.Sin(angle) * radius)));
-        }
-
-        return arc;
     }
 
     /// <summary>The length of a polyline, which is what a run's profile positions are relative to.</summary>
