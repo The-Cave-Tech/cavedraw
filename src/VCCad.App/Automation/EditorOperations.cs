@@ -3028,6 +3028,64 @@ public static class EditorOperations
         Add("view.status", "Current zoom and whether the view is auto-fitting.", "",
             (ctx, _) => ViewStatus(ctx));
 
+        Add("capture.start",
+            "Start recording the canvas to an FFV1 video file, for reviewing what a run actually did. " +
+            "FFV1 is lossless, so thin lines and small text survive review - a lossy codec would make a " +
+            "rendering fault indistinguishable from a compression artefact.",
+            "path?:string, fps?:number (default 10), maxWidth?:number (default 1280), encoder?:string",
+            (ctx, p) =>
+            {
+                static string DefaultPath() => System.IO.Path.Combine(
+                    "artifacts", $"capture-{DateTime.UtcNow:yyyyMMdd-HHmmss}.mkv");
+
+                Avalonia.Controls.Window? window = ctx.UiRoot?.Invoke() as Avalonia.Controls.Window;
+                if (window is null)
+                {
+                    throw new EditorOperationException("No window to record.");
+                }
+
+                string path = p.TryGetProperty("path", out JsonElement pv) && pv.ValueKind == JsonValueKind.String
+                    ? pv.GetString() ?? DefaultPath()
+                    : DefaultPath();
+                int fps = p.TryGetProperty("fps", out JsonElement fv) && fv.ValueKind == JsonValueKind.Number
+                    ? fv.GetInt32()
+                    : 10;
+                double maxWidth = p.TryGetProperty("maxWidth", out JsonElement mv) && mv.ValueKind == JsonValueKind.Number
+                    ? mv.GetDouble()
+                    : 1280;
+                string? encoder = p.TryGetProperty("encoder", out JsonElement ev) && ev.ValueKind == JsonValueKind.String
+                    ? ev.GetString()
+                    : null;
+
+                return VCCad.App.Capture.CanvasRecording.Start(
+                    () => VCCad.App.Views.ScreenCapture.CaptureBgra(window, maxWidth), path, fps, encoder);
+            });
+
+        Add("capture.stop",
+            "Stop recording and report what was written: the path, the frames, the duration and any frames " +
+            "dropped because the encoder could not keep up.",
+            "",
+            (ctx, p) =>
+            {
+                VCCad.App.Capture.CaptureResult result = VCCad.App.Capture.CanvasRecording.Stop();
+                return new
+                {
+                    path = result.Path,
+                    frames = result.Frames,
+                    dropped = result.Dropped,
+                    seconds = Math.Round(result.Seconds, 2),
+                    bytes = result.Bytes,
+                    codec = "ffv1",
+                    encoderExitCode = result.EncoderExitCode,
+                    encoderOutput = result.EncoderOutput,
+                };
+            });
+
+        Add("capture.status",
+            "Whether a recording is running, where it is going and how far it has got.",
+            "",
+            (ctx, p) => VCCad.App.Capture.CanvasRecording.Status());
+
         Add("view.zoomIn", "Zoom in one step (the toolbar's + button).", "",
             (ctx, _) =>
             {

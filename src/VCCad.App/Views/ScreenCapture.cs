@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using VCCad.App.Capture;
 
 namespace VCCad.App.Views;
 
@@ -24,6 +25,65 @@ public static class ScreenCapture
         return Dispatcher.UIThread.CheckAccess()
             ? Capture(window, maxWidth)
             : Dispatcher.UIThread.Invoke(() => Capture(window, maxWidth));
+    }
+
+    /// <summary>
+    /// The same capture as <see cref="CaptureWindow"/>, as raw pixels instead of a PNG.
+    ///
+    /// A recording cannot afford a PNG encode per frame, and an encoder wants the pixels anyway. Downscaled the
+    /// same way, so a recording and the still that accompanied it show the same thing at the same size.
+    /// </summary>
+    public static CaptureFrame? CaptureBgra(Avalonia.Controls.Window? window, double maxWidth = 1280)
+    {
+        if (window is null)
+        {
+            return null;
+        }
+
+        return Dispatcher.UIThread.CheckAccess()
+            ? CaptureRaw(window, maxWidth)
+            : Dispatcher.UIThread.Invoke(() => CaptureRaw(window, maxWidth));
+    }
+
+    private static CaptureFrame? CaptureRaw(Avalonia.Controls.Window window, double maxWidth)
+    {
+        Size size = window.ClientSize;
+        if (size.Width < 1 || size.Height < 1)
+        {
+            return null;
+        }
+
+        double scale = size.Width > maxWidth ? maxWidth / size.Width : 1.0;
+        var pixelSize = new PixelSize(
+            Math.Max(1, (int)Math.Round(size.Width * scale)),
+            Math.Max(1, (int)Math.Round(size.Height * scale)));
+
+        try
+        {
+            using var bitmap = new RenderTargetBitmap(pixelSize, new Vector(96 * scale, 96 * scale));
+            bitmap.Render(window);
+
+            int stride = pixelSize.Width * 4;
+            var buffer = new byte[stride * pixelSize.Height];
+            System.Runtime.InteropServices.GCHandle handle =
+                System.Runtime.InteropServices.GCHandle.Alloc(
+                    buffer, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try
+            {
+                bitmap.CopyPixels(new PixelRect(pixelSize), handle.AddrOfPinnedObject(), buffer.Length, stride);
+            }
+            finally
+            {
+                handle.Free();
+            }
+
+            return new CaptureFrame(buffer, pixelSize.Width, pixelSize.Height, stride);
+        }
+        catch (Exception)
+        {
+            // A dropped frame must never break a recording or a chat turn.
+            return null;
+        }
     }
 
     private static byte[]? Capture(Window window, double maxWidth)
