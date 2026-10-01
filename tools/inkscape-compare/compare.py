@@ -41,7 +41,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-SVG_UNITS_PER_POINT = 96.0 / 72.0
+# No unit bridge: the writer states pt on the root extent, so one model point is one point on the page.
 
 INKSCAPE_CANDIDATES = (
     r"C:\Program Files\Inkscape\bin\inkscape.exe",
@@ -71,7 +71,7 @@ def find_inkscape() -> str | None:
 
 
 def rasterise(svg_path: Path, png_path: Path, point_dpi: float, inkscape: str) -> None:
-    export_dpi = point_dpi * SVG_UNITS_PER_POINT
+    export_dpi = point_dpi
     command = [
         inkscape,
         "--export-type=png",

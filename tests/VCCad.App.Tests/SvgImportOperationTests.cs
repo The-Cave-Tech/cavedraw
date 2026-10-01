@@ -46,7 +46,7 @@ public class SvgImportOperationTests
 
         // And it is a real document with real geometry, not a tab with an empty one.
         CadDocument document = context.Document;
-        Assert.Equal(100.0, document.Artboards[0].Width, 6);
+        Assert.Equal(75.0, document.Artboards[0].Width, 6);
         Assert.Equal(3, document.AllPaths().Count());
     }
 

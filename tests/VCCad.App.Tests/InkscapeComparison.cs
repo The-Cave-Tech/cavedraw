@@ -86,7 +86,7 @@ public sealed record RenderComparison(
 public static class InkscapeComparison
 {
     /// <summary>SVG user units per model point: SVG's 96 units per inch over the model's 72.</summary>
-    public const double SvgUnitsPerPoint = 96.0 / 72.0;
+    // No unit bridge: SvgWriter states pt on the root extent, so one model point is one point on the page.
 
     /// <summary>How long a headless Inkscape render may take before it is treated as hung.</summary>
     private static readonly TimeSpan RenderTimeout = TimeSpan.FromSeconds(120);
@@ -172,7 +172,7 @@ public static class InkscapeComparison
             ?? throw new InvalidOperationException(
                 "Inkscape was not found. Set VCCAD_INKSCAPE to inkscape.exe, or install Inkscape.");
 
-        double exportDpi = pointDpi * SvgUnitsPerPoint;
+        double exportDpi = pointDpi;
         string directory = Path.Combine(
             Path.GetTempPath(), "vccad-inkscape-compare", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
