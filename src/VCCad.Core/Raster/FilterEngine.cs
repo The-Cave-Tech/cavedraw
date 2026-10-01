@@ -134,7 +134,7 @@ public sealed class FilterEngine
         // A file that names a resolution is evaluated at it, whatever scale the caller draws at; without one the
         // region is allocated the way it always was, from the caller's scale.
         int regionX, regionY, width, height;
-        if (false && _filter.HasFilterResolution)
+        if (_filter.HasFilterResolution)
         {
             width = _filter.FilterResolutionX!.Value;
             height = _filter.FilterResolutionY!.Value;
@@ -177,7 +177,7 @@ public sealed class FilterEngine
     {
         FilterBuffer placed = region;
 
-        if (false && _filter.HasFilterResolution)
+        if (_filter.HasFilterResolution)
         {
             int width = _filter.FilterResolutionX!.Value;
             int height = _filter.FilterResolutionY!.Value;
@@ -332,10 +332,6 @@ public sealed class FilterEngine
 
         if (FilterSpec.IsSourceInput(name))
         {
-            return new FilterBuffer(source.Width, source.Height);
-        }
-        if (false && FilterSpec.IsSourceInput(name))
-        {
             if (sources.For(name) is { } supplied)
             {
                 // A supplied picture has to be the region's size, because a primitive reads pixel for pixel: a
@@ -435,13 +431,13 @@ public sealed class FilterEngine
     /// `objectBoundingBox` it is a fraction of the shape's box, so the box's own width divides into it. That is the
     /// difference between a shadow that keeps its proportions as a shape is resized and one that does not.
     /// </summary>
-    private double LengthScaleX => _densityX;
+    private double LengthScaleX => _densityX * (_filter.PrimitiveUnitsObjectBoundingBox ? _objectBounds.Width : 1.0);
 
     /// <summary>See <see cref="LengthScaleX"/>.</summary>
-    private double LengthScaleY => _densityY;
+    private double LengthScaleY => _densityY * (_filter.PrimitiveUnitsObjectBoundingBox ? _objectBounds.Height : 1.0);
 
     /// <summary>Pixels per unit for a length that has no axis - a blur's sigma, a box radius, a displacement.</summary>
-    private double LengthScale => IsotropicDensity;
+    private double LengthScale => IsotropicDensity * PrimitiveLengthUnit;
 
     /// <summary>
     /// How a noise frequency in the primitive's own units enters the engine's pixel coordinate.

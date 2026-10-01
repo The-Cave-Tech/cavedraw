@@ -256,10 +256,15 @@ public class FilterUnitsAndResolutionTests
         Assert.Equal(20, back.FilterResolutionY);
         Assert.Equal(document.FindFilter("boxed"), back);
 
-        // A filter that uses neither does not grow members for them, so an older sidecar and this one agree.
-        CadDocument plain = Document(new FilterSpec("plain", new[] { FilterPrimitive.Blur(1.0) }));
-        Assert.DoesNotContain("primitiveUnits", VccadDocumentSerializer.Serialize(plain), StringComparison.Ordinal);
-        Assert.DoesNotContain("filterRes", VccadDocumentSerializer.Serialize(plain), StringComparison.Ordinal);
+        // A filter that uses neither does not grow members for them, so an older sidecar and this one agree. The
+        // names are the sidecar's own members - the serializer writes property names verbatim - so this bites when
+        // either is written unconditionally.
+        string plainJson = VccadDocumentSerializer.Serialize(
+            Document(new FilterSpec("plain", new[] { FilterPrimitive.Blur(1.0) })));
+
+        Assert.DoesNotContain("PrimitiveUnitsObjectBoundingBox", plainJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("FilterResolutionX", plainJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("FilterResolutionY", plainJson, StringComparison.Ordinal);
     }
 
     // ---------------------------------------------------------------- the pixels
@@ -372,6 +377,9 @@ public class FilterUnitsAndResolutionTests
 
         _output.WriteLine($"relative gap across the two sizes: {boxGap:0.####} in box units, {userGap:0.####} in user units");
 
+        // The bounding-box blur is genuinely soft at the relative sample - a fifth of a unit out - which is what a
+        // reading of 0.05 as a user-space length would make vanish entirely.
+        Assert.True(boxSmallEdge > 0.1f, $"0.05 of a 40-unit box must blur: edge alpha {boxSmallEdge}");
         Assert.True(
             userGap > 0.05f && boxGap < userGap / 2f,
             $"a bounding-box length must follow the shape ({boxGap}) where a user-space one does not ({userGap})");
