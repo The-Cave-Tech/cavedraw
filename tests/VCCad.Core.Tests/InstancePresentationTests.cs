@@ -49,6 +49,34 @@ public class InstancePresentationTests
     private static void Refresh(CadDocument document) => new RefreshInstancesCommand(document).Do();
 
     /// <summary>
+    /// **Text takes the use site's paint, before and after a refresh.**
+    ///
+    /// The repaint walk handled paths and groups and had no case for text, so a `use` stating a fill over a
+    /// definition containing a `<text>` left the text at SVG's initial black while the shapes beside it took the
+    /// use site's colour - a drawing that disagreed with itself, and only for text. This is the block's colour;
+    /// a run's own colour is a separate member and is deliberately not touched here.
+    /// </summary>
+    [Fact]
+    public void ATextInsideAnInstanceTakesTheUseSitesPaint()
+    {
+        SvgImportResult result = Read(
+            "<defs><text id=\"label\" x=\"0\" y=\"10\" font-size=\"10\">hi</text></defs>" +
+            "<use xlink:href=\"#label\" fill=\"#ff0000\"/>");
+
+        TextItem text = Deep(Instances(result.Document, "label").Single().Children).OfType<TextItem>().Single();
+
+        Assert.Equal(1.0, text.Color.R, 9);
+        Assert.Equal(0.0, text.Color.G, 9);
+
+        Refresh(result.Document);
+
+        TextItem after = Deep(Instances(result.Document, "label").Single().Children).OfType<TextItem>().Single();
+
+        Assert.Equal(1.0, after.Color.R, 9);
+        Assert.Equal(0.0, after.Color.G, 9);
+    }
+
+    /// <summary>
     /// **A marker the reader placed survives a refresh.** `SvgMarkers` turns a marker into real artwork when the
     /// file is read - it is placed into the geometry rather than kept as a live property on the path - so the
     /// question an instance raises is whether that artwork is still there once the instance is rebuilt from the

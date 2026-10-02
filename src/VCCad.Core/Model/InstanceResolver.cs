@@ -217,6 +217,19 @@ public static class InstanceResolver
                     }
 
                     break;
+                case TextItem text:
+
+                    // **Text carries a block colour too, and it was the one kind this walk forgot.** A `use` that
+                    // states a paint over a definition containing text left the text at SVG's initial black while
+                    // the shapes beside it took the use site's colour - the drawing disagreed with itself, and only
+                    // for text. A run's own colour is a separate member with its own provenance (`TextRun.Color`),
+                    // so it is deliberately not touched here.
+                    if (Equals(text.Color, InstancePresentation.Default.Fill.Color))
+                    {
+                        text.Color = paint.Fill.Color;
+                    }
+
+                    break;
                 case ArtGroup group when !IsInstance(group):
                     Repaint(group.Children, paint);
                     break;
