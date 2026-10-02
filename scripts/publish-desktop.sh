@@ -72,9 +72,22 @@ fi
 
 # Serialise with any concurrent build/test/publish in this repository
 # (optional: the lock is a coordination nicety, not a requirement).
+#
+# **-o is load-bearing, not tidiness.** Without it, every process the build
+# starts inherits the lock's file descriptor, and the ones that outlive the
+# build keep the lock open for as long as they live - so the next caller waits
+# for ever on a lock whose owner has finished. That happened twice on the CI
+# runner, from different survivors:
+#
+#   MSBuild worker nodes   (nodeReuse:true)        - now disabled in ci.yml
+#   VBCSCompiler           (Roslyn shared server)  - cannot be disabled there
+#
+# `flock -o` closes the descriptor before running the command, so the lock is
+# held by this process alone and no child can inherit it. Verified on the
+# runner: with -o, `fuser` reports the flock process and not its child.
 run_locked() {
   if command -v flock >/dev/null 2>&1; then
-    flock "$LOCK" "$@"
+    flock -o "$LOCK" "$@"
   else
     "$@"
   fi

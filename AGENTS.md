@@ -294,11 +294,21 @@ starting, not stuck, and one at several minutes with no child work is wedged. Re
 last resort, not the first guess.
 
 **And the wedge has a cause worth knowing.** `scripts/publish-desktop.sh` serialises builds with
-`flock /tmp/vccad-build.lock`, and MSBuild's worker nodes (`nodeReuse:true`) **linger after a build
-holding that descriptor** - so the lock is never released and the next desktop job blocks forever at
-around 0.15 load. `MSBUILDDISABLENODEREUSE=1` is set in every CI job so the nodes exit and the lock
-is released. The restarts above appeared to fix it only because they killed the process holding the
-lock, which is why the problem kept returning.
+`flock /tmp/vccad-build.lock`. A plain `flock` passes the lock's file descriptor to every process the
+build starts, and the ones that outlive the build keep the lock open, so the next caller waits for
+ever on a lock whose owner has finished - at around 0.15 load, which reads as "slow", not "stuck".
+Two different survivors caused it, a round apart:
+
+- **MSBuild worker nodes** (`nodeReuse:true`) - `MSBUILDDISABLENODEREUSE=1` in the CI jobs makes them
+  exit;
+- **`VBCSCompiler`**, the Roslyn shared compiler server, which that variable does *not* cover. It had
+  `PPID 1` and was still holding the descriptor while the next `flock` waited 308 seconds with no
+  child process and no output.
+
+The fix is `flock -o`, which closes the descriptor before running the command so the lock is held by
+the `flock` process alone and **no** child can inherit it - verified on the runner by comparing `fuser`
+with and without it. Chasing each lingering process was the wrong shape of fix: it worked until the
+next tool that persists. The restarts above appeared to help only because they killed the holder.
 
 **Stage and commit in one step.** A tree staged in one round and committed in a
 later one collects whatever other agents wrote in between, producing a commit whose
