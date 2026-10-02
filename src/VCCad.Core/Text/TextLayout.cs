@@ -519,6 +519,11 @@ public static class TextLayoutEngine
             double runPen = pen;
             int currentRun = -1;
 
+            // The last character a list placed, and where, so the one the pen reaches next can turn that into the
+            // distance between them.
+            int previousPlaced = -1;
+            double previousInline = 0;
+
             for (int k = 0; k < order.Length; k++)
             {
                 int index = order[k];
@@ -542,25 +547,29 @@ public static class TextLayoutEngine
                 int within = PieceStart(text, index);
 
                 // **The file's own places win over the face's advances.** A run that states where each of its
-                // characters sits advances by the difference between consecutive places - so a list that contradicts
-                // the metrics is kept, which is the whole point of the attribute. The last character a list reaches
-                // keeps the measured advance, and past the end of the list the pen is the face's again: the same
-                // "a short list applies where it reaches" rule the across list follows.
+                // characters sits is placed absolutely, so the pen never has to arrive from anywhere - which is what
+                // lets a right-to-left line's places run back from its far edge without the advances going negative.
+                // The last character a list reaches keeps the measured advance, and past the end of the list the pen
+                // is the face's again: the same "a short list applies where it reaches" rule the across list follows.
                 double[]? places = text.Runs[runOf[index]].InlineOffsets is { Length: > 0 } runPlaces
                     && !mark
                     && within < runPlaces.Length
                         ? runPlaces
                         : null;
 
-                bool placed = false;
-                if (places is not null)
-                {
-                    advance = within + 1 < places.Length ? places[within + 1] - places[within] : advance;
-                    placed = true;
-                }
-
+                bool placed = places is not null;
                 double inline = mark ? basePen : placed ? runPen + places![within] : pen;
                 bool turned = Math.Abs(rotation[index]) > 1e-9;
+
+                // **A placed character's advance is the distance to the one the pen reaches next.** Places are in the
+                // file's own order, which a right-to-left or reordered line walks the other way, so the difference
+                // between consecutive entries is not that distance and can be negative. Recording the distance the
+                // walk actually covers keeps the run's box, its caret positions and what the writer states honest.
+                if (placed && previousPlaced >= 0)
+                {
+                    GlyphBox reached = glyphs[previousPlaced];
+                    glyphs[previousPlaced] = reached with { Advance = Math.Abs(inline - previousInline) };
+                }
 
                 // **The shift moves the glyph across its baseline and never moves the pen.** `baseline-shift`
                 // raises a run's own baseline off the line's, so the next character starts exactly where it would
@@ -591,7 +600,11 @@ public static class TextLayoutEngine
                     glyphs.Add(new GlyphBox(
                         index, inline, line.Cross, step, line.Cross + ShiftUp(vertical: true, shift) + across, inline,
                         rotation[index], runOf[index], PieceStart(text, index)));
-                    pen = placed ? inline + step : pen + step;
+
+                    // **The pen never walks backwards.** A placed character is where the file put it, and a
+                    // right-to-left run's places descend in the file's order, so the pen is the furthest point
+                    // reached rather than the last place plus an advance.
+                    pen = placed ? Math.Max(pen, inline + step) : pen + step;
                 }
                 else
                 {
@@ -601,7 +614,13 @@ public static class TextLayoutEngine
                         index, inline, line.Cross + line.Ascent, advance, inline,
                         line.Cross + line.Ascent + ShiftUp(vertical: false, shift) + across, 0.0,
                         runOf[index], PieceStart(text, index)));
-                    pen = placed ? inline + advance : pen + advance;
+                    pen = placed ? Math.Max(pen, inline + advance) : pen + advance;
+                }
+
+                if (placed)
+                {
+                    previousPlaced = glyphs.Count - 1;
+                    previousInline = inline;
                 }
 
                 if (!mark)

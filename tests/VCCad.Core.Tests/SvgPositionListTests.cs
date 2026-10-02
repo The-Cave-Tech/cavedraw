@@ -50,40 +50,60 @@ public class SvgPositionListTests
     }
 
     /// <summary>
-    /// **A right-to-left line's list is reported, and the run is placed by its first value.**
+    /// **A right-to-left line's places run the other way.** SVG states a place per character in the file's own order,
+    /// and under `rtl` the first character is the right-hand one - so a list of 40, 30, 20 puts character 0 at 40 and
+    /// the last at 20. The layout walks a line in visual order, so a fix that applied the list in the order the pen
+    /// reaches the characters would draw the string mirrored.
     ///
-    /// The places such a file states descend in the file's own order while the pen walks the line in visual order, so
-    /// the model's frame for them is not yet settled: applying them as they stand puts the glyphs in the right places
-    /// and gives them *negative* advances, which breaks the run's box, its caret and its far edge. The honest state
-    /// until that is worked out is the one this pins - the first value places the run, no list is recorded, and the
-    /// file is told - rather than a mirrored or half-applied line.
+    /// What makes it work is the same thing that makes the forward case work: a run that states its own places is
+    /// placed **absolutely**, so its origin is the leftmost place it names rather than a width measured from its
+    /// first value. For a forward line that leftmost place *is* the first value, which is why one rule covers both.
     /// </summary>
     [Fact]
-    public void AnRtlAlongListIsReportedRatherThanHalfApplied() => Measured(6, () =>
+    public void AnRtlAlongListPlacesTheCharactersItNames() => Measured(6, () =>
     {
-        SvgImportResult result = SvgReader.Read(
-            Head + "<text x=\"40 30 20\" y=\"10\" font-size=\"10\" direction=\"rtl\">abc</text></svg>");
-        TextItem item = result.Document.AllItems().OfType<TextItem>().Single();
-
-        Assert.Null(item.Runs[0].InlineOffsets);
-        Assert.Contains(
-            result.Warnings,
-            w => w.Contains("right-to-left", StringComparison.Ordinal) &&
-                 w.Contains("position per character", StringComparison.Ordinal));
-
+        TextItem item = Block("<text x=\"40 30 20\" y=\"10\" font-size=\"10\" direction=\"rtl\">abc</text>");
         TextLayout layout = TextLayoutEngine.Compute(item);
+
+        double PageX(int logical) => item.Origin.X + layout.Glyphs.Single(g => g.Index == logical).X;
+
         Assert.Equal(3, layout.Glyphs.Count);
+        Assert.Equal(40.0, PageX(0), 9);
+        Assert.Equal(30.0, PageX(1), 9);
+        Assert.Equal(20.0, PageX(2), 9);
 
-        // **The list changes nothing, which is what declining it means.** The same file without the list places the
-        // run exactly the same way - by its first value and the face's own advances - so this pins the decline rather
-        // than a convention about which way a right-to-left line runs, which is not what is at issue here.
-        SvgImportResult single = SvgReader.Read(
-            Head + "<text x=\"40\" y=\"10\" font-size=\"10\" direction=\"rtl\">abc</text></svg>");
-        TextLayout plain = TextLayoutEngine.Compute(
-            single.Document.AllItems().OfType<TextItem>().Single());
+        // A placed run's advances run the way the pen walks it, so every one of them is a distance and none is
+        // negative - a negative advance makes the run's own box, its caret and its far edge nonsense.
+        Assert.All(layout.Glyphs, g => Assert.True(g.Advance >= 0, $"advance {g.Advance} is negative"));
+    });
 
-        Assert.Equal(plain.Glyphs.Select(g => g.X), layout.Glyphs.Select(g => g.X));
-        Assert.Equal(plain.Glyphs.Select(g => g.Advance), layout.Glyphs.Select(g => g.Advance));
+    /// <summary>
+    /// **A right-to-left list survives the round trip.** The numbers come back in the file's own order - character 0
+    /// is the right-hand place - so a writer that emitted the model's own frame would hand back a mirrored line.
+    /// </summary>
+    [Fact]
+    public void AnRtlAlongListSurvivesTheSvgRoundTrip() => Measured(6, () =>
+    {
+        const string source =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"400\">" +
+            "<text x=\"40 30 20\" y=\"10\" font-size=\"10\" direction=\"rtl\">abc</text></svg>";
+
+        CadDocument document = SvgReader.Read(source).Document;
+        TextItem before = document.AllItems().OfType<TextItem>().Single();
+        TextLayout original = TextLayoutEngine.Compute(before);
+
+        TextItem after = SvgReader.Read(SvgWriter.Write(document)).Document
+            .AllItems().OfType<TextItem>().Single();
+        TextLayout again = TextLayoutEngine.Compute(after);
+
+        Assert.Equal(3, again.Glyphs.Count);
+        for (int logical = 0; logical < 3; logical++)
+        {
+            Assert.Equal(
+                before.Origin.X + original.Glyphs.Single(g => g.Index == logical).X,
+                after.Origin.X + again.Glyphs.Single(g => g.Index == logical).X,
+                6);
+        }
     });
 
     /// <summary>

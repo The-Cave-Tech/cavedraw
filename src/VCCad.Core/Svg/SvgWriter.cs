@@ -1419,31 +1419,20 @@ public static class SvgWriter
             // of the list goes with it, each entry added to the coordinate the run starts at. That first entry is the
             // run's own start, which is what makes the list come back rebased on the same place.
             //
-            // A right-to-left horizontal line is the one shape this cannot state: its written `x` is where the run
-            // *ends*, while the model's places run forwards, so the loss is named rather than written as a list that
-            // would come back reversed.
+            // **The model's places are already in the file's own order.** They are relative to the run's start, which
+            // is the leftmost place it names - so a right-to-left line's entries come out descending, exactly as the
+            // file wrote them, and a forward line's ascending, without the writer needing to know which it is.
             if (run.InlineOffsets is { Length: > 0 } along && start < along.Length)
             {
-                if (text.Direction == TextDirection.RightToLeft &&
-                    text.WritingMode == TextWritingMode.HorizontalTb)
-                {
-                    Report(
-                        text,
-                        "a run states a position per character on a right-to-left line, and the file's own places " +
-                        "cannot be written that way");
-                }
-                else
-                {
-                    int count = Math.Min(length, along.Length - start);
-                    bool horizontal = text.WritingMode == TextWritingMode.HorizontalTb;
-                    double from = horizontal
-                        ? text.Origin.X + box.X + anchor
-                        : text.Origin.Y + layout.Lines[box.Line].Top;
+                int count = Math.Min(length, along.Length - start);
+                bool horizontal = text.WritingMode == TextWritingMode.HorizontalTb;
+                double from = horizontal
+                    ? text.Origin.X + box.X + anchor
+                    : text.Origin.Y + layout.Lines[box.Line].Top;
 
-                    element.SetAttributeValue(
-                        horizontal ? "x" : "y",
-                        string.Join(' ', Enumerable.Range(start, count).Select(i => Number(from + along[i]))));
-                }
+                element.SetAttributeValue(
+                    horizontal ? "x" : "y",
+                    string.Join(' ', Enumerable.Range(start, count).Select(i => Number(from + along[i]))));
             }
 
             // **A per-character across offset travels as the list the file stated.** `dy` under a horizontal mode and

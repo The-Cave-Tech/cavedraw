@@ -522,25 +522,12 @@ public static partial class SvgReader
             // starts. The single values above still place the piece - and for a list they are the same fact, so
             // nothing is counted twice here: this list is *positions*, and the pen is the first of them.
             //
-            // **A right-to-left line is declined and named.** Its places descend in the file's own order while the
-            // pen walks the line in visual order, so applying them as they stand puts the characters in the right
-            // places and gives them *negative* advances - a run whose box, caret and far edge are all wrong, which is
-            // a fix that looks right glyph by glyph. Settling that frame is the work; until then the first value
-            // places the run, as it did before the list was kept at all, and the file is told rather than drawn
-            // mirrored.
+            // A right-to-left line keeps its list like any other. Its places are stated in the file's own order and
+            // run back from the far edge, which is a frame difference and not a different fact: `Flush` starts the
+            // piece at the leftmost place it names, and the layout places each character absolutely from there.
             if (AxisList(element, vertical, style.FontSize, along: true) is { Length: > 0 } along)
             {
-                if (style.Direction == TextDirection.RightToLeft &&
-                    style.WritingMode == TextWritingMode.HorizontalTb)
-                {
-                    _context.Warnings.Add(
-                        "a right-to-left line states a position per character, and the model's places run along "
-                        + "such a line the other way: the first value places the run and the list is not honoured");
-                }
-                else
-                {
-                    _pendingAlong = along;
-                }
+                _pendingAlong = along;
             }
 
             if (inline is not null)
@@ -734,10 +721,33 @@ public static partial class SvgReader
 
             chunk.Advance = Natural(chunk);
 
+            // **A placed run's own places decide where it starts and how wide it is.** They are the file's statement
+            // of where each character sits, so the piece begins at the leftmost of them and covers as much as they
+            // do - not a width measured from the first value, which is only the same thing when the places ascend. A
+            // backward piece is where that shows: its stated place is the far edge and its places run back from it.
+            if (chunk.PositionAlong is { Length: > 1 } places)
+            {
+                double lowest = places.Min();
+                chunk.Inline += lowest;
+                for (int i = 0; i < places.Length; i++)
+                {
+                    places[i] -= lowest;
+                }
+
+                if (places.Length == chunk.Text.Length)
+                {
+                    // The ink runs on from the *far* character of the run, which is the last one a forward line
+                    // reaches and the first one a backward line does.
+                    chunk.Advance = places.Max() + (chunk.Backward ? FirstAdvance(chunk) : LastAdvance(chunk));
+                }
+            }
+
             // **Merged in the frame the model stores in.** A right-to-left piece's stated `x` is the far edge of
             // the piece it holds, so it is taken back to the pen's own position first - which is where the next
-            // piece continues from and what the model's origin is measured against.
-            if (chunk.Backward)
+            // piece continues from and what the model's origin is measured against. A piece that states its own
+            // places has already been taken back to the first of them above, and subtracting a measured width from
+            // *that* would move it off the places the file gave it.
+            if (chunk.Backward && chunk.PositionAlong is not { Length: > 0 })
             {
                 chunk.Inline -= chunk.Advance;
             }
@@ -925,24 +935,36 @@ public static partial class SvgReader
         /// </summary>
         private static double Natural(TextChunk chunk)
         {
-            var run = new TextRun
-            {
-                Text = chunk.Text.ToString(),
-                FontFamily = chunk.Style.FontFamily,
-                FontSize = chunk.Style.FontSize,
-                Bold = chunk.Style.Bold,
-                Italic = chunk.Style.Italic,
-                LetterSpacing = chunk.Style.LetterSpacing,
-                WordSpacing = chunk.Style.WordSpacing,
-            };
-
             double width = 0;
-            foreach (double advance in run.Advances())
+            foreach (double advance in AsRun(chunk).Advances())
             {
                 width += advance;
             }
 
             return width;
         }
+
+        /// <summary>The last character's own advance, which is the one a forward piece's ink runs on from.</summary>
+        private static double LastAdvance(TextChunk chunk)
+        {
+            TextRun run = AsRun(chunk);
+            return TextMeasurement.AdvanceOf(run, run.Text.Length - 1);
+        }
+
+        /// <summary>The first character's own advance, which is the one a backward piece's ink runs on from.</summary>
+        private static double FirstAdvance(TextChunk chunk)
+            => TextMeasurement.AdvanceOf(AsRun(chunk), 0);
+
+        /// <summary>The run a chunk is measured as, so the face and the tracking asked for are the chunk's own.</summary>
+        private static TextRun AsRun(TextChunk chunk) => new()
+        {
+            Text = chunk.Text.ToString(),
+            FontFamily = chunk.Style.FontFamily,
+            FontSize = chunk.Style.FontSize,
+            Bold = chunk.Style.Bold,
+            Italic = chunk.Style.Italic,
+            LetterSpacing = chunk.Style.LetterSpacing,
+            WordSpacing = chunk.Style.WordSpacing,
+        };
     }
 }
