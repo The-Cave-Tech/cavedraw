@@ -374,6 +374,35 @@ public sealed class CadDocument
     }
 
     /// <summary>
+    /// Every art brush in the library whose **asset** the document does not have.
+    ///
+    /// An art brush names the item it maps rather than copying it, so the art has one definition and every stroke
+    /// that uses the brush follows an edit to it. The price of that is a reference that can come apart: delete the
+    /// item, or load a file whose definition did not travel, and the brush is a name for artwork that is not
+    /// there. Reported for the same reason a missing brush is, and answering it is the difference between a
+    /// known gap and a brush that quietly draws nothing.
+    /// </summary>
+    public IEnumerable<(BrushSpec Brush, Guid Asset)> MissingBrushAssets()
+    {
+        foreach (BrushSpec brush in _brushes)
+        {
+            if (brush.IsArt && brush.ArtAsset is { } asset && FindItem(asset) is null)
+            {
+                yield return (brush, asset);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The item with this id, anywhere in the document - an artboard, a group, or the pasteboard - or null.
+    ///
+    /// Walking for it rather than holding a table, because the tree **is** the table: an item referenced by an
+    /// asset has to be found in the same place a person sees it, and a stale second index is how a reference
+    /// survives an item's deletion.
+    /// </summary>
+    public LayerItem? FindItem(Guid id) => AllItems().FirstOrDefault(item => item.Id == id);
+
+    /// <summary>
     /// Every item in the document, artboards and pasteboard alike, in tree order.
     ///
     /// Needed by anything that has to act on the whole document rather than on a selection - editing a profile

@@ -114,7 +114,8 @@ internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, St
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     RasterEffectDto[]? RasterEffects = null,
 
-    // The tablet dynamics the stroke was drawn with, in target order. Absent when it responds to nothing.
+    // The tablet dynamics the stroke was drawn with, in target order. Absent when the model holds no spec at all,
+    // which is a different state from a spec with every target switched off - that one is written and read back.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     DynamicsTargetDto[]? Dynamics = null,
 
@@ -149,9 +150,24 @@ internal sealed record BrushDto(
     double Roundness,
     double Diameter,
 
-    // The tablet dynamics the brush is modulated by, in target order. Absent when it responds to nothing.
+    // The tablet dynamics the brush is modulated by, in target order. Absent when the brush holds no spec at all,
+    // for the reason the stroke's member gives.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    DynamicsTargetDto[]? Dynamics = null);
+    DynamicsTargetDto[]? Dynamics = null,
+
+    // The art brush's own members (#100): the item it maps, how the asset is laid along the path, the two
+    // mirrors, and the colourisation. Optional **and written only for the art kind**, so a calligraphic brush -
+    // including every one written before this member existed - serialises to exactly the bytes it did then. The
+    // asset is an id rather than a copy: one definition of the art, which every stroke that uses the brush
+    // follows.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? ArtAsset = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ArtStretch? Stretch = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? FlipAcross = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? FlipAlong = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ArtColourisation? Colourisation = null,
+
+    // The shade a tint-and-shade colourisation modulates against. Absent unless the brush states one.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ColorDto? ShadeColour = null);
 
 /// <summary>One outline effect on the wire: its kind, its parameters, and the seed its randomness comes from.</summary>
 internal sealed record OutlineEffectDto(
@@ -701,7 +717,7 @@ internal abstract record ItemDto
                     e.Opacity,
                     e.Tint is { } tint ? new ColorDto(tint.R, tint.G, tint.B, tint.A) : null)).ToArray()
                 : null,
-            s.HasDynamics ? ToDynamicsDto(s.Dynamics) : null,
+            s.Dynamics is not null ? ToDynamicsDto(s.Dynamics) : null,
 
             s.HasBrush ? ToBrushDto(s.Brush!) : null);
 
@@ -714,22 +730,45 @@ internal abstract record ItemDto
     /// tell from one the file never stated.
     /// </summary>
     internal static BrushDto ToBrushDto(BrushSpec brush)
-        => new(
+    {
+        // The art members belong to the art kind and to nothing else. Writing them on a nib would be inventing
+        // data - a nib has no asset to map - and would change the bytes of every brush written before this kind
+        // existed, which the absence rule forbids.
+        bool art = brush.IsArt;
+
+        return new BrushDto(
             brush.Name,
             brush.Kind,
             brush.AngleDegrees,
             brush.Roundness,
             brush.Diameter,
-            brush.HasDynamics ? ToDynamicsDto(brush.Dynamics) : null);
+            brush.Dynamics is not null ? ToDynamicsDto(brush.Dynamics) : null,
+            art ? brush.ArtAsset : null,
+            art ? (ArtStretch?)brush.Stretch : null,
+            art ? brush.FlipAcross : null,
+            art ? brush.FlipAlong : null,
+            art ? (ArtColourisation?)brush.Colourisation : null,
+            art && brush.ShadeColour is { } shade
+                ? new ColorDto(shade.R, shade.G, shade.B, shade.A)
+                : null);
+    }
 
     /// <summary>
     /// The dynamics on the wire, in target order: one entry per target the enum names.
     ///
-    /// Written whether or not a target is on, because the list's length **is** the target list - a short array
-    /// would mean the targets it omits are off, which is a different answer from the one the document holds.
+    /// Written whenever the model **holds** a spec, whether or not a target is on, because the list's length
+    /// **is** the target list and an all-off spec is a recorded decision rather than the absence of one. The
+    /// model says so in as many words: a null spec stores nothing, an all-off spec stores that every response
+    /// was switched off, and <see cref="StrokeDynamics"/> never fires for either. Collapsing the second to the
+    /// first here made a stroke that had been switched off come back as one that had never been set up - the
+    /// same "a value the model holds and the lossless store drops" defect the effect parameters had.
+    ///
+    /// The predicate is the member being non-null, not <see cref="StrokeSpec.HasDynamics"/>: that property
+    /// answers "does this stroke respond to the pen", which is a rendering question, and a spec with every
+    /// target off answers no while still being a value somebody chose.
     /// </summary>
     private static DynamicsTargetDto[]? ToDynamicsDto(DynamicsSpec? dynamics)
-        => dynamics is { IsEmpty: false }
+        => dynamics is not null
             ? Enum.GetValues<DynamicsTarget>()
                 .Select(target =>
                 {
@@ -1151,6 +1190,7 @@ internal static class ItemDtoExtensions
                 MiterLimit = s.MiterLimit,
                 Alignment = s.Alignment,
                 Dash = new DashPattern(s.Dash ?? Array.Empty<double>(), s.DashOffset),
+                WidthProfile = s.WidthProfile?.ToModel(),
                 Effects = ToEffects(s.Effects),
                 RasterEffects = ToRasterEffects(s.RasterEffects),
                 Dynamics = ToDynamics(s.Dynamics),
@@ -1174,9 +1214,27 @@ internal static class ItemDtoExtensions
     private static BrushSpec? ToModel(this BrushDto? dto)
         => dto is null ? null : ToBrushModel(dto);
 
-    /// <summary>The brush library entry as a model value; the document-level reader uses this.</summary>
+    /// <summary>
+    /// The brush library entry as a model value; the document-level reader uses this.
+    ///
+    /// The art members are read as the file wrote them, and a member the file does not state keeps the model's
+    /// own default rather than a value this reader chose: a brush written before the art kind existed has no
+    /// stretch to read, and calling that "repeat" is the model's default, not an invention about the file.
+    /// </summary>
     internal static BrushSpec ToBrushModel(BrushDto dto)
-        => new(dto.Name, dto.AngleDegrees, dto.Roundness, dto.Diameter, dto.Kind, ToDynamics(dto.Dynamics));
+        => new(
+            dto.Name,
+            dto.AngleDegrees,
+            dto.Roundness,
+            dto.Diameter,
+            dto.Kind,
+            ToDynamics(dto.Dynamics),
+            dto.ArtAsset,
+            dto.Stretch ?? ArtStretch.Repeat,
+            dto.FlipAcross ?? false,
+            dto.FlipAlong ?? false,
+            dto.Colourisation ?? ArtColourisation.None,
+            dto.ShadeColour is { } shade ? new ColorRgb(shade.R, shade.G, shade.B, shade.A) : null);
 
     /// <summary>
     /// The dynamics on the wire, or null when the stroke responds to nothing.

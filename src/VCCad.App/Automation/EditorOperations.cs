@@ -2929,14 +2929,22 @@ public static class EditorOperations
                 .ToArray());
 
         Add("brush.create",
-            "Create a reusable brush in the document - a calligraphic nib with an angle, a roundness and a " +
-            "diameter. angle is the direction the nib's long axis points, in degrees from the +X axis towards +Y, " +
-            "the same sense a path direction is measured in; roundness is the nib's short axis as a fraction of " +
-            "its long one, so 1 is a circular pen and a small number is a flat nib; diameter is the long axis in " +
-            "points. The name has to be free: two brushes with one name would make 'the brush called X' " +
-            "ambiguous, and it is the name that strokes refer to. Creating a brush does not apply it - an asset " +
-            "sits in the document until something uses it. One undo step.",
-            "name:string, angle?:number (default 0), roundness?:number (default 1), diameter?:number (default 1)",
+            "Create a reusable brush in the document. Two kinds: 'calligraphic', an elliptical nib with an angle, " +
+            "a roundness and a diameter; and 'art', which maps a piece of the document's own artwork along the " +
+            "stroke instead of stroking a line. For a nib, angle is the direction the nib's long axis points, in " +
+            "degrees from the +X axis towards +Y, the same sense a path direction is measured in; roundness is " +
+            "the nib's short axis as a fraction of its long one, so 1 is a circular pen and a small number is a " +
+            "flat nib. For an art brush, 'asset' is the id of the document item whose artwork is mapped - a group, " +
+            "a path or an embedded image - and 'size' (or 'diameter') is how wide that artwork is drawn across " +
+            "the stroke; 'stretch' says whether it spans the path once (stretchToFit), keeps its proportions and " +
+            "is drawn once (scaleProportionally) or repeats along the path (repeat). The name has to be free: two " +
+            "brushes with one name would make 'the brush called X' ambiguous, and it is the name that strokes " +
+            "refer to. Creating a brush does not apply it - an asset sits in the document until something uses " +
+            "it. One undo step.",
+            "name:string, kind?:calligraphic|art (default calligraphic), angle?:number, roundness?:number, " +
+            "diameter?:number, asset?:guid, size?:number (an art brush's diameter), " +
+            "stretch?:stretchToFit|scaleProportionally|repeat, flipAcross?:bool, flipAlong?:bool, " +
+            "colourisation?:none|tint|tintAndShade, shadeColour?:[r,g,b]",
             (ctx, p) =>
             {
                 string name = p.GetString("name") ?? string.Empty;
@@ -2951,7 +2959,7 @@ public static class EditorOperations
                     throw new EditorOperationException($"there is already a brush called '{name}'");
                 }
 
-                BrushSpec brush = ReadBrush(p, name);
+                BrushSpec brush = ReadBrush(p, name, document);
                 var library = document.Brushes.ToList();
                 library.Add(brush);
                 ctx.Session.Execute(new EditBrushesCommand(
@@ -3102,10 +3110,14 @@ public static class EditorOperations
             });
 
         Add("brush.set",
-            "Change a stored brush's nib - its angle, roundness or diameter. Only the members given change. The " +
-            "strokes that use the brush are re-pointed with it, because that is what makes it an asset rather " +
-            "than a copy. One undo step.",
-            "name:string, angle?:number, roundness?:number, diameter?:number",
+            "Change a stored brush. A nib's angle, roundness or diameter; an art brush's asset, size, stretch, " +
+            "flips and colourisation. Only the members given change. Setting 'asset' on an art brush re-points it " +
+            "at another item of the document rather than copying its artwork, which is what keeps the brush a " +
+            "reference. The strokes that use the brush are re-pointed with it, because that is what makes it an " +
+            "asset rather than a copy. One undo step.",
+            "name:string, angle?:number, roundness?:number, diameter?:number, asset?:guid, size?:number, " +
+            "stretch?:stretchToFit|scaleProportionally|repeat, flipAcross?:bool, flipAlong?:bool, " +
+            "colourisation?:none|tint|tintAndShade, shadeColour?:[r,g,b]",
             (ctx, p) =>
             {
                 string name = p.GetString("name") ?? string.Empty;
@@ -3117,7 +3129,17 @@ public static class EditorOperations
                 {
                     AngleDegrees = Given(p, "angle") ? p.GetDouble("angle", brush.AngleDegrees) : brush.AngleDegrees,
                     Roundness = Given(p, "roundness") ? ClampedRoundness(p.GetDouble("roundness", brush.Roundness)) : brush.Roundness,
-                    Diameter = Given(p, "diameter") ? Math.Max(0.0, p.GetDouble("diameter", brush.Diameter)) : brush.Diameter,
+                    Diameter = Given(p, "diameter")
+                        ? Math.Max(0.0, p.GetDouble("diameter", brush.Diameter))
+                        : Given(p, "size")
+                            ? Math.Max(0.0, p.GetDouble("size", brush.Diameter))
+                            : brush.Diameter,
+                    ArtAsset = Given(p, "asset") ? ReadAsset(p, document) : brush.ArtAsset,
+                    Stretch = Given(p, "stretch") ? ReadStretch(p) : brush.Stretch,
+                    FlipAcross = Given(p, "flipAcross") ? p.GetBool("flipAcross", brush.FlipAcross) : brush.FlipAcross,
+                    FlipAlong = Given(p, "flipAlong") ? p.GetBool("flipAlong", brush.FlipAlong) : brush.FlipAlong,
+                    Colourisation = Given(p, "colourisation") ? ReadColourisation(p) : brush.Colourisation,
+                    ShadeColour = Given(p, "shadeColour") ? ReadShadeColour(p) : brush.ShadeColour,
                 };
 
                 return ApplyBrushEdit(ctx, document, brush, name, updated, "Edit brush");
@@ -3136,6 +3158,85 @@ public static class EditorOperations
                     itemId = missing.Path.Id,
                     name = missing.Path.Name,
                     brush = missing.Name,
+                })
+                .ToArray());
+
+        Add("brush.placements",
+            "Where an art brush's artwork is placed along a path - the read half of an art brush, and the only way " +
+            "to learn what the art is drawn as without seeing it. Each placement names the arc length it starts " +
+            "at, the path point there, the direction of travel in degrees, how much of the path it covers and the " +
+            "six numbers of the affine transform carrying the asset's own coordinates onto the path. " +
+            "**Reported rather than held**: the model has no member that says art is drawn at a place - a stroke's " +
+            "render plan is widths and outlines - so the placements are computed from the path every time they are " +
+            "asked for, which is why editing the path moves the art with no brush re-applied. A nib places no art, " +
+            "and a brush whose asset the document does not have is refused by name rather than answered with an " +
+            "empty list.",
+            "name:string, itemId?:guid (default: the selected paths)",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                CadDocument document = ctx.Document;
+                BrushSpec brush = document.FindBrush(name)
+                    ?? throw new EditorOperationException($"there is no brush called '{name}'");
+
+                if (!brush.IsArt)
+                {
+                    throw new EditorOperationException(
+                        $"'{name}' is a {brush.Kind.ToString().ToLowerInvariant()} brush, which sweeps a nib along " +
+                        "the path; it places no artwork");
+                }
+
+                if (brush.ArtAsset is not { } assetId)
+                {
+                    throw new EditorOperationException(
+                        $"the art brush '{name}' names no asset, so there is no artwork to place");
+                }
+
+                LayerItem asset = document.FindItem(assetId)
+                    ?? throw new EditorOperationException(
+                        $"the art brush '{name}' maps the item {assetId}, and this document has no such item");
+
+                Rect2D bounds = ItemBounds.Of(asset);
+                IEnumerable<PathItem> paths = p.TryGetGuid("itemId", out Guid id)
+                    ? new[] { RequirePath(document, id) }
+                    : ctx.Session.SelectedPaths();
+
+                return paths.Select(path => new
+                {
+                    itemId = path.Id,
+                    name = path.Name,
+                    brush = name,
+                    assetId,
+                    assetName = asset.Name,
+                    assetWidth = Math.Round(bounds.Width, 4),
+                    assetHeight = Math.Round(bounds.Height, 4),
+                    placements = ArtBrushPath.Placements(path, brush, bounds).Select(placement => new
+                    {
+                        position = Math.Round(placement.Position, 4),
+                        x = Math.Round(placement.Point.X, 4),
+                        y = Math.Round(placement.Point.Y, 4),
+                        tangentDegrees = Math.Round(placement.TangentRadians * 180.0 / Math.PI, 4),
+                        length = Math.Round(placement.Length, 4),
+                        transform = new[]
+                        {
+                            placement.Transform.A, placement.Transform.B, placement.Transform.C,
+                            placement.Transform.D, placement.Transform.E, placement.Transform.F,
+                        },
+                    }).ToArray(),
+                }).ToArray();
+            });
+
+        Add("brush.missingAssets",
+            "Every art brush in the document whose asset is not there - the item its artwork lives on was deleted, " +
+            "or a file arrived without it. An art brush names its artwork rather than copying it, so the reference " +
+            "can come apart, and a brush that quietly maps nothing is exactly the sort of gap worth naming. " +
+            "Reported with the brush's name and the id it asked for; nothing is substituted for the missing art.",
+            "",
+            (ctx, _) => ctx.Document.MissingBrushAssets()
+                .Select(missing => new
+                {
+                    brush = missing.Brush.Name,
+                    assetId = missing.Asset,
                 })
                 .ToArray());
 
@@ -6877,16 +6978,101 @@ public static class EditorOperations
     /// <summary>
     /// A brush built from the parameters a caller gave, holding this build's defaults for the ones they did not.
     ///
+    /// The **kind decides which members mean anything**, and is read first: a nib has an angle, a roundness and a
+    /// diameter, and an art brush maps an asset of a stated size with a stretch, two flips and a colourisation. A
+    /// kind this build does not make is refused by name rather than falling back to a nib, because a caller that
+    /// asked for a brush this build cannot make would otherwise get a plausible line and no warning.
+    ///
     /// Roundness is clamped into 0..1 and the diameter at zero rather than refused: they describe a shape, and a
     /// caller computing one can arrive a hair outside the range the same way a dragged slider can. A diameter
     /// below zero is not a nib, so it becomes the smallest one there is rather than a brush that draws inside out.
     /// </summary>
-    private static BrushSpec ReadBrush(JsonElement p, string name)
-        => BrushSpec.Calligraphic(
-            name,
-            p.GetDouble("angle", 0.0),
-            ClampedRoundness(p.GetDouble("roundness", 1.0)),
-            Math.Max(0.0, p.GetDouble("diameter", 1.0)));
+    private static BrushSpec ReadBrush(JsonElement p, string name, CadDocument document)
+    {
+        string kind = (p.GetString("kind") ?? "calligraphic").Trim().ToLowerInvariant();
+        switch (kind)
+        {
+            case "calligraphic" or "nib":
+                return BrushSpec.Calligraphic(
+                    name,
+                    p.GetDouble("angle", 0.0),
+                    ClampedRoundness(p.GetDouble("roundness", 1.0)),
+                    BrushSize(p, p.GetDouble("diameter", 1.0)));
+
+            case "art":
+                return BrushSpec.Art(
+                    name,
+                    Given(p, "asset") ? ReadAsset(p, document) : null,
+                    BrushSize(p, p.GetDouble("diameter", p.GetDouble("size", 1.0))),
+                    Given(p, "stretch") ? ReadStretch(p) : ArtStretch.Repeat,
+                    p.GetBool("flipAcross", false),
+                    p.GetBool("flipAlong", false),
+                    Given(p, "colourisation") ? ReadColourisation(p) : ArtColourisation.None,
+                    Given(p, "shadeColour") ? ReadShadeColour(p) : null);
+
+            default:
+                throw new EditorOperationException(
+                    $"'{kind}' is not a brush kind this build makes; use calligraphic or art");
+        }
+    }
+
+    /// <summary>
+    /// A brush's size: the nib's long axis, or the width an art asset is drawn across the path.
+    ///
+    /// One reader for both, because <c>size</c> is the word an art brush's caller reaches for and
+    /// <c>diameter</c> is the word the model and the nib already use, and a driver that guessed the other one
+    /// should get its brush rather than a size of nothing.
+    /// </summary>
+    private static double BrushSize(JsonElement p, double value)
+        => Math.Max(0.0, Given(p, "size") ? p.GetDouble("size", value) : value);
+
+    /// <summary>
+    /// The item an art brush maps, refused by name when the document does not have it.
+    ///
+    /// The reference is to the document's own artwork, so a brush pointing at an id nothing answers to is a
+    /// brush that would draw nothing - and creating one is the moment to say so, when the caller can still pass
+    /// the right id, rather than at render time when nothing can.
+    /// </summary>
+    private static Guid ReadAsset(JsonElement p, CadDocument document)
+    {
+        if (!p.TryGetGuid("asset", out Guid asset))
+        {
+            throw new EditorOperationException("'asset' has to be the id of an item in this document");
+        }
+
+        if (document.FindItem(asset) is null)
+        {
+            throw new EditorOperationException(
+                $"the document has no item {asset} for an art brush to map; name an item that is in the drawing");
+        }
+
+        return asset;
+    }
+
+    private static ArtStretch ReadStretch(JsonElement p)
+        => (p.GetString("stretch") ?? string.Empty).Trim().ToLowerInvariant() switch
+        {
+            "stretchtofit" or "stretch-to-fit" or "fit" => ArtStretch.StretchToFit,
+            "scaleproportionally" or "scale-proportionally" or "proportional" => ArtStretch.ScaleProportionally,
+            "repeat" => ArtStretch.Repeat,
+            var other => throw new EditorOperationException(
+                $"'{other}' is not an art brush stretch; use stretchToFit, scaleProportionally or repeat"),
+        };
+
+    private static ArtColourisation ReadColourisation(JsonElement p)
+        => (p.GetString("colourisation") ?? string.Empty).Trim().ToLowerInvariant() switch
+        {
+            "none" => ArtColourisation.None,
+            "tint" => ArtColourisation.Tint,
+            "tintandshade" or "tint-and-shade" or "tint & shade" => ArtColourisation.TintAndShade,
+            var other => throw new EditorOperationException(
+                $"'{other}' is not an art brush colourisation; use none, tint or tintAndShade"),
+        };
+
+    private static ColorRgb ReadShadeColour(JsonElement p)
+        => p.TryGetColorArray("shadeColour", out ColorRgb shade)
+            ? shade
+            : throw new EditorOperationException("'shadeColour' has to be an [r,g,b] colour");
 
     private static double ClampedRoundness(double roundness) => Math.Clamp(roundness, 0.0, 1.0);
 
@@ -7986,6 +8172,12 @@ public static class EditorOperations
     ///
     /// The nib parameters are rounded the way every other readout in the registry rounds: far enough to hide the
     /// last bit of a floating-point division, near enough that a value a person set comes back as it was typed.
+    ///
+    /// The **art members are reported only for an art brush**, keyed off the kind rather than off "is the asset
+    /// set": a nib written with an asset would be a brush this build cannot draw, and reporting the member would
+    /// hide that. What the art brush does *not* report is a claim that anything draws it - the asset and its
+    /// placements are as far as the model goes, and which item that is comes back by id and name so a caller can
+    /// find it.
     /// </summary>
     private static object? DescribeBrush(BrushSpec? brush)
         => brush is null
@@ -7997,7 +8189,25 @@ public static class EditorOperations
                 angle = Math.Round(brush.AngleDegrees, 4),
                 roundness = Math.Round(brush.Roundness, 6),
                 diameter = Math.Round(brush.Diameter, 4),
+                size = Math.Round(brush.Diameter, 4),
                 dynamics = DescribeDynamics(brush.Dynamics),
+                art = brush.IsArt
+                    ? (object?)new
+                    {
+                        asset = brush.ArtAsset,
+                        stretch = brush.Stretch.ToString().ToLowerInvariant(),
+                        flipAcross = brush.FlipAcross,
+                        flipAlong = brush.FlipAlong,
+                        colourisation = brush.Colourisation.ToString().ToLowerInvariant(),
+                        shadeColour = brush.ShadeColour is { } shade
+                            ? new[] { shade.R, shade.G, shade.B }
+                            : (double[]?)null,
+
+                        // Said out loud, because the model holds the mode and not its effect: a caller reading
+                        // "tint" must not take the artwork to have been tinted by anything in this build.
+                        colourisationApplied = false,
+                    }
+                    : null,
             };
 
     /// <summary>

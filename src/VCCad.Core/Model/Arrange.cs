@@ -75,7 +75,7 @@ public static class Arrange
 
         // Measured once per object, before anything moves: every box has to come from the same instant or
         // the target line would be computed from a selection that is already half arranged.
-        Dictionary<LayerItem, Rect2D> boxes = items.ToDictionary(i => i, i => ItemBounds.Of(i));
+        Dictionary<LayerItem, Rect2D> boxes = Measure(items);
 
         double start = items.Min(item => Start(boxes[item], axis));
         double end = items.Max(item => End(boxes[item], axis));
@@ -141,7 +141,7 @@ public static class Arrange
 
         // Measured once per object, before anything moves: the span and the gaps below have to describe
         // the same reading of the selection, or the layout is computed from a half-arranged one.
-        Dictionary<LayerItem, Rect2D> boxes = items.ToDictionary(i => i, i => ItemBounds.Of(i));
+        Dictionary<LayerItem, Rect2D> boxes = Measure(items);
 
         Rect2D BoxOf(LayerItem item) => boxes.TryGetValue(item, out Rect2D box) ? box : Rect2D.Empty;
 
@@ -195,7 +195,7 @@ public static class Arrange
             return false;
         }
 
-        Dictionary<LayerItem, Rect2D> boxes = items.ToDictionary(i => i, i => ItemBounds.Of(i));
+        Dictionary<LayerItem, Rect2D> boxes = Measure(items);
         double span = items.Max(item => End(boxes[item], axis)) - items.Min(item => Start(boxes[item], axis));
         double totalWidth = items.Sum(item => Extent(boxes[item], axis));
 

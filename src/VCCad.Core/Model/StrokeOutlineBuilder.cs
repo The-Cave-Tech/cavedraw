@@ -50,6 +50,12 @@ public static class StrokeOutlineBuilder
     /// <paramref name="scale"/> is the renderer's own scale factor - the group transform's scale, for the
     /// exporter. The profile's widths, and the brush's diameter, are in the same units as the stroke's own
     /// width, so all of them are scaled together; the canvas passes 1 because it paints inside the transform.
+    ///
+    /// **An art brush contributes nothing here, deliberately.** A plan is a width or a set of outlines, and an art
+    /// brush is neither: it maps an asset along the path at a stated size, which <see cref="ArtBrushPath"/>
+    /// answers. So a stroke carrying one keeps the width it has - the outline below is the stroke's own, not the
+    /// art's - and the art is placed by a second step that this type has no member to describe. That gap is real
+    /// and is reported rather than patched over: a renderer that reads only the plan draws the stroke and no art.
     /// </summary>
     public static StrokeRenderPlan Plan(PathItem path, StrokeSpec stroke, double scale = 1.0)
     {
@@ -94,8 +100,11 @@ public static class StrokeOutlineBuilder
             brush = brush.Scaled(scale);
         }
 
+        // Only a **nib** answers this seam. An art brush maps an asset along the path instead of sweeping a nib
+        // along it, so it has no half-width to give - reading its size as one would draw a line where the file has
+        // artwork. Its geometry is ArtBrushPath, which is a different shape of answer and a different caller.
         PathOffset.DirectionalHalfWidths? directional =
-            brush is null ? null : (_, direction) => brush.Halves(direction);
+            brush is { IsNib: true } ? (_, direction) => brush.Halves(direction) : null;
 
         double width = stroke.Width * scale;
         IReadOnlyList<FlattenedOutline> flattened = PathFlattener.FlattenForStroke(path);
