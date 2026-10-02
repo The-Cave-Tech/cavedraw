@@ -266,6 +266,54 @@ public class StrokeStackTests
         Assert.Null(reloaded.Strokes[1].Blend);
     }
 
+    /// <summary>
+    /// **The canonical text form distinguishes two strokes that differ only by opacity or blending.**
+    ///
+    /// The dump is documentation that two documents with equal dumps are identical in every value the model
+    /// holds, and the round-trip tests are built on it. Per-stroke opacity and blending were left out of it, so a
+    /// path carrying a translucent highlight and the same path carrying an opaque one **printed the same stroke
+    /// text** - every comparison built on the dump then passed for the wrong reason, which is the failure mode the
+    /// stack's own `strokes=` member was added to prevent one member earlier.
+    ///
+    /// What is compared is the **stroke text** rather than the whole dump, because a dump also carries the ids
+    /// every document generates for itself: two separately built documents differ by id whatever else they hold,
+    /// and a test that compared whole dumps would pass without the paint ever being printed.
+    /// </summary>
+    [Fact]
+    public void TheDumpDistinguishesTwoStrokesThatDifferOnlyByPaint()
+    {
+        string StrokeText(StrokeSpec stroke)
+        {
+            CadDocument document = CadDocument.CreateDefault();
+            PathItem path = Line();
+            path.Stroke = stroke;
+            document.Artboards[0].Layers[0].AddItem(path);
+
+            string line = ModelDump.Of(document)
+                .Split('\n')
+                .First(text => text.Contains("stroke=", StringComparison.Ordinal));
+            int at = line.IndexOf("stroke=", StringComparison.Ordinal);
+            return line.Substring(at, line.IndexOf(" subpaths=", at, StringComparison.Ordinal) - at);
+        }
+
+        StrokeSpec plain = Stroke(4, 0, 0, 0);
+
+        string silent = StrokeText(plain);
+        string faint = StrokeText(plain with { Opacity = 0.4 });
+        string opaque = StrokeText(plain with { Opacity = 1.0 });
+        string multiplied = StrokeText(plain with { Blend = BlendMode.Multiply });
+
+        Assert.NotEqual(silent, faint);
+
+        // The distinction this issue warns about, in the text form: stating 1 is not the same document as
+        // stating nothing, and a dump that printed "opacity:1" for both would blur exactly that.
+        Assert.NotEqual(silent, opaque);
+        Assert.NotEqual(silent, multiplied);
+
+        // And the same stroke text prints the same way twice, so the differences above are the paint.
+        Assert.Equal(faint, StrokeText(plain with { Opacity = 0.4 }));
+    }
+
     private static string BytesOf(PathItem path)
     {
         CadDocument document = CadDocument.CreateDefault();

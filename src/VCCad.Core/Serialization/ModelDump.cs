@@ -293,10 +293,20 @@ public static class ModelDump
         return builder.ToString();
     }
 
+    /// <summary>
+    /// One stroke as the dump prints it.
+    ///
+    /// The opacity and the blend mode are printed **only when the stroke states them**, which is the same rule the
+    /// sidecar and the dump's own stroke-stack member follow: a stroke that says nothing about its opacity is not
+    /// the same document as one that states 1, and printing "opacity=1" for both would make two different
+    /// documents compare equal. That is exactly the failure the dump exists to prevent in the round-trip tests.
+    /// </summary>
     private static string Stroke(StrokeSpec stroke)
         => $"{stroke.HasVisibleOutline}/{Colour(stroke.Color)}/{Num(stroke.Width)}" +
            $"/{stroke.Cap}/{stroke.Join}/{Num(stroke.MiterLimit)}/{stroke.Alignment}" +
-           $"/dash:{stroke.Dash.Segments.Count}@{Num(stroke.Dash.Offset)}";
+           $"/dash:{stroke.Dash.Segments.Count}@{Num(stroke.Dash.Offset)}" +
+           (stroke.Opacity is { } opacity ? $"/opacity:{Num(opacity)}" : string.Empty) +
+           (stroke.Blend is { } blend ? $"/blend:{blend.ToSvgName()}" : string.Empty);
 
     private static string Colour(ColorRgb colour)
         => $"{colour.R:0.####},{colour.G:0.####},{colour.B:0.####},{colour.A:0.####}";
