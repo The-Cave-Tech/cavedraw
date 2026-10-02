@@ -5180,6 +5180,33 @@ public sealed class CanvasWorkspace : Control
     /// would otherwise be shaped one character at a time. It is also why the per-character positions
     /// come from the model instead of being re-derived from the face here.
     /// </summary>
+    /// <summary>
+    /// **The programme a run carries, when every glyph id in this piece belongs to it.**
+    ///
+    /// Lifted out of the tracked-glyph route so a second per-glyph route can use it: a vertical column drawn glyph
+    /// by glyph has to draw from the file's own programme too, and a copy of this check would be a second place a run
+    /// could silently fall back to a substitute face.
+    /// </summary>
+    private static EmbeddedFont? ResolveProgramme(
+        TextRun run, int pieceStart, int length,
+        out IGlyphTypeface? typeface, out ushort[]? ids)
+    {
+        typeface = null;
+        ids = null;
+
+        if (run.EmbeddedFont is { } embedded && run.GlyphIds is { } glyphIds &&
+            pieceStart >= 0 && pieceStart + length <= glyphIds.Length &&
+            EmbeddedFontManager.TryGetEmbeddedGlyphTypeface(embedded.FamilyName, out IGlyphTypeface resolved) &&
+            GlyphIdsBelongTo(resolved, glyphIds, pieceStart, length))
+        {
+            typeface = resolved;
+            ids = glyphIds;
+            return embedded;
+        }
+
+        return null;
+    }
+
     private static void DrawTrackedSegment(
         DrawingContext context, IBrush brush, TextRun run, TextRunBox box, int pieceStart, Point2D origin)
     {
@@ -5200,18 +5227,7 @@ public sealed class CanvasWorkspace : Control
 
         // A run that carries its own programme is still drawn from it, exactly as the untracked path
         // draws it. The glyph ids are only trusted when every one of them belongs to that programme.
-        EmbeddedFont? program = null;
-        IGlyphTypeface? typeface = null;
-        ushort[]? ids = null;
-        if (run.EmbeddedFont is { } embedded && run.GlyphIds is { } glyphIds &&
-            pieceStart >= 0 && pieceStart + box.Length <= glyphIds.Length &&
-            EmbeddedFontManager.TryGetEmbeddedGlyphTypeface(embedded.FamilyName, out IGlyphTypeface resolved) &&
-            GlyphIdsBelongTo(resolved, glyphIds, pieceStart, box.Length))
-        {
-            program = embedded;
-            typeface = resolved;
-            ids = glyphIds;
-        }
+        EmbeddedFont? program = ResolveProgramme(run, pieceStart, box.Length, out IGlyphTypeface? typeface, out ushort[]? ids);
 
         double pen = 0;
         for (int i = 0; i < box.Length; i++)
