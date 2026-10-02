@@ -499,16 +499,22 @@ public partial class ColorsPane : UserControl
                     .Select(p => (p, p.Stroke)).ToList();
                 foreach ((PathItem path, _) in _strokeBefore)
                 {
+                    // A clone with the colour replaced (#189). A drag in the picker is a preview rather than a
+                    // command, so it writes the path directly - and rebuilding the stroke from the members named
+                    // here dropped the brush, the profile, the effects, the pen, the opacity and the blend from
+                    // the selection with nothing said about it.
                     double width = path.Stroke.Width > 0 ? path.Stroke.Width : 1.0;
-                    path.Stroke = new StrokeSpec(true, color, width, path.Stroke.Cap, path.Stroke.Join,
-                        path.Stroke.MiterLimit, path.Stroke.Alignment, path.Stroke.Dash);
+                    path.Stroke = path.Stroke with { IsVisible = true, Color = color, Width = width };
                 }
             }
 
             StrokeSpec basis = _vm.PrimarySelection is PathItem sp ? sp.Stroke : _vm.CurrentStroke;
-            _vm.CurrentStroke = new StrokeSpec(true, color,
-                basis.Width > 0 ? basis.Width : 1.0,
-                basis.Cap, basis.Join, basis.MiterLimit, basis.Alignment, basis.Dash);
+            _vm.CurrentStroke = basis with
+            {
+                IsVisible = true,
+                Color = color,
+                Width = basis.Width > 0 ? basis.Width : 1.0,
+            };
         }
         else
         {

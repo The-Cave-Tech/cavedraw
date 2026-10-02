@@ -1932,17 +1932,25 @@ public sealed class DocumentSession : INotifyPropertyChanged
 
             foreach (PathItem path in SelectedPaths().ToList())
             {
+                // **A clone with the colour replaced, not a rebuild from the members named here** (#189). Every
+                // member this method does not mention - the brush, the width profile, the effects, the pen, the
+                // opacity, the blend - belongs to the stroke being recoloured, and listing the ones to carry over
+                // silently resets the rest: picking a colour on a brushed stroke left a plain line. A `with`
+                // cannot drift behind the type the way a hand-written list does.
                 double width = path.Stroke.Width > 0 ? path.Stroke.Width : 1.0;
-                var after = new StrokeSpec(true, colour, width, path.Stroke.Cap, path.Stroke.Join,
-                    path.Stroke.MiterLimit, path.Stroke.Alignment, path.Stroke.Dash);
+                StrokeSpec after = path.Stroke with { IsVisible = true, Color = colour, Width = width };
                 if (after != path.Stroke)
                 {
                     edits.Add(new SetStrokeCommand(path, after, path.Stroke));
                 }
             }
 
-            CurrentStroke = new StrokeSpec(true, colour, basis.Width > 0 ? basis.Width : 1.0,
-                basis.Cap, basis.Join, basis.MiterLimit, basis.Alignment, basis.Dash);
+            CurrentStroke = basis with
+            {
+                IsVisible = true,
+                Color = colour,
+                Width = basis.Width > 0 ? basis.Width : 1.0,
+            };
         }
         else
         {
@@ -2532,15 +2540,19 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// existing width/caps/joins.</summary>
     public void ApplyStrokeColor(ColorRgb color)
     {
-        CurrentStroke = new StrokeSpec(true, color,
-            CurrentStroke.Width > 0 ? CurrentStroke.Width : 1.0,
-            CurrentStroke.Cap, CurrentStroke.Join, CurrentStroke.MiterLimit, CurrentStroke.Alignment,
-            CurrentStroke.Dash);
+        // A clone with the colour replaced, for the reason `ApplyWorkingColour` gives: a rebuild from a list of
+        // members drops everything the list does not name (#189).
+        CurrentStroke = CurrentStroke with
+        {
+            IsVisible = true,
+            Color = color,
+            Width = CurrentStroke.Width > 0 ? CurrentStroke.Width : 1.0,
+        };
         var edits = SelectedPaths().Select(p =>
         {
             double width = p.Stroke.Width > 0 ? p.Stroke.Width : 1.0;
             return (IUndoableCommand)new SetStrokeCommand(p,
-                new StrokeSpec(true, color, width, p.Stroke.Cap, p.Stroke.Join, p.Stroke.MiterLimit, p.Stroke.Alignment, p.Stroke.Dash),
+                p.Stroke with { IsVisible = true, Color = color, Width = width },
                 p.Stroke);
         }).ToList();
         ExecuteIfAny(edits, "Stroke colour");
@@ -2555,8 +2567,21 @@ public sealed class DocumentSession : INotifyPropertyChanged
         // when nothing is selected (so setting a width before drawing works).
         ColorRgb baseColor = color ?? (CurrentStroke.IsVisible ? CurrentStroke.Color : ColorRgb.Black);
         DashPattern currentDash = dash ?? CurrentStroke.Dash;
-        CurrentStroke = new StrokeSpec(true, baseColor, Math.Max(0, width), cap, join,
-            Math.Max(1, miterLimit), alignment, currentDash);
+
+        // The geometry members this call names replace their values; everything it does not name - the brush, the
+        // width profile, the effects, the dynamics, the pen, the opacity, the blend - is the stroke's own and
+        // survives the restroke (#189). A fresh construction dropped all of it.
+        CurrentStroke = CurrentStroke with
+        {
+            IsVisible = true,
+            Color = baseColor,
+            Width = Math.Max(0, width),
+            Cap = cap,
+            Join = join,
+            MiterLimit = Math.Max(1, miterLimit),
+            Alignment = alignment,
+            Dash = currentDash,
+        };
 
         var edits = SelectedPaths().Select(p =>
         {
@@ -2565,7 +2590,17 @@ public sealed class DocumentSession : INotifyPropertyChanged
             ColorRgb existing = color ?? (p.Stroke.IsVisible ? p.Stroke.Color : ColorRgb.Black);
             DashPattern d = dash ?? p.Stroke.Dash;
             return (IUndoableCommand)new SetStrokeCommand(p,
-                new StrokeSpec(true, existing, Math.Max(0, width), cap, join, Math.Max(1, miterLimit), alignment, d),
+                p.Stroke with
+                {
+                    IsVisible = true,
+                    Color = existing,
+                    Width = Math.Max(0, width),
+                    Cap = cap,
+                    Join = join,
+                    MiterLimit = Math.Max(1, miterLimit),
+                    Alignment = alignment,
+                    Dash = d,
+                },
                 p.Stroke);
         }).ToList();
         ExecuteIfAny(edits, "Stroke");
