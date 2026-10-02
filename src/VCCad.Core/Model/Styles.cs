@@ -235,13 +235,18 @@ public readonly struct DashPattern : IEquatable<DashPattern>
 /// <summary>
 /// Immutable stroke specification for a path: visibility, colour, geometric width
 /// (in points, unscaled by any group transform), end caps, joins, miter limit,
-/// dash pattern, alignment (centre/inside/outside) and an optional width profile.
+/// dash pattern, alignment (centre/inside/outside) and an optional width profile or brush.
 ///
 /// A [WidthProfile] makes the stroke's width vary along the path, and can vary it differently on each side.
 /// It is added rather than replacing [Width]: a stroke with a profile still has a width, which the profile
 /// **replaces where it says something**, so a profile is a modulation of an ordinary stroke rather than a
 /// separate kind of thing. That is what makes the two compositional - clearing a profile leaves a stroke
 /// exactly as it was, and setting one on a stroke that has no width still draws nothing.
+///
+/// A [Brush] is the **nib the stroke is swept with**, which is a different question from how wide it is:
+/// the width a nib lays down depends on the direction of travel, which a width profile cannot express. A
+/// brush therefore replaces the width rather than modulating it, and is the last member so that a stroke
+/// written before brushes existed is byte-identical to one written now.
 /// </summary>
 public sealed record StrokeSpec(
     bool IsVisible,
@@ -255,7 +260,8 @@ public sealed record StrokeSpec(
     WidthProfileSpec? WidthProfile = null,
     EffectStack? Effects = null,
     RasterEffectStack? RasterEffects = null,
-    DynamicsSpec? Dynamics = null)
+    DynamicsSpec? Dynamics = null,
+    BrushSpec? Brush = null)
 {
     /// <summary>Convenience: no visible stroke.</summary>
     public static StrokeSpec None { get; } =
@@ -294,6 +300,15 @@ public sealed record StrokeSpec(
     /// with a tablet be exported as geometry and still say how it was made.
     /// </summary>
     public bool HasDynamics => Dynamics is { IsEmpty: false };
+
+    /// <summary>
+    /// Whether the stroke is swept with a brush.
+    ///
+    /// A brush that names no kind of nib still has one - the calligraphic nib is a real answer with a
+    /// diameter and a roundness - so unlike an empty width profile there is no "says nothing" state to
+    /// filter out here. The absence of a brush is the null member, which is the default.
+    /// </summary>
+    public bool HasBrush => Brush is not null;
 
     /// <summary>True when a stroke is visible and has positive width.</summary>
     public bool HasVisibleOutline => IsVisible && Width > 0.0;

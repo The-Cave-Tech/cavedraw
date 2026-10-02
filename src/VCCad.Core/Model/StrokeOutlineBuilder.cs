@@ -48,14 +48,14 @@ public static class StrokeOutlineBuilder
     /// Resolves a stroke to the geometry that draws it.
     ///
     /// <paramref name="scale"/> is the renderer's own scale factor - the group transform's scale, for the
-    /// exporter. The profile's widths are in the same units as the stroke's own width, so both are scaled
-    /// together; the canvas passes 1 because it paints inside the transform.
+    /// exporter. The profile's widths, and the brush's diameter, are in the same units as the stroke's own
+    /// width, so all of them are scaled together; the canvas passes 1 because it paints inside the transform.
     /// </summary>
     public static StrokeRenderPlan Plan(PathItem path, StrokeSpec stroke, double scale = 1.0)
     {
         double width = Math.Max(0.0, stroke.Width * scale);
 
-        if (!stroke.HasWidthProfile && !stroke.HasEffects)
+        if (!stroke.HasWidthProfile && !stroke.HasEffects && !stroke.HasBrush)
         {
             // A constant-width stroke with nothing done to its outline stays a stroke. Turning it into an outline
             // would change what it looks like, because a stroked path's caps and joins are the renderer's, not a
@@ -86,6 +86,17 @@ public static class StrokeOutlineBuilder
                     point.Interpolation)));
         }
 
+        // The nib is scaled with the stroke's own widths, so a brush on a path inside a scaled group draws the
+        // line the canvas shows at that scale rather than the line it would draw at scale 1.
+        BrushSpec? brush = stroke.Brush;
+        if (brush is not null && scale != 1.0)
+        {
+            brush = brush.Scaled(scale);
+        }
+
+        PathOffset.DirectionalHalfWidths? directional =
+            brush is null ? null : (_, direction) => brush.Halves(direction);
+
         double width = stroke.Width * scale;
         IReadOnlyList<FlattenedOutline> flattened = PathFlattener.FlattenForStroke(path);
 
@@ -94,8 +105,9 @@ public static class StrokeOutlineBuilder
         // region without its stroke's ends and corners is a different picture in all three at once - and this is
         // the one place that can put them back for all three.
         IReadOnlyList<IReadOnlyList<Point2D>> outlines = Dashing(stroke.Dash, scale)
-            ? DashedOutline(flattened, profile, width, stroke, scale)
-            : PathOffset.Outline(flattened, profile, width, stroke.MiterLimit, stroke.Cap, stroke.Join);
+            ? DashedOutline(flattened, profile, width, stroke, scale, directional)
+            : PathOffset.Outline(
+                flattened, profile, width, stroke.MiterLimit, stroke.Cap, stroke.Join, directional);
 
         // The effects come **after** the outline exists, because that is what they reshape. Applying them to the
         // path instead would mean each effect having to know about widths and joins, and two renderers could then
@@ -147,7 +159,8 @@ public static class StrokeOutlineBuilder
         WidthProfileSpec? profile,
         double width,
         StrokeSpec stroke,
-        double scale)
+        double scale,
+        PathOffset.DirectionalHalfWidths? directional)
     {
         var result = new List<IReadOnlyList<Point2D>>();
 
@@ -162,7 +175,8 @@ public static class StrokeOutlineBuilder
 
                 IReadOnlyList<IReadOnlyList<Point2D>> loops =
                     PathOffset.Outline(
-                        new[] { run.Shape }, runProfile, width, stroke.MiterLimit, stroke.Cap, stroke.Join);
+                        new[] { run.Shape }, runProfile, width, stroke.MiterLimit, stroke.Cap, stroke.Join,
+                        directional);
 
                 if (loops.Count == 0)
                 {

@@ -37,6 +37,18 @@ public static class PathOffset
     private const double ArcStep = Math.PI / 12.0;
 
     /// <summary>
+    /// The half-widths a stroke is drawn with where it is, given the direction it is travelling in there.
+    ///
+    /// This is what a **brush** needs and a width profile cannot give: a nib's width depends on the
+    /// direction of travel, so the same point on the path is drawn differently depending on which way the
+    /// path runs through it. The offsetting itself does not care where the number came from - it pushes the
+    /// edge out by what it is handed - so a brush and a profile share this one implementation of the
+    /// outline, which is what keeps the canvas and the exporter from growing two answers that differ at the
+    /// corners a person compares.
+    /// </summary>
+    public delegate (double Left, double Right) DirectionalHalfWidths(double position, Vector2D direction);
+
+    /// <summary>
     /// The filled outline of a stroked path, one closed loop per flattened outline.
     ///
     /// <paramref name="fallbackWidth"/> is used where the profile has nothing to say - an empty profile - so an
@@ -44,6 +56,11 @@ public static class PathOffset
     ///
     /// <paramref name="cap"/> and <paramref name="join"/> are the stroke's own, and a closed outline has
     /// neither: a loop with no free end is not capped, and its join applies at every vertex.
+    ///
+    /// <paramref name="directional"/> is the stroke's brush, when it has one, and it is asked for the
+    /// half-widths at each vertex along with the direction of travel there. A brush **replaces** the width
+    /// rather than modulating it: what it returns is the whole distance to the edge, so the profile and the
+    /// fallback width are not consulted at all on a stroke that carries one.
     /// </summary>
     public static IReadOnlyList<IReadOnlyList<Point2D>> Outline(
         IReadOnlyList<FlattenedOutline> outlines,
@@ -51,7 +68,8 @@ public static class PathOffset
         double fallbackWidth,
         double miterLimit = 4.0,
         StrokeCap cap = StrokeCap.Butt,
-        StrokeJoin join = StrokeJoin.Miter)
+        StrokeJoin join = StrokeJoin.Miter,
+        DirectionalHalfWidths? directional = null)
     {
         var result = new List<IReadOnlyList<Point2D>>();
 
@@ -70,7 +88,9 @@ public static class PathOffset
             var right = new List<Point2D>(points.Count);
             for (int i = 0; i < points.Count; i++)
             {
-                (double leftWidth, double rightWidth) = WidthsAt(profile, fallbackWidth, positions[i]);
+                Vector2D travel = Travel(incoming[i], outgoing[i]);
+                (double leftWidth, double rightWidth) =
+                    WidthsAt(profile, fallbackWidth, positions[i], travel, directional);
                 AddCorner(left, points, i, incoming, outgoing, leftWidth, left: true,
                     miterLimit, join, outline.IsClosed);
                 AddCorner(right, points, i, incoming, outgoing, rightWidth, left: false,
@@ -85,12 +105,14 @@ public static class PathOffset
             loop.AddRange(left);
             if (!outline.IsClosed)
             {
-                (double endLeft, double endRight) = WidthsAt(profile, fallbackWidth, positions[^1]);
+                Vector2D forward = Unit(points[^1] - points[^2]);
+                (double endLeft, double endRight) =
+                    WidthsAt(profile, fallbackWidth, positions[^1], forward, directional);
                 AppendCap(
                     loop,
                     left[^1],
                     right[0],
-                    Unit(points[^1] - points[^2]),
+                    forward,
                     (endLeft + endRight) / 2.0,
                     cap);
             }
@@ -98,12 +120,14 @@ public static class PathOffset
             loop.AddRange(right);
             if (!outline.IsClosed)
             {
-                (double startLeft, double startRight) = WidthsAt(profile, fallbackWidth, positions[0]);
+                Vector2D backward = Unit(points[0] - points[1]);
+                (double startLeft, double startRight) =
+                    WidthsAt(profile, fallbackWidth, positions[0], backward, directional);
                 AppendCap(
                     loop,
                     right[^1],
                     left[0],
-                    Unit(points[0] - points[1]),
+                    backward,
                     (startLeft + startRight) / 2.0,
                     cap);
             }
@@ -271,12 +295,39 @@ public static class PathOffset
     }
 
     /// <summary>
-    /// The half-widths at a position along the path, which is the profile's answer when it has one and the
-    /// fallback width - halved - when it does not.
+    /// The half-widths at a position along the path: the brush's answer when the stroke has one, the
+    /// profile's when it has a profile, and the fallback width - halved - when it has neither.
     /// </summary>
     public static (double Left, double Right) WidthsAt(
-        WidthProfileSpec? profile, double fallbackWidth, double position)
-        => profile?.HalvesAt(position) ?? (fallbackWidth / 2.0, fallbackWidth / 2.0);
+        WidthProfileSpec? profile,
+        double fallbackWidth,
+        double position,
+        Vector2D direction = default,
+        DirectionalHalfWidths? directional = null)
+        => directional?.Invoke(position, direction)
+           ?? profile?.HalvesAt(position)
+           ?? (fallbackWidth / 2.0, fallbackWidth / 2.0);
+
+    /// <summary>
+    /// The direction a vertex is travelling in, which is what a nib is measured against.
+    ///
+    /// The two segments meeting at a vertex usually point almost the same way, and their sum is that shared
+    /// direction; at a genuine corner it is the bisector, which is the direction that answers "which way is
+    /// this piece of the path going" without favouring either segment. Where a closed path doubles straight
+    /// back the sum is nothing at all, so one of the two segments is taken, and a vertex with no direction
+    /// whatsoever falls back to the +X axis - the same answer the parameterisation gives an empty path.
+    /// </summary>
+    private static Vector2D Travel(Vector2D incoming, Vector2D outgoing)
+    {
+        var sum = new Vector2D(incoming.X + outgoing.X, incoming.Y + outgoing.Y);
+        if ((sum.X * sum.X) + (sum.Y * sum.Y) > 1e-18)
+        {
+            return Unit(sum);
+        }
+
+        Vector2D one = (outgoing.X * outgoing.X) + (outgoing.Y * outgoing.Y) > 1e-18 ? outgoing : incoming;
+        return (one.X * one.X) + (one.Y * one.Y) > 1e-18 ? Unit(one) : new Vector2D(1, 0);
+    }
 
     /// <summary>
     /// Where a vertex goes when its two edges are offset by <paramref name="halfWidth"/>: the point where the

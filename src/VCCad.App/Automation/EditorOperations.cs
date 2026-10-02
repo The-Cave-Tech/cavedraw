@@ -2920,6 +2920,217 @@ public static class EditorOperations
                 })
                 .ToArray());
 
+        Add("brush.create",
+            "Create a reusable brush in the document - a calligraphic nib with an angle, a roundness and a " +
+            "diameter. angle is the direction the nib's long axis points, in degrees from the +X axis towards +Y, " +
+            "the same sense a path direction is measured in; roundness is the nib's short axis as a fraction of " +
+            "its long one, so 1 is a circular pen and a small number is a flat nib; diameter is the long axis in " +
+            "points. The name has to be free: two brushes with one name would make 'the brush called X' " +
+            "ambiguous, and it is the name that strokes refer to. Creating a brush does not apply it - an asset " +
+            "sits in the document until something uses it. One undo step.",
+            "name:string, angle?:number (default 0), roundness?:number (default 1), diameter?:number (default 1)",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                if (name.Length == 0)
+                {
+                    throw new EditorOperationException("brush.create needs a name");
+                }
+
+                CadDocument document = ctx.Document;
+                if (document.FindBrush(name) is not null)
+                {
+                    throw new EditorOperationException($"there is already a brush called '{name}'");
+                }
+
+                BrushSpec brush = ReadBrush(p, name);
+                var library = document.Brushes.ToList();
+                library.Add(brush);
+                ctx.Session.Execute(new EditBrushesCommand(
+                    document, library, Array.Empty<EditBrushesCommand.StrokeEdit>(), "Create brush"));
+
+                return DescribeBrush(brush);
+            });
+
+        Add("brush.list",
+            "Every reusable brush in the document, with the nib parameters that decide what it draws. What a " +
+            "person reads in the brush picker and a driver reads to name one for brush.apply.",
+            "",
+            (ctx, _) => ctx.Document.Brushes.Select(DescribeBrush).ToArray());
+
+        Add("brush.apply",
+            "Apply a stored brush to the selected paths' strokes, so they are swept with its nib. strokeIndex " +
+            "picks one stroke of the stack, counted from the bottom, and defaults to every stroke; a path whose " +
+            "stack is shorter is skipped. Applying a brush replaces the width the stroke would otherwise draw " +
+            "with the nib's, because the width a nib lays down depends on the direction of travel - a width " +
+            "profile alongside it is not consulted. One undo step per path.",
+            "name:string, strokeIndex?:number",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                BrushSpec brush = ctx.Document.FindBrush(name)
+                    ?? throw new EditorOperationException($"there is no brush called '{name}'");
+
+                int? at = OptionalStrokeIndex(p);
+                int paths = 0;
+                int touched = 0;
+
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    var stack = path.Strokes.ToList();
+                    bool changed = false;
+                    for (int i = 0; i < stack.Count; i++)
+                    {
+                        if (at is { } index && i != index)
+                        {
+                            continue;
+                        }
+
+                        stack[i] = stack[i] with { Brush = brush };
+                        changed = true;
+                        touched++;
+                    }
+
+                    if (changed)
+                    {
+                        ctx.Session.Execute(new SetStrokesCommand(path, stack, "Apply brush"));
+                        paths++;
+                    }
+                }
+
+                return new { applied = name, paths, strokes = touched };
+            });
+
+        Add("brush.clear",
+            "Take the brush off the selected paths' strokes, which leaves the stroke's own width and profile - " +
+            "what the stroke drew before a brush was applied. strokeIndex picks one stroke of the stack, counted " +
+            "from the bottom, and defaults to every stroke. One undo step per path.",
+            "strokeIndex?:number",
+            (ctx, p) =>
+            {
+                int? at = OptionalStrokeIndex(p);
+                int paths = 0;
+
+                foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
+                {
+                    var stack = path.Strokes.ToList();
+                    bool changed = false;
+                    for (int i = 0; i < stack.Count; i++)
+                    {
+                        if ((at is { } index && i != index) || stack[i].Brush is null)
+                        {
+                            continue;
+                        }
+
+                        stack[i] = stack[i] with { Brush = null };
+                        changed = true;
+                    }
+
+                    if (changed)
+                    {
+                        ctx.Session.Execute(new SetStrokesCommand(path, stack, "Clear brush"));
+                        paths++;
+                    }
+                }
+
+                return new { cleared = paths, strokeIndex = at };
+            });
+
+        Add("brush.rename",
+            "Rename a brush. Strokes refer to a brush by name, so this renames them with it - a rename that " +
+            "left the strokes naming the old name would leave them pointing at nothing. One undo step.",
+            "from:string, to:string",
+            (ctx, p) =>
+            {
+                string from = p.GetString("from") ?? string.Empty;
+                string to = p.GetString("to") ?? string.Empty;
+                CadDocument document = ctx.Document;
+
+                BrushSpec existing = document.FindBrush(from)
+                    ?? throw new EditorOperationException($"there is no brush called '{from}'");
+                if (to.Length == 0)
+                {
+                    throw new EditorOperationException("brush.rename needs a new name");
+                }
+
+                if (document.FindBrush(to) is not null)
+                {
+                    throw new EditorOperationException($"there is already a brush called '{to}'");
+                }
+
+                var library = document.Brushes
+                    .Select(brush => brush.Name == from ? brush with { Name = to } : brush)
+                    .ToList();
+                List<EditBrushesCommand.StrokeEdit> edits = StrokesNamingBrush(
+                    document, from, stroke => stroke with { Brush = stroke.Brush! with { Name = to } });
+
+                ctx.Session.Execute(new EditBrushesCommand(document, library, edits, "Rename brush"));
+
+                // The nib itself is carried across untouched, which is the promise of a rename: the strokes
+                // that used it look the same afterwards.
+                return new { renamed = from, to, strokes = edits.Count, diameter = existing.Diameter };
+            });
+
+        Add("brush.delete",
+            "Delete a brush from the document and clear it from every stroke that used it. The strokes keep " +
+            "their own widths and profiles - only the brush goes - which is what makes deleting an asset a safe " +
+            "thing to do. One undo step.",
+            "name:string",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                CadDocument document = ctx.Document;
+                if (document.FindBrush(name) is null)
+                {
+                    throw new EditorOperationException($"there is no brush called '{name}'");
+                }
+
+                var library = document.Brushes.Where(brush => brush.Name != name).ToList();
+                List<EditBrushesCommand.StrokeEdit> edits = StrokesNamingBrush(
+                    document, name, stroke => stroke with { Brush = null });
+
+                ctx.Session.Execute(new EditBrushesCommand(document, library, edits, "Delete brush"));
+                return new { deleted = name, cleared = edits.Count };
+            });
+
+        Add("brush.set",
+            "Change a stored brush's nib - its angle, roundness or diameter. Only the members given change. The " +
+            "strokes that use the brush are re-pointed with it, because that is what makes it an asset rather " +
+            "than a copy. One undo step.",
+            "name:string, angle?:number, roundness?:number, diameter?:number",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                CadDocument document = ctx.Document;
+                BrushSpec brush = document.FindBrush(name)
+                    ?? throw new EditorOperationException($"there is no brush called '{name}'");
+
+                var updated = brush with
+                {
+                    AngleDegrees = Given(p, "angle") ? p.GetDouble("angle", brush.AngleDegrees) : brush.AngleDegrees,
+                    Roundness = Given(p, "roundness") ? ClampedRoundness(p.GetDouble("roundness", brush.Roundness)) : brush.Roundness,
+                    Diameter = Given(p, "diameter") ? Math.Max(0.0, p.GetDouble("diameter", brush.Diameter)) : brush.Diameter,
+                };
+
+                return ApplyBrushEdit(ctx, document, brush, name, updated, "Edit brush");
+            });
+
+        Add("brush.missing",
+            "Every stroke in the document that names a brush the document does not have, with the path it is on " +
+            "and the name it asked for. A stroke holds its brush as a value, so it still draws - which is exactly " +
+            "why this is worth asking: a name that resolves to nothing means an asset was lost in an edit or a " +
+            "merge, and reporting it is the difference between a known gap and a drawing that quietly looks like " +
+            "someone meant it.",
+            "",
+            (ctx, _) => ctx.Document.MissingBrushes()
+                .Select(missing => new
+                {
+                    itemId = missing.Path.Id,
+                    name = missing.Path.Name,
+                    brush = missing.Name,
+                })
+                .ToArray());
+
         Add("profile.editMode",
             "Open or close the on-canvas width-profile editor for a path: the mode in which a handle is " +
             "shown at each of the profile's width points, at the stroke's own width, and a grip dragged " +
@@ -6656,6 +6867,82 @@ public static class EditorOperations
     }
 
     /// <summary>
+    /// A brush built from the parameters a caller gave, holding this build's defaults for the ones they did not.
+    ///
+    /// Roundness is clamped into 0..1 and the diameter at zero rather than refused: they describe a shape, and a
+    /// caller computing one can arrive a hair outside the range the same way a dragged slider can. A diameter
+    /// below zero is not a nib, so it becomes the smallest one there is rather than a brush that draws inside out.
+    /// </summary>
+    private static BrushSpec ReadBrush(JsonElement p, string name)
+        => BrushSpec.Calligraphic(
+            name,
+            p.GetDouble("angle", 0.0),
+            ClampedRoundness(p.GetDouble("roundness", 1.0)),
+            Math.Max(0.0, p.GetDouble("diameter", 1.0)));
+
+    private static double ClampedRoundness(double roundness) => Math.Clamp(roundness, 0.0, 1.0);
+
+    /// <summary>
+    /// Every stroke in the document that names this brush, with where it is and what it should become.
+    ///
+    /// A brush is referred to by name, so an edit to the asset has to reach the strokes that named it wherever
+    /// they are - including inside groups, and including in the pasteboard. Missing one would leave a stroke
+    /// drawn from a brush the document no longer has.
+    /// </summary>
+    private static List<EditBrushesCommand.StrokeEdit> StrokesNamingBrush(
+        CadDocument document, string name, Func<StrokeSpec, StrokeSpec> map)
+    {
+        var edits = new List<EditBrushesCommand.StrokeEdit>();
+
+        foreach (PathItem path in document.AllPaths())
+        {
+            for (int i = 0; i < path.Strokes.Count; i++)
+            {
+                if (path.Strokes[i].Brush?.Name == name)
+                {
+                    edits.Add(new EditBrushesCommand.StrokeEdit(
+                        path, i, path.Strokes[i], map(path.Strokes[i])));
+                }
+            }
+        }
+
+        return edits;
+    }
+
+    /// <summary>
+    /// Applies a change to a stored brush, and to every stroke that uses it, as one undo step.
+    ///
+    /// The re-pointed strokes are **fresh copies** of the brush rather than the library's own instance: a stroke
+    /// holds a value, so handing every stroke the same instance would make one stroke's later edit an edit to all
+    /// of them, which is not what the model says.
+    /// </summary>
+    private static object ApplyBrushEdit(
+        AutomationContext ctx,
+        CadDocument document,
+        BrushSpec brush,
+        string name,
+        BrushSpec updated,
+        string description)
+    {
+        var library = document.Brushes
+            .Select(existing => existing.Name == name ? updated : existing)
+            .ToList();
+        List<EditBrushesCommand.StrokeEdit> edits = StrokesNamingBrush(
+            document, name, stroke => stroke with { Brush = updated });
+
+        ctx.Session.Execute(new EditBrushesCommand(document, library, edits, description));
+        return new
+        {
+            brush = name,
+            angle = Math.Round(updated.AngleDegrees, 4),
+            roundness = Math.Round(updated.Roundness, 6),
+            diameter = Math.Round(updated.Diameter, 4),
+            changed = updated != brush,
+            strokes = edits.Count,
+        };
+    }
+
+    /// <summary>
     /// The dynamics curve a caller asked for: their own control points when they gave any, otherwise the preset.
     ///
     /// A curve given with the wrong number of numbers is refused rather than padded, because a curve is two points
@@ -7639,6 +7926,7 @@ public static class EditorOperations
         dash = stroke.Dash.IsEmpty ? null : stroke.Dash.Segments.ToArray(),
         dashOffset = Math.Round(stroke.Dash.Offset, 4),
         profile = DescribeWidthProfile(stroke.WidthProfile),
+        brush = DescribeBrush(stroke.Brush),
         effects = stroke.HasEffects
             ? stroke.AllEffects.Select(effect => new
             {
@@ -7684,6 +7972,25 @@ public static class EditorOperations
                 }).ToArray(),
             }
             : null;
+
+    /// <summary>
+    /// A brush as a caller reads it, or null when the stroke has none.
+    ///
+    /// The nib parameters are rounded the way every other readout in the registry rounds: far enough to hide the
+    /// last bit of a floating-point division, near enough that a value a person set comes back as it was typed.
+    /// </summary>
+    private static object? DescribeBrush(BrushSpec? brush)
+        => brush is null
+            ? null
+            : new
+            {
+                name = brush.Name,
+                kind = brush.Kind.ToString().ToLowerInvariant(),
+                angle = Math.Round(brush.AngleDegrees, 4),
+                roundness = Math.Round(brush.Roundness, 6),
+                diameter = Math.Round(brush.Diameter, 4),
+                dynamics = DescribeDynamics(brush.Dynamics),
+            };
 
     /// <summary>
     /// A tablet response as a caller reads it: the targets that are switched on, with their curves - null when

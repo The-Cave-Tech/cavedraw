@@ -116,7 +116,13 @@ internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, St
 
     // The tablet dynamics the stroke was drawn with, in target order. Absent when it responds to nothing.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    DynamicsTargetDto[]? Dynamics = null);
+    DynamicsTargetDto[]? Dynamics = null,
+
+    // The brush the stroke is swept with, when it has one. Absent for an ordinary stroke - and the last member,
+    // so a document written before brushes existed serialises to exactly the bytes it did then, which is the
+    // rule the width profile, the effects and the stroke stack all follow.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    BrushDto? Brush = null);
 
 /// <summary>
 /// One dynamics target on the wire: whether it is on, and the two control points of its curve.
@@ -126,6 +132,26 @@ internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, St
 /// down anywhere.
 /// </summary>
 internal sealed record DynamicsTargetDto(bool Enabled, double X1, double Y1, double X2, double Y2);
+
+/// <summary>
+/// A brush on the wire: its kind, the name it is known by, and the parameters of that kind.
+///
+/// The kind is written on every brush rather than omitted for the first one, because the value of the default
+/// is a decision this build made: a brush of a kind that arrives later must not be read as a calligraphic nib
+/// by a reader that guessed. The calligraphic members travel together with it for the same reason every
+/// gradient's geometry travels - a file says what it says, and dropping the members of a kind this build does
+/// not draw yet would make the round trip lossy.
+/// </summary>
+internal sealed record BrushDto(
+    string Name,
+    BrushKind Kind,
+    double AngleDegrees,
+    double Roundness,
+    double Diameter,
+
+    // The tablet dynamics the brush is modulated by, in target order. Absent when it responds to nothing.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    DynamicsTargetDto[]? Dynamics = null);
 
 /// <summary>One outline effect on the wire: its kind, its parameters, and the seed its randomness comes from.</summary>
 internal sealed record OutlineEffectDto(
@@ -675,16 +701,44 @@ internal abstract record ItemDto
                     e.Opacity,
                     e.Tint is { } tint ? new ColorDto(tint.R, tint.G, tint.B, tint.A) : null)).ToArray()
                 : null,
-            s.HasDynamics
-                ? Enum.GetValues<DynamicsTarget>()
-                    .Select(target =>
-                    {
-                        DynamicsTargetSpec spec = s.Dynamics!.For(target);
-                        return new DynamicsTargetDto(
-                            spec.Enabled, spec.Curve.X1, spec.Curve.Y1, spec.Curve.X2, spec.Curve.Y2);
-                    })
-                    .ToArray()
-                : null);
+            s.HasDynamics ? ToDynamicsDto(s.Dynamics) : null,
+
+            s.HasBrush ? ToBrushDto(s.Brush!) : null);
+
+    /// <summary>
+    /// A brush on the wire, or null when the stroke has none.
+    ///
+    /// Every calligraphic member is written, including one that holds its default, because a nib's angle and
+    /// roundness are the brush: a roundness that came back as the default would be a differently-shaped line,
+    /// and a value that is only absent because it happens to equal the default is not something a reader can
+    /// tell from one the file never stated.
+    /// </summary>
+    internal static BrushDto ToBrushDto(BrushSpec brush)
+        => new(
+            brush.Name,
+            brush.Kind,
+            brush.AngleDegrees,
+            brush.Roundness,
+            brush.Diameter,
+            brush.HasDynamics ? ToDynamicsDto(brush.Dynamics) : null);
+
+    /// <summary>
+    /// The dynamics on the wire, in target order: one entry per target the enum names.
+    ///
+    /// Written whether or not a target is on, because the list's length **is** the target list - a short array
+    /// would mean the targets it omits are off, which is a different answer from the one the document holds.
+    /// </summary>
+    private static DynamicsTargetDto[]? ToDynamicsDto(DynamicsSpec? dynamics)
+        => dynamics is { IsEmpty: false }
+            ? Enum.GetValues<DynamicsTarget>()
+                .Select(target =>
+                {
+                    DynamicsTargetSpec spec = dynamics.For(target);
+                    return new DynamicsTargetDto(
+                        spec.Enabled, spec.Curve.X1, spec.Curve.Y1, spec.Curve.X2, spec.Curve.Y2);
+                })
+                .ToArray()
+            : null;
 }
 
 /// <summary>Explicit restoration from DTO back into a live model graph.</summary>
@@ -1100,6 +1154,7 @@ internal static class ItemDtoExtensions
                 Effects = ToEffects(s.Effects),
                 RasterEffects = ToRasterEffects(s.RasterEffects),
                 Dynamics = ToDynamics(s.Dynamics),
+                Brush = s.Brush?.ToModel(),
             }
             : new StrokeSpec(s.Visible, new ColorRgb(s.Color.R, s.Color.G, s.Color.B, s.Color.A),
                 s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment,
@@ -1107,7 +1162,21 @@ internal static class ItemDtoExtensions
                 s.WidthProfile?.ToModel(),
                 ToEffects(s.Effects),
                 ToRasterEffects(s.RasterEffects),
-                ToDynamics(s.Dynamics));
+                ToDynamics(s.Dynamics),
+                s.Brush?.ToModel());
+
+    /// <summary>
+    /// A brush read back from the file, or null when the stroke has none.
+    ///
+    /// The kind is read as the file wrote it rather than assumed: a reader that met a kind it had never heard of
+    /// and called it calligraphic would draw a different line and say nothing.
+    /// </summary>
+    private static BrushSpec? ToModel(this BrushDto? dto)
+        => dto is null ? null : ToBrushModel(dto);
+
+    /// <summary>The brush library entry as a model value; the document-level reader uses this.</summary>
+    internal static BrushSpec ToBrushModel(BrushDto dto)
+        => new(dto.Name, dto.AngleDegrees, dto.Roundness, dto.Diameter, dto.Kind, ToDynamics(dto.Dynamics));
 
     /// <summary>
     /// The dynamics on the wire, or null when the stroke responds to nothing.
@@ -1220,7 +1289,11 @@ internal sealed record DocumentDto(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string[]? ForeignPathEffects = null,
 
     // The namespace prefixes the file declared, so the writer uses the same ones rather than generated ones.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<string, string>? SvgNamespaces = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<string, string>? SvgNamespaces = null,
+
+    // The brushes, when the document has any. The last member, so a document that has none - which is every
+    // document written before brushes existed - serialises to exactly the bytes it did then.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] BrushDto[]? Brushes = null);
 
 /// <summary>
 /// Lossless, deterministic serializer for <see cref="CadDocument"/>.
@@ -1340,7 +1413,13 @@ public static class VccadDocumentSerializer
 
             d.ForeignPathEffects.Count == 0 ? null : d.ForeignPathEffects.ToArray(),
 
-            d.SvgNamespaces.Count == 0 ? null : new Dictionary<string, string>(d.SvgNamespaces));
+            d.SvgNamespaces.Count == 0 ? null : new Dictionary<string, string>(d.SvgNamespaces),
+
+            // The brushes. Absent when the document has none, so a document that never used one is written
+            // exactly as it was before brushes existed.
+            d.Brushes.Count == 0
+                ? null
+                : d.Brushes.Select(ItemDto.ToBrushDto).ToArray());
     }
 
     private static WidthProfileDto ToDto(WidthProfileSpec profile)
@@ -1516,6 +1595,10 @@ public static class VccadDocumentSerializer
                     p.Name,
                     p.Points!.Select(point => new WidthPoint(
                         point.Position, point.Left, point.Right, point.Interpolation)))));
+
+        // The brushes, for the same reason as the profiles: a stroke refers to one by name, so a library that
+        // did not load would leave every brush-stroked path naming an asset the document does not have.
+        document.SetBrushes((dto.Brushes ?? Array.Empty<BrushDto>()).Select(ItemDtoExtensions.ToBrushModel));
 
         // The root-level baggage - the Inkscape named view, the RDF - verbatim, so a saved and reopened document
         // still carries the settings the file gave it.

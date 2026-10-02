@@ -22,6 +22,7 @@ public sealed class CadDocument
     private readonly List<Artboard> _artboards = new();
     private readonly List<WidthProfileSpec> _widthProfiles = new();
     private readonly List<FilterSpec> _filters = new();
+    private readonly List<BrushSpec> _brushes = new();
 
     /// <summary>
     /// Root-level elements the model has no meaning for, kept verbatim as XML.
@@ -241,6 +242,60 @@ public sealed class CadDocument
     }
 
     /// <summary>
+    /// The document's brushes, in the order they were created.
+    ///
+    /// A brush is an asset like a width profile, and a stroke **refers to it by name** and carries a copy of it
+    /// as a value: the copy is what still draws when the asset is gone, and the name is what makes editing the
+    /// asset an edit to every stroke that used it. Brushes are separate from profiles rather than a kind of one
+    /// because they answer a different question - a nib's width depends on the direction of travel, which no
+    /// profile can express - and the family is expected to grow (issue #99 onward).
+    /// </summary>
+    public IReadOnlyList<BrushSpec> Brushes => _brushes;
+
+    /// <summary>The brush with this name, or null. Names are matched exactly and case-sensitively.</summary>
+    public BrushSpec? FindBrush(string name) => _brushes.FirstOrDefault(b => b.Name == name);
+
+    /// <summary>Adds a brush to the library, or replaces the one with that name. Returns the brush added.</summary>
+    public BrushSpec AddBrush(BrushSpec brush)
+    {
+        int existing = _brushes.FindIndex(b => b.Name == brush.Name);
+        if (existing >= 0)
+        {
+            _brushes[existing] = brush;
+        }
+        else
+        {
+            _brushes.Add(brush);
+        }
+
+        return brush;
+    }
+
+    /// <summary>Removes a brush from the library, reporting whether it was there.</summary>
+    public bool RemoveBrush(string name) => _brushes.RemoveAll(b => b.Name == name) > 0;
+
+    /// <summary>
+    /// The strokes that name a brush the document does not have.
+    ///
+    /// Reported rather than defaulted, for the same reason a missing width profile is: a stroke holds its brush
+    /// as a value and still draws, so a name that resolves to nothing is an asset lost in an edit or a merge -
+    /// and quietly drawing the stroke as though it had no brush would make that look like a design decision.
+    /// </summary>
+    public IEnumerable<(PathItem Path, string Name)> MissingBrushes()
+    {
+        foreach (PathItem path in AllPaths())
+        {
+            foreach (StrokeSpec stroke in path.Strokes)
+            {
+                if (stroke.Brush is { } brush && FindBrush(brush.Name) is null)
+                {
+                    yield return (path, brush.Name);
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Every item in the document, artboards and pasteboard alike, in tree order.
     ///
     /// Needed by anything that has to act on the whole document rather than on a selection - editing a profile
@@ -297,6 +352,13 @@ public sealed class CadDocument
     {
         _widthProfiles.Clear();
         _widthProfiles.AddRange(profiles);
+    }
+
+    /// <summary>Replaces the brush library wholesale; deserialization and the edit command use this.</summary>
+    internal void SetBrushes(IEnumerable<BrushSpec> brushes)
+    {
+        _brushes.Clear();
+        _brushes.AddRange(brushes);
     }
 
     /// <summary>

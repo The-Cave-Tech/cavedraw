@@ -13,8 +13,10 @@ namespace VCCad.App.Tests;
 /// The inspector sections the feature list names that the model can honestly support: **stroke type** (a plain
 /// stroke or one carrying a width profile) and **tablet dynamics** (the response curve a stroke records).
 ///
-/// The brush selector is deliberately absent: brushes do not exist in the model (#99-#103), so a control offering
-/// them would be a placeholder that does nothing.
+/// The brush selector is still deliberately absent, and is now a **pane** piece of work rather than a model
+/// one: a brush exists on a stroke (`StrokeSpec.Brush`, issue #99) and is reachable through the `brush.*`
+/// operations, but the stroke pane has no control for it yet, so offering one here would not be exercised by
+/// these tests.
 ///
 /// Every edit is asserted on the **model**, at the stroke the shared `InspectedStroke` names - the failure these
 /// sections are most likely to have is a control that changes a different stroke than the pane is describing.
