@@ -243,7 +243,7 @@ understand the screen and the document without pixels:
 A driver that cannot see should still be able to work confidently: dump first,
 describe when a visual judgement is needed.
 
-### Eight things that cost real time, learned the hard way
+### Nine things that cost real time, learned the hard way
 
 Most of these happened in a single session; the last two were learned the hard way in
 a later one, and cost the most. They are cheap to avoid and expensive to discover.
@@ -267,6 +267,15 @@ before you believe the change.
 mutated a measure function that happened to be measured in a case where two frames
 coincided, so every test still passed. Check that the case you are mutating is the
 case the test exercises.
+
+**A truncated search is not a search.** `Select-Object -First N`, `head -n` or a pager is a
+look, not evidence. A session grepped `src` for a pointer-pressure read, cut the output at
+fourteen lines, and every hit that mattered was past the cut - then reasoned from the
+absence for three comments and a reframing of the issue, all of them wrong; the file did
+read the pressure, ten lines below where the list stopped. **If a result was truncated, the
+answer is unknown, not negative.** Re-run without the cap, or open the file, before a
+missing match is allowed to decide anything - and the same goes for a match count from a
+capped search, which is how a "nothing references this" claim becomes false.
 
 **Stage and commit in one step.** A tree staged in one round and committed in a
 later one collects whatever other agents wrote in between, producing a commit whose
