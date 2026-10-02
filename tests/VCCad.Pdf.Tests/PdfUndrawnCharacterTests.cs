@@ -35,8 +35,8 @@ public class PdfUndrawnCharacterTests
     [Fact]
     public void ARunTheFaceCannotDrawIsReported()
     {
-        // "salaam", four characters a Latin-only clone has no glyphs for.
-        IReadOnlyList<string> notes = NotesFor("Arial", "\u0633\u0644\u0627\u0645");
+        // Devanagari - a script no face the project can supply covers, so the loss is genuinely unrepairable.
+        IReadOnlyList<string> notes = NotesFor("Arial", "\u0928\u092e\u0938\u094d\u0924\u0947");
 
         string? declared = notes.FirstOrDefault(
             note => note.Contains("have no glyph", StringComparison.Ordinal));
@@ -44,7 +44,7 @@ public class PdfUndrawnCharacterTests
         Assert.True(declared is not null,
             $"the loss must be declared; the notes were: [{string.Join(" | ", notes)}]");
 
-        Assert.Contains("4 of 4", declared, StringComparison.Ordinal);
+        Assert.Contains("6 of 6", declared, StringComparison.Ordinal);
         Assert.Contains("Arial", declared!, StringComparison.Ordinal);
     }
 

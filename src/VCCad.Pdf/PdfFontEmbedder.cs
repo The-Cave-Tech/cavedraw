@@ -53,12 +53,21 @@ internal sealed class PdfFontEmbedder
             // source document did — rather than inventing a substitute face.
             StandardFonts.TryResolve(key.Family, key.Bold, key.Italic, out StandardFace face);
             byte[]? program = StandardFontFiles.TryReadProgram(face);
-            if (program is null)
+
+            // **A face that cannot draw the run's characters is no use.** The standard chain supplies the URW Core 35
+            // faces, which cover Latin, Greek and Cyrillic and nothing else - so a document written in another
+            // script lost every character of its runs, silently, into a blank page. The project already bundles
+            // faces with wider coverage, and they are consulted before a run is given up on.
+            TrueTypeFont? font = program is null ? null : new TrueTypeFont(program);
+            if (font is null || !Covers(font, codePoints))
+            {
+                font = BundledCovering(key, codePoints) ?? font;
+            }
+
+            if (font is null)
             {
                 continue;
             }
-
-            TrueTypeFont font = new(program);
             string name = $"/F{index++}";
 
             int type0 = assembler.Allocate();
@@ -77,6 +86,40 @@ internal sealed class PdfFontEmbedder
 
             _fonts[key] = new Entry(name, font, type0);
         }
+    }
+
+    /// <summary>Whether the face has a glyph for every code point the run uses.</summary>
+    private static bool Covers(TrueTypeFont font, HashSet<int> codePoints)
+    {
+        foreach (int codePoint in codePoints)
+        {
+            if (codePoint is < 0 or > 0xFFFF || font.GlyphFor((char)codePoint) == 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The first bundled face that covers the run's code points, or null when none does.
+    ///
+    /// The key's weight and slant are asked for, so a bold run gets the bold programme - the bundled faces are real
+    /// families, not one face reused.
+    /// </summary>
+    private static TrueTypeFont? BundledCovering(FontKey key, HashSet<int> codePoints)
+    {
+        foreach (string family in VCCad.Pdf.Fonts.BundledFonts.Families)
+        {
+            TrueTypeFont candidate = VCCad.Pdf.Fonts.BundledFonts.Resolve(family, key.Bold, key.Italic);
+            if (Covers(candidate, codePoints))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>True when no text fonts were used.</summary>

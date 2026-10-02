@@ -24,7 +24,7 @@ public class ExportStatusTests
     {
         var viewModel = new EditorViewModel();
         var text = new TextItem { Name = "Arabic", Origin = new VCCad.Geometry.Point2D(60, 80) };
-        text.Runs.Add(new TextRun { Text = "\u0633\u0644\u0627\u0645", FontFamily = "Arial", FontSize = 48 });
+        text.Runs.Add(new TextRun { Text = "\u0928\u092e\u0938\u094d\u0924\u0947", FontFamily = "Arial", FontSize = 48 });
         viewModel.Document.Artboards[0].Layers[0].AddItem(text);
 
         viewModel.ExportPdf();
