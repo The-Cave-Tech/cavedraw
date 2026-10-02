@@ -127,7 +127,7 @@ public static partial class SvgReader
 
         foreach (TextChunk chunk in chunks)
         {
-            if (chunk.Text.Length == 0 || !Paintable(chunk, context))
+            if (chunk.Text.Length == 0 || !Paintable(chunk.Paint, context))
             {
                 continue;
             }
@@ -287,15 +287,18 @@ public static partial class SvgReader
     /// A run in the model is *filled*: it has a colour and no stroke. So text the file only strokes, and text it
     /// paints with neither, is text the model cannot draw - and both are reported rather than turned into a run
     /// painted with something the file did not name.
+    ///
+    /// It reads the paint rather than the piece, so the flowed-text reader - which has no piece to give it - asks
+    /// the same question and gets the same answer, and a file painted one way cannot be reported two ways.
     /// </summary>
-    private static bool Paintable(TextChunk chunk, Context context)
+    private static bool Paintable(PresentationStyle paint, Context context)
     {
-        if (chunk.Paint.Fill.IsVisible)
+        if (paint.Fill.IsVisible)
         {
             return true;
         }
 
-        context.Warnings.Add(chunk.Paint.Stroke.HasVisibleOutline
+        context.Warnings.Add(paint.Stroke.HasVisibleOutline
             ? "text is stroked and not filled, and the model fills text and never strokes it"
             : "text is painted with neither a fill nor a stroke, so nothing is drawn");
         return false;

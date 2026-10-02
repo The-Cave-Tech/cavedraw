@@ -151,7 +151,13 @@ public static partial class SvgReader
         // Root-level elements that are neither artwork nor ours: `sodipodi:namedview` holds the grid, the zoom and
         // the page settings, and `<metadata>` holds the RDF. Kept verbatim, because a file that comes back without
         // them resets the document's own settings in Inkscape - a silent rewrite of somebody's file.
-        document.SetSvgExtras(root.Elements()
+        //
+        // **The walk below adds to this list rather than only reading it.** An element the reader has to refuse is
+        // kept here too, so a refusal costs the drawing and not the file's own text: a `flowRoot` whose region the
+        // model cannot hold is the case this exists for (`SvgFlowText.cs`), and dropping it while naming
+        // it would still be a silent rewrite of a different kind. It is written back at the root, which is where the
+        // file's root-level baggage belongs.
+        var kept = new List<string>(root.Elements()
             .Where(child => child.Name.LocalName == "metadata" ||
                             (child.Name.Namespace != XNamespace.None && child.Name.Namespace != Svg))
             .Select(child => child.ToString()));
@@ -181,6 +187,7 @@ public static partial class SvgReader
             Markers = markers,
             PathEffects = pathEffects,
             Warnings = warnings,
+            Kept = kept,
             Viewport = viewport,
             BaseDirectory = baseDirectory,
 
@@ -218,6 +225,9 @@ public static partial class SvgReader
         document.SetForeignPathEffects(pathEffects
             .Where(entry => !context.UsedPathEffects.Contains(entry.Key))
             .Select(entry => entry.Value.Xml));
+
+        // Everything kept verbatim: the file's own root-level baggage, and whatever the walk had to refuse.
+        document.SetSvgExtras(kept);
 
         return new SvgImportResult(document, counts, context.Missing, warnings.OrderBy(w => w, StringComparer.Ordinal).ToArray());
     }
@@ -762,6 +772,16 @@ public static partial class SvgReader
         /// </summary>
         public required HashSet<string> Warnings { get; init; }
 
+        /// <summary>
+        /// Elements the walk had to refuse, kept **verbatim** so that refusing them costs the drawing and not the
+        /// file.
+        ///
+        /// It starts as the document's root-level baggage and the walk appends to it - a `flowRoot` whose region the
+        /// model cannot hold is the first such element (see `SvgFlowText.cs`). Written back at the root by the
+        /// writer, beside the rest of what the model carries but does not draw.
+        /// </summary>
+        public required List<string> Kept { get; init; }
+
         /// <summary>Reports something the reader could not do, as an <see cref="Action{T}"/> for helpers to take.</summary>
         public void Warn(string message) => Warnings.Add(message);
 
@@ -891,6 +911,12 @@ public static partial class SvgReader
 
             case "text":
                 ReadTextElement(element, context, style, text);
+                return;
+
+            // SVG 1.2's flowed text: a region to flow into rather than a point to place at. Read where the model's
+            // frame can hold the region, and refused by name - with the element kept verbatim - where it cannot.
+            case "flowRoot":
+                ReadFlowRoot(element, context, style, text);
                 return;
 
             case "defs":
@@ -1134,6 +1160,7 @@ public static partial class SvgReader
             Markers = context.Markers,
             PathEffects = context.PathEffects,
             Warnings = context.Warnings,
+            Kept = context.Kept,
             Viewport = context.Viewport,
             BaseDirectory = context.BaseDirectory,
             Text = text,
@@ -1256,6 +1283,7 @@ public static partial class SvgReader
             Markers = context.Markers,
             PathEffects = context.PathEffects,
             Warnings = context.Warnings,
+            Kept = context.Kept,
             Viewport = viewport,
             BaseDirectory = context.BaseDirectory,
             Text = text,
@@ -1782,6 +1810,7 @@ public static partial class SvgReader
             Markers = context.Markers,
             PathEffects = context.PathEffects,
             Warnings = context.Warnings,
+            Kept = context.Kept,
             Viewport = context.Viewport,
             BaseDirectory = context.BaseDirectory,
             Text = context.Text,
@@ -2399,6 +2428,7 @@ public static partial class SvgReader
                 Markers = context.Markers,
                 PathEffects = context.PathEffects,
                 Warnings = context.Warnings,
+                Kept = context.Kept,
                 Viewport = context.Viewport,
                 BaseDirectory = context.BaseDirectory,
                 Text = context.Text,
@@ -2503,6 +2533,7 @@ public static partial class SvgReader
             Markers = context.Markers,
             PathEffects = context.PathEffects,
             Warnings = context.Warnings,
+            Kept = context.Kept,
             Viewport = context.Viewport,
             BaseDirectory = context.BaseDirectory,
             Text = SvgTextStyle.From(
@@ -2734,6 +2765,7 @@ public static partial class SvgReader
                 Markers = external.Markers,
                 PathEffects = external.PathEffects,
                 Warnings = context.Warnings,
+                Kept = context.Kept,
                 Viewport = context.Viewport,
                 BaseDirectory = external.BaseDirectory,
                 Text = SvgTextStyle.From(

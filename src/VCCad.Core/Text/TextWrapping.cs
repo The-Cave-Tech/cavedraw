@@ -64,6 +64,20 @@ public static class TextWrapping
                 // Break at the last space that fits; if the current word alone is wider
                 // than the frame, break it rather than let it run out of the box.
                 int breakAt = lastSpace > lineStart ? lastSpace : i;
+
+                // **A surrogate pair is one character, and no line may end between its halves.** A break inside
+                // one puts half a character at the end of one line and the other half at the start of the next -
+                // a string no reader or writer can hold, and one that a UTF-16 substring or an XML writer rejects
+                // outright. Moving the break in front of the pair keeps it whole on the next line, and is only
+                // done when that leaves the line something to hold; a pair wider than the frame on its own
+                // overflows instead, exactly as a single character wider than the frame does.
+                if (breakAt > lineStart + 1 &&
+                    char.IsLowSurrogate(flat[breakAt]) &&
+                    char.IsHighSurrogate(flat[breakAt - 1]))
+                {
+                    breakAt--;
+                }
+
                 lines.Add(new LineRange(lineStart, breakAt - lineStart));
                 lineStart = breakAt == lastSpace ? breakAt + 1 : breakAt;
                 lastSpace = -1;

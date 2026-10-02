@@ -369,22 +369,36 @@ public class SvgWriterTextTests
     }
 
     /// <summary>
-    /// **A frame is reported and the text is still set.**
+    /// **A frame is written as the flowed text it is read from, so its width comes back.**
     ///
-    /// SVG has no wrap width: a `text` element is as wide as its content and there is no attribute that says "break
-    /// here". The lines the frame produced are written, and the width itself is named, because a block that comes
-    /// back without its frame re-wraps the moment it is edited.
+    /// SVG has no attribute on a `text` element that says where to break, so a framed block written that way comes
+    /// back as one block per line - a model that has changed shape, which the corpus round trip caught the moment
+    /// the reader learned to read a region (#126). A `flowRoot` holds the region instead, so the frame is **written**
+    /// rather than named: the words, the width and the block's paragraph structure all reach the file.
+    ///
+    /// This test was `AWrapWidthIsReportedRatherThanInvented`, which pinned the old loss.
     /// </summary>
     [Fact]
-    public void AWrapWidthIsReportedRatherThanInvented()
+    public void AWrapWidthIsWrittenAsTheFlowedFormRatherThanNamed()
     {
         var text = new TextItem { Origin = new Point2D(0, 0), FrameWidth = 60 };
         text.Runs.Add(new TextRun { Text = "Hello", FontSize = 10 });
 
-        SvgWriteResult result = Measured(10.0, () => SvgWriter.WriteResult(Document(text)));
+        Measured(10.0, () =>
+        {
+            SvgWriteResult result = SvgWriter.WriteResult(Document(text));
 
-        Assert.Contains(result.Missing, entry => entry.Contains("wrap width", StringComparison.Ordinal));
-        Assert.Contains(">Hello</tspan>", result.Svg, StringComparison.Ordinal);
+            Assert.Contains("<flowRoot", result.Svg, StringComparison.Ordinal);
+            Assert.Contains("<flowRegion", result.Svg, StringComparison.Ordinal);
+            Assert.Contains("width=\"60\"", result.Svg, StringComparison.Ordinal);
+            Assert.Contains(">Hello</flowPara>", result.Svg, StringComparison.Ordinal);
+            Assert.DoesNotContain(result.Missing, entry => entry.Contains("wrap width", StringComparison.Ordinal));
+
+            // And the frame comes back, which is the whole point of writing it at all.
+            TextItem back = SvgReader.Read(result.Svg).Document.AllItems().OfType<TextItem>().Single();
+            Assert.Equal(60.0, back.FrameWidth, 9);
+            Assert.Equal("Hello", back.PlainText);
+        });
     }
 
     /// <summary>

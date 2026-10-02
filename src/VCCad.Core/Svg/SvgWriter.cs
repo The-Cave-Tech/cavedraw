@@ -1030,8 +1030,19 @@ public static class SvgWriter
                 return;
             }
 
+            // **A framed block is written as the flowed text it is read from.** A `text` element has no attribute
+            // that says where to break, so a frame written that way comes back as one block per line - a model that
+            // has changed shape, which the corpus round trip caught the moment the reader learned to read a frame.
+            // The flowed form holds the region, the paragraphs and the runs, so the block that goes out is the block
+            // that came in. See #126.
+            if (text.FrameWidth > 0)
+            {
+                WriteFlowRoot(text, parent);
+                return;
+            }
+
             TextLayout layout = TextLayoutEngine.Compute(text);
-            ReportTextLosses(text, layout);
+            ReportTextLosses(text, layout, flowed: false);
 
             string transform = TextTransform(text);
             bool preserve = PreservesSpace(text);
@@ -1170,6 +1181,220 @@ public static class SvgWriter
                 element.Add(new XAttribute("fill-opacity", Number(colour.A)));
             }
 
+            FaceAttributes(element, run);
+
+            Wrote("tspan");
+            return element;
+        }
+
+        /// <summary>
+        /// A framed block, as SVG 1.2's flowed text: a `flowRoot`, the one rectangle it flows into, and a
+        /// `flowPara` for every paragraph.
+        ///
+        /// **The frame goes out as the file's own form.** A `text` element has no attribute that says where to
+        /// break, so a framed block written that way comes back as one block per line - the model changed shape,
+        /// which the corpus round trip caught the moment the reader learned to read a region. The flowed form holds
+        /// the region's width, the block's leading, its alignment and its paragraphs, so the reader's own answer to
+        /// `flowRoot` reads this back as the block that was written.
+        ///
+        /// **One number here is the model's and not the file's.** A `flowRegion` is an area, so its `rect` needs a
+        /// height; the model records a frame width and no height, and the height written is the block's own
+        /// laid-out height. That is the one thing the model does not hold about a region, and it is named on the
+        /// report rather than left for the reader to take on trust - the reader will say the same thing about it
+        /// when the file comes back.
+        ///
+        /// **The first run's face is written on the `flowRoot`.** A paragraph break inherits the style of the
+        /// element around it, and the reader gives the newline it sets between two paragraphs the `flowRoot`'s
+        /// style - so writing the first run's face here is what makes a block whose first paragraph is empty come
+        /// back with the run boundaries it went out with.
+        /// </summary>
+        private void WriteFlowRoot(TextItem text, XElement parent)
+        {
+            TextLayout layout = TextLayoutEngine.Compute(text);
+            ReportTextLosses(text, layout, flowed: true);
+
+            Report(text, "the region's height is the block's own laid-out height, which the model does not record: " +
+                         "the frame a block holds is its width");
+
+            TextRun lead = text.Runs[0];
+
+            var element = new XElement(Svg + "flowRoot");
+            if (!string.IsNullOrEmpty(text.Name))
+            {
+                element.Add(new XAttribute("id", text.Name));
+            }
+
+            ApplyForeign(element, text);
+
+            string transform = TextTransform(text);
+            if (transform.Length > 0)
+            {
+                element.Add(new XAttribute("transform", transform));
+            }
+
+            string? clip = WriteClips(text, AffineTransform.Identity);
+            if (clip is not null)
+            {
+                element.Add(new XAttribute("clip-path", $"url(#{clip})"));
+            }
+
+            FaceAttributes(element, lead);
+
+            // The block's own colour paints the `flowRoot`, which is where the reader takes a block's colour from;
+            // a run that states another carries it on its own `flowPara` or `flowSpan`.
+            element.Add(new XAttribute("fill", Hex(text.Color)));
+            if (text.Color.A < 1.0)
+            {
+                element.Add(new XAttribute("fill-opacity", Number(text.Color.A)));
+            }
+
+            // **White space is asked for on the `flowRoot`, and the paragraphs carry no indentation to keep.**
+            // `xml:space` in scope keeps every white space character, so the writer's own separation between the
+            // paragraphs would otherwise become content - but the `flowRoot` is the one element the reader never
+            // reads text from: it takes the region and the paragraphs, and ignores everything between them. Inside
+            // a paragraph nothing is indented either, because a paragraph that holds text as well as elements is
+            // mixed content and a writer does not lay mixed content out. The block asks once, so every paragraph
+            // inherits the same answer and two of them cannot come back as differently styled runs.
+            if (PreservesSpace(text))
+            {
+                element.Add(new XAttribute(XNamespace.Xml + "space", "preserve"));
+            }
+
+            if (Math.Abs(text.LineSpacing - 1.2) > 1e-9)
+            {
+                element.Add(new XAttribute("line-height", Number(text.LineSpacing)));
+            }
+
+            // Flowed text is aligned inside the region with `text-align`, which is not the same property as the
+            // `text-anchor` a point-placed block uses - see the reader's FlowAlign.
+            if (text.Alignment != TextAlignment.Left)
+            {
+                element.Add(new XAttribute(
+                    "text-align", text.Alignment == TextAlignment.Center ? "center" : "right"));
+            }
+
+            element.Add(new XElement(Svg + "flowRegion", new XElement(Svg + "rect",
+                new XAttribute("x", Number(text.Origin.X)),
+                new XAttribute("y", Number(text.Origin.Y)),
+                new XAttribute("width", Number(text.FrameWidth)),
+                new XAttribute("height", Number(Math.Max(layout.Height, 1.0))))));
+
+            foreach (XElement paragraph in FlowParagraphs(text))
+            {
+                element.Add(paragraph);
+            }
+
+            Wrote("flowRoot");
+            parent.Add(element);
+        }
+
+        /// <summary>
+        /// A block's paragraphs, as the `flowPara` elements the reader builds them back from.
+        ///
+        /// An explicit newline is the model's whole spelling of "a new line", and a paragraph is what SVG flows
+        /// into a region - so the block's text is split at its newlines and each piece is a paragraph. A leading
+        /// newline is an empty first paragraph and a trailing one an empty last paragraph, which is what keeps a
+        /// blank line where the model has one.
+        /// </summary>
+        private static IEnumerable<XElement> FlowParagraphs(TextItem text)
+        {
+            string plain = text.PlainText;
+
+            // Where each run begins in the block's flattened text, which is the space the paragraph offsets are in
+            // - a run's own string is a different space, and slicing one with the other's index takes the wrong
+            // characters.
+            var runStart = new int[text.Runs.Count];
+            int flat = 0;
+            for (int i = 0; i < text.Runs.Count; i++)
+            {
+                runStart[i] = flat;
+                flat += text.Runs[i].Text.Length;
+            }
+
+            int at = 0;
+            while (true)
+            {
+                int end = plain.IndexOf('\n', at);
+                int stop = end < 0 ? plain.Length : end;
+
+                yield return FlowParagraph(text, plain, runStart, at, stop);
+
+                if (end < 0)
+                {
+                    yield break;
+                }
+
+                at = end + 1;
+            }
+        }
+
+        /// <summary>
+        /// One paragraph: the runs that reach into it, the first as the element's own text and the rest as
+        /// `flowSpan`s inside it.
+        ///
+        /// **The shape is the `text` element's, one level down.** The paragraph's own style is the first piece's -
+        /// the same answer the `text` writer gives the lead run - and every piece after it states its own face and
+        /// colour, so the reader's run boundaries are the model's. Nothing is written between the pieces and the
+        /// paragraph is mixed content, which is what stops the writer laying it out with indentation the reader
+        /// would have to collapse and could not tell from content.
+        ///
+        /// A paragraph with nothing in it is an empty element, which is the blank line the model spells as two
+        /// newlines in a row.
+        /// </summary>
+        private static XElement FlowParagraph(TextItem text, string plain, int[] runStart, int start, int stop)
+        {
+            var paragraph = new XElement(Svg + "flowPara");
+            bool lead = true;
+
+            for (int i = 0; i < text.Runs.Count; i++)
+            {
+                TextRun run = text.Runs[i];
+                int from = Math.Max(start, runStart[i]);
+                int to = Math.Min(stop, runStart[i] + run.Text.Length);
+                if (to <= from)
+                {
+                    continue;
+                }
+
+                string piece = plain[from..to];
+                ColorRgb colour = text.ColourOf(run);
+
+                XElement held = lead ? paragraph : new XElement(Svg + "flowSpan");
+
+                if (colour != text.Color)
+                {
+                    held.Add(new XAttribute("fill", Hex(colour)));
+                }
+
+                if (colour.A < 1.0)
+                {
+                    held.Add(new XAttribute("fill-opacity", Number(colour.A)));
+                }
+
+                FaceAttributes(held, run);
+                held.Add(new XText(piece));
+
+                if (!lead)
+                {
+                    // Added after its text, so the paragraph's first child is content and the writer has no room
+                    // to indent - see the note on `xml:space` in WriteFlowRoot.
+                    paragraph.Add(held);
+                }
+
+                lead = false;
+            }
+
+            return paragraph;
+        }
+
+        /// <summary>
+        /// The face and the two spacings a run carries, in the file's own spelling.
+        ///
+        /// One place writes them, so the `text` form of a run and the flowed form of it cannot come to disagree
+        /// about a face, a size or a tracking - which is the same reason the reader resolves them once for both.
+        /// </summary>
+        private static void FaceAttributes(XElement element, TextRun run)
+        {
             element.Add(new XAttribute("font-family", Face(run.FontFamily)));
             if (run.FontSize > 0)
             {
@@ -1209,9 +1434,6 @@ public static class SvgWriter
             {
                 element.Add(new XAttribute("font-variant", variant));
             }
-
-            Wrote("tspan");
-            return element;
         }
 
         /// <summary>
@@ -1222,7 +1444,7 @@ public static class SvgWriter
         /// half-carried block as much as to a dropped one: a file holding the words but not the programme they were
         /// set in looks complete and is not, and only the person who is told can act on it.
         /// </summary>
-        private void ReportTextLosses(TextItem text, TextLayout layout)
+        private void ReportTextLosses(TextItem text, TextLayout layout, bool flowed)
         {
             // SVG's `display="none"` is not a hidden element to this reader - it is an element it never reads - so
             // writing the block hidden would delete it outright. Losing the state is the smaller loss, and it is
@@ -1233,16 +1455,19 @@ public static class SvgWriter
                              "it does not draw is one it does not read");
             }
 
-            if (text.FrameWidth > 0)
+            // **A frame is only a loss in the `text` form.** The flowed form has a region, so a framed block written
+            // as a `flowRoot` keeps its width and every baseline it sets - and there is nothing to report. See
+            // WriteFlowRoot.
+            if (!flowed && text.FrameWidth > 0)
             {
-                Report(text, "the wrap width is not in the file: SVG has no text frame, so the reader recovers " +
-                             "the block's width from the text it sets");
+                Report(text, "the wrap width is not in the file: a `text` element has no attribute that says where " +
+                             "to break, so the reader recovers the block's width from the text it sets");
             }
 
-            if (layout.Lines.Count > 1)
+            if (!flowed && layout.Lines.Count > 1)
             {
-                Report(text, $"the block is set on {layout.Lines.Count} baselines and the file states a baseline " +
-                             "at a time, so the reader reads one block back per line");
+                Report(text, $"the block is set on {layout.Lines.Count} baselines and a `text` element states one " +
+                             "baseline, so the reader reads one block back per line");
             }
 
             // The block's colour is whatever its first piece was painted with, so a block whose own colour is not
@@ -1258,7 +1483,9 @@ public static class SvgWriter
             // A block that records the ascent it was placed with is written at **that** baseline, so the file is
             // where the model says it is - and the reader, which measures a top-left back against its own ascent,
             // will therefore move the block by the difference. Saying so is the honest half of writing it right.
-            if (text.Runs[0].PlacedAscentEm > 0 &&
+            // A flowed block states no baseline at all - the region is the block's whole position - so there is no
+            // difference to report.
+            if (!flowed && text.Runs[0].PlacedAscentEm > 0 &&
                 Math.Abs(text.Runs[0].PlacedAscentEm - TextMeasurement.TypicalAscentEm) > 1e-9)
             {
                 Report(text, $"the recorded ascent of {Number(text.Runs[0].PlacedAscentEm)} em is written where " +
@@ -1375,10 +1602,20 @@ public static class SvgWriter
         /// right for the files that mean it and lossy for a block whose spacing is content - a run of spaces set
         /// deliberately, or a leading one. Asking for the spaces to be kept is what makes those come back.
         /// </summary>
-        private static bool PreservesSpace(TextItem text)
-        {
-            string plain = text.PlainText;
+        private static bool PreservesSpace(TextItem text) => NeedsPreserve(text.PlainText);
 
+        /// <summary>
+        /// Whether a stretch of text would survive a round trip through SVG's white-space collapse, and so has to
+        /// ask for the spaces to be kept.
+        ///
+        /// The reader collapses runs of white space and strips the ends the way the specification says, which is
+        /// right for the files that mean it and lossy for text whose spacing is content - a run of spaces set
+        /// deliberately, or a leading one. It is asked **once for a block**, by both writers, so a block cannot come
+        /// back with one paragraph asking for its spaces and the next not - which the reader would read as two
+        /// differently styled runs.
+        /// </summary>
+        private static bool NeedsPreserve(string plain)
+        {
             // **Every white space that is not a lone interior space is content the collapse would rewrite.** The
             // reader collapses with `char.IsWhiteSpace`, which is Unicode white space and not just the four XML
             // characters - so a non-breaking space, which is what a French typesetter puts before `!`, came back as

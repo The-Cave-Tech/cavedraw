@@ -97,6 +97,45 @@ public class TextWrappingTests : IDisposable
         Assert.Single(TextWrapping.Lines(Block(string.Empty)));
     }
 
+    /// <summary>
+    /// **A line never ends between the halves of a surrogate pair.**
+    ///
+    /// An astral character is two UTF-16 code units, and the wrap rule counts code units - so a frame that breaks
+    /// mid-character used to put a lone high surrogate at the end of one line and a lone low surrogate at the start
+    /// of the next. Every reader of a line then had half a character: `Substring` on a segment produced a string an
+    /// XML writer rejects outright ("the surrogate pair is invalid"), and the canvas would draw a replacement
+    /// glyph. Inkscape's flowed-text test file reaches this exactly - its frame holds text from the supplementary
+    /// plane - which is how the round trip found it. See #126.
+    /// </summary>
+    [Fact]
+    public void ALineBreakNeverSplitsASurrogatePair()
+    {
+        TextMeasurement.Current = new FixedMetrics(1);
+
+        // Four astral characters - eight code units - in a five-unit frame, so the break lands inside a pair.
+        const string astral = "\U00010303\U00010303\U00010303\U00010303";
+        Assert.Equal(8, astral.Length);
+
+        List<TextWrapping.LineRange> lines = TextWrapping.Lines(Block(astral, frameWidth: 5));
+
+        (string flat, _) = TextWrapping.Flatten(Block(astral, frameWidth: 5));
+        Assert.True(lines.Count > 1, "the block must wrap to exercise a break");
+
+        foreach (TextWrapping.LineRange line in lines)
+        {
+            string piece = flat.Substring(line.Start, line.Length);
+            Assert.False(
+                piece.Length > 0 && char.IsHighSurrogate(piece[^1]),
+                $"a line may not end on a high surrogate; got a piece of {piece.Length} code units");
+            Assert.False(
+                piece.Length > 0 && char.IsLowSurrogate(piece[0]),
+                "a line may not begin on a low surrogate");
+        }
+
+        // And nothing is lost or duplicated by moving the break: the lines still cover the whole text.
+        Assert.Equal(astral, string.Concat(lines.Select(line => flat.Substring(line.Start, line.Length))));
+    }
+
     private static string TextOf(TextWrapping.LineRange line)
     {
         TextMeasurement.Current ??= new FixedMetrics(1);
