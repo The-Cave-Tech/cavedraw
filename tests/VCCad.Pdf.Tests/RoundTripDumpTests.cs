@@ -272,6 +272,249 @@ public class RoundTripDumpTests
         Assert.Equal("SourceAlpha", primitive.Input);
     }
 
+    // ------------------------------------------------------------------
+    // The document's remaining assets, and the per-item blend mode (issue #187).
+    //
+    // Same rule as the filter section above: the dump is the thing the round-trip tests compare, so a member it
+    // does not print cannot fail a round trip. Every assertion is on the specific text for the member and the value
+    // that was set, never merely on the two dumps being unequal - an inequality can pass for the wrong reason, which
+    // is how the vacuous tests this replaces worked.
+    // ------------------------------------------------------------------
+
+    /// <summary>A named width profile with a taper, a cubic point and a one-sided point - all of them content.</summary>
+    private static WidthProfileSpec TaperProfile()
+        => new("Taper", new[]
+        {
+            WidthPoint.Even(0.0, 4.0),
+            new WidthPoint(0.25, 6.0, 2.0, WidthInterpolation.Cubic),
+            WidthPoint.Even(1.0, 4.0),
+        });
+
+    /// <summary>**A width profile changes the dump, and the dump names its points.** Before this the whole asset was
+    /// invisible, so a save that lost a profile's taper still compared equal.</summary>
+    [Fact]
+    public void AWidthProfileChangesTheDump()
+    {
+        CadDocument document = CadDocument.CreateDefault("Bare");
+        document.Artboards[0].Layers[0].AddItem(Rectangle());
+
+        string before = ModelDump.Of(document);
+        document.AddWidthProfile(TaperProfile());
+
+        string after = ModelDump.Of(document);
+        Assert.NotEqual(before, after);
+        Assert.Contains("profile 0 name=Taper points=3", after, StringComparison.Ordinal);
+        Assert.Contains("left=6 right=2 interpolation=Cubic", after, StringComparison.Ordinal);
+        Assert.DoesNotContain("name=Taper", before, StringComparison.Ordinal);
+    }
+
+    /// <summary>**A brush changes the dump, and the dump names its kind and its nib.** A calligraphic brush's angle
+    /// and roundness are what it draws with, so a round trip that reset them is caught here.</summary>
+    [Fact]
+    public void ABrushChangesTheDump()
+    {
+        CadDocument document = CadDocument.CreateDefault("Bare");
+        document.Artboards[0].Layers[0].AddItem(Rectangle());
+
+        string before = ModelDump.Of(document);
+        document.AddBrush(BrushSpec.Calligraphic("Ink", 45.0, 0.5, 8.0));
+
+        string after = ModelDump.Of(document);
+        Assert.NotEqual(before, after);
+        Assert.Contains(
+            "brush 0 name=Ink kind=Calligraphic angle=45 roundness=0.5 diameter=8",
+            after,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("name=Ink", before, StringComparison.Ordinal);
+    }
+
+    /// <summary>**A definition changes the dump, and its own artwork is printed inside it** - a count alone would
+    /// let a definition whose content changed compare equal.</summary>
+    [Fact]
+    public void ADefinitionChangesTheDump()
+    {
+        CadDocument document = CadDocument.CreateDefault("Bare");
+        document.Artboards[0].Layers[0].AddItem(Rectangle());
+
+        string before = ModelDump.Of(document);
+        ArtGroup entry = document.AddDefinition("box");
+        entry.AddItem(PathFactory.CreateRectangle("entry-path", new VCCad.Geometry.Rect2D(3, 3, 6, 6)));
+
+        string after = ModelDump.Of(document);
+        Assert.NotEqual(before, after);
+        Assert.Contains("definitions=1", after, StringComparison.Ordinal);
+
+        string block = after[after.IndexOf("definitions=1", StringComparison.Ordinal)..];
+        Assert.Contains("name=box", block, StringComparison.Ordinal);
+        Assert.Contains("name=entry-path", block, StringComparison.Ordinal);
+    }
+
+    /// <summary>**A root-level foreign element changes the dump.** Verbatim XML is what keeps an Inkscape named view
+    /// from being silently dropped, so the dump has to hold it.</summary>
+    [Fact]
+    public void AnSvgExtraChangesTheDump()
+    {
+        CadDocument document = CadDocument.CreateDefault("Bare");
+
+        string before = ModelDump.Of(document);
+        document.SetSvgExtras(new[] { "<sodipodi:namedview id=\"nv\"/>" });
+
+        string after = ModelDump.Of(document);
+        Assert.NotEqual(before, after);
+        Assert.Contains("svgExtra 0 <sodipodi:namedview id=\"nv\"/>", after, StringComparison.Ordinal);
+    }
+
+    /// <summary>**An unreferenced foreign definition changes the dump**, for the same reason: nothing points at it
+    /// today, and losing it is the silent rewrite issue #155 is about.</summary>
+    [Fact]
+    public void AForeignPathEffectChangesTheDump()
+    {
+        CadDocument document = CadDocument.CreateDefault("Bare");
+
+        string before = ModelDump.Of(document);
+        document.SetForeignPathEffects(new[] { "<filter id=\"unused\"/>" });
+
+        string after = ModelDump.Of(document);
+        Assert.NotEqual(before, after);
+        Assert.Contains("foreignPathEffect 0 <filter id=\"unused\"/>", after, StringComparison.Ordinal);
+    }
+
+    /// <summary>**A declared namespace prefix changes the dump.** The prefix is what the writer gives back, so a
+    /// round trip that regenerated it would be a rewrite the dump could not previously see.</summary>
+    [Fact]
+    public void AnSvgNamespaceChangesTheDump()
+    {
+        CadDocument document = CadDocument.CreateDefault("Bare");
+
+        string before = ModelDump.Of(document);
+        document.SetSvgNamespaces(new[]
+        {
+            new KeyValuePair<string, string>("inkscape", "http://www.inkscape.org/namespaces/inkscape"),
+        });
+
+        string after = ModelDump.Of(document);
+        Assert.NotEqual(before, after);
+        Assert.Contains(
+            "namespace inkscape=http://www.inkscape.org/namespaces/inkscape",
+            after,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// **An item's blend mode changes the dump, on the item's own line, for every kind of item.**
+    ///
+    /// A path, a group and a text block are all printed - each kind is a different branch of the dump, so a fix that
+    /// covered only the one that was easiest to test would let the others stay invisible.
+    /// </summary>
+    [Fact]
+    public void AnItemsBlendModeChangesTheDump()
+    {
+        CadDocument document = CadDocument.CreateDefault("Blended");
+        PathItem path = Rectangle();
+        document.Artboards[0].Layers[0].AddItem(path);
+
+        var group = new ArtGroup { Name = "g" };
+        group.AddItem(PathFactory.CreateRectangle("inner", new VCCad.Geometry.Rect2D(0, 0, 5, 5)));
+        document.Artboards[0].Layers[0].AddItem(group);
+
+        var text = new TextItem { Name = "t" };
+        text.Runs.Add(new TextRun { Text = "hi", FontFamily = "Helvetica", FontSize = 10 });
+        document.Artboards[0].Layers[0].AddItem(text);
+
+        string before = ModelDump.Of(document);
+        Assert.DoesNotContain("blend=", before, StringComparison.Ordinal);
+
+        path.BlendMode = BlendMode.Multiply;
+        group.BlendMode = BlendMode.Overlay;
+        text.BlendMode = BlendMode.Screen;
+
+        string after = ModelDump.Of(document);
+        Assert.NotEqual(before, after);
+
+        string pathLine = LineContaining(after, "name=r");
+        Assert.Contains("blend=multiply", pathLine, StringComparison.Ordinal);
+
+        string groupLine = LineContaining(after, "name=g");
+        Assert.Contains("blend=overlay", groupLine, StringComparison.Ordinal);
+
+        string textLine = LineContaining(after, "name=t");
+        Assert.Contains("blend=screen", textLine, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// **A default document dumps none of these members.** This is the other half of the remit: an ordinary
+    /// document's dump has to stay byte-identical, or every existing dump comparison churns - and the text for a
+    /// member that is at its default must be absent, not printed as a default value.
+    /// </summary>
+    [Fact]
+    public void ADefaultDocumentDumpsNoneOfTheseMembers()
+    {
+        CadDocument document = CadDocument.CreateDefault("Ordinary");
+        document.Artboards[0].Layers[0].AddItem(Rectangle());
+
+        string dump = ModelDump.Of(document);
+
+        Assert.DoesNotContain("widthProfiles=", dump, StringComparison.Ordinal);
+        Assert.DoesNotContain("brushes=", dump, StringComparison.Ordinal);
+        Assert.DoesNotContain("definitions=", dump, StringComparison.Ordinal);
+        Assert.DoesNotContain("svgExtras=", dump, StringComparison.Ordinal);
+        Assert.DoesNotContain("foreignPathEffects=", dump, StringComparison.Ordinal);
+        Assert.DoesNotContain("svgNamespaces=", dump, StringComparison.Ordinal);
+        Assert.DoesNotContain("blend=", dump, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// **The round trip the harness could not previously witness.** A width profile, a brush, a blend mode and the
+    /// document's SVG baggage all survive a save and reload - asserted on the reloaded model as well as the dumps,
+    /// because an equal dump only means the two agreed about what they printed.
+    /// </summary>
+    [Fact]
+    public void TheDocumentsAssetsAndBlendModesSurviveTheRoundTrip()
+    {
+        CadDocument document = CadDocument.CreateDefault("Assets");
+        PathItem path = Rectangle();
+        path.BlendMode = BlendMode.Multiply;
+        document.Artboards[0].Layers[0].AddItem(path);
+        document.AddWidthProfile(TaperProfile());
+        document.AddBrush(BrushSpec.Calligraphic("Ink", 45.0, 0.5, 8.0));
+        document.SetSvgExtras(new[] { "<sodipodi:namedview id=\"nv\"/>" });
+        document.SetForeignPathEffects(new[] { "<filter id=\"unused\"/>" });
+        document.SetSvgNamespaces(new[]
+        {
+            new KeyValuePair<string, string>("inkscape", "http://www.inkscape.org/namespaces/inkscape"),
+        });
+
+        string before = ModelDump.Of(document);
+        CadDocument reloaded = Reload(document);
+        string after = ModelDump.Of(reloaded);
+
+        Assert.True(before == after, FirstDifference(before, after));
+
+        WidthProfileSpec profile = Assert.Single(reloaded.WidthProfiles);
+        Assert.Equal("Taper", profile.Name);
+        Assert.Equal(3, profile.Points.Count);
+        Assert.Equal(6.0, profile.Points[1].LeftWidth, 6);
+        Assert.Equal(2.0, profile.Points[1].RightWidth, 6);
+        Assert.Equal(WidthInterpolation.Cubic, profile.Points[1].Interpolation);
+
+        BrushSpec brush = Assert.Single(reloaded.Brushes);
+        Assert.Equal("Ink", brush.Name);
+        Assert.Equal(BrushKind.Calligraphic, brush.Kind);
+        Assert.Equal(45.0, brush.AngleDegrees, 6);
+        Assert.Equal(0.5, brush.Roundness, 6);
+        Assert.Equal(8.0, brush.Diameter, 6);
+
+        Assert.Equal(BlendMode.Multiply, reloaded.AllPaths().Single().BlendMode);
+        Assert.Equal(new[] { "<sodipodi:namedview id=\"nv\"/>" }, reloaded.SvgExtras);
+        Assert.Equal(new[] { "<filter id=\"unused\"/>" }, reloaded.ForeignPathEffects);
+        Assert.Equal("http://www.inkscape.org/namespaces/inkscape", reloaded.SvgNamespaces["inkscape"]);
+    }
+
+    /// <summary>The one dump line that contains <paramref name="needle"/>, so a value can be asserted on the line
+    /// the item it belongs to is actually printed on rather than anywhere in the dump.</summary>
+    private static string LineContaining(string dump, string needle)
+        => dump.Split('\n').Single(line => line.Contains(needle, StringComparison.Ordinal));
+
     /// <summary>A readable description of where two dumps first disagree.</summary>
     private static string FirstDifference(string before, string after)
     {

@@ -72,7 +72,194 @@ public static class ModelDump
             }
         }
 
+        // The rest of the document's own assets, each printed with its content rather than a count. The rule is the
+        // one the filters block gives: a member the dump does not print cannot fail a round trip, so a width profile
+        // that lost a point, a brush that came back as another kind, or a definition whose artwork was dropped would
+        // all compare equal. Every block is absent when the document holds none, so an ordinary document dumps
+        // exactly as it did before any of these were covered.
+        if (document.WidthProfiles.Count > 0)
+        {
+            builder.Append("  widthProfiles=").Append(document.WidthProfiles.Count).AppendLine();
+            for (int p = 0; p < document.WidthProfiles.Count; p++)
+            {
+                DumpWidthProfile(builder, document.WidthProfiles[p], p);
+            }
+        }
+
+        if (document.Brushes.Count > 0)
+        {
+            builder.Append("  brushes=").Append(document.Brushes.Count).AppendLine();
+            for (int b = 0; b < document.Brushes.Count; b++)
+            {
+                DumpBrush(builder, document.Brushes[b], b);
+            }
+        }
+
+        // The definitions an instance refers to by id. Not artwork - a viewer draws it only where it is used - but
+        // document state all the same, and the entry's children are what an instance holds.
+        if (document.Definitions.Children.Count > 0)
+        {
+            builder.Append("  definitions=").Append(document.Definitions.Children.Count).AppendLine();
+            DumpItems(builder, document.Definitions.Children, 4);
+        }
+
+        // Root-level elements the model has no meaning for, kept verbatim as XML. Escaped, because they are text
+        // rather than structure: a round trip that lost one would silently rewrite somebody's named view.
+        if (document.SvgExtras.Count > 0)
+        {
+            builder.Append("  svgExtras=").Append(document.SvgExtras.Count).AppendLine();
+            for (int e = 0; e < document.SvgExtras.Count; e++)
+            {
+                builder.Append("    svgExtra ").Append(e).Append(' ')
+                    .Append(Escape(document.SvgExtras[e])).AppendLine();
+            }
+        }
+
+        if (document.ForeignPathEffects.Count > 0)
+        {
+            builder.Append("  foreignPathEffects=").Append(document.ForeignPathEffects.Count).AppendLine();
+            for (int e = 0; e < document.ForeignPathEffects.Count; e++)
+            {
+                builder.Append("    foreignPathEffect ").Append(e).Append(' ')
+                    .Append(Escape(document.ForeignPathEffects[e])).AppendLine();
+            }
+        }
+
+        // Sorted by prefix, because a namespace map is unordered: two documents that declare the same prefixes in a
+        // different order are the same document, and a dump that followed insertion order would say otherwise.
+        if (document.SvgNamespaces.Count > 0)
+        {
+            builder.Append("  svgNamespaces=").Append(document.SvgNamespaces.Count).AppendLine();
+            foreach (KeyValuePair<string, string> entry in
+                document.SvgNamespaces.OrderBy(e => e.Key, StringComparer.Ordinal))
+            {
+                builder.Append("    namespace ").Append(Escape(entry.Key))
+                    .Append('=').Append(Escape(entry.Value)).AppendLine();
+            }
+        }
+
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// A reusable width profile and every point on it.
+    ///
+    /// The points are the profile: a name and a count would let a profile whose tapers moved, or whose interpolation
+    /// changed, compare equal to the one it replaced.
+    /// </summary>
+    private static void DumpWidthProfile(StringBuilder builder, WidthProfileSpec profile, int index)
+    {
+        builder.Append("    profile ").Append(index)
+            .Append(" name=").Append(Escape(profile.Name))
+            .Append(" points=").Append(profile.Points.Count)
+            .AppendLine();
+
+        for (int p = 0; p < profile.Points.Count; p++)
+        {
+            WidthPoint point = profile.Points[p];
+            builder.Append("      point ").Append(p)
+                .Append(" position=").Append(Num(point.Position))
+                .Append(" left=").Append(Num(point.LeftWidth))
+                .Append(" right=").Append(Num(point.RightWidth))
+                .Append(" interpolation=").Append(point.Interpolation)
+                .AppendLine();
+        }
+    }
+
+    /// <summary>
+    /// A brush, with every member of every kind.
+    ///
+    /// One line rather than a block, because a brush has no nested list of its own: its kind's members travel
+    /// together on the record, and a reader that took some of them would draw a brush the file does not describe.
+    /// The kind is printed first so the members that matter for it can be read in order.
+    /// </summary>
+    private static void DumpBrush(StringBuilder builder, BrushSpec brush, int index)
+    {
+        builder.Append("    brush ").Append(index)
+            .Append(" name=").Append(Escape(brush.Name))
+            .Append(" kind=").Append(brush.Kind)
+            .Append(" angle=").Append(Num(brush.AngleDegrees))
+            .Append(" roundness=").Append(Num(brush.Roundness))
+            .Append(" diameter=").Append(Num(brush.Diameter))
+            .Append(" dynamics=").Append(Dynamics(brush.Dynamics))
+            .Append(" artAsset=").Append(brush.ArtAsset?.ToString() ?? "-")
+            .Append(" stretch=").Append(brush.Stretch)
+            .Append(" flipAcross=").Append(brush.FlipAcross)
+            .Append(" flipAlong=").Append(brush.FlipAlong)
+            .Append(" colourisation=").Append(brush.Colourisation)
+            .Append(" shade=").Append(ColourOr(brush.ShadeColour))
+            .Append(" side=").Append(Tile(brush.PatternSideTile))
+            .Append(" start=").Append(Tile(brush.PatternStartTile))
+            .Append(" end=").Append(Tile(brush.PatternEndTile))
+            .Append(" inner=").Append(Tile(brush.PatternInnerTile))
+            .Append(" outer=").Append(Tile(brush.PatternOuterTile))
+            .Append(" spacing=").Append(Num(brush.PatternSpacing))
+            .Append(" corner=").Append(Num(brush.PatternCornerThresholdDegrees))
+            .Append(" scatter=").Append(Scatter(brush.ScatterSpec))
+            .Append(" bristles=").Append(Bristles(brush.BristleSpec))
+            .AppendLine();
+    }
+
+    /// <summary>One pattern tile, or "-" when the slot holds nothing.</summary>
+    private static string Tile(PatternTileSpec? tile)
+        => tile is null
+            ? "-"
+            : $"({tile.Asset?.ToString() ?? "-"},{tile.FlipAcross},{tile.FlipAlong}," +
+              $"{Num(tile.RotationDegrees)},{Num(tile.Scale)})";
+
+    /// <summary>A scatter brush's five ranged controls, or "-" when the brush is not one.</summary>
+    private static string Scatter(ScatterBrushSpec? spec)
+        => spec is null
+            ? "-"
+            : $"({spec.Asset?.ToString() ?? "-"},{Ranged(spec.Spacing)},{Ranged(spec.Rotation)}," +
+              $"{Ranged(spec.Scale)},{Ranged(spec.Offset)},{Ranged(spec.Opacity)})";
+
+    /// <summary>A value and the plus-or-minus a copy's own draw may stray by, which are one setting.</summary>
+    private static string Ranged(ScatterParameter parameter)
+        => $"{Num(parameter.Value)}~{Num(parameter.Randomness)}";
+
+    /// <summary>A bristle bundle's parameters, or "-" when the brush is not one.</summary>
+    private static string Bristles(BristleBrushSpec? spec)
+        => spec is null
+            ? "-"
+            : $"({spec.Count},{Num(spec.Length)},{Num(spec.Stiffness)},{Num(spec.Thickness)}," +
+              $"{Num(spec.Spread)},{Num(spec.Randomness)},{Num(spec.PressureSpread)},{Num(spec.TiltTurn)}," +
+              $"{Num(spec.ColourJitter)})";
+
+    /// <summary>
+    /// A brush's response curves: each enabled target with its control points, "none" when it records a spec with
+    /// every target off, or "-" when it records no spec at all.
+    ///
+    /// The three are not the same thing - no spec is a brush that never mentioned the pen, and a spec with every
+    /// target off is a stated decision - so the dump tells them apart rather than folding both to a dash.
+    /// </summary>
+    private static string Dynamics(DynamicsSpec? spec)
+    {
+        if (spec is null)
+        {
+            return "-";
+        }
+
+        var builder = new StringBuilder();
+        foreach (DynamicsTarget target in Enum.GetValues<DynamicsTarget>())
+        {
+            DynamicsTargetSpec setting = spec.For(target);
+            if (!setting.Enabled)
+            {
+                continue;
+            }
+
+            if (builder.Length > 0)
+            {
+                builder.Append(';');
+            }
+
+            builder.Append(target).Append(':')
+                .Append(Num(setting.Curve.X1)).Append(',').Append(Num(setting.Curve.Y1)).Append(',')
+                .Append(Num(setting.Curve.X2)).Append(',').Append(Num(setting.Curve.Y2));
+        }
+
+        return builder.Length == 0 ? "none" : builder.ToString();
     }
 
     /// <summary>
@@ -184,7 +371,7 @@ public static class ModelDump
                     .Append(" subpaths=").Append(path.SubPaths.Count)
                     .Append(" fillCmyk=").Append(Cmyk(path.SourceFillCmyk))
                     .Append(" strokeCmyk=").Append(Cmyk(path.SourceStrokeCmyk))
-                    .Append(Clips(item)).Append(FilterId(item)).AppendLine();
+                    .Append(Clips(item)).Append(FilterId(item)).Append(Blend(item)).AppendLine();
 
                 for (int s = 0; s < path.SubPaths.Count; s++)
                 {
@@ -221,7 +408,7 @@ public static class ModelDump
                     .Append(" paragraph=").Append(Num(text.ParagraphSpacing))
                     .Append(" runs=").Append(text.Runs.Count)
                     .Append(" colourCmyk=").Append(Cmyk(text.SourceCmyk))
-                    .Append(Clips(item)).Append(FilterId(item)).AppendLine();
+                    .Append(Clips(item)).Append(FilterId(item)).Append(Blend(item)).AppendLine();
 
                 for (int r = 0; r < text.Runs.Count; r++)
                 {
@@ -273,7 +460,7 @@ public static class ModelDump
                     .Append(" colourKey=").Append(Numbers(image.ColourKey))
                     .Append(" filter=").Append(image.Filter ?? "-")
                     .Append(" maskFilter=").Append(image.MaskFilter ?? "-")
-                    .Append(Clips(item)).Append(FilterId(item)).AppendLine();
+                    .Append(Clips(item)).Append(FilterId(item)).Append(Blend(item)).AppendLine();
                 break;
 
             case ArtGroup group:
@@ -289,7 +476,7 @@ public static class ModelDump
                     .Append(Num(group.Transform.E)).Append(',')
                     .Append(Num(group.Transform.F))
                     .Append(" children=").Append(group.Children.Count)
-                    .Append(Clips(item)).Append(FilterId(item)).AppendLine();
+                    .Append(Clips(item)).Append(FilterId(item)).Append(Blend(item)).AppendLine();
 
                 DumpItems(builder, group.Children, indent + 2);
                 break;
@@ -299,6 +486,7 @@ public static class ModelDump
                     .Append(" id=").Append(item.Id)
                     .Append(" name=").Append(Escape(item.Name))
                     .Append(FilterId(item))
+                    .Append(Blend(item))
                     .AppendLine();
                 break;
         }
@@ -450,6 +638,18 @@ public static class ModelDump
     /// </summary>
     private static string FilterId(LayerItem item)
         => string.IsNullOrEmpty(item.FilterId) ? string.Empty : " filterId=" + Escape(item.FilterId);
+
+    /// <summary>
+    /// The blend mode an item composites with, or nothing when it is the default.
+    ///
+    /// Every kind of item can be blended, so it is printed on the item's own line rather than as document state -
+    /// and a round trip that dropped it would draw the item composited normally with nothing else in the dump to
+    /// show it. Written only when it is not <see cref="BlendMode.Normal"/>, so an item that states nothing is
+    /// exactly as it was before this member was covered, while one that is blended and one that is not still
+    /// compare different - which is what lets a dump-based test witness the blend at all.
+    /// </summary>
+    private static string Blend(LayerItem item)
+        => item.BlendMode == BlendMode.Normal ? string.Empty : " blend=" + item.BlendMode.ToSvgName();
 
     /// <summary>
     /// A stable fingerprint of a byte array. Samples can be hundreds of kilobytes, so the
