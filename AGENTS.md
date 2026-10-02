@@ -293,6 +293,13 @@ commit being verified. Check the worker's elapsed time first: a `Runner.Worker` 
 starting, not stuck, and one at several minutes with no child work is wedged. Restarting is the
 last resort, not the first guess.
 
+**And the wedge has a cause worth knowing.** `scripts/publish-desktop.sh` serialises builds with
+`flock /tmp/vccad-build.lock`, and MSBuild's worker nodes (`nodeReuse:true`) **linger after a build
+holding that descriptor** - so the lock is never released and the next desktop job blocks forever at
+around 0.15 load. `MSBUILDDISABLENODEREUSE=1` is set in every CI job so the nodes exit and the lock
+is released. The restarts above appeared to fix it only because they killed the process holding the
+lock, which is why the problem kept returning.
+
 **Stage and commit in one step.** A tree staged in one round and committed in a
 later one collects whatever other agents wrote in between, producing a commit whose
 message describes something other than its contents. Three commits in one session

@@ -14,6 +14,7 @@ jobs:
     runs-on: [self-hosted, Linux, runningman]
     env:
       DOTNET_NOLOGO: '1'
+      MSBUILDDISABLENODEREUSE: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -116,6 +117,7 @@ jobs:
     runs-on: [self-hosted, Linux, runningman]
     env:
       DOTNET_NOLOGO: '1'
+      MSBUILDDISABLENODEREUSE: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -170,6 +172,7 @@ jobs:
     runs-on: [self-hosted, Windows]
     env:
       DOTNET_NOLOGO: '1'
+      MSBUILDDISABLENODEREUSE: '1'
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       # **Faces are located on the machine, never shipped.** beast-winrunner has the URW base-35
       # set copied to C:\urw-fonts, which is what the text-export tests embed; without it the
