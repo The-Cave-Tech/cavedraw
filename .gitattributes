@@ -8,3 +8,23 @@ docker/Dockerfile text eol=lf
 
 # PowerShell runs on Windows, where CRLF is what it expects.
 *.ps1 text eol=crlf
+
+# **Binary files must not be line-ending converted.** Git decides "binary" by looking for a NUL byte in the
+# first 8000 bytes, and a small encrypted PDF need not contain one - the 805-byte rc4-40.pdf does not. On a
+# machine with core.autocrlf=false (a developer's) it is checked out untouched; on a Windows CI runner, where
+# checkout sets autocrlf=true, every newline inside it is rewritten and the fixture no longer decrypts.
+# That showed up as six failures in the PDF suite reading like a broken security handler - a crypto bug that
+# was really a checkout bug, and one that could not reproduce on the machine it was written on.
+*.pdf binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.gz binary
+*.wasm binary
