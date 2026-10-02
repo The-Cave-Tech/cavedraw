@@ -171,20 +171,110 @@ public class StrokeStackOperationTests
     }
 
     /// <summary>
-    /// Outline Stroke refuses a path with a stack rather than expanding the bottom stroke and dropping the rest.
-    /// A refusal leaves the path exactly as it was; a half-expanded path is a drawing somebody has lost.
+    /// **Outline Stroke expands every stroke of the stack, not only the bottom one.** This test used to pin a
+    /// refusal, because the expander worked a stroke at a time and expanding a stack would have dropped every
+    /// stroke above the bottom one; now that it produces one filled path per stroke the refusal is turned into
+    /// the positive assertion, which is the honest form once the gap is closed.
+    ///
+    /// The two strokes differ in colour **and** width, so an implementation that expanded the bottom stroke twice,
+    /// or that expanded one and dropped the other, cannot pass: the colours must appear in stack order and the
+    /// 8pt outline must be geometrically wider than the 2pt one.
     /// </summary>
     [Fact]
-    public void ExpandingAStackIsRefusedRatherThanHalfDone()
+    public void ExpandingAStackGivesOneOutlinePerStrokeInStackOrder()
     {
         (AutomationContext context, PathItem path) = Host();
-        EditorOperations.Invoke(context, "style.addStroke", Params(new { width = 2 }));
+        path.Strokes.Clear();
+        path.Strokes.Add(new StrokeSpec(true, ColorRgb.Red, 8, StrokeCap.Butt, StrokeJoin.Miter, 4));
+        path.Strokes.Add(new StrokeSpec(true, ColorRgb.Blue, 2, StrokeCap.Butt, StrokeJoin.Miter, 4));
+        path.NotifyStrokesChanged();
 
-        EditorOperationException error = Assert.Throws<EditorOperationException>(
-            () => EditorOperations.Invoke(context, "path.expandStroke", default));
+        EditorOperations.Invoke(context, "path.expandStroke", default);
 
-        Assert.Contains("more than one", error.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(2, path.Strokes.Count);
+        Layer layer = context.Document.Artboards[0].Layers[0];
+        ArtGroup group = Assert.IsType<ArtGroup>(Assert.Single(layer.Children));
+        Assert.Equal(2, group.Children.Count);
+
+        PathItem bottom = Assert.IsType<PathItem>(group.Children[0]);
+        PathItem top = Assert.IsType<PathItem>(group.Children[1]);
+
+        // The ink of each stroke is geometry now, in **that** stroke's colour - the whole point of the stack.
+        Assert.Equal(ColorRgb.Red, bottom.Fill.Color);
+        Assert.Equal(ColorRgb.Blue, top.Fill.Color);
+
+        // And the geometry is that stroke's own width: the 8pt band covers more of the page than the 2pt one.
+        Assert.True(
+            bottom.BoundingBox().Height > top.BoundingBox().Height,
+            $"the 8pt outline is taller than the 2pt one: {bottom.BoundingBox().Height} vs {top.BoundingBox().Height}");
+    }
+
+    /// <summary>
+    /// **A path with one stroke expands to one plain path, exactly as it did before the stack existed.** The
+    /// compatibility half: a person who outlines an ordinary stroked path gets the shape they always got, not a
+    /// group of one.
+    /// </summary>
+    [Fact]
+    public void ASingleStrokePathStillExpandsToAPlainPath()
+    {
+        (AutomationContext context, PathItem path) = Host();
+
+        object? result = EditorOperations.Invoke(context, "path.expandStroke", default);
+
+        Layer layer = context.Document.Artboards[0].Layers[0];
+        PathItem outline = Assert.IsType<PathItem>(Assert.Single(layer.Children));
+        Assert.True(outline.Fill.IsVisible);
+        Assert.Equal(path.Stroke.Color, outline.Fill.Color);
+
+        // And the operation reports how many strokes it expanded, which for this path is one.
+        Assert.Contains("\"expanded\":1", JsonSerializer.Serialize(result), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// **An invisible stroke in the stack is skipped rather than expanded to nothing.** A path whose stack is
+    /// [visible, none, visible] gives a group of two, because a stroke that paints nothing has no ink to turn
+    /// into geometry.
+    /// </summary>
+    [Fact]
+    public void AnInvisibleStrokeInTheStackIsNotExpanded()
+    {
+        (AutomationContext context, PathItem path) = Host();
+        path.Strokes.Clear();
+        path.Strokes.Add(new StrokeSpec(true, ColorRgb.Red, 6, StrokeCap.Butt, StrokeJoin.Miter, 4));
+        path.Strokes.Add(StrokeSpec.None);
+        path.Strokes.Add(new StrokeSpec(true, ColorRgb.Blue, 2, StrokeCap.Butt, StrokeJoin.Miter, 4));
+        path.NotifyStrokesChanged();
+
+        EditorOperations.Invoke(context, "path.expandStroke", default);
+
+        Layer layer = context.Document.Artboards[0].Layers[0];
+        ArtGroup group = Assert.IsType<ArtGroup>(Assert.Single(layer.Children));
+        Assert.Equal(2, group.Children.Count);
+        Assert.Equal(ColorRgb.Red, ((PathItem)group.Children[0]).Fill.Color);
+        Assert.Equal(ColorRgb.Blue, ((PathItem)group.Children[1]).Fill.Color);
+    }
+
+    /// <summary>
+    /// **Expanding a whole stack is one undo step, and undo restores the path with all of its strokes.** A
+    /// composite that left the group behind, or that restored only the bottom stroke, would leave a document
+    /// nobody started with.
+    /// </summary>
+    [Fact]
+    public void ExpandingAStackIsOneUndoStepThatRestoresBothStrokes()
+    {
+        (AutomationContext context, PathItem path) = Host();
+        path.Strokes.Clear();
+        path.Strokes.Add(new StrokeSpec(true, ColorRgb.Red, 8, StrokeCap.Butt, StrokeJoin.Miter, 4));
+        path.Strokes.Add(new StrokeSpec(true, ColorRgb.Blue, 2, StrokeCap.Butt, StrokeJoin.Miter, 4));
+        path.NotifyStrokesChanged();
+
+        EditorOperations.Invoke(context, "path.expandStroke", default);
+        context.ViewModel.ActiveSession.Undo();
+
+        Layer layer = context.Document.Artboards[0].Layers[0];
+        PathItem restored = Assert.IsType<PathItem>(Assert.Single(layer.Children));
+        Assert.Equal(new[] { 8.0, 2.0 }, restored.Strokes.Select(s => s.Width).ToArray());
+        Assert.Equal(ColorRgb.Red, restored.Strokes[0].Color);
+        Assert.Equal(ColorRgb.Blue, restored.Strokes[1].Color);
     }
 
     /// <summary>

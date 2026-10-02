@@ -48,19 +48,32 @@ public static class StrokeExpander
     public static double Tolerance => PathFlattener.Tolerance;
 
     /// <summary>
-    /// The stroke, as a filled path - or null when there is no stroke to expand.
+    /// The path's **bottom** stroke, as a filled path - or null when there is no stroke to expand.
+    ///
+    /// This reads <see cref="PathItem.Stroke"/>, the compatibility property, and therefore answers for one of a
+    /// stack's strokes. A path carrying several expands through <see cref="Expand(PathItem, StrokeSpec)"/>, one
+    /// call per stroke, because "the" stroke of a stack is not a well-defined thing.
+    /// </summary>
+    public static PathItem? Expand(PathItem path) => Expand(path, path.Stroke);
+
+    /// <summary>
+    /// **One named stroke** of the path, as a filled path - or null when that stroke has nothing to expand.
+    ///
+    /// The stroke is a parameter rather than being read off the path so that every stroke of a stack can be
+    /// expanded, and each one's ink becomes geometry in its own colour. The geometry still comes from the shared
+    /// plan, so an expansion of any stroke draws what the canvas, the PDF writer and the SVG writer draw for that
+    /// same stroke.
     ///
     /// Nothing is guessed: a stroke with no width, or an invisible one, expands to nothing, because
     /// inventing a width for it would put ink on the page that was not there.
     /// </summary>
-    public static PathItem? Expand(PathItem path)
+    public static PathItem? Expand(PathItem path, StrokeSpec stroke)
     {
-        if (!path.Stroke.HasVisibleOutline || path.Stroke.Width <= 0)
+        if (!stroke.HasVisibleOutline || stroke.Width <= 0)
         {
             return null;
         }
 
-        StrokeSpec stroke = path.Stroke;
         var expanded = new PathItem { Name = path.Name };
 
         // The plan decides whether this stroke is stroked or filled, and it is the same decision the canvas, the
@@ -90,12 +103,12 @@ public static class StrokeExpander
         }
 
         // The ink is geometry now: it paints with a fill, and the stroke it came from is spent.
-        expanded.Fill = path.Fill.IsVisible ? path.Fill : FillSpec.Solid(path.Stroke.Color);
+        expanded.Fill = path.Fill.IsVisible ? path.Fill : FillSpec.Solid(stroke.Color);
 
         // The outline's own stroke is set by the rule in issue #55: below 4pt the original over four,
         // otherwise 1pt. It is a hairline either way - the shape now carries the weight.
         expanded.Stroke = new StrokeSpec(
-            true, path.Stroke.Color, OutlineWidth(path.Stroke.Width),
+            true, stroke.Color, OutlineWidth(stroke.Width),
             StrokeCap.Butt, StrokeJoin.Miter, 4);
 
         expanded.GeometryChanged();

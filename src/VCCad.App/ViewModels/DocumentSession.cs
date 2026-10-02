@@ -584,6 +584,11 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// out for itself draws a different picture from the window it was run in, which is how a dashed stroke came
     /// out solid here while the canvas drew it dashed.
     ///
+    /// **Every stroke of the stack is expanded**, one filled path each, in the order the strokes are stacked -
+    /// because expanding only the bottom one would silently drop the rest, which is the failure an appearance
+    /// stack makes easy. The per-stroke results are held in a group, since they can differ in colour. A path with
+    /// one stroke expands to that one path, exactly as it did before the stack existed.
+    ///
     /// A path with no stroke is left alone rather than silently removed: expanding it would produce
     /// nothing, and deleting something because it had nothing to expand would be a surprise.
     /// </summary>
@@ -591,11 +596,17 @@ public sealed class DocumentSession : INotifyPropertyChanged
     {
         var edits = new List<IUndoableCommand>();
         var expanded = new List<LayerItem>();
+        int strokes = 0;
 
         foreach (PathItem path in SelectedPaths().ToList())
         {
-            PathItem? outline = StrokeExpander.Expand(path);
-            if (outline is null)
+            List<StrokeSpec> visible = path.Strokes
+                .Where(s => s.HasVisibleOutline && s.Width > 0)
+                .ToList();
+
+            // Nothing to expand: the path has no visible stroke, so it is left as it is - the same reading
+            // `StrokeExpander.Expand` gives a single stroke with no width, applied to the whole stack.
+            if (visible.Count == 0)
             {
                 expanded.Add(path);
                 continue;
@@ -607,9 +618,30 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 continue;
             }
 
+            var outlines = new List<PathItem>();
+            foreach (StrokeSpec stroke in visible)
+            {
+                PathItem? outline = StrokeExpander.Expand(path, stroke);
+                if (outline is not null)
+                {
+                    outlines.Add(outline);
+                }
+            }
+
+            if (outlines.Count == 0)
+            {
+                expanded.Add(path);
+                continue;
+            }
+
+            // One stroke keeps the plain path it has always produced; several are held in a group so that the
+            // expansion stays one object to select, move and style, and so the strokes' own colours survive it.
+            LayerItem replacement = outlines.Count == 1 ? outlines[0] : GroupedOutlines(path, outlines);
+
             edits.Add(new RemoveItemCommand(path));
-            edits.Add(new AddItemCommand(layer, outline));
-            expanded.Add(outline);
+            edits.Add(new AddItemCommand(layer, replacement));
+            expanded.Add(replacement);
+            strokes += outlines.Count;
         }
 
         if (edits.Count == 0)
@@ -620,8 +652,20 @@ public sealed class DocumentSession : INotifyPropertyChanged
 
         Execute(new CompositeCommand("Expand stroke", edits));
         SelectRange(expanded, additive: false);
-        SetStatus($"Expanded {edits.Count / 2} stroke(s) into outlines");
-        return edits.Count / 2;
+        SetStatus($"Expanded {strokes} stroke(s) into outlines");
+        return strokes;
+    }
+
+    /// <summary>Holds one expanded outline per stroke, in stack order, as the group the expansion selected.</summary>
+    private static ArtGroup GroupedOutlines(PathItem source, IReadOnlyList<PathItem> outlines)
+    {
+        var group = new ArtGroup { Name = source.Name };
+        foreach (PathItem outline in outlines)
+        {
+            group.AddItem(outline);
+        }
+
+        return group;
     }
 
     /// <summary>The layer an item sits on, or null when it is not in the document.</summary>

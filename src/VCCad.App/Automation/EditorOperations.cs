@@ -4768,22 +4768,11 @@ public static class EditorOperations
             "Turn the selected objects' strokes into filled outlines - Illustrator's Outline Stroke. " +
             "Open paths expand with their caps, closed paths to both sides, and a compound path's holes " +
             "to the inside of each hole. The outline gets its own stroke width by the rule: below 4pt " +
-            "the original over four, otherwise 1pt.",
+            "the original over four, otherwise 1pt. Every stroke of a path's stack is expanded, one filled " +
+            "path per stroke in stack order, held in a group; a single-stroke path expands to one path.",
             "",
             (ctx, _) =>
             {
-                // **Refused rather than half-done.** Stroke expansion produces one filled path per stroke, and
-                // the expander still works a stroke at a time - so on a path with a stack it would expand the
-                // bottom stroke and silently drop the rest, which is the failure this whole issue is about.
-                // Refusing leaves the path and every stroke on it exactly as it was, and says why.
-                if (ctx.Session.SelectedPaths()
-                        .Any(p => p.Strokes.Count(s => s.HasVisibleOutline) > 1))
-                {
-                    throw new EditorOperationException(
-                        "path.expandStroke works on one stroke at a time, and something selected has more than " +
-                        "one. Expanding it would drop the others, so nothing has been changed.");
-                }
-
                 int count = ctx.Session.ExpandSelectedStrokes();
                 ctx.ViewModel.NotifyDocumentChanged();
                 return new { expanded = count };
