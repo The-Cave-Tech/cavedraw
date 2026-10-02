@@ -1074,6 +1074,7 @@ public static partial class SvgReader
         // uneditable and would lose the structure the file has.
         AffineTransform transform = Transform(element.Attribute("transform")?.Value);
         var group = new ArtGroup { Name = element.Attribute("id")?.Value ?? string.Empty };
+        group.SourceId = SourceOf(element);
         group.Transform = transform;
         group.BlendMode = style.Blend;
         CaptureForeign(element, group);
@@ -1199,6 +1200,7 @@ public static partial class SvgReader
         var group = new ArtGroup
         {
             Name = element.Attribute("id")?.Value ?? string.Empty,
+            SourceId = SourceOf(element),
             Transform = Transform(element.Attribute("transform")?.Value)
                 .Compose(AffineTransform.CreateTranslation(x, y))
                 .Compose(fit),
@@ -2250,6 +2252,14 @@ public static partial class SvgReader
     /// Both reference forms are read: `xlink:href`, which Inkscape writes, and the SVG 2 bare `href`. A target that
     /// is not there is **reported**, and so is a reference that leads back to itself - a `use` inside the defs it
     /// refers to would otherwise recurse until the stack ran out.
+    ///
+    /// A cycle is refused by **name**, not by a depth limit: the id being resolved is remembered for as long as it
+    /// is being resolved, so a second attempt at the same id is the cycle itself and the report says which one.
+    /// That is what makes a file that would loop terminate and say why rather than recursing without bound.
+    ///
+    /// A `use` whose target is an `svg` and which states a `width` or `height` of its own is reported, because
+    /// SVG 2 would size that viewport from the use and this reader draws the target at its own size - see the
+    /// `else` branch below for why a plain shape is a different case.
     /// </summary>
     private static IEnumerable<LayerItem> ReadUse(XElement element, Context context, PresentationStyle style)
     {
@@ -2347,12 +2357,47 @@ public static partial class SvgReader
         {
             // A shape or a group: read it into this group, which is what makes the instance hold the definition's
             // content rather than pointing at it from nowhere.
+            //
+            // **A `use` of an `svg` is the case this reader cannot honour.** SVG 2 sizes the viewport a `use`
+            // establishes from the use's own `width` and `height` when the target is a `symbol` **or an `svg`**;
+            // the symbol half is honoured above, and an `svg` target is drawn at its own size because that is the
+            // size its own attributes state. A use that gives a different one is therefore reported by name rather
+            // than drawn at a size the file did not ask for - a value this reader cannot honour is never
+            // substituted, and `width` on a use of a plain shape is *not* this case: SVG gives it no effect at all
+            // there, so ignoring it is honouring it.
+            if (target.Name.LocalName == "svg" && StatesSize(element))
+            {
+                context.Warn(
+                    $"a use of the <svg> '{id}' states a width or height, which this reader cannot honour: the " +
+                    "target is drawn at its own size");
+            }
+
             ReadElement(target, inside);
         }
 
         context.Resolving.Remove(id);
         yield return group;
     }
+
+    /// <summary>
+    /// The provenance the writer records for an instance it had to write as a copy.
+    ///
+    /// The model has no separate definition object to point a real `use` at - an instance group *holds* the
+    /// definition's content - so the writer inlines the content and states the id it came from in `data-source`
+    /// rather than losing it. Reading that back is what makes the round trip return the model it started with:
+    /// without it an instance silently becomes a plain copy on the second open, with the link gone and nothing
+    /// said, which is the substitution this repository forbids.
+    ///
+    /// It is deliberately **not** resolved against the id index the way a real `use` is. The content is already
+    /// inside this group, so a target this file no longer contains is not a missing definition - it is what a copy
+    /// looks like - and reporting it would be a false alarm on every instance this editor ever wrote.
+    /// </summary>
+    private static string? SourceOf(XElement element)
+        => element.Attribute("data-source") is { Value.Length: > 0 } source ? source.Value : null;
+
+    /// <summary>Whether a `use` states a size of its own, which SVG 2 applies only to a `symbol` or `svg` target.</summary>
+    private static bool StatesSize(XElement element)
+        => element.Attribute("width") is { Value.Length: > 0 } || element.Attribute("height") is { Value.Length: > 0 };
 
     private static bool IsHidden(XElement element)
     {
