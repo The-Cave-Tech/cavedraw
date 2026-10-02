@@ -29,11 +29,14 @@ namespace VCCad.App.Views.Panes;
 /// **The block's writing mode and base direction are offered too**, because the model holds both (#127) and the
 /// layout, the caret, the bounds and the SVG export all act on them: they go through
 /// <see cref="DocumentSession.ApplyTextStyle"/> (`text.style`) exactly as the leading and the turn do, so a person
-/// and a driver set them the same way and neither can set something the other cannot. What the model cannot hold is
-/// **not** offered here, because a control that does nothing is worse than an absent one: `baseline-shift` with
-/// per-glyph positioning (#128) has no member on <see cref="TextItem"/> or <see cref="TextRun"/>. Letter and word
-/// spacing, font stretch and variant **are** offered, because the model does hold them (#147). Face reporting is
-/// offered too, because the model carries the face actually used - see <see cref="FaceReport"/>.
+/// and a driver set them the same way and neither can set something the other cannot. The **glyph orientation** is
+/// offered for the same reason, one level down: it is the run's own (#127), the layout turns every glyph by it and
+/// the SVG writer writes it back, and it goes through <see cref="DocumentSession.ApplyTextFieldsAt"/> (`text.update`)
+/// exactly as the tracking and the variant do. What the model cannot hold is **not** offered here, because a control
+/// that does nothing is worse than an absent one: `baseline-shift` with per-glyph positioning (#128) has no member
+/// on <see cref="TextItem"/> or <see cref="TextRun"/>. Letter and word spacing, font stretch and variant **are**
+/// offered, because the model does hold them (#147). Face reporting is offered too, because the model carries the
+/// face actually used - see <see cref="FaceReport"/>.
 /// </summary>
 public partial class TextPane : UserControl
 {
@@ -65,6 +68,7 @@ public partial class TextPane : UserControl
     private string _shownWordSpacing = string.Empty;
     private string _shownFontStretch = string.Empty;
     private string _shownFontVariant = string.Empty;
+    private int _shownOrientation = -1;
     private int _shownWritingMode = -1;
     private int _shownDirection = -1;
 
@@ -76,6 +80,7 @@ public partial class TextPane : UserControl
         // losing focus - the same commit-on-interaction-end pattern the stroke inspector uses, so one gesture is one
         // undo step. Content keeps AcceptsReturn, so Enter is a newline there and only losing focus commits it.
         AlignBox.SelectionChanged += (_, _) => ApplyFields();
+        OrientationBox.SelectionChanged += (_, _) => ApplyFields();
         WritingModeBox.SelectionChanged += (_, _) => ApplyFields();
         DirectionBox.SelectionChanged += (_, _) => ApplyFields();
         FamilyBox.SelectionChanged += (_, _) => ApplyFields();
@@ -185,6 +190,19 @@ public partial class TextPane : UserControl
         string? fontStretch = faceRun is null ? null : ChangedWord(FontStretchBox, _shownFontStretch);
         string? fontVariant = faceRun is null ? null : ChangedWord(FontVariantBox, _shownFontVariant);
 
+        // The glyph orientation is per run too, so it stops describing anything when there is no run to name. The
+        // combo's own words are `text.update`'s: mixed is the initial value and is what `auto` means.
+        GlyphOrientation? orientation = faceRun is null
+            || OrientationBox.SelectedIndex == _shownOrientation
+            || OrientationBox.SelectedIndex < 0
+                ? null
+                : OrientationBox.SelectedIndex switch
+                {
+                    1 => GlyphOrientation.Upright,
+                    2 => GlyphOrientation.Rotate,
+                    _ => GlyphOrientation.Auto,
+                };
+
         if (faceRun is null)
         {
             // There is no run to name, so no face member can honestly be applied.
@@ -231,10 +249,10 @@ public partial class TextPane : UserControl
 
         if (content is not null || color is not null || family is not null || size is not null
             || bold is not null || italic is not null || letterSpacing is not null || wordSpacing is not null
-            || fontStretch is not null || fontVariant is not null)
+            || fontStretch is not null || fontVariant is not null || orientation is not null)
         {
             _vm.ActiveSession.ApplyTextFieldsAt(faceRun, content, family, size, bold, italic, color,
-                letterSpacing, wordSpacing, fontStretch, fontVariant);
+                letterSpacing, wordSpacing, fontStretch, fontVariant, orientation);
         }
 
         if (alignment is { } align)
@@ -415,6 +433,15 @@ public partial class TextPane : UserControl
                 _shownFontVariant = FontVariantBox.Text ?? string.Empty;
             }
 
+            // The glyph orientation is read from the same summary a driver reads through `text.common`, at the
+            // inspected run like the rest of the run's own members - and a selection that disagrees about it is shown
+            // as mixed rather than as the first run's turn.
+            OrientationBox.PlaceholderText = summary.OrientationMixed ? MixedWord : string.Empty;
+            OrientationBox.SelectedIndex = summary.OrientationMixed
+                ? -1
+                : OrientationIndex(summary.Orientation ?? GlyphOrientation.Auto);
+            _shownOrientation = OrientationBox.SelectedIndex;
+
             BoldBox.IsChecked = summary.BoldMixed ? null : summary.Bold ?? false;
             _shownBold = BoldBox.IsChecked;
 
@@ -500,6 +527,11 @@ public partial class TextPane : UserControl
             mixed.Add("variant");
         }
 
+        if (summary.OrientationMixed)
+        {
+            mixed.Add("orient");
+        }
+
         if (summary.LineSpacingMixed)
         {
             mixed.Add("leading");
@@ -565,6 +597,8 @@ public partial class TextPane : UserControl
         FontStretchBox.Watermark = string.Empty;
         FontVariantBox.Text = string.Empty;
         FontVariantBox.Watermark = string.Empty;
+        OrientationBox.PlaceholderText = string.Empty;
+        OrientationBox.SelectedIndex = -1;
 
         _shownContent = string.Empty;
         _shownColor = string.Empty;
@@ -581,6 +615,7 @@ public partial class TextPane : UserControl
         _shownWordSpacing = string.Empty;
         _shownFontStretch = string.Empty;
         _shownFontVariant = string.Empty;
+        _shownOrientation = -1;
         _shownWritingMode = -1;
         _shownDirection = -1;
     }
@@ -711,4 +746,12 @@ public partial class TextPane : UserControl
     /// <summary>Which item of the direction combo a block's base direction is.</summary>
     private static int DirectionIndex(TextDirection direction)
         => direction == TextDirection.RightToLeft ? 1 : 0;
+
+    /// <summary>Which item of the orientation combo a run's turn is, which is the order the combo lists them in.</summary>
+    private static int OrientationIndex(GlyphOrientation orientation) => orientation switch
+    {
+        GlyphOrientation.Upright => 1,
+        GlyphOrientation.Rotate => 2,
+        _ => 0,
+    };
 }

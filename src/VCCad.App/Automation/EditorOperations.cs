@@ -4264,16 +4264,23 @@ public static class EditorOperations
             "Update the selected text objects **member by member**. Each member is written only where it is given, " +
             "and an omitted member is left exactly as each block has it - so a mixed selection can have its size " +
             "changed without the block whose words or colour differ having them written over. One content string and " +
-            "one colour are block members; family, size, weight, slant, letter spacing, word spacing, font stretch " +
-            "and font variant are per run, and runIndex names the run they land on, with a block that has no run " +
-            "there skipped rather than counted as a disagreement. With no runIndex the face members style every run, " +
+            "one colour are block members; family, size, weight, slant, letter spacing, word spacing, font stretch, " +
+            "font variant and the glyph orientation are per run, and runIndex names the run they land on, with a " +
+            "block that has no run there skipped rather than counted as a disagreement. With no runIndex the face " +
+            "members style every run, " +
             "which is the uniform edit a whole-block request means. A stretch or a variant is kept on the run and no " +
             "face is chosen by width or variant, so it round-trips and is reported rather than changing the drawing; " +
-            "fontStretch and fontVariant are cleared with \"normal\". " +
+            "fontStretch and fontVariant are cleared with \"normal\". `orientation` is the quarter turn a glyph " +
+            "carries in a vertical column - SVG's `glyph-orientation-vertical`, CSS's `text-orientation` - and it " +
+            "changes what is drawn: a Latin run set `upright` in a `vertical-rl` column draws upright instead of " +
+            "turned, and the SVG export writes the property back. Its own words are `mixed` (the initial value), " +
+            "`upright` and `sideways`; SVG 1.1's `auto`, `0` and `90` are read as the same three, because that is " +
+            "what an SVG file holds and a caller should not have to translate. " +
             "Reports how many blocks changed and what the selection now reads, so a caller can tell which members " +
             "were altered and which are still mixed. One undo step.",
             "text?:string, family?:string, fontSize?:number, bold?:bool, italic?:bool, color?:[r,g,b], " +
-            "runIndex?:number, letterSpacing?:number, wordSpacing?:number, fontStretch?:string, fontVariant?:string",
+            "runIndex?:number, letterSpacing?:number, wordSpacing?:number, fontStretch?:string, fontVariant?:string, " +
+            "orientation?:mixed|upright|sideways (SVG: auto|0|90)",
             (ctx, p) =>
             {
                 // A member is written only where it is **given**: the presence of the key, not its value, is what
@@ -4301,11 +4308,15 @@ public static class EditorOperations
                     ? p.GetString("fontVariant")
                     : null;
 
+                // The quarter turn a glyph carries in a vertical column. Presence is the edit, and an unknown value
+                // is refused by name: a driver that asked for an upright column and got a turned one cannot tell.
+                GlyphOrientation? orientation = ParseOrientation(p);
+
                 // Null styles every run, which is what a whole-block face edit means; an index names one.
                 int? runIndex = OptionalNumber(p, "runIndex") is { } at ? (int)at : null;
 
                 int changed = ctx.Session.ApplyTextFieldsAt(runIndex, content, family, size, bold, italic, color,
-                    letterSpacing, wordSpacing, fontStretch, fontVariant);
+                    letterSpacing, wordSpacing, fontStretch, fontVariant, orientation);
 
                 // Choosing a font is what makes it recent, so the picker's "recent" list is a
                 // record of what was actually used rather than of what was scrolled past.
@@ -4331,7 +4342,7 @@ public static class EditorOperations
             "to show one value per member, and showing the first block's words, colour or size as though they were " +
             "everyone's is how a person types a number and believes it describes what they selected. runIndex names " +
             "the run the per-run members (family, size, weight, slant, letter spacing, word spacing, font stretch, " +
-            "font variant) are read from, and a block with no run there is a " +
+            "font variant, glyph orientation) are read from, and a block with no run there is a " +
             "gap rather than a disagreement - blocks carry different numbers of runs, and counting a shorter one as " +
             "\"different\" would make every selection of unequal blocks report every face member as mixed. Without " +
             "runIndex the shared inspected run is read, which is the run the panel's face fields describe.",
@@ -9944,6 +9955,41 @@ public static class EditorOperations
     }
 
     /// <summary>
+    /// An `orientation` member, or null when it was not given - which is "leave each run's own turn alone".
+    ///
+    /// The member exists because the model has held <see cref="TextRun.FontOrientation"/> since #127 and
+    /// <c>TextLayout</c> turns every glyph by it, while no operation could set one: a driver could import a column
+    /// the file set upright and never make one. The vocabulary is the one <c>SvgText.ReadOrientation</c> already
+    /// reads, because inventing a second set of words for three values is how a caller ends up unable to write what
+    /// a file holds. CSS's `text-orientation` spells them `mixed`, `upright` and `sideways`; SVG 1.1's
+    /// `glyph-orientation-vertical` spells the same three `auto`, `0` and `90`, and both are accepted.
+    ///
+    /// An unknown value is **refused by name** rather than read as the initial value, like `writingMode` and
+    /// `direction`: a driver that asked for an upright column and got a turned one has no way to notice.
+    /// </summary>
+    private static GlyphOrientation? ParseOrientation(JsonElement p)
+    {
+        if (p.ValueKind != JsonValueKind.Object || !p.TryGetProperty("orientation", out JsonElement value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            throw new EditorOperationException("orientation must be a string");
+        }
+
+        return (value.GetString() ?? string.Empty).Trim().ToLowerInvariant() switch
+        {
+            "mixed" or "auto" => GlyphOrientation.Auto,
+            "upright" or "0" => GlyphOrientation.Upright,
+            "sideways" or "sideways-right" or "90" => GlyphOrientation.Rotate,
+            _ => throw new EditorOperationException(
+                $"orientation must be mixed, upright or sideways (or SVG's auto, 0 or 90), not \"{value.GetString()}\""),
+        };
+    }
+
+    /// <summary>
     /// What the selection's text blocks agree on, and what they do not - the report `text.common` returns and
     /// `text.update` answers with, built from the same <see cref="TextSummary"/> the Text panel reads.
     ///
@@ -9966,7 +10012,7 @@ public static class EditorOperations
         int commonRuns = summary.FamilyMixed || summary.FontSizeMixed || summary.BoldMixed
             || summary.ItalicMixed || summary.ColorMixed
             || summary.LetterSpacingMixed || summary.WordSpacingMixed
-            || summary.FontStretchMixed || summary.FontVariantMixed
+            || summary.FontStretchMixed || summary.FontVariantMixed || summary.OrientationMixed
                 ? 0
                 : summary.Runs;
 
@@ -9996,6 +10042,18 @@ public static class EditorOperations
             fontStretchMixed = summary.FontStretchMixed,
             fontVariant = summary.FontVariant,
             fontVariantMixed = summary.FontVariantMixed,
+
+            // The quarter turn a glyph carries in a vertical column, in the words `text.update` documents first -
+            // CSS's `text-orientation` spelling, whose `mixed` is the initial value. SVG 1.1's `auto`, `0` and `90`
+            // are accepted as the same three on the way in, so the report and the request speak the same value.
+            orientation = summary.Orientation switch
+            {
+                GlyphOrientation.Auto => "mixed",
+                GlyphOrientation.Upright => "upright",
+                GlyphOrientation.Rotate => "sideways",
+                _ => null,
+            },
+            orientationMixed = summary.OrientationMixed,
             colour = summary.Color is { } colour ? DescribeColorValue(colour) : null,
             colourMixed = summary.ColorMixed,
             alignment = summary.Alignment?.ToString(),

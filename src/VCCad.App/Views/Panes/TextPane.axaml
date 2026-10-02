@@ -82,6 +82,21 @@
                  ToolTip.Tip="font-variant as CSS spells it - small-caps; normal clears it"/>
       </Grid>
 
+      <!-- The quarter turn a glyph carries in a vertical column (#127): SVG's `glyph-orientation-vertical`, CSS's
+           `text-orientation`. It is per run like the face, and the model already holds it while the layout turns every
+           glyph by it - so it is edited here through `text.update`, the same operation the fields above use, and a
+           driver sets it the same way. `mixed` is the initial value, and a horizontal block draws the same under all
+           three. -->
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+        <TextBlock Text="Orient" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <ComboBox x:Name="OrientationBox" Grid.Column="1" HorizontalAlignment="Stretch"
+                  ToolTip.Tip="text-orientation in a vertical column: mixed (turn the scripts that turn), upright (every glyph upright) or sideways (every glyph turned)">
+          <ComboBoxItem Content="mixed"/>
+          <ComboBoxItem Content="upright"/>
+          <ComboBoxItem Content="sideways"/>
+        </ComboBox>
+      </Grid>
+
       <TextBlock Text="PARAGRAPH" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
       <Grid ColumnDefinitions="Auto,*,10,Auto,*" ColumnSpacing="4">
         <TextBlock Text="Leading" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>

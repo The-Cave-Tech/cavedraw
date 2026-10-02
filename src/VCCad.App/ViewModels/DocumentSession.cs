@@ -1170,6 +1170,11 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// are "leave it alone" when null and CSS's <c>normal</c> when given as such, because the model spells an absent
     /// width or variant as null and a caller has to be able to put one back.
     ///
+    /// <paramref name="orientation"/> is per-run too, and is the quarter turn a glyph carries in a vertical column.
+    /// It is a value the run holds rather than a choice of face, so it is deliberately not routed through
+    /// <see cref="ChoseFace"/>: setting a run upright in a column does not replace the programme that draws its
+    /// glyphs.
+    ///
     /// One <see cref="ReplaceTextCommand"/> per block and a composite across the selection, so a gesture is one undo
     /// step; a request that changes nothing adds no command, because an undo step that undoes to exactly where it
     /// started reads as "undo did nothing".
@@ -1177,7 +1182,8 @@ public sealed class DocumentSession : INotifyPropertyChanged
     public int ApplyTextFieldsAt(int? runIndex, string? content, string? family, double? fontSize,
         bool? bold, bool? italic, ColorRgb? color,
         double? letterSpacing = null, double? wordSpacing = null,
-        string? fontStretch = null, string? fontVariant = null)
+        string? fontStretch = null, string? fontVariant = null,
+        GlyphOrientation? orientation = null)
     {
         var edits = new List<IUndoableCommand>();
         foreach (TextItem text in SelectedTextItems())
@@ -1274,6 +1280,13 @@ public sealed class DocumentSession : INotifyPropertyChanged
                         run.FontVariant = wantedVariant;
                         changed = true;
                     }
+                }
+
+                // The orientation joins the list above: the run's own, and not a choice of face.
+                if (orientation is { } turn && run.FontOrientation != turn)
+                {
+                    run.FontOrientation = turn;
+                    changed = true;
                 }
 
                 changed |= faceChanged;

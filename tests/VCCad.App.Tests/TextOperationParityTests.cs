@@ -2,6 +2,8 @@ using System.Text.Json;
 using VCCad.App.Automation;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
+using VCCad.Core.Svg;
+using VCCad.Core.Text;
 using VCCad.App.Views.Panes;
 using VCCad.Geometry;
 using Xunit;
@@ -43,6 +45,7 @@ public class TextOperationParityTests
         bool bold = false, bool italic = false, ColorRgb? colour = null, TextAlignment alignment = TextAlignment.Left,
         double lineSpacing = 1.2, double paragraphSpacing = 0, double frameWidth = 0, double rotationDegrees = 0,
         double letterSpacing = 0, double wordSpacing = 0, string? fontStretch = null, string? fontVariant = null,
+        GlyphOrientation orientation = GlyphOrientation.Auto,
         params TextRun[] extraRuns)
     {
         var item = new TextItem
@@ -62,9 +65,17 @@ public class TextOperationParityTests
         item.Runs[0].WordSpacing = wordSpacing;
         item.Runs[0].FontStretch = fontStretch;
         item.Runs[0].FontVariant = fontVariant;
+        item.Runs[0].FontOrientation = orientation;
         item.Runs.AddRange(extraRuns);
         return item;
     }
+
+    /// <summary>
+    /// The quarter turn the layout gives one character in the block's own space - the turn the canvas draws and the
+    /// SVG writer has to write, asked of the one layout both read rather than of the member it came from.
+    /// </summary>
+    private static double GlyphTurn(TextItem text, int index)
+        => TextLayoutEngine.Compute(text).Glyphs.Single(glyph => glyph.Index == index).Rotation;
 
     /// <summary>Two blocks on one layer, both selected, and a context that can be invoked through the registry.</summary>
     private static (AutomationContext Context, EditorViewModel ViewModel, TextItem First, TextItem Second) With(
@@ -366,7 +377,7 @@ public class TextOperationParityTests
             Block("two", "Nimbus Roman", 20, bold: false, italic: true, colour: ColorRgb.Red,
                 alignment: TextAlignment.Right, lineSpacing: 2.0, paragraphSpacing: 6, frameWidth: 100,
                 rotationDegrees: 30, letterSpacing: 5.0, wordSpacing: 3.0, fontStretch: "expanded",
-                fontVariant: null));
+                fontVariant: null, orientation: GlyphOrientation.Upright));
 
         // The panel's own authority on agreement, so the operation and the panel cannot report different things.
         TextSummary summary = TextSummary.Of(viewModel.ActiveSession.SelectedTextItems(), 0);
@@ -390,6 +401,7 @@ public class TextOperationParityTests
                      ("wordSpacingMixed", summary.WordSpacingMixed),
                      ("fontStretchMixed", summary.FontStretchMixed),
                      ("fontVariantMixed", summary.FontVariantMixed),
+                     ("orientationMixed", summary.OrientationMixed),
                      ("lineSpacingMixed", summary.LineSpacingMixed),
                      ("paragraphSpacingMixed", summary.ParagraphSpacingMixed),
                      ("rotationMixed", summary.RotationMixed),
@@ -411,6 +423,7 @@ public class TextOperationParityTests
         Assert.Equal(JsonValueKind.Null, reported.GetProperty("wordSpacing").ValueKind);
         Assert.Equal(JsonValueKind.Null, reported.GetProperty("fontStretch").ValueKind);
         Assert.Equal(JsonValueKind.Null, reported.GetProperty("fontVariant").ValueKind);
+        Assert.Equal(JsonValueKind.Null, reported.GetProperty("orientation").ValueKind);
         Assert.Equal(JsonValueKind.Null, reported.GetProperty("leading").ValueKind);
         Assert.Equal(JsonValueKind.Null, reported.GetProperty("space").ValueKind);
         Assert.Equal(JsonValueKind.Null, reported.GetProperty("turn").ValueKind);
@@ -448,6 +461,10 @@ public class TextOperationParityTests
         Assert.Equal(1.0, reported.GetProperty("wordSpacing").GetDouble(), 6);
         Assert.Equal("condensed", reported.GetProperty("fontStretch").GetString());
         Assert.Equal("small-caps", reported.GetProperty("fontVariant").GetString());
+
+        // The initial orientation is CSS's `mixed`, not an absent member: a driver reads a value it can write.
+        Assert.Equal("mixed", reported.GetProperty("orientation").GetString());
+        Assert.False(reported.GetProperty("orientationMixed").GetBoolean());
         Assert.Equal(TextAlignment.Center.ToString(), reported.GetProperty("alignment").GetString());
         Assert.Equal(1.5, reported.GetProperty("leading").GetDouble(), 6);
         Assert.Equal(4.0, reported.GetProperty("space").GetDouble(), 6);
@@ -679,6 +696,175 @@ public class TextOperationParityTests
             context, "text.style", Params(new { writingMode = "sideways" })));
 
         Assert.Equal(TextWritingMode.HorizontalTb, first.WritingMode);
+        Assert.Equal(depth, viewModel.ActiveSession.UndoDepth);
+    }
+
+    // ---------------------------------------------------------------- the glyph orientation (#127)
+
+    /// <summary>
+    /// **The orientation reaches the geometry, not only the member.** This is the whole point of the gap: the model
+    /// has carried <see cref="TextRun.FontOrientation"/> since #127 and `TextLayout` turns every glyph by it, but no
+    /// operation could set one - so a driver could import a column the file set upright and never make one. The
+    /// assertion is on the quarter turn the layout gives each character, which is what the canvas draws and what
+    /// the writer writes: `o` is Latin, so the initial value turns it a quarter turn clockwise in a vertical column,
+    /// and `upright` has to leave it alone.
+    /// </summary>
+    [Fact]
+    public void TheOrientationReachesTheGlyphTurnTheLayoutDraws()
+    {
+        TextItem first = Block("one");
+        first.WritingMode = TextWritingMode.VerticalRl;
+        TextItem second = Block("two");
+        second.WritingMode = TextWritingMode.VerticalRl;
+        (AutomationContext context, _, TextItem _, TextItem _) = With(first, second);
+
+        Assert.Equal(-Math.PI / 2.0, GlyphTurn(first, 0), 9);
+
+        EditorOperations.Invoke(context, "text.update", Params(new { orientation = "upright" }));
+
+        Assert.Equal(0.0, GlyphTurn(first, 0), 9);
+        Assert.Equal(0.0, GlyphTurn(second, 0), 9);
+
+        // And `sideways` is the other turn, so the request is not read as "upright or nothing".
+        EditorOperations.Invoke(context, "text.update", Params(new { orientation = "sideways" }));
+
+        Assert.Equal(-Math.PI / 2.0, GlyphTurn(first, 0), 9);
+    }
+
+    /// <summary>
+    /// **The orientation reaches the bytes the writer writes.** The SVG writer writes
+    /// `glyph-orientation-vertical` in SVG 1.1's own spelling only when the run asks for something other than the
+    /// initial value, so an ordinary vertical block keeps the bytes it had - and a run set through the operation has
+    /// to appear in the file, because the geometry alone cannot say whether a column was set upright or turned.
+    /// </summary>
+    [Fact]
+    public void TheOrientationReachesTheSvgTheWriterWrites()
+    {
+        TextItem first = Block("one");
+        first.WritingMode = TextWritingMode.VerticalRl;
+        TextItem second = Block("two");
+        second.WritingMode = TextWritingMode.VerticalRl;
+        (AutomationContext context, EditorViewModel viewModel, TextItem _, TextItem _) = With(first, second);
+
+        string plain = SvgWriter.Write(viewModel.Document);
+        Assert.DoesNotContain("glyph-orientation-vertical", plain, StringComparison.Ordinal);
+
+        // Naming the value a run already holds is not an edit: the initial value is absent from the file, so the
+        // bytes have to be exactly what they were. This is the absent-at-default rule, through the operation.
+        EditorOperations.Invoke(context, "text.update", Params(new { orientation = "mixed" }));
+        Assert.Equal(plain, SvgWriter.Write(viewModel.Document));
+
+        EditorOperations.Invoke(context, "text.update", Params(new { orientation = "sideways" }));
+
+        Assert.Contains(
+            "glyph-orientation-vertical=\"90\"", SvgWriter.Write(viewModel.Document), StringComparison.Ordinal);
+
+        // The initial value is absent from the file, so putting it back writes nothing again.
+        EditorOperations.Invoke(context, "text.update", Params(new { orientation = "auto" }));
+
+        Assert.Equal(plain, SvgWriter.Write(viewModel.Document));
+    }
+
+    /// <summary>
+    /// **The same value is read back in the words the operation accepts.** A driver reads what it can write: the
+    /// report speaks CSS's `text-orientation` spelling, and the request accepted SVG 1.1's `90` for the same value,
+    /// because the reader reads both and a caller should not have to know which one the file used.
+    /// </summary>
+    [Fact]
+    public void TheOrientationIsSettableAndReportedInThePropertiesOwnWords()
+    {
+        (AutomationContext context, _, TextItem first, TextItem second) = With(Block("one"), Block("two"));
+
+        EditorOperations.Invoke(context, "text.update", Params(new { orientation = "90" }));
+
+        Assert.Equal(GlyphOrientation.Rotate, first.Runs[0].FontOrientation);
+        Assert.Equal(GlyphOrientation.Rotate, second.Runs[0].FontOrientation);
+
+        JsonElement common = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "text.common", default));
+
+        Assert.Equal("sideways", common.GetProperty("orientation").GetString());
+        Assert.False(common.GetProperty("orientationMixed").GetBoolean());
+    }
+
+    /// <summary>
+    /// **A selection that disagrees about the orientation says so**, rather than reporting the first block's, and
+    /// says that no run agrees on a value - the same judgement every other face member makes.
+    /// </summary>
+    [Fact]
+    public void AMixedOrientationIsReportedAsMixed()
+    {
+        TextItem first = Block("one", orientation: GlyphOrientation.Upright);
+        (AutomationContext context, _, TextItem _, TextItem _) = With(first, Block("two"));
+
+        JsonElement common = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "text.common", default));
+
+        Assert.True(common.GetProperty("orientationMixed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, common.GetProperty("orientation").ValueKind);
+        Assert.Equal(0, common.GetProperty("runs").GetInt32());
+    }
+
+    /// <summary>
+    /// **The orientation is per run like the face**, so a named run takes it and the others keep theirs - and a block
+    /// with no run at the index is a gap rather than a disagreement, exactly as for every other run member.
+    /// </summary>
+    [Fact]
+    public void TheOrientationLandsOnTheNamedRunAlone()
+    {
+        TextItem first = Block("one", extraRuns: new[] { Run("tail") });
+        (AutomationContext context, _, TextItem _, TextItem second) = With(first, Block("two"));
+
+        EditorOperations.Invoke(context, "text.update", Params(new { orientation = "upright", runIndex = 1 }));
+
+        Assert.Equal(GlyphOrientation.Auto, first.Runs[0].FontOrientation);
+        Assert.Equal(GlyphOrientation.Upright, first.Runs[1].FontOrientation);
+
+        // The second block has no run at index 1, so it is a gap: nothing was clamped onto the run it does have.
+        Assert.Single(second.Runs);
+        Assert.Equal(GlyphOrientation.Auto, second.Runs[0].FontOrientation);
+    }
+
+    /// <summary>
+    /// **Setting the orientation does not replace the face.** The run's family, its own colour and the name the
+    /// document asked for all belong to the run and to the family that is not being replaced, so a request that
+    /// names only the orientation must leave every one of them exactly as it was.
+    /// </summary>
+    [Fact]
+    public void AnOrientationEditLeavesTheFaceAndTheNameTheDocumentAskedFor()
+    {
+        TextItem first = Block("one", "Nimbus Roman", 18, colour: ColorRgb.Red);
+        first.Runs[0].Color = ColorRgb.Red;
+        first.Runs[0].SourceFont = "Helvetica-Bold";
+        first.Runs[0].LetterSpacing = 4.0;
+        (AutomationContext context, _, TextItem _, TextItem _) = With(first, Block("two"));
+
+        EditorOperations.Invoke(context, "text.update", Params(new { orientation = "upright" }));
+
+        Assert.Equal(GlyphOrientation.Upright, first.Runs[0].FontOrientation);
+        Assert.Equal("Nimbus Roman", first.Runs[0].FontFamily);
+        Assert.Equal(18.0, first.Runs[0].FontSize, 6);
+        Assert.Equal(ColorRgb.Red, first.Runs[0].Color);
+        Assert.Equal("Helvetica-Bold", first.Runs[0].SourceFont);
+        Assert.Equal(4.0, first.Runs[0].LetterSpacing, 6);
+    }
+
+    /// <summary>
+    /// **A value that is not one of the property's own is refused by name**, not silently read as the initial value:
+    /// a driver that asked for an upright column and got a turned one has no way to notice. And a refused request
+    /// leaves no undo step behind.
+    /// </summary>
+    [Fact]
+    public void AnUnknownOrientationIsRefused()
+    {
+        (AutomationContext context, EditorViewModel viewModel, TextItem first, TextItem _) = With(
+            Block("one"), Block("two"));
+        int depth = viewModel.ActiveSession.UndoDepth;
+
+        Assert.ThrowsAny<Exception>(() => EditorOperations.Invoke(
+            context, "text.update", Params(new { orientation = "upside-down" })));
+
+        Assert.Equal(GlyphOrientation.Auto, first.Runs[0].FontOrientation);
         Assert.Equal(depth, viewModel.ActiveSession.UndoDepth);
     }
 }

@@ -516,4 +516,75 @@ public class TextPaneTests
         // And the direction they do agree on is still shown, so one disagreeing member does not blank the others.
         Assert.Equal(0, Combo(pane, "DirectionBox").SelectedIndex);
     }
+
+    // ---------------------------------------------------------------- the glyph orientation (#127)
+
+    /// <summary>
+    /// **The orientation combo writes the run the panel names, through the call `text.update` makes.** The member has
+    /// been on the model and honoured by the layout since #127 while no control and no operation reached it, so this
+    /// is the person's half of the parity rule: the combo commits through
+    /// <see cref="DocumentSession.ApplyTextFieldsAt"/> exactly as the tracking fields do, and it is per run, so the
+    /// run the panel is not describing keeps its own turn.
+    /// </summary>
+    [AvaloniaFact]
+    public void TheOrientationComboSetsTheInspectedRunAndNowhereElse()
+    {
+        var viewModel = new EditorViewModel();
+        TextItem block = Block(viewModel, Run("Title", size: 24), Run("caption", size: 8));
+        viewModel.SelectObject(block);
+        viewModel.IsEditingText = true;
+        viewModel.InspectedRun = 1;
+
+        var pane = new TextPane();
+        pane.Attach(viewModel);
+        var window = new Window { Width = 440, Height = 780, Content = pane };
+        window.Show();
+        Settle();
+
+        // The panel starts on the initial value both runs hold.
+        Assert.Equal(0, Combo(pane, "OrientationBox").SelectedIndex);
+
+        ComboBox orientation = Combo(pane, "OrientationBox");
+        orientation.SelectedIndex = 1;
+        Settle();
+
+        Assert.Equal(GlyphOrientation.Upright, block.Runs[1].FontOrientation);
+        Assert.Equal(GlyphOrientation.Auto, block.Runs[0].FontOrientation);
+
+        // One gesture is one undo step, and it restores the run that changed.
+        viewModel.Undo();
+        Assert.Equal(GlyphOrientation.Auto, block.Runs[1].FontOrientation);
+    }
+
+    /// <summary>
+    /// **The panel says mixed when the selection disagrees about the orientation**, rather than showing the first
+    /// run's turn as though it described every run - and an apply that read the un-touched combo as a value would
+    /// flatten the run that differed.
+    /// </summary>
+    [AvaloniaFact]
+    public void ThePanelShowsAMixedOrientationAsMixed()
+    {
+        TextItem first = Block(new EditorViewModel(), Run("one"));
+        first.Runs[0].FontOrientation = GlyphOrientation.Upright;
+
+        var viewModel = new EditorViewModel();
+        viewModel.Document.Artboards[0].Layers[0].AddItem(first);
+        TextItem second = Block(viewModel, Run("two"));
+        viewModel.SelectObject(first);
+        viewModel.ToggleObjectSelection(second);
+
+        var pane = new TextPane();
+        pane.Attach(viewModel);
+        var window = new Window { Width = 440, Height = 780, Content = pane };
+        window.Show();
+        Settle();
+
+        ComboBox orientation = Combo(pane, "OrientationBox");
+        Assert.Equal(-1, orientation.SelectedIndex);
+        Assert.Equal("mixed", orientation.PlaceholderText);
+        Assert.Contains("orient", Text(pane, "MixedLabel").Text ?? string.Empty, StringComparison.Ordinal);
+
+        // The face they agree on is still shown, so one disagreeing member does not blank the others.
+        Assert.Equal("Nimbus Sans", Combo(pane, "FamilyBox").SelectedItem);
+    }
 }
