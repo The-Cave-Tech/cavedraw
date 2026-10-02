@@ -83,15 +83,12 @@ public class VerticalSelectionBoundsTests
     }
 
     /// <summary>
-    /// **The gap, as a deliberate sentinel.** A column's characters are separated down the page, so its selection
-    /// boxes must be taller than they are wide. They are not: the current metrics pair `XOf(i)` - the across
-    /// position, which a column does not change as its pen runs down - with the line's top, which every character on
-    /// the line shares. Measured at the time of writing: **64.80 wide by 43.20 tall**, which is a horizontal line's
-    /// boxes. Remove the skip when the metrics give a vertical block the glyph positions and swap the box
-    /// dimensions; this assertion is the acceptance.
+    /// **The acceptance.** A column's characters are separated down the page, so its selection boxes must be taller
+    /// than they are wide. It was measured at **64.80 wide by 43.20 tall** before the metrics took a vertical
+    /// block's positions from the glyphs - the layout's own `GlyphBox.X` across and `GlyphBox.Y` down - and swapped
+    /// the box dimensions in the painter and this readout together.
     /// </summary>
-    [AvaloniaFact(Skip = "the metrics give a column a horizontal line's boxes - 64.80x43.20 measured - so a " +
-        "vertical selection must come from GlyphBox.X/Y with the box dimensions swapped; see #127")]
+    [AvaloniaFact]
     public void AVerticalSelectionPaintsABoxTallerThanItIsWide()
     {
         Rect2D? box = SelectionBox(TextWritingMode.VerticalRl);

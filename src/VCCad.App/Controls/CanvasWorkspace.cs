@@ -5053,13 +5053,21 @@ public sealed class CanvasWorkspace : Control
                 Point2D p0 = text.Origin + offset + new Vector2D(
                     metrics.X[i],
                     metrics.Y[i]);
-                double w = metrics.Y[i + 1] == metrics.Y[i]
-                    ? metrics.X[i + 1] - metrics.X[i]
-                    : metrics.Size[i] * 0.3;
+
+                // **A column's box is the other way round.** Its characters are separated down the page, so the
+                // extent the pen runs is the box's *height* and the line box is its *width* - the opposite pairing
+                // from a horizontal line. `TextSelectionBounds` computes the same pair from the same metrics, so the
+                // paint and the readout agree by construction rather than by two estimates.
+                bool column = metrics.Layout.Vertical;
+                double pen = column
+                    ? (metrics.Y[i + 1] != metrics.Y[i] ? metrics.Y[i + 1] - metrics.Y[i] : metrics.Size[i] * 0.3)
+                    : (metrics.Y[i + 1] == metrics.Y[i] ? metrics.X[i + 1] - metrics.X[i] : metrics.Size[i] * 0.3);
 
                 // The line's own height, so the highlight covers the whole line box - which is what
                 // a caret the height of the line is marking.
-                double h = metrics.Ascent[i] + metrics.Descent[i];
+                double lineBox = metrics.Ascent[i] + metrics.Descent[i];
+                double w = column ? lineBox : pen;
+                double h = column ? pen : lineBox;
 
                 // One rectangle, in the block's own upright space. The rotation is already on the
                 // context (pushed above), so turning the quad here as well - and then converting it
@@ -5521,16 +5529,22 @@ public sealed class CanvasWorkspace : Control
 
         for (int i = first; i < last && i + 1 < metrics.X.Length; i++)
         {
-            // The same box the painter fills, from the same metrics: the readout is only useful if it agrees with
-            // the paint by construction rather than by a second estimate.
-            double ink = metrics.Y[i + 1] == metrics.Y[i]
-                ? metrics.X[i + 1] - metrics.X[i]
-                : metrics.Size[i] * 0.3;
+            // The same box the painter fills, from the same metrics, including the swap a column needs: the extent
+            // the pen runs is the height and the line box is the width. The readout is only useful if it agrees
+            // with the paint by construction rather than by a second estimate.
+            bool column = metrics.Layout.Vertical;
+            double pen = column
+                ? (metrics.Y[i + 1] != metrics.Y[i] ? metrics.Y[i + 1] - metrics.Y[i] : metrics.Size[i] * 0.3)
+                : (metrics.Y[i + 1] == metrics.Y[i] ? metrics.X[i + 1] - metrics.X[i] : metrics.Size[i] * 0.3);
+            double lineBox = metrics.Ascent[i] + metrics.Descent[i];
+
+            double w = Math.Max(0.5, column ? lineBox : pen);
+            double h = column ? pen : lineBox;
 
             minX = Math.Min(minX, metrics.X[i]);
             minY = Math.Min(minY, metrics.Y[i]);
-            maxX = Math.Max(maxX, metrics.X[i] + Math.Max(0.5, ink));
-            maxY = Math.Max(maxY, metrics.Y[i] + metrics.Ascent[i] + metrics.Descent[i]);
+            maxX = Math.Max(maxX, metrics.X[i] + w);
+            maxY = Math.Max(maxY, metrics.Y[i] + h);
         }
 
         return maxX < minX ? null : new Rect2D(minX, minY, maxX - minX, maxY - minY);
@@ -5557,12 +5571,39 @@ public sealed class CanvasWorkspace : Control
         for (int i = 0; i < n; i++)
         {
             TextLine line = layout.Lines[layout.LineOf(i)];
-            m.X[i] = layout.XOf(i);
-            m.Y[i] = line.Top;
+
+            // **A vertical column's characters are separated down the page, not along a line.** For a horizontal
+            // block the caret's x is the pen and its y is the line's top; for a column those two facts are the other
+            // way round, and the layout already says where each character goes: `GlyphBox.X` is the across position
+            // and `GlyphBox.Y` the pen running down. Taking them from the line instead put a column's whole
+            // selection on one line - measured at 64.80 wide by 43.20 tall for three characters of a 36pt column.
+            if (layout.Vertical && i < layout.Glyphs.Count)
+            {
+                GlyphBox glyph = layout.Glyphs[i];
+                m.X[i] = glyph.X;
+                m.Y[i] = glyph.Y;
+            }
+            else
+            {
+                m.X[i] = layout.XOf(i);
+                m.Y[i] = line.Top;
+            }
+
             m.Baseline[i] = line.Baseline;
             m.Ascent[i] = line.Ascent;
             m.Descent[i] = line.Descent;
             m.Size[i] = SizeAt(text, i);
+        }
+
+        // **The trailing slot is the caret past the last character, and a column needs it too.** The loop runs one
+        // entry past the glyphs, and for a vertical block that entry has no glyph to take a position from - so it
+        // fell through to the horizontal branch and the box for the last character measured back to a line's top,
+        // which collapsed the whole column's extent to one character's height.
+        if (layout.Vertical && layout.Glyphs.Count > 0 && n > layout.Glyphs.Count)
+        {
+            GlyphBox lastGlyph = layout.Glyphs[^1];
+            m.X[n - 1] = lastGlyph.X;
+            m.Y[n - 1] = lastGlyph.Y + lastGlyph.Advance;
         }
 
         return m;
