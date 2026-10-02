@@ -284,6 +284,15 @@ on the host, still running. Which means the whole session's host runs had been t
 and stale tests, and any of them could have passed or failed for a reason that no longer existed in the code being
 pushed. Clear the tree first (`rm -rf` the directory, then extract), or the evidence describes a document nobody has.
 
+**A self-hosted runner that looks busy with no job may be starting one.** The jobs API lags the
+runner: `busy=true` with no `in_progress` job is not proof of a wedge. A session read it that way
+three times and restarted the service; twice the worker really was stuck, and the third time it
+was mid-*start* - the `systemctl restart` killed a `dotnet restore` and the job died with
+`Fatal error. Internal CLR error. (0x80131506)`, which reads exactly like a regression in the
+commit being verified. Check the worker's elapsed time first: a `Runner.Worker` at `etimes=5` is
+starting, not stuck, and one at several minutes with no child work is wedged. Restarting is the
+last resort, not the first guess.
+
 **Stage and commit in one step.** A tree staged in one round and committed in a
 later one collects whatever other agents wrote in between, producing a commit whose
 message describes something other than its contents. Three commits in one session
@@ -1013,12 +1022,3 @@ Dockerfile notes:
 | Font renders as a substitute on canvas | the programme isn't registered: check `EmbeddedFontManager.Register` ran and `TextRun.GlyphIds` is non-null |
 | Headless XAML load fails with "No precompiled XAML found for VCCad.App.App" after a crashed build (`MSB4166`) | a killed MSBuild child left a *corrupted incremental* `VCCad.App.dll` missing its compiled-XAML IL. Rebuild that project: `dotnet build src/VCCad.App/VCCad.App.csproj -c Release -t:Rebuild` |
 | Editing a checkout that lives on the WSL ext4 filesystem fails with `ENOTSUP`/`EIO` | only when the repo is on the WSL filesystem over 9p, which has no hardlink+rename (ours is on `C:\`, so this does not apply - see 4.0) — VS Code / VS over `\\wsl.localhost\...` are fine, but simple atomic-replace writers are not. `scripts/stage-apply.sh <relpath>` installs a file staged under the Windows temp dir, and `scripts/replace-text.py` performs exact-substring patches |
-
-**A self-hosted runner that looks busy with no job may be starting one.** The jobs API lags the
-runner: `busy=true` with no `in_progress` job is not proof of a wedge. A session read it that way
-three times and restarted the service; twice the worker really was stuck, and the third time it
-was mid-*start* - the `systemctl restart` killed a `dotnet restore` and the job died with
-`Fatal error. Internal CLR error. (0x80131506)`, which reads exactly like a regression in the
-commit being verified. Check the worker's elapsed time first: a `Runner.Worker` at `etimes=5` is
-starting, not stuck, and one at several minutes with no child work is wedged. Restarting is the
-last resort, not the first guess.
