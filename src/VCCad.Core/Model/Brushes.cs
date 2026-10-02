@@ -28,6 +28,90 @@ public enum BrushKind
     /// and one start and one end tile at the two ends. See <see cref="PatternBrushPath"/>.
     /// </summary>
     Pattern,
+
+    /// <summary>
+    /// An asset repeated along the path, each copy drawn from a range around the value the brush states, so the run
+    /// looks hand-placed rather than machined. See <see cref="ScatterBrushPath"/>.
+    /// </summary>
+    Scatter,
+}
+
+/// <summary>
+/// One control of a scatter brush: the value it is set to, and how far a copy's own draw may stray from it.
+///
+/// **The pair, rather than two members.** A scatter brush is five of these and every one of them is the same two
+/// numbers, so the range travels with the value it belongs to instead of beside it - a value and its range cannot
+/// come apart in a `with` expression or in a reader that took one and not the other.
+///
+/// A zero range is not "a very small range": it is the stated value exactly, which is what lets a caller pin a
+/// scatter down to a fixed run of copies, and it is the one case the seam does not draw from the sequence at all
+/// because there is nothing to draw from.
+/// </summary>
+/// <param name="Value">The setting itself - a pitch, an angle, a scale, a distance or an opacity.</param>
+/// <param name="Randomness">
+/// How far a copy's own draw may stray from <paramref name="Value"/>, as a plus-or-minus. Held non-negative:
+/// <see cref="Min"/> and <see cref="Max"/> are what a renderer reads, so the sign a file happened to write cannot
+/// make a range that is narrower than it says.
+/// </param>
+public sealed record ScatterParameter(double Value, double Randomness = 0.0)
+{
+    /// <summary>The smallest value a copy's draw can take, which is <see cref="Value"/> when the range is zero.</summary>
+    public double Min => Value - Math.Abs(Randomness);
+
+    /// <summary>The largest value a copy's draw can take, which is <see cref="Value"/> when the range is zero.</summary>
+    public double Max => Value + Math.Abs(Randomness);
+}
+
+/// <summary>
+/// A scatter brush's parameters: the item whose artwork is repeated, and the five controls each copy is drawn from.
+///
+/// **Why this is one member rather than ten.** The pattern brush's tiles live directly on <see cref="BrushSpec"/>
+/// because there are five of them and each is a different thing; a scatter brush's controls are five of the *same*
+/// thing - a value and a range - so they are stated as five <see cref="ScatterParameter"/>s in one optional spec,
+/// for the reason <see cref="DynamicsSpec"/> is one member rather than five curves. The whole spec is **absent at
+/// its default**: a brush of another kind carries null here, so every brush written before this kind existed
+/// serialises to exactly the bytes it did then, and a scatter brush that states nothing carries the model's own
+/// defaults rather than a writer's guesses.
+///
+/// The asset is an id rather than a copy, for the reason the art brush's is: one definition of the artwork, which
+/// every stroke that uses the brush follows, so editing the item redraws every scattered stroke with no brush
+/// re-applied.
+/// </summary>
+/// <param name="Asset">The item whose artwork is repeated, or null for a brush that names no artwork yet.</param>
+/// <param name="Spacing">The pitch between consecutive copies, in the stroke's own units.</param>
+/// <param name="Rotation">An extra turn of each copy about its own centre, in degrees, on top of the path's tangent.</param>
+/// <param name="Scale">A copy's size as a multiple of the brush's size. One is the brush's own size.</param>
+/// <param name="Offset">How far a copy's centre sits across the path, in the stroke's own units. Positive is to the left of travel.</param>
+/// <param name="Opacity">How opaque a copy is painted, in 0..1.</param>
+public sealed record ScatterBrushSpec(
+    Guid? Asset,
+    ScatterParameter Spacing,
+    ScatterParameter Rotation,
+    ScatterParameter Scale,
+    ScatterParameter Offset,
+    ScatterParameter Opacity)
+{
+    /// <summary>
+    /// A spec with whichever controls were stated, and the model's own defaults for the rest.
+    ///
+    /// The defaults are the ones that draw a plain run of copies and nothing else: no gap, no turn, the brush's own
+    /// size, no offset and full opacity. Spacing's default of zero is not a pitch of nothing - the seam reads it as
+    /// "lay the copies end to end at their own size", which is what a brush that states no pitch means.
+    /// </summary>
+    public static ScatterBrushSpec Stating(
+        Guid? asset,
+        ScatterParameter? spacing = null,
+        ScatterParameter? rotation = null,
+        ScatterParameter? scale = null,
+        ScatterParameter? offset = null,
+        ScatterParameter? opacity = null)
+        => new(
+            asset,
+            spacing ?? new ScatterParameter(0.0),
+            rotation ?? new ScatterParameter(0.0),
+            scale ?? new ScatterParameter(1.0),
+            offset ?? new ScatterParameter(0.0),
+            opacity ?? new ScatterParameter(1.0));
 }
 
 /// <summary>
@@ -149,6 +233,11 @@ public enum ArtColourisation
 /// document, plus a spacing and the threshold that decides what counts as a corner; its geometry is
 /// <see cref="PatternBrushPath"/>. It is not a nib either, for the art brush's reason: reading its size as a
 /// half-width would draw a line where the file has tiles.
+///
+/// **The scatter brush is the fourth kind (#102) and is one asset placed many times.** Its artwork and its five
+/// ranged controls travel together in one optional <see cref="ScatterBrushSpec"/>, whose absence is every brush
+/// that is not this kind; its geometry is <see cref="ScatterBrushPath"/>. It is not a nib for the art brush's
+/// reason, and unlike the art brush its copies need no bend and no stretch - each is an independent placement.
 /// </summary>
 public sealed record BrushSpec(
     string Name,
@@ -180,7 +269,13 @@ public sealed record BrushSpec(
 
     // How much the direction of travel has to change at a node for that node to count as a corner, in degrees.
     // Thirty is the model's own default and is what a right angle and a gentle curve are told apart by.
-    double PatternCornerThresholdDegrees = 30.0)
+    double PatternCornerThresholdDegrees = 30.0,
+
+    // The scatter brush's own member (issue #102), the fourth kind. Its artwork and its five ranged controls travel
+    // together in one optional spec, and null is every brush that is not this kind - so a nib, an art brush or a
+    // pattern brush, including every one written before this kind existed, serialises to exactly the bytes it did
+    // then. Absent at its default, and written whenever the kind is scatter: a kind's own members travel together.
+    ScatterBrushSpec? ScatterSpec = null)
 {
     /// <summary>An elliptical nib: the calligraphic brush, named for the shape rather than the kind.</summary>
     public static BrushSpec Calligraphic(
@@ -235,6 +330,35 @@ public sealed record BrushSpec(
             Math.Max(0.0, spacing), Math.Clamp(cornerThresholdDegrees, 0.0, 180.0));
 
     /// <summary>
+    /// A **scatter brush**: the asset called <paramref name="asset"/> repeated along the path, each copy drawn
+    /// <paramref name="size"/> across it, with its own turn, size and offset drawn from the ranges stated here.
+    ///
+    /// The pressure response is the brush's <see cref="Dynamics"/>, not a second set of numbers: the model already
+    /// carries a curve for <see cref="DynamicsTarget.ScatterScale"/> and one for <see cref="DynamicsTarget.Opacity"/>,
+    /// and stating the same response twice is how two answers to one question come apart. With no dynamics recorded,
+    /// pressure is ignored rather than passed through - the rule the width dynamics already follow.
+    ///
+    /// The randomness is a **range around the stated value**, and a copy's draw from it is a pure function of the
+    /// path and these parameters through a stable sequence. That is what makes a scatter reproducible: the same
+    /// document scatters the same way on every render, which a fresh <see cref="Random"/> per frame could not be.
+    /// </summary>
+    public static BrushSpec Scatter(
+        string name,
+        Guid? asset,
+        double size,
+        ScatterParameter? spacing = null,
+        ScatterParameter? rotation = null,
+        ScatterParameter? scale = null,
+        ScatterParameter? offset = null,
+        ScatterParameter? opacity = null,
+        DynamicsSpec? dynamics = null)
+        => new(
+            name, 0.0, 1.0, size, BrushKind.Scatter, dynamics,
+            null, ArtStretch.Repeat, false, false, ArtColourisation.None, null,
+            null, null, null, null, null, 0.0, 30.0,
+            ScatterBrushSpec.Stating(asset, spacing, rotation, scale, offset, opacity));
+
+    /// <summary>
     /// Whether this brush is a **nib** a stroke is swept with, as against art mapped along the path.
     ///
     /// The distinction is load-bearing rather than descriptive: a nib answers "how far is the edge from the
@@ -252,6 +376,13 @@ public sealed record BrushSpec(
     /// asset covering the path. See <see cref="PatternBrushPath"/>.
     /// </summary>
     public bool IsPattern => Kind is BrushKind.Pattern;
+
+    /// <summary>
+    /// Whether this brush repeats an asset along the path with randomness. Like the art brush it maps artwork
+    /// rather than sweeping a nib, so it is not a nib either - and unlike the art brush every copy is its own
+    /// placement with its own turn, size and offset. See <see cref="ScatterBrushPath"/>.
+    /// </summary>
+    public bool IsScatter => Kind is BrushKind.Scatter;
 
     /// <summary>The tile in one of the five slots, or null when that slot holds nothing.</summary>
     public PatternTileSpec? Tile(PatternTileKind slot) => slot switch

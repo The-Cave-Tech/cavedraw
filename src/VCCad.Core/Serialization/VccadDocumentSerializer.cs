@@ -190,7 +190,41 @@ internal sealed record BrushDto(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PatternTileDto? PatternInnerTile = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PatternTileDto? PatternOuterTile = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? PatternSpacing = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? PatternCornerThreshold = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? PatternCornerThreshold = null,
+
+    // The scatter brush's own member (#102), the fourth kind: its artwork and the five ranged controls a copy is
+    // drawn from, in one optional spec. Written **only for the scatter kind**, so every brush written before this
+    // kind existed - nib, art and pattern alike - serialises to exactly the bytes it did then.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ScatterBrushDto? Scatter = null);
+
+/// <summary>
+/// A scatter brush on the wire: the item it repeats and the five controls each copy is drawn from.
+///
+/// The whole spec is one member rather than ten, for the reason the model states: the five controls are five of the
+/// same thing - a value and a range - and a reader that took one without the other would draw a scatter the file
+/// does not describe. The artwork is an id rather than a copy, so one definition of it is followed by every stroke
+/// that uses the brush.
+/// </summary>
+internal sealed record ScatterBrushDto(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? Asset = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ScatterParameterDto? Spacing = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ScatterParameterDto? Rotation = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ScatterParameterDto? Scale = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ScatterParameterDto? Offset = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ScatterParameterDto? Opacity = null);
+
+/// <summary>
+/// One of a scatter brush's controls on the wire: the value it is set to, and how far a copy may stray from it.
+///
+/// The value is always written, because it is the setting; the range is absent when it is zero, so a scatter that
+/// was pinned down is written as the value alone rather than as a range of nothing - the rule a file written before
+/// this kind existed depends on. A negative range is written as the model holds it and read back through
+/// <see cref="ScatterParameter.Min"/>, which takes the magnitude, so a file cannot state a range that is narrower
+/// than it says.
+/// </summary>
+internal sealed record ScatterParameterDto(
+    double Value,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Randomness = null);
 
 /// <summary>
 /// One tile of a pattern brush on the wire: the item whose artwork it is, and the controls that are the tile's own.
@@ -830,6 +864,11 @@ internal abstract record ItemDto
         // together: the art kind writes a stretch of "repeat" and two flips of false on every art brush it writes.
         bool pattern = brush.IsPattern;
 
+        // The scatter members belong to the scatter kind for the same reason, and are written whenever it is that
+        // kind: a kind's own members travel together, so a scatter brush says what it scatters even when every one of
+        // its controls holds the model's default. A brush of another kind writes nothing here.
+        bool scatter = brush.IsScatter;
+
         return new BrushDto(
             brush.Name,
             brush.Kind,
@@ -851,8 +890,30 @@ internal abstract record ItemDto
             pattern ? ToPatternTileDto(brush.PatternInnerTile) : null,
             pattern ? ToPatternTileDto(brush.PatternOuterTile) : null,
             pattern ? brush.PatternSpacing : null,
-            pattern ? brush.PatternCornerThresholdDegrees : null);
+            pattern ? brush.PatternCornerThresholdDegrees : null,
+            scatter ? ToScatterDto(brush.ScatterSpec) : null);
     }
+
+    /// <summary>
+    /// A scatter brush's parameters on the wire, or null for a scatter brush that states none.
+    ///
+    /// A control the model holds is written, and the range inside it only when it says something: a copy drawn at
+    /// the value with no range is the value, and a member written holding zero would be this build stating a
+    /// randomness the file never mentioned.
+    /// </summary>
+    private static ScatterBrushDto? ToScatterDto(ScatterBrushSpec? spec)
+        => spec is null
+            ? null
+            : new ScatterBrushDto(
+                spec.Asset,
+                ToScatterParameterDto(spec.Spacing),
+                ToScatterParameterDto(spec.Rotation),
+                ToScatterParameterDto(spec.Scale),
+                ToScatterParameterDto(spec.Offset),
+                ToScatterParameterDto(spec.Opacity));
+
+    private static ScatterParameterDto ToScatterParameterDto(ScatterParameter parameter)
+        => new(parameter.Value, Math.Abs(parameter.Randomness) > 1e-12 ? parameter.Randomness : null);
 
     /// <summary>
     /// One tile of a pattern brush's set on the wire, or null for a slot the brush does not fill.
@@ -1401,7 +1462,35 @@ internal static class ItemDtoExtensions
             // The spacing and the threshold are read as the file wrote them, and a member it does not state keeps
             // the model's own default rather than a value this reader chose - the same rule the art members follow.
             dto.PatternSpacing ?? 0.0,
-            dto.PatternCornerThreshold ?? 30.0);
+            dto.PatternCornerThreshold ?? 30.0,
+
+            // The scatter parameters, for the reason the art and pattern members are read: a member the file does
+            // not state keeps the model's own default rather than a value this reader invented.
+            ToScatterModel(dto.Scatter));
+
+    /// <summary>
+    /// A scatter brush's parameters read back from the file, or null for a brush that states none.
+    ///
+    /// A control the file does not mention keeps the model's own default - no pitch, no turn, the brush's own size,
+    /// no offset, full opacity - for the reason the art and pattern members do: those defaults are the model's, not
+    /// a value this reader chose.
+    /// </summary>
+    private static ScatterBrushSpec? ToScatterModel(ScatterBrushDto? dto)
+        => dto is null
+            ? null
+            : ScatterBrushSpec.Stating(
+                dto.Asset,
+                ToScatterParameter(dto.Spacing, 0.0),
+                ToScatterParameter(dto.Rotation, 0.0),
+                ToScatterParameter(dto.Scale, 1.0),
+                ToScatterParameter(dto.Offset, 0.0),
+                ToScatterParameter(dto.Opacity, 1.0));
+
+    /// <summary>One scatter control read back, with the model's default value when the file states none of it.</summary>
+    private static ScatterParameter ToScatterParameter(ScatterParameterDto? dto, double fallback)
+        => dto is null
+            ? new ScatterParameter(fallback)
+            : new ScatterParameter(dto.Value, dto.Randomness ?? 0.0);
 
     /// <summary>
     /// One tile of a pattern brush's set read back from the file, or null for a slot the file does not state.

@@ -528,7 +528,7 @@ public class PatternBrushOperationTests
         }
 
         // The kind is one a caller can ask for by name, and the refusal for the ones this build does not make
-        // names all three it does.
+        // names all four it does.
         string create = EditorOperations.All.Single(o => o.Name == "brush.create").Parameters;
         Assert.Contains("pattern", create, StringComparison.OrdinalIgnoreCase);
     }

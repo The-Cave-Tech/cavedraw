@@ -4511,12 +4511,16 @@ public sealed class CanvasWorkspace : Control
     /// **A pattern brush draws its tiles through here too.** Its tiles are artwork placed along the path in
     /// exactly the sense this method means, and `PlacedArt.Resolve` answers for both kinds, so one loop draws
     /// them both and the two renderers cannot come to different conclusions about where a tile sits.
+    ///
+    /// **A scatter brush's copies come through here as well.** They are artwork placed along the path with their own
+    /// turn, size and opacity, and `PlacedArt.Resolve` answers for them too - so the scatter needs no third drawing
+    /// loop, only the per-copy opacity multiplied into the paint.
     /// </summary>
     private void PaintStrokeArt(
         DrawingContext context, PathItem path, StrokeSpec stroke, double opacity, AffineTransform toWorld)
     {
         if (stroke.Brush is not { } brush || _document is null || _artDepth >= MaxArtDepth ||
-            (!brush.IsArt && !brush.IsPattern))
+            (!brush.IsArt && !brush.IsPattern && !brush.IsScatter))
         {
             return;
         }
@@ -4541,7 +4545,9 @@ public sealed class CanvasWorkspace : Control
 
                 using (context.PushTransform(MatrixOf(ontoThePath)))
                 {
-                    PaintItem(context, piece.Asset, opacity, toWorld.Compose(ontoThePath));
+                    // The piece's own opacity is multiplied in rather than replacing the stroke's: a scatter brush's
+                    // copies each carry their own, and a copy at 40% on a stroke at 50% is a fifth-covered pixel.
+                    PaintItem(context, piece.Asset, opacity * piece.Opacity, toWorld.Compose(ontoThePath));
                 }
             }
         }

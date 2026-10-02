@@ -397,14 +397,14 @@ public sealed class CadDocument
     }
 
     /// <summary>
-    /// Every art or pattern brush in the library whose **artwork** the document does not have.
+    /// Every art, pattern or scatter brush in the library whose **artwork** the document does not have.
     ///
-    /// An art brush names the item it maps rather than copying it, and a pattern brush names the item in each of
-    /// its five slots, so the artwork has one definition and every stroke that uses the brush follows an edit to
-    /// it. The price of that is a reference that can come apart: delete the item, or load a file whose definition
-    /// did not travel, and the brush is a name for artwork that is not there. Reported for the same reason a
-    /// missing brush is, and answering it is the difference between a known gap and a brush that quietly draws
-    /// nothing.
+    /// An art brush names the item it maps rather than copying it, a pattern brush names the item in each of
+    /// its five slots, and a scatter brush names the item it repeats - so the artwork has one definition and every
+    /// stroke that uses the brush follows an edit to it. The price of that is a reference that can come apart:
+    /// delete the item, or load a file whose definition did not travel, and the brush is a name for artwork that is
+    /// not there. Reported for the same reason a missing brush is, and answering it is the difference between a
+    /// known gap and a brush that quietly draws nothing.
     /// </summary>
     public IEnumerable<(BrushSpec Brush, Guid Asset)> MissingBrushAssets()
     {
@@ -417,6 +417,13 @@ public sealed class CadDocument
 
             if (!brush.IsPattern)
             {
+                // A scatter brush names one item and repeats it, so its reference can come apart in exactly the
+                // same way - and a scatter that quietly repeats nothing is the same invisible gap.
+                if (brush.IsScatter && brush.ScatterSpec?.Asset is { } scatter && FindItem(scatter) is null)
+                {
+                    yield return (brush, scatter);
+                }
+
                 continue;
             }
 

@@ -106,7 +106,15 @@ public class ArtBrushOperationTests
         Assert.Empty(document.Brushes);
     }
 
-    /// <summary>A kind this build does not make is refused by name rather than quietly made a nib.</summary>
+    /// <summary>
+    /// A kind this build does not make is refused by name rather than quietly made a nib.
+    ///
+    /// **Turned over when the scatter kind landed (#102), not deleted.** This test used to name 'scatter' as the
+    /// example of a kind that did not exist, and that is now one this build does make - so the refusal is pinned
+    /// with a kind that genuinely is not made (a bristle brush), and the kind that used to stand in for "not made"
+    /// is asserted to be **accepted**. Leaving it naming 'scatter' would have made the test a lie; deleting it
+    /// would have thrown away the gap it recorded. This is the failing-on-improvement rule working as intended.
+    /// </summary>
     [Fact]
     public void AKindThisBuildDoesNotMakeIsRefusedByName()
     {
@@ -114,10 +122,21 @@ public class ArtBrushOperationTests
 
         EditorOperationException error = Assert.Throws<EditorOperationException>(
             () => EditorOperations.Invoke(context, "brush.create",
-                Params(new { name = "Scatter", kind = "scatter", diameter = 4 })));
+                Params(new { name = "Bristle", kind = "bristle", diameter = 4 })));
 
-        Assert.Contains("scatter", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("bristle", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(document.Brushes);
+
+        // The refusal names every kind this build does make, including the one that used to be the example.
+        Assert.Contains("scatter", error.Message, StringComparison.OrdinalIgnoreCase);
+
+        // And the kind that used to be refused is now made, with its own kind on the brush.
+        EditorOperations.Invoke(context, "brush.create",
+            Params(new { name = "Spray", kind = "scatter", diameter = 4, spacing = 10 }));
+
+        BrushSpec created = Assert.Single(document.Brushes);
+        Assert.Equal(BrushKind.Scatter, created.Kind);
+        Assert.True(created.IsScatter);
     }
 
     /// <summary>**Reading a stroke back says what kind of brush it carries**, art members and all.</summary>

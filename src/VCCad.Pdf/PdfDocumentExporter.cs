@@ -135,7 +135,7 @@ public static class PdfDocumentExporter
         var alphas = new List<double>();
         foreach (Artboard artboard in document.Artboards)
         {
-            CollectAlphas(artboard, 1.0, alphas);
+            CollectAlphas(document, artboard, 1.0, alphas, 0);
         }
 
         var alphaStates = new PdfAlphaStates(assembler, alphas);
@@ -537,15 +537,22 @@ public static class PdfDocumentExporter
     }
 
     /// <summary>
+    /// How deep the art a stroke's brush maps is nested, matching the canvas's cap so a cycle stops at the same
+    /// place on the screen and in the file.
+    ///
+    /// One statement of the cap rather than one per walk, because the **alpha scan** has to reach exactly as deep
+    /// as the painting does: an alpha the painter asks for and the scan never saw is a graphics state that does not
+    /// exist, so a brush's translucent artwork would be written opaque.
+    /// </summary>
+    private const int MaxArtDepth = 8;
+
+    /// <summary>
     /// Emits the fill/stroke operators for one path. Contours are separated into
     /// closed (fillable) and open (stroke-only), so the renderer never fills an
     /// open path as PDF would implicitly do.
     /// </summary>
     private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfFontEmbedder embedder, PdfShadingObjects? shadings = null, PdfImageObjects? images = null, CadDocument? document = null, List<string>? notes = null, int artDepth = 0)
     {
-        // How deep the art a stroke's brush maps is nested, matching the canvas's cap so a cycle stops at the
-        // same place on the screen and in the file.
-        const int MaxArtDepth = 8;
         // A **stroke's raster effects** are the same kind of thing and take the same route, reached from the stroke
         // side: the path is drawn with every stroke it has, the effect graphs run over those pixels, and the answer
         // is placed as an image. The frame is asked of `SelectionEngine` for the same reason the filter branch asks
@@ -835,10 +842,14 @@ public static class PdfDocumentExporter
             // **A pattern brush's tiles are written through here too.** They are artwork placed along the path in
             // the same sense, and `PlacedArt.Resolve` answers for both kinds - so one route writes both, and the
             // screen and the file cannot disagree about where a tile sits.
+            //
+            // **A scatter brush's copies are written through here as well**, each under its own placement's matrix
+            // and at its own opacity: a copy's turn, size and offset are the placement, which is the matrix a reader
+            // applies, so the scatter needs no third writing route either.
             void WriteStrokeArt()
             {
                 if (document is null || artDepth >= MaxArtDepth ||
-                    stroke.Brush is not { } brush || (!brush.IsArt && !brush.IsPattern))
+                    stroke.Brush is not { } brush || (!brush.IsArt && !brush.IsPattern && !brush.IsScatter))
                 {
                     return;
                 }
@@ -852,7 +863,7 @@ public static class PdfDocumentExporter
                     AffineTransform placed = toDoc.Compose(piece.Placement.Transform);
 
                     ops.Add("q");
-                    PaintItem(ops, piece.Asset, placed, strokeOpacity, alphaStates, embedder, images, shadings,
+                    PaintItem(ops, piece.Asset, placed, strokeOpacity * piece.Opacity, alphaStates, embedder, images, shadings,
                         document, notes, artDepth + 1);
                     ops.Add("Q");
                 }
@@ -996,7 +1007,8 @@ public static class PdfDocumentExporter
         return AffineTransform.CreateTranslation(-offset.X, -offset.Y);
     }
 
-    private static void CollectAlphas(Artboard artboard, double opacity, List<double> alphas)
+    private static void CollectAlphas(
+        CadDocument document, Artboard artboard, double opacity, List<double> alphas, int artDepth)
     {
         if (!artboard.IsVisible)
         {
@@ -1012,12 +1024,13 @@ public static class PdfDocumentExporter
 
             foreach (LayerItem item in layer.Children)
             {
-                CollectItemAlphas(item, opacity * layer.Opacity, alphas);
+                CollectItemAlphas(document, item, opacity * layer.Opacity, alphas, artDepth);
             }
         }
     }
 
-    private static void CollectItemAlphas(LayerItem item, double opacity, List<double> alphas)
+    private static void CollectItemAlphas(
+        CadDocument document, LayerItem item, double opacity, List<double> alphas, int artDepth)
     {
         if (!item.IsEffectivelyVisible())
         {
@@ -1040,6 +1053,35 @@ public static class PdfDocumentExporter
                     alphas.Add(stroke.Color.A * opacity * path.Opacity * stroke.EffectiveOpacity);
                 }
 
+                // **The artwork a brush places is alpha-bearing too.** A piece is painted at the stroke's opacity
+                // times the piece's own, and the asset's own colours multiply in inside it - so every alpha that
+                // painting will ask for has to be in this list, or the state it asks for does not exist. Without
+                // this a scatter brush's translucent copies found `HasTransparency` false and were written fully
+                // opaque: the file quietly disagreeing with the canvas, which is exactly the defect the fidelity
+                // rule exists to catch. The art and pattern kinds are walked the same way, because a translucent
+                // asset mapped by either of them asks for an alpha in precisely the same sense.
+                if (artDepth < MaxArtDepth)
+                {
+                    foreach (StrokeSpec stroke in path.Strokes)
+                    {
+                        if (stroke.Brush is not { } brush ||
+                            (!brush.IsArt && !brush.IsPattern && !brush.IsScatter))
+                        {
+                            continue;
+                        }
+
+                        foreach (PlacedArt piece in PlacedArt.Resolve(document, path, brush))
+                        {
+                            CollectItemAlphas(
+                                document,
+                                piece.Asset,
+                                opacity * path.Opacity * stroke.EffectiveOpacity * piece.Opacity,
+                                alphas,
+                                artDepth + 1);
+                        }
+                    }
+                }
+
                 break;
             case TextItem text:
                 // Every colour the block draws with, not only the block's own: a run may carry its own, and a
@@ -1057,7 +1099,7 @@ public static class PdfDocumentExporter
             case ArtGroup group:
                 foreach (LayerItem child in group.Children)
                 {
-                    CollectItemAlphas(child, opacity * group.Opacity, alphas);
+                    CollectItemAlphas(document, child, opacity * group.Opacity, alphas, artDepth);
                 }
 
                 break;

@@ -12,6 +12,11 @@ namespace VCCad.Core.Model;
 /// what a renderer does with the answer is the same: draw that item under that transform. So this resolves both,
 /// and the canvas and the exporter consume the one answer rather than each learning a second kind.
 ///
+/// **A scatter brush answers here too** (#102). It repeats one asset with a different turn, size and offset at every
+/// copy, so its geometry is a third seam, <see cref="ScatterBrushPath"/> - but a copy is still an item under a
+/// transform, which is the one thing a renderer needs. Only its per-copy opacity has nowhere to go in an art
+/// brush's placement, so it travels on <see cref="Opacity"/> rather than as a fourth rendering route.
+///
 /// <see cref="ArtBrushPath"/> answers *where* a piece goes from the path and the brush's size, but it cannot name
 /// the artwork: only the document knows which item a brush's asset id refers to, and only the item knows its own
 /// bounds. This is that missing half, resolved into the two things a renderer needs - what to draw and the
@@ -25,7 +30,15 @@ namespace VCCad.Core.Model;
 /// </param>
 /// <param name="AssetBounds">The asset's bounds in its own frame, which is what the placement was computed against.</param>
 /// <param name="Placement">Where the piece sits, how far it reaches, and the transform carrying the asset's frame onto the path.</param>
-public readonly record struct PlacedArt(LayerItem Asset, Rect2D AssetBounds, ArtBrushPlacement Placement)
+/// <param name="Opacity">
+/// How opaque **this piece** is painted, in 0..1. It is carried per piece rather than read off the item or the
+/// stroke because a scatter brush's copies differ from one another: one copy is drawn at 40% and the next at 90%,
+/// which is a fact about the copy and not about the artwork it repeats. The art and pattern halves have no such
+/// fact to state and leave it at 1, so a piece of their artwork is painted at the stroke's own opacity exactly as
+/// it was before this member existed.
+/// </param>
+public readonly record struct PlacedArt(
+    LayerItem Asset, Rect2D AssetBounds, ArtBrushPlacement Placement, double Opacity = 1.0)
 {
     /// <summary>
     /// The artwork a stroke's brush maps along the path, in the order it is drawn.
@@ -45,8 +58,14 @@ public readonly record struct PlacedArt(LayerItem Asset, Rect2D AssetBounds, Art
     /// size is in the stroke's units, so a path inside a scaled group draws the art at that scale. The canvas
     /// passes 1 because it paints inside the transform; the exporter passes its stroke scale.
     /// </param>
+    /// <param name="pressure">
+    /// The pen's pressure in 0..1, which only a scatter brush reads: it drives the size and the opacity of a copy
+    /// through the brush's own dynamics. It defaults to a fully pressed pen, because a **stored** document has no
+    /// pen - the pressure a path was drawn with is not a member of the model - so both renderers leave it at the
+    /// default and a caller that does know the pressure can pass it.
+    /// </param>
     public static IReadOnlyList<PlacedArt> Resolve(
-        CadDocument document, PathItem path, BrushSpec? brush, double scale = 1.0)
+        CadDocument document, PathItem path, BrushSpec? brush, double scale = 1.0, double pressure = 1.0)
     {
         if (brush is not { } spec)
         {
@@ -58,6 +77,13 @@ public readonly record struct PlacedArt(LayerItem Asset, Rect2D AssetBounds, Art
         if (spec.IsPattern)
         {
             return ResolveTiles(document, path, spec, scale);
+        }
+
+        // A scatter brush repeats **one** asset with a different turn, size and offset at every copy, so its own
+        // seam decides each placement and this names the item once.
+        if (spec.IsScatter)
+        {
+            return ResolveCopies(document, path, spec, scale, pressure);
         }
 
         if (!spec.IsArt || spec.ArtAsset is not { } assetId)
@@ -145,6 +171,49 @@ public readonly record struct PlacedArt(LayerItem Asset, Rect2D AssetBounds, Art
                 asset.Bounds,
                 new ArtBrushPlacement(
                     tile.Position, tile.Point, tile.TangentRadians, tile.Length, tile.Transform)));
+        }
+
+        return resolved;
+    }
+
+    /// <summary>
+    /// A scatter brush's copies as renderable artwork, in the order they are drawn.
+    ///
+    /// The asset is looked up **once**, because a scatter brush repeats one item rather than five: the copies differ
+    /// in where they go and how they are turned, sized and faded, never in what they are. A brush naming an item the
+    /// document does not have places nothing rather than a copy of invented size - the same refusal the other two
+    /// halves make.
+    ///
+    /// The copy's **opacity** is the one fact that does not fit an art brush's placement, so it travels on
+    /// <see cref="PlacedArt.Opacity"/>: it is a property of the copy rather than of the artwork, and the two
+    /// renderers multiply it into the opacity they already paint the piece at.
+    /// </summary>
+    private static IReadOnlyList<PlacedArt> ResolveCopies(
+        CadDocument document, PathItem path, BrushSpec brush, double scale, double pressure)
+    {
+        if (brush.ScatterSpec?.Asset is not { } assetId || document.FindItem(assetId) is not { } asset)
+        {
+            return Array.Empty<PlacedArt>();
+        }
+
+        Rect2D bounds = ItemBounds.Of(asset);
+        IReadOnlyList<ScatterBrushPlacement> copies =
+            ScatterBrushPath.Placements(path, brush, _ => bounds, scale, pressure);
+        if (copies.Count == 0)
+        {
+            return Array.Empty<PlacedArt>();
+        }
+
+        var resolved = new PlacedArt[copies.Count];
+        for (int i = 0; i < copies.Count; i++)
+        {
+            ScatterBrushPlacement copy = copies[i];
+            resolved[i] = new PlacedArt(
+                asset,
+                bounds,
+                new ArtBrushPlacement(
+                    copy.Position, copy.Point, copy.TangentRadians, copy.Length, copy.Transform),
+                copy.Opacity);
         }
 
         return resolved;
