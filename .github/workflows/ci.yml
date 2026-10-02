@@ -172,3 +172,50 @@ jobs:
         with:
           name: vccad-desktop
           path: artifacts/desktop
+
+  # **The same build and tests on Windows**, so the two self-hosted runners can be compared
+  # directly. The Linux job additionally publishes the WebAssembly bundle and verifies it; this
+  # one starts and ends with the suites, which is where the time actually is.
+  #
+  # Font-dependent export tests need URW faces. Without `VCCAD_URW_FONTS` they skip cleanly -
+  # the documented behaviour - so a Windows run reports fewer tests than the Linux one until the
+  # faces are installed on beast-winrunner.
+  build-test-windows:
+    runs-on: [self-hosted, Windows]
+    env:
+      DOTNET_NOLOGO: '1'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The SDK is installed to C:\dotnet by the dotnet-install script, not by
+      # actions/setup-dotnet - which cannot write into a self-hosted runner's directory. The
+      # runner service does not have it on PATH, so the job adds it for its own steps.
+      - name: Put the SDK on PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value 'C:\dotnet'
+
+      - name: Check the toolchain is .NET 10
+        shell: pwsh
+        run: |
+          $version = (dotnet --version).Trim()
+          Write-Output "dotnet --version: $version"
+          if (-not $version.StartsWith('10.')) {
+            Write-Error "expected the .NET 10 SDK but dotnet is $version"
+            exit 1
+          }
+
+      - name: Restore
+        run: dotnet restore VCCad.sln
+
+      - name: Build
+        run: dotnet build VCCad.sln -c Release --no-restore
+
+      - name: Unit + integration tests
+        run: |
+          dotnet test tests/VCCad.Geometry.Tests -c Release --no-build --no-restore
+          dotnet test tests/VCCad.Core.Tests -c Release --no-build --no-restore
+          dotnet test tests/VCCad.Pdf.Tests -c Release --no-build --no-restore
+          dotnet test tests/VCCad.Api.Integration.Tests -c Release --no-build --no-restore
+          dotnet test tests/VCCad.App.Tests -c Release --no-build --no-restore
