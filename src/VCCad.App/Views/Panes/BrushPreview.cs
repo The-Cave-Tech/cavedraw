@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using VCCad.App.Controls;
 using VCCad.Core.Model;
 using VCCad.Geometry;
 using MediaGeometry = Avalonia.Media.Geometry;
@@ -74,13 +75,11 @@ internal static class BrushPreview
 /// the preview is about to draw rather than only that a preview exists. <see cref="Render"/> fills exactly those
 /// loops and paints exactly those placements, so the two cannot come apart.
 ///
-/// **What is the canvas's and what is not.** The geometry is the canvas's: the loops are
-/// <see cref="StrokeOutlineBuilder"/>'s and the placements are <see cref="PlacedArt.Resolve"/>'s, composed onto the
-/// path the same way `CanvasWorkspace.PaintStrokeArt` composes them. The **paint** of a placed asset is not: the
-/// canvas paints an item through its own private painter, which a pane cannot reach, so an asset is previewed as
-/// its own shape filled in the stroke's colour. A vector tile therefore previews with the right outline and the
-/// wrong fill; a person who wants the exact colours has the canvas, and the alternative - a second item painter
-/// here - is the second renderer this whole type exists to avoid.
+/// **Every part of it is the canvas's, geometry and paint alike.** The geometry is
+/// <see cref="StrokeOutlineBuilder"/>'s and <see cref="PlacedArt.Resolve"/>'s, and a placed asset's paint is
+/// <c>CanvasWorkspace.PaintItemStandalone</c> - the canvas's own item painter, reached rather than copied, so a
+/// gradient, an item's own stroke or the art a nested brush maps all preview as the canvas draws them. There is
+/// deliberately nothing here that could form a second opinion about either.
 /// </summary>
 public sealed class BrushPreviewView : Control
 {
@@ -120,39 +119,65 @@ public sealed class BrushPreviewView : Control
         InvalidateVisual();
     }
 
-    public override void Render(DrawingContext context)
+    /// <summary>
+    /// How the sample is fitted into the control: a uniform scale - never enlarging past 1:1, so a preview says
+    /// "this is the brush at its own size" rather than "this is the brush made to fill a box" - and the translation
+    /// that centres it. One answer, because <see cref="Render"/> draws with it and <see cref="ControlPoint"/>
+    /// reports it.
+    /// </summary>
+    private (double Scale, double Left, double Top) Fit()
     {
-        base.Render(context);
-
         Rect box = Bounds;
-        if (box.Width <= 0 || box.Height <= 0)
-        {
-            return;
-        }
-
         Rect2D world = BrushPreview.SamplePath.BoundingBox();
-        if (world.Width <= 0 && world.Height <= 0)
+
+        if (box.Width <= 0 || box.Height <= 0 || (world.Width <= 0 && world.Height <= 0))
         {
-            return;
+            return (0, 0, 0);
         }
 
-        // Uniform, and never enlarging past 1:1, so a preview says "this is the brush at its own size" rather than
-        // "this is the brush made to fill a box".
         double scale = Math.Min(1.0, Math.Min(
             (box.Width - 8) / Math.Max(world.Width, 1e-6),
             (box.Height - 8) / Math.Max(world.Height, 1e-6)));
 
         if (scale <= 0 || double.IsNaN(scale))
         {
+            return (0, 0, 0);
+        }
+
+        return (
+            scale,
+            ((box.Width - (world.Width * scale)) / 2) - (world.Left * scale),
+            ((box.Height - (world.Height * scale)) / 2) - (world.Top * scale));
+    }
+
+    /// <summary>
+    /// Where a point of the sample's own model space lands in this control, so a caller can look at the pixel a
+    /// placement names rather than at the whole picture. It is how a test asks "what did you draw here"; the
+    /// preview itself uses <see cref="Fit"/> directly.
+    /// </summary>
+    internal Point ControlPoint(Point2D model)
+    {
+        (double scale, double left, double top) = Fit();
+        return new Point((model.X * scale) + left, (model.Y * scale) + top);
+    }
+
+    public override void Render(DrawingContext context)
+    {
+        base.Render(context);
+
+        (double scale, double left, double top) = Fit();
+        if (scale <= 0)
+        {
             return;
         }
 
-        double left = ((box.Width - (world.Width * scale)) / 2) - (world.Left * scale);
-        double top = ((box.Height - (world.Height * scale)) / 2) - (world.Top * scale);
-
         var brush = new SolidColorBrush(Colors.Black);
 
-        using (context.PushTransform(Matrix.CreateScale(scale, scale) * Matrix.CreateTranslation(left, top)))
+        // The preview's own pass transform, which is this pass's `_paintWorld`: what a filtered asset rasterises
+        // against. It is the same matrix the context is pushed with below.
+        Avalonia.Matrix world = Matrix.CreateScale(scale, scale) * Matrix.CreateTranslation(left, top);
+
+        using (context.PushTransform(world))
         {
             if (Outline.Count > 0)
             {
@@ -169,39 +194,13 @@ public sealed class BrushPreviewView : Control
 
                 using (context.PushTransform(MatrixOf(ontoThePath)))
                 {
-                    PaintAsset(context, piece.Asset, brush);
+                    // The canvas's own item painter, reached rather than copied. The asset is drawn exactly as the
+                    // canvas draws it - its fill and its gradient, its own strokes, a nested brush's art and a
+                    // raster piece included - so the preview cannot come to a second opinion about the paint.
+                    CanvasWorkspace.PaintItemStandalone(
+                        context, _document, piece.Asset, piece.Opacity, ontoThePath, world);
                 }
             }
-        }
-    }
-
-    /// <summary>An asset's own shape, in the asset's own frame.</summary>
-    private static void PaintAsset(DrawingContext context, LayerItem item, IBrush brush)
-    {
-        switch (item)
-        {
-            case PathItem path:
-                context.DrawGeometry(brush, null, GeometryOf(path.SubPaths));
-                break;
-
-            case ArtGroup group:
-                using (context.PushTransform(MatrixOf(group.Transform)))
-                {
-                    foreach (LayerItem child in group.Children)
-                    {
-                        PaintAsset(context, child, brush);
-                    }
-                }
-
-                break;
-
-            case ImageItem image:
-                if (image.Placement.Width > 0 && image.Placement.Height > 0)
-                {
-                    context.DrawGeometry(brush, null, RectGeometry(image.Placement));
-                }
-
-                break;
         }
     }
 
@@ -227,55 +226,6 @@ public sealed class BrushPreviewView : Control
 
                 g.EndFigure(true);
             }
-        }
-
-        return geometry;
-    }
-
-    /// <summary>A path's own curves, in its own coordinates - the same figure `ObjectThumbnail` builds, unfitted.</summary>
-    private static MediaGeometry GeometryOf(IReadOnlyList<SubPath> subPaths)
-    {
-        var geometry = new StreamGeometry();
-        using (StreamGeometryContext g = geometry.Open())
-        {
-            g.SetFillRule(Avalonia.Media.FillRule.NonZero);
-            foreach (SubPath sub in subPaths)
-            {
-                if (sub.Nodes.Count == 0)
-                {
-                    continue;
-                }
-
-                g.BeginFigure(new Point(sub.Nodes[0].Anchor.X, sub.Nodes[0].Anchor.Y), sub.IsClosed);
-
-                int last = sub.IsClosed ? sub.Nodes.Count : sub.Nodes.Count - 1;
-                for (int i = 0; i < last; i++)
-                {
-                    PathNode from = sub.Nodes[i];
-                    PathNode to = sub.Nodes[(i + 1) % sub.Nodes.Count];
-                    g.CubicBezierTo(
-                        new Point(from.OutHandle.X, from.OutHandle.Y),
-                        new Point(to.InHandle.X, to.InHandle.Y),
-                        new Point(to.Anchor.X, to.Anchor.Y));
-                }
-
-                g.EndFigure(sub.IsClosed);
-            }
-        }
-
-        return geometry;
-    }
-
-    private static MediaGeometry RectGeometry(Rect2D rect)
-    {
-        var geometry = new StreamGeometry();
-        using (StreamGeometryContext g = geometry.Open())
-        {
-            g.BeginFigure(new Point(rect.Left, rect.Top), true);
-            g.LineTo(new Point(rect.Right, rect.Top));
-            g.LineTo(new Point(rect.Right, rect.Bottom));
-            g.LineTo(new Point(rect.Left, rect.Bottom));
-            g.EndFigure(true);
         }
 
         return geometry;
