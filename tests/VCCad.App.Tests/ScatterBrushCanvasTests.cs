@@ -232,6 +232,54 @@ public class ScatterBrushCanvasTests
     }
 
     /// <summary>
+    /// **Two renders of the same document are the same picture.** The randomness is derived from the path and the
+    /// brush's parameters through a stable sequence rather than a fresh generator, so the copies land in the same
+    /// places on every frame - which is the property that makes a scatter safe to export, re-open and print twice.
+    ///
+    /// The pair of assertions is what keeps this from passing for the wrong reason: the two buffers are required to
+    /// be identical **and** the scattered render is required to differ from the same document with every range set
+    /// to zero. A renderer that drew nothing at all would satisfy the first and fail the second.
+    /// </summary>
+    [AvaloniaFact]
+    public void TwoRendersOfTheSameDocumentAreIdentical()
+    {
+        (Window window, EditorViewModel viewModel, _) = Host();
+        PathItem asset = Square(viewModel);
+        PathItem path = Line(viewModel, new Point2D(100, 300), new Point2D(320, 300));
+
+        BrushSpec scattered = BrushSpec.Scatter(
+            "Spray", asset.Id, size: 16,
+            spacing: new ScatterParameter(45),
+            rotation: new ScatterParameter(0, 180),
+            scale: new ScatterParameter(1.0, 0.4),
+            offset: new ScatterParameter(0, 22),
+            opacity: new ScatterParameter(0.9, 0.3));
+
+        path.Stroke = path.Stroke with { Brush = scattered };
+        Settle();
+        byte[] first = Pixels(window);
+        byte[] second = Pixels(window);
+
+        Assert.True(first.AsSpan().SequenceEqual(second),
+            "two renders of one document have to be the same picture, randomness and all");
+
+        // The same document with every range at zero: the copies are laid out differently, so a renderer that
+        // ignored the draw - or drew nothing - cannot satisfy both halves.
+        path.Stroke = path.Stroke with { Brush = scattered with { ScatterSpec = scattered.ScatterSpec! with
+        {
+            Rotation = new ScatterParameter(0, 0),
+            Scale = new ScatterParameter(1.0, 0),
+            Offset = new ScatterParameter(0, 0),
+            Opacity = new ScatterParameter(1.0, 0),
+        } } };
+        Settle();
+        byte[] pinned = Pixels(window);
+
+        Assert.False(first.AsSpan().SequenceEqual(pinned),
+            "the ranged scatter and the pinned one have to be different pictures");
+    }
+
+    /// <summary>
     /// **A copy's own opacity reaches the pixels.** Two renders of one document differ only in the opacity a copy
     /// is drawn at, and the ink at the copy's own centre is measured: the faint copy is lighter than the solid one,
     /// at the same place and the same size. Geometry alone cannot be the claim here, so the probe is fixed by a

@@ -304,21 +304,25 @@ public static class ScatterBrushPath
         => (Mix(seed + ((uint)axis * 0x27D4EB2Fu)) / 4294967296.0 * 2.0) - 1.0;
 
     /// <summary>
-    /// The seed a subpath's sequence starts from: the brush's own parameters, the asset it maps, which subpath this
-    /// is, and how long it is.
+    /// The seed a subpath's sequence starts from: the brush's own parameters, which subpath this is, and how long
+    /// it is.
     ///
-    /// **Derived from the path and the parameters**, which is what the issue asks for and what makes a scatter
-    /// reproducible: the same document gives the same numbers, so two renders agree and two exports are identical
-    /// files. Nothing here is a clock, a thread id or a fresh generator. The asset's id is folded by its bytes rather
-    /// than by <see cref="Guid.GetHashCode"/>, because a hash is not promised to be the same number on a different
-    /// run and a seed that moved would rescatter every drawing.
+    /// **Derived from the path and the parameters, and nothing else**, which is what the issue asks for and what
+    /// makes a scatter reproducible: the same document gives the same numbers, so two renders agree and two exports
+    /// are identical files. Nothing here is a clock, a thread id or a fresh generator.
+    ///
+    /// **The artwork's id is deliberately not folded in.** It is tempting - two brushes that repeat different
+    /// artwork would then scatter differently - but it would make the arrangement depend on an identifier nobody
+    /// drew, and re-pointing a brush at a different item would reshuffle every copy. A person repointing a brush
+    /// means to change what is repeated, not where the copies are. It also makes the sequence a function of exactly
+    /// what the issue names, so a test can pin the numbers it asserts without pinning a <see cref="Guid"/> it has no
+    /// way to set.
     /// </summary>
     private static uint Seed(ScatterBrushSpec spec, int subpath, double totalLength)
     {
         uint seed = 2166136261u;
         seed = Fold(seed, subpath);
         seed = Fold(seed, (int)Math.Round(totalLength * 1000.0, MidpointRounding.AwayFromZero));
-        seed = FoldGuid(seed, spec.Asset);
         seed = FoldParameter(seed, spec.Spacing);
         seed = FoldParameter(seed, spec.Rotation);
         seed = FoldParameter(seed, spec.Scale);
@@ -332,25 +336,6 @@ public static class ScatterBrushPath
     {
         seed = Fold(seed, (int)Math.Round(parameter.Value * 1000.0, MidpointRounding.AwayFromZero));
         return Fold(seed, (int)Math.Round(Math.Abs(parameter.Randomness) * 1000.0, MidpointRounding.AwayFromZero));
-    }
-
-    /// <summary>The asset's own bytes folded in, so two brushes that map different artwork do not scatter alike.</summary>
-    private static uint FoldGuid(uint seed, Guid? id)
-    {
-        if (id is not { } guid)
-        {
-            return Fold(seed, 0);
-        }
-
-        Span<byte> bytes = stackalloc byte[16];
-        guid.TryWriteBytes(bytes);
-        for (int i = 0; i < 16; i += 4)
-        {
-            int word = bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16) | (bytes[i + 3] << 24);
-            seed = Fold(seed, word);
-        }
-
-        return seed;
     }
 
     /// <summary>One integer mixed into a seed, FNV-1a's step: the same input always gives the same output.</summary>
