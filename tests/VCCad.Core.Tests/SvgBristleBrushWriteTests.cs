@@ -154,6 +154,44 @@ public class SvgBristleBrushWriteTests
         Assert.Equal("#000000", (string?)oneBundle[0].Attribute("fill"));
     }
 
+    /// <summary>
+    /// **A `currentColor` stroke keeps the keyword when the brush does not jitter, and the jittered case says why
+    /// it cannot.** Each bristle's fill is a shade of the stroke's colour resolved in the model
+    /// (`StrokeOutlineBuilder`), so no element can carry the keyword: the colours round-trip exactly and only their
+    /// provenance does not. That is a loss to declare, not a defect to hide - `SvgWriteResult.Missing` is the same
+    /// honest boundary the class comment describes, and this is its first use for a brush.
+    /// </summary>
+    [Fact]
+    public void AColourJitterCannotKeepCurrentColorAndDeclaresIt()
+    {
+        var spec = new BristleBrushSpec(
+            Count: 4, Spread: 1.0, Randomness: 0.5, Thickness: 3.0, Stiffness: 1.0, ColourJitter: 0.0);
+
+        // The control: no jitter, so one path carries the whole bundle and the keyword survives on it.
+        CadDocument held = CadDocument.CreateDefault();
+        PathItem plain = Line(
+            held, new Point2D(40, 400), new Point2D(300, 400),
+            BrushSpec.Bristle("Scrub", 40, spec));
+        plain.Stroke = plain.Stroke with { FromCurrentColor = true, Color = ColorRgb.Black };
+
+        SvgWriteResult plainResult = SvgWriter.WriteResult(held);
+        Assert.Contains("currentColor", plainResult.Svg, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            plainResult.Missing, reason => reason.Contains("currentColor", StringComparison.Ordinal));
+
+        // The jitter: the keyword cannot be written for any bristle, and the writer names the loss.
+        CadDocument jittered = CadDocument.CreateDefault();
+        PathItem stitched = Line(
+            jittered, new Point2D(40, 400), new Point2D(300, 400),
+            BrushSpec.Bristle("Scrub", 40, spec with { ColourJitter = 0.7 }));
+        stitched.Stroke = stitched.Stroke with { Color = ColorRgb.Black, FromCurrentColor = true };
+
+        SvgWriteResult jitteredResult = SvgWriter.WriteResult(jittered);
+        Assert.DoesNotContain("currentColor", jitteredResult.Svg, StringComparison.Ordinal);
+        Assert.Contains(
+            jitteredResult.Missing, reason => reason.Contains("currentColor", StringComparison.Ordinal));
+    }
+
     /// <summary>The file's own number, so a coordinate is searched for exactly as it is written. Mirrored from the writer.</summary>
     private static string Num(double value)
         => value.ToString("R", CultureInfo.InvariantCulture);

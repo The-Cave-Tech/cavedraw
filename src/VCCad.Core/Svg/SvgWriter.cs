@@ -2435,6 +2435,19 @@ public static class SvgWriter
             XElement parent,
             string? itemClip)
         {
+            // **The keyword cannot survive a jitter, and saying so is part of writing the file.** Each bristle's fill
+            // is a shade of the stroke's colour, resolved in the model by `StrokeOutlineBuilder` before any writer
+            // sees it, so these elements carry literals. SVG has no per-element spelling for "a shade of
+            // `currentColor`", so the derivation is genuinely unrepresentable rather than merely unwritten: the
+            // colours round-trip exactly and only their provenance does not. Declared here rather than lost in
+            // silence, which is what `Missing` is for.
+            if (stroke.FromCurrentColor)
+            {
+                _missing.Add(
+                    $"Path {Identity(path)}: a colour-jittered bristle brush cannot keep `currentColor` - each " +
+                    "bristle's fill is a shade computed from that colour, and SVG has no per-element spelling for it");
+            }
+
             for (int i = 0; i < plan.Outlines.Count; i++)
             {
                 var element = new XElement(Svg + "path");
