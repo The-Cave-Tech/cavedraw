@@ -185,6 +185,11 @@ jobs:
     env:
       DOTNET_NOLOGO: '1'
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      # **Faces are located on the machine, never shipped.** beast-winrunner has the URW base-35
+      # set copied to C:\urw-fonts, which is what the text-export tests embed; without it the
+      # letter-spacing export test fails rather than skipping. The path is a machine fact, so it
+      # lives here beside the other runner facts rather than in the project.
+      VCCAD_URW_FONTS: 'C:\urw-fonts'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
