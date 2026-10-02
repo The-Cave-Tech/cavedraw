@@ -476,7 +476,12 @@ internal sealed record TextRunDto(
     // anything a face measures. Absent for a run with no list, which is nearly every run, so those bytes do not
     // change. It was missing here while the layout already honoured it, which meant saving and reopening a document
     // silently put every affected character back on the plain baseline.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double[]? PositionOffsets = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double[]? PositionOffsets = null,
+
+    // The along-line offset the file states for each character - SVG's `x`/`dx` list. Its sibling above is the
+    // across axis; between them they are the file's own statement of where each glyph sits, which no face can
+    // supply. Absent for a run with no list.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double[]? InlineOffsets = null);
 
 /// <summary>One parameter of a live path effect, keyed and spelled as the file spelled it.</summary>
 internal sealed record PathEffectParameterDto(string Name, string Value);
@@ -754,7 +759,8 @@ internal abstract record ItemDto
         r.FontVariant,
         r.FontOrientation,
         r.BaselineShift,
-        r.PositionOffsets);
+        r.PositionOffsets,
+        r.InlineOffsets);
 
     private static EmbeddedFontDto ToEmbedded(EmbeddedFont f) => new(
         f.Format,
@@ -1161,6 +1167,7 @@ internal static class ItemDtoExtensions
             FontOrientation = dto.FontOrientation,
             BaselineShift = dto.BaselineShift,
             PositionOffsets = dto.PositionOffsets,
+            InlineOffsets = dto.InlineOffsets,
         };
 
         return run;

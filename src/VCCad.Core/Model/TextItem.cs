@@ -256,6 +256,23 @@ public sealed class TextRun
     /// </summary>
     public double[]? PositionOffsets { get; set; }
 
+    /// <summary>
+    /// **The along-line offset the file states for each character, in its own units** - SVG's `x`/`dx` list on a
+    /// `<text>`/`<tspan>`, the other half of <see cref="PositionOffsets"/>. Null when the file states none, which is
+    /// the common case.
+    ///
+    /// Each entry is **relative to where the run itself starts**, which is where the file's own statement is the
+    /// fact and the face's advances are not: SVG lets a per-character position contradict the metrics, and a run
+    /// whose characters are spread by the file has to come back with that spread rather than the face's. A run with
+    /// the list therefore advances by the difference between consecutive entries - the last entry's character keeps
+    /// the measured advance, which is the same "a short list applies where it reaches" rule the across list follows.
+    ///
+    /// This is **not** <see cref="Advances"/>, which is what the face measures and what carries on past the end of
+    /// the list; and it is not <see cref="LetterSpacing"/>, which is one uniform gap rather than a position per
+    /// character.
+    /// </summary>
+    public double[]? InlineOffsets { get; set; }
+
     public TextRun Clone() => new()
     {
         Text = Text,
@@ -278,6 +295,7 @@ public sealed class TextRun
         RawCodes = RawCodes,
         GlyphIds = GlyphIds,
         PositionOffsets = PositionOffsets is null ? null : (double[])PositionOffsets.Clone(),
+        InlineOffsets = InlineOffsets is null ? null : (double[])InlineOffsets.Clone(),
     };
 }
 

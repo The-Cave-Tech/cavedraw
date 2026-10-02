@@ -1471,11 +1471,13 @@ public static class PdfDocumentExporter
         // loop below places each one from the layout's own glyph positions instead.
         bool column = text.WritingMode != TextWritingMode.HorizontalTb;
 
-        // **Nor can a per-character across offset.** `TryWriteRunsAsOneTextObject` writes one `Tm` and one show for
-        // the block's text, which has no way to state that a character sits off the baseline - and a `y`/`dy` list is
-        // exactly that statement. Those lists come from the SVG reader, which never produces an embedded programme,
-        // so the reachable case is a run drawn with a face from this machine.
-        bool offsetGlyphs = text.Runs.Any(r => r.PositionOffsets is { Length: > 0 });
+        // **Nor can per-character positions of either axis.** `TryWriteRunsAsOneTextObject` writes one `Tm` and one
+        // show for the block's text, which has no way to state that a character sits off the baseline or somewhere of
+        // its own along the line - and a `y`/`dy` or `x`/`dx` list is exactly that statement. Those lists come from
+        // the SVG reader, which never produces an embedded programme, so the reachable case is a run drawn with a
+        // face from this machine.
+        bool offsetGlyphs = text.Runs.Any(
+            r => r.PositionOffsets is { Length: > 0 } || r.InlineOffsets is { Length: > 0 });
         if (!column && !offsetGlyphs && TryWriteRunsAsOneTextObject(ops, text, embedder, alphaStates, toDoc))
         {
             return;
@@ -1593,9 +1595,11 @@ public static class PdfDocumentExporter
                 double lineHeight = run.FontSize * text.LineSpacing;
 
                 // A column's characters are placed one by one where the layout puts them, and so are the characters
-                // of a run that states its own across offsets - from the same source the canvas draws from, so the
-                // page and the screen cannot disagree about where a `dy` list put a character.
-                bool perCharacter = column || run.PositionOffsets is { Length: > 0 };
+                // of a run that states its own per-character positions - from the same source the canvas draws from,
+                // so the page and the screen cannot disagree about where a list put a character.
+                bool perCharacter = column ||
+                    run.PositionOffsets is { Length: > 0 } ||
+                    run.InlineOffsets is { Length: > 0 };
                 VCCad.Core.Text.TextLayout glyphLayout = perCharacter
                     ? VCCad.Core.Text.TextLayoutEngine.Compute(text)
                     : VCCad.Core.Text.TextLayout.Empty;

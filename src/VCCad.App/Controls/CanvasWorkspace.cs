@@ -5163,8 +5163,10 @@ public sealed class CanvasWorkspace : Control
             // **A run that states per-character across offsets is drawn glyph by glyph too.** The file's `dy` list
             // moves each character without moving the pen, and a `FormattedText` has no per-character placement at
             // all - so a run-level draw would put the column the file asked for back on one line, which is exactly
-            // what the model and the layout say it must not be. Same route as tracking, for the same reason.
-            if (run.LetterSpacing != 0 || run.WordSpacing != 0 || run.PositionOffsets is { Length: > 0 })
+            // what the model and the layout say it must not be. Same route as tracking, for the same reason - and the
+            // same for an `x`/`dx` list, whose places are the run's own and contradict the face's advances.
+            if (run.LetterSpacing != 0 || run.WordSpacing != 0 ||
+                run.PositionOffsets is { Length: > 0 } || run.InlineOffsets is { Length: > 0 })
             {
                 DrawTrackedSegment(context, brush, run, box, pieceStart, origin);
                 continue;
@@ -5275,6 +5277,11 @@ public sealed class CanvasWorkspace : Control
         // draws it. The glyph ids are only trusted when every one of them belongs to that programme.
         EmbeddedFont? program = ResolveProgramme(run, pieceStart, box.Length, out IGlyphTypeface? typeface, out ushort[]? ids);
 
+        // **The file's own along-line places, where it stated them.** They are relative to where the run starts, which
+        // is where this walk's pen starts, and they are allowed to contradict the face's advances - that is what the
+        // attribute is for. The layout placed the glyphs by the same list, so the screen and the page cannot differ.
+        double[]? places = run.InlineOffsets is { Length: > 0 } ? run.InlineOffsets : null;
+
         double pen = 0;
         for (int i = 0; i < box.Length; i++)
         {
@@ -5283,10 +5290,18 @@ public sealed class CanvasWorkspace : Control
             // **The file's own across offset for this character**, where it stated one. It moves the glyph and not
             // the pen, which is the rule the layout follows too - so the next character starts where it would have.
             double across = run.PositionOffsets is { } offsets && i < offsets.Length ? offsets[i] : 0.0;
-            DrawOneGlyph(context, brush, run, index, new Point(origin.X + pen, origin.Y + across),
+
+            bool placed = places is not null && i < places.Length;
+            double at = placed ? places![i] : pen;
+
+            DrawOneGlyph(context, brush, run, index, new Point(origin.X + at, origin.Y + across),
                 advanceScale, program, typeface, ids);
 
-            pen += advanceScale * (index < advances.Count ? advances[index] : TextMeasurement.AdvanceAtEnd(run));
+            // The pen moves to the file's next place where the list still reaches, and by the face's advance past its
+            // end - the same rule the layout follows.
+            pen = places is not null && i + 1 < places.Length
+                ? places[i + 1]
+                : at + (advanceScale * (index < advances.Count ? advances[index] : TextMeasurement.AdvanceAtEnd(run)));
         }
     }
 

@@ -72,6 +72,16 @@ public static partial class SvgReader
         /// </summary>
         public double[]? PositionOffsets { get; set; }
 
+        /// <summary>
+        /// **How far each of this piece's characters strays from <see cref="Inline"/>, in the file's own units** -
+        /// SVG's `x`/`dx` list for a horizontal block and its `y`/`dy` list for a vertical one.
+        ///
+        /// The along axis is the other half of <see cref="PositionOffsets"/>: a run starts where the file put it, and
+        /// these are the places the file's own list gives its characters, rebased on that start. Null when the file
+        /// stated a single position rather than a list.
+        /// </summary>
+        public double[]? PositionAlong { get; set; }
+
         /// <summary>How far the pen moves along the line for this piece, through the model's own measurer.</summary>
         public double Advance { get; set; }
 
@@ -111,7 +121,13 @@ public static partial class SvgReader
                    Equals(previous.Paint.Fill, Paint.Fill) &&
                    previous.Paint.FillGradientId == Paint.FillGradientId &&
                    Math.Abs(Cross - previous.Cross) < 1e-9 &&
-                   Math.Abs(Inline - expected) < 1e-9;
+                   Math.Abs(Inline - expected) < 1e-9 &&
+
+                   // **A piece that states its own per-character positions is never merged.** A list belongs to the
+                   // run it came in with, and appending two pieces keeps only the first one's - so a list would be
+                   // silently dropped or silently applied to characters the file said nothing about.
+                   PositionOffsets is null && previous.PositionOffsets is null &&
+                   PositionAlong is null && previous.PositionAlong is null;
         }
     }
 
@@ -299,6 +315,7 @@ public static partial class SvgReader
             TextChunk chunk = block.Chunks[i];
             TextRun run = block.Item.Runs[i];
             run.PositionOffsets = chunk.PositionOffsets;
+            run.InlineOffsets = chunk.PositionAlong;
 
             if (i > 0)
             {
@@ -420,6 +437,14 @@ public static partial class SvgReader
         /// an earlier one's - which a single-`tspan` test would never catch.
         /// </summary>
         private double[]? _pendingOffsets;
+
+        /// <summary>
+        /// **The per-character along-line offsets the current chunk stated**, the across list's sibling. The file's
+        /// `x`/`y` list is absolute and its `dx`/`dy` list is a running shift, so both arrive here already folded into
+        /// one list of positions rebased on the piece's own start. Cleared when a run consumes it, for the same
+        /// reason as the across list: a later piece that states nothing must not inherit it.
+        /// </summary>
+        private double[]? _pendingAlong;
         private TextChunk? _current;
         private bool _atStart = true;
         private bool _lastWasSpace;
@@ -472,7 +497,7 @@ public static partial class SvgReader
             //
             // A one-entry list is not a list. `PositionList` answers null for it, so it falls through to the single
             // read above and places the piece, leaving nothing per-character behind.
-            double[]? dcrossList = PositionList(element, vertical ? "dx" : "dy");
+            double[]? dcrossList = PositionList(element, vertical ? "dx" : "dy", vertical ? SvgAxis.X : SvgAxis.Y, style.FontSize);
             double? dcross = dcrossList is null
                 ? Position(element, vertical ? "dx" : "dy", vertical ? SvgAxis.X : SvgAxis.Y, style.FontSize)
                 : null;
@@ -480,6 +505,16 @@ public static partial class SvgReader
             if (dcrossList is not null)
             {
                 _pendingOffsets = dcrossList;
+            }
+
+            // **The along pair is read as a list too, and SVG's two forms are folded into one.** `x`/`y` states where
+            // each character is and `dx`/`dy` moves the pen from where the last one left it, so a file that says both
+            // means the sum; the list is then rebased on the first character's place, which is where the piece
+            // starts. The single values above still place the piece - and for a list they are the same fact, so
+            // nothing is counted twice here: this list is *positions*, and the pen is the first of them.
+            if (AlongOffsets(element, vertical, style.FontSize) is { Length: > 0 } along)
+            {
+                _pendingAlong = along;
             }
 
             if (inline is not null)
@@ -647,9 +682,11 @@ public static partial class SvgReader
                     // Consumed here: the list belongs to this piece, so the next one must not inherit it. A chunk
                     // that states no list of its own gets null, which is the common case.
                     PositionOffsets = _pendingOffsets,
+                    PositionAlong = _pendingAlong,
                 };
 
                 _pendingOffsets = null;
+                _pendingAlong = null;
             }
 
             return _current;
@@ -699,13 +736,15 @@ public static partial class SvgReader
         /// **The whole list a positioning attribute states, one entry per character** - where every other attribute
         /// is answered by a single number because the model places a run as a whole.
         ///
-        /// Only the **across** attribute is read this way. Its per-character offset is the file's own statement of
-        /// where each character sits, which no face measurement can supply, so a run that states one carries it.
-        /// The along-line attributes keep their single-value read and their warning: the pen is measured from the
-        /// installed face, and honouring the file's own along-line positions would need a per-character advance the
-        /// model does not hold - so accepting the list there would be the same lie in the other direction.
+        /// Both axes have a list now: the **across** pair (`y`/`dy`, or `x`/`dx` under a vertical mode) places each
+        /// character off the baseline, and the **along** pair (`x`/`dx`, or `y`/`dy` vertically) places each
+        /// character along the line. Each entry resolves through the same units a single value does, so `1em` in a
+        /// list means what `1em` means on its own.
+        ///
+        /// A single entry is not a list: it is the number that places the piece, which the caller has already read,
+        /// so null comes back and nothing per-character is recorded.
         /// </summary>
-        private static double[]? PositionList(XElement element, string attribute)
+        private double[]? PositionList(XElement element, string attribute, SvgAxis axis, double fontSize)
         {
             string? value = element.Attribute(attribute)?.Value;
             if (string.IsNullOrWhiteSpace(value))
@@ -713,8 +752,72 @@ public static partial class SvgReader
                 return null;
             }
 
-            double[]? numbers = Numbers(value);
-            return numbers is { Length: > 1 } ? numbers : null;
+            string[] tokens = value.Split(
+                new[] { ' ', '\t', '\r', '\n', ',' }, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length < 2)
+            {
+                return null;
+            }
+
+            var numbers = new double[tokens.Length];
+            for (int i = 0; i < tokens.Length; i++)
+            {
+                if (ResolveLength(tokens[i], axis, attribute, fontSize) is not { } resolved)
+                {
+                    // **A list this reader cannot resolve is reported, not half-applied.** Taking the entries it
+                    // understood would place some characters where the file asked and leave the rest where the face
+                    // put them, which draws a string the file does not contain.
+                    _context.Warnings.Add(
+                        $"{attribute}=\"{value}\" has a length this reader cannot resolve, so its positions are " +
+                        "not honoured");
+                    return null;
+                }
+
+                numbers[i] = resolved;
+            }
+
+            return numbers;
+        }
+
+        /// <summary>
+        /// The file's per-character along-line places, as offsets from where the piece starts.
+        ///
+        /// `x`/`y` states where each character is and `dx`/`dy` moves the pen from where the last one left it, so the
+        /// two are summed per character and the list is rebased on its first entry - which is the frame the model
+        /// has, because a run starts where the file put it. A delta list is therefore accumulated, which is SVG's own
+        /// rule for `dx`/`dy`: each entry is a step, not a place.
+        /// </summary>
+        private double[]? AlongOffsets(XElement element, bool vertical, double fontSize)
+        {
+            SvgAxis axis = vertical ? SvgAxis.Y : SvgAxis.X;
+            double[]? absolute = PositionList(element, vertical ? "y" : "x", axis, fontSize);
+            double[]? delta = PositionList(element, vertical ? "dy" : "dx", axis, fontSize);
+            if (absolute is null && delta is null)
+            {
+                return null;
+            }
+
+            int n = Math.Max(absolute?.Length ?? 0, delta?.Length ?? 0);
+            var offsets = new double[n];
+            double running = 0;
+            double first = 0;
+            for (int i = 0; i < n; i++)
+            {
+                if (delta is not null && i < delta.Length)
+                {
+                    running += delta[i];
+                }
+
+                double place = (absolute is not null && i < absolute.Length ? absolute[i] : 0.0) + running;
+                if (i == 0)
+                {
+                    first = place;
+                }
+
+                offsets[i] = place - first;
+            }
+
+            return offsets;
         }
 
         /// <summary>
@@ -722,9 +825,9 @@ public static partial class SvgReader
         ///
         /// In text those units mean something - the run's own size - so they are resolved here rather than through
         /// the generic length table, which has no text context and would report an assumption this reader is not
-        /// making. A list of positions is one per character and a run is placed as a whole, so the first is used and
-        /// the rest are reported: the across delta is the one exception, and it is not read here at all - its list
-        /// has somewhere to go (`TextRun.PositionOffsets`) and `PositionList` reads it whole.
+        /// making. A list of positions is read as a whole list by <see cref="PositionList"/> - on both axes now, so
+        /// this reads the value that places the piece and nothing is reported about the rest: the first entry and the
+        /// single number are the same fact, and the entries are kept per character.
         /// </summary>
         private double? Position(XElement element, string attribute, SvgAxis axis, double fontSize)
         {
@@ -740,21 +843,25 @@ public static partial class SvgReader
                 end++;
             }
 
-            if (Numbers(value) is { Length: > 1 })
-            {
-                _context.Warnings.Add(
-                    $"{attribute}=\"{value}\" gives a position per character, and the model places a run as a whole");
-            }
-
             string first = value[..end];
-            int letters = first.Length;
-            while (letters > 0 && char.IsLetter(first[letters - 1]))
+            return ResolveLength(first, axis, attribute, fontSize);
+        }
+
+        /// <summary>
+        /// One length of a positioning attribute, resolved the way a single value is: the text units first, because
+        /// in text `em` and `ex` mean the run's own size, and the generic length table otherwise. Null is the generic
+        /// table declining the value, which a caller reports rather than guessing at.
+        /// </summary>
+        private double? ResolveLength(string token, SvgAxis axis, string attribute, double fontSize)
+        {
+            int letters = token.Length;
+            while (letters > 0 && char.IsLetter(token[letters - 1]))
             {
                 letters--;
             }
 
-            string unit = first[letters..].ToLowerInvariant();
-            if (double.TryParse(first[..letters].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture,
+            string unit = token[letters..].ToLowerInvariant();
+            if (double.TryParse(token[..letters].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture,
                     out double parsed))
             {
                 if (unit == "em")
@@ -768,7 +875,7 @@ public static partial class SvgReader
                 }
             }
 
-            return _context.Length(first, axis, attribute);
+            return _context.Length(token, axis, attribute);
         }
 
         /// <summary>

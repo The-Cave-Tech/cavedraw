@@ -513,6 +513,12 @@ public static class TextLayoutEngine
             // the gap the file does not have. The pen itself is left alone, which the mark's zero advance does.
             double basePen = pen;
 
+            // **Where the run whose characters are being walked begins on this line**, which is the frame its own
+            // per-character along positions are measured from: the file states those relative to the run's start, and
+            // a run's start is this pen. Tracked here rather than per character because the pen moves.
+            double runPen = pen;
+            int currentRun = -1;
+
             for (int k = 0; k < order.Length; k++)
             {
                 int index = order[k];
@@ -521,13 +527,39 @@ public static class TextLayoutEngine
                     continue;
                 }
 
+                if (runOf[index] != currentRun)
+                {
+                    currentRun = runOf[index];
+                    runPen = pen;
+                }
+
                 // **The same advance the line was measured with.** `widths` is `TextWrapping.Flatten`'s own output,
                 // which already spreads a run's recorded advance over its characters - so a glyph's place on the
                 // line is this number and nothing is measured a second time. Measuring again here is the same
                 // arithmetic done twice, and it disagrees the moment the two calls see different faces.
                 double advance = widths[index];
                 bool mark = TextMeasurement.IsCombiningMark(CharAt(text, index));
-                double inline = mark ? basePen : pen;
+                int within = PieceStart(text, index);
+
+                // **The file's own places win over the face's advances.** A run that states where each of its
+                // characters sits advances by the difference between consecutive places - so a list that contradicts
+                // the metrics is kept, which is the whole point of the attribute. The last character a list reaches
+                // keeps the measured advance, and past the end of the list the pen is the face's again: the same
+                // "a short list applies where it reaches" rule the across list follows.
+                double[]? places = text.Runs[runOf[index]].InlineOffsets is { Length: > 0 } runPlaces
+                    && !mark
+                    && within < runPlaces.Length
+                        ? runPlaces
+                        : null;
+
+                bool placed = false;
+                if (places is not null)
+                {
+                    advance = within + 1 < places.Length ? places[within + 1] - places[within] : advance;
+                    placed = true;
+                }
+
+                double inline = mark ? basePen : placed ? runPen + places![within] : pen;
                 bool turned = Math.Abs(rotation[index]) > 1e-9;
 
                 // **The shift moves the glyph across its baseline and never moves the pen.** `baseline-shift`
@@ -541,7 +573,6 @@ public static class TextLayoutEngine
                 // the baseline shift above already follows. A list shorter than the run applies where it reaches and
                 // is zero beyond: SVG repeats a short list's last value, and repeating it here would silently move
                 // characters the file said nothing about.
-                int within = PieceStart(text, index);
                 double across = text.Runs[runOf[index]].PositionOffsets is { } offsets && within < offsets.Length
                     ? offsets[within]
                     : 0.0;
@@ -556,11 +587,11 @@ public static class TextLayoutEngine
                     // sits to the right of its column line rather than above it: see `ShiftUp`.
                     // A mark takes no step either: in a column an *upright* glyph advances by the line's own pitch,
                     // so a mark that kept that step would push the column down by a whole line for nothing.
-                    double step = mark ? 0.0 : turned ? advance : line.Height;
+                    double step = mark ? 0.0 : placed || turned ? advance : line.Height;
                     glyphs.Add(new GlyphBox(
                         index, inline, line.Cross, step, line.Cross + ShiftUp(vertical: true, shift) + across, inline,
                         rotation[index], runOf[index], PieceStart(text, index)));
-                    pen += step;
+                    pen = placed ? inline + step : pen + step;
                 }
                 else
                 {
@@ -570,7 +601,7 @@ public static class TextLayoutEngine
                         index, inline, line.Cross + line.Ascent, advance, inline,
                         line.Cross + line.Ascent + ShiftUp(vertical: false, shift) + across, 0.0,
                         runOf[index], PieceStart(text, index)));
-                    pen += advance;
+                    pen = placed ? inline + advance : pen + advance;
                 }
 
                 if (!mark)

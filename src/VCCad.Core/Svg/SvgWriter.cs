@@ -1414,6 +1414,38 @@ public static class SvgWriter
                 element.Add(new XAttribute("y", Number(text.Origin.Y + line.Top)));
             }
 
+            // **The file's own places travel as the list they came from.** `x` is the along axis under a horizontal
+            // mode and `y` under a vertical one, and the piece here may be one line's slice of the run - so the slice
+            // of the list goes with it, each entry added to the coordinate the run starts at. That first entry is the
+            // run's own start, which is what makes the list come back rebased on the same place.
+            //
+            // A right-to-left horizontal line is the one shape this cannot state: its written `x` is where the run
+            // *ends*, while the model's places run forwards, so the loss is named rather than written as a list that
+            // would come back reversed.
+            if (run.InlineOffsets is { Length: > 0 } along && start < along.Length)
+            {
+                if (text.Direction == TextDirection.RightToLeft &&
+                    text.WritingMode == TextWritingMode.HorizontalTb)
+                {
+                    Report(
+                        text,
+                        "a run states a position per character on a right-to-left line, and the file's own places " +
+                        "cannot be written that way");
+                }
+                else
+                {
+                    int count = Math.Min(length, along.Length - start);
+                    bool horizontal = text.WritingMode == TextWritingMode.HorizontalTb;
+                    double from = horizontal
+                        ? text.Origin.X + box.X + anchor
+                        : text.Origin.Y + layout.Lines[box.Line].Top;
+
+                    element.SetAttributeValue(
+                        horizontal ? "x" : "y",
+                        string.Join(' ', Enumerable.Range(start, count).Select(i => Number(from + along[i]))));
+                }
+            }
+
             // **A per-character across offset travels as the list the file stated.** `dy` under a horizontal mode and
             // `dx` under a vertical one are the across axis, and the piece here may be one line's slice of the run,
             // so the slice of the list goes with it. Nothing can re-derive these: they are the file's own statement

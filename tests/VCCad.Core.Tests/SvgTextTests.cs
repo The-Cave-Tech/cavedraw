@@ -560,17 +560,20 @@ public class SvgTextTests
     }
 
     /// <summary>
-    /// **A position per character is reported, because a run is placed as a whole.** `x="1 2 3"` is real SVG - one
-    /// position for each glyph - and flattening it to the first would move two characters and say nothing.
+    /// **A position per character is kept, not flattened.** `x="1 2 3"` is real SVG - one position for each glyph -
+    /// and its first value places the block while the rest are the file's own places for the characters that follow.
+    /// This was a declared loss: the reader reported the list because the model had nowhere to put it. It has
+    /// `TextRun.InlineOffsets` now, so the assertion is the member and the absence of the warning that stated the gap.
     /// </summary>
     [Fact]
-    public void APositionPerCharacterIsReported()
+    public void APositionPerCharacterIsKept()
     {
         SvgImportResult result = Read("<text x=\"1 2 3\" y=\"10\">abc</text>");
 
         Assert.Equal(1.0, Block(result).Origin.X, 9);
-        Assert.Contains(result.Warnings, w => w.Contains("a position per character", StringComparison.Ordinal) &&
-                                             w.Contains("x=\"1 2 3\"", StringComparison.Ordinal));
+        Assert.Equal(new[] { 0.0, 1.0, 2.0 }, Assert.Single(Block(result).Runs).InlineOffsets!);
+        Assert.DoesNotContain(
+            result.Warnings, w => w.Contains("position per character", StringComparison.Ordinal));
     }
 
     /// <summary>

@@ -4473,6 +4473,13 @@ public static class EditorOperations
                             VCCad.Core.Text.TextMeasurement.Advances(r).Sum(), 4),
                         ascent = Math.Round(VCCad.Core.Text.TextMeasurement.Ascent(r), 4),
                         descent = Math.Round(VCCad.Core.Text.TextMeasurement.Descent(r), 4),
+
+                        // **How much of the file's own per-character placement this run carries**, one count per
+                        // axis: SVG's `y`/`dy` list moves a character across the line and its `x`/`dx` list along it.
+                        // A driver that cannot see the page needs these numbers to tell that an imported list was
+                        // kept rather than flattened to the run's first value.
+                        perCharacterAcross = r.PositionOffsets?.Length ?? 0,
+                        perCharacterAlong = r.InlineOffsets?.Length ?? 0,
                     }).ToArray(),
                     plain = text.PlainText,
                     caret = ctx.ViewModel.TextCaretOffset,

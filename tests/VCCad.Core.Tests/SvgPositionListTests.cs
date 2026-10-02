@@ -129,6 +129,104 @@ public class SvgPositionListTests
         Assert.Equal(Base(1) + 10.0, shifted.Origin.Y + layout.Glyphs[1].Y, 9);
     }
 
+    /// <summary>
+    /// **An `x` list produces exactly the places the file states, even where they contradict the advances.**
+    ///
+    /// This is the acceptance the issue names for the along axis: the characters are not where a face would put them
+    /// - they are where the file put them - and the first entry is what places the block. Three characters at `x`
+    /// 1, 2 and 3 sit at page 1, 2 and 3 whatever the face measures.
+    /// </summary>
+    [Fact]
+    public void AnXListPlacesTheCharactersWhereTheFileSays()
+    {
+        TextItem item = Block("<text x=\"1 2 3\" y=\"10\" font-size=\"10\">abc</text>");
+
+        Assert.Equal(new[] { 0.0, 1.0, 2.0 }, item.Runs[0].InlineOffsets!);
+
+        TextLayout layout = TextLayoutEngine.Compute(item);
+        Assert.Equal(3, layout.Glyphs.Count);
+        Assert.Equal(1.0, item.Origin.X + layout.Glyphs[0].X, 9);
+        Assert.Equal(2.0, item.Origin.X + layout.Glyphs[1].X, 9);
+        Assert.Equal(3.0, item.Origin.X + layout.Glyphs[2].X, 9);
+    }
+
+    /// <summary>
+    /// **A `dx` list is a running shift, which is SVG's rule for it.** Each entry moves the pen from where the last
+    /// one left it, so `dx="1 2"` puts the first character one along and the second three along - not one and two,
+    /// which is what reading the list as bare places would give.
+    /// </summary>
+    [Fact]
+    public void ADxListAccumulates()
+    {
+        TextItem item = Block("<text x=\"0\" y=\"10\" font-size=\"10\" dx=\"1 2\">ab</text>");
+
+        Assert.Equal(new[] { 0.0, 2.0 }, item.Runs[0].InlineOffsets!);
+
+        TextLayout layout = TextLayoutEngine.Compute(item);
+        Assert.Equal(2, layout.Glyphs.Count);
+        Assert.Equal(1.0, item.Origin.X + layout.Glyphs[0].X, 9);
+        Assert.Equal(3.0, item.Origin.X + layout.Glyphs[1].X, 9);
+    }
+
+    /// <summary>
+    /// **A list shorter than the run applies where it reaches.** Two places for three characters leaves the third
+    /// where the face puts it - past the last place - rather than repeating the last entry and stacking two
+    /// characters on one spot.
+    /// </summary>
+    [Fact]
+    public void AShortAlongListAppliesWhereItReaches()
+    {
+        TextItem item = Block("<text x=\"1 5\" y=\"10\" font-size=\"10\">abc</text>");
+
+        Assert.Equal(new[] { 0.0, 4.0 }, item.Runs[0].InlineOffsets!);
+
+        TextLayout layout = TextLayoutEngine.Compute(item);
+        Assert.Equal(1.0, item.Origin.X + layout.Glyphs[0].X, 9);
+        Assert.Equal(5.0, item.Origin.X + layout.Glyphs[1].X, 9);
+        Assert.True(
+            item.Origin.X + layout.Glyphs[2].X > 5.0,
+            "the character past the list continues from the last place rather than stacking on it");
+    }
+
+    /// <summary>
+    /// **The along list survives the SVG round trip, as a list.** The writer stated the run's own single `x`, so a
+    /// document read from a file and written back out came home with every character where the face put it. The
+    /// assertion is the list in the written element and the geometry after a write and a read.
+    /// </summary>
+    [Fact]
+    public void TheAlongListSurvivesTheSvgRoundTrip()
+    {
+        const string source =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"400\">" +
+            "<text x=\"1 5 9\" y=\"10\" font-size=\"10\">abc</text></svg>";
+
+        CadDocument document = SvgReader.Read(source).Document;
+        TextItem before = document.AllItems().OfType<TextItem>().Single();
+        TextLayout original = TextLayoutEngine.Compute(before);
+
+        string svg = SvgWriter.Write(document);
+
+        string? written = System.Xml.Linq.XDocument.Parse(svg)
+            .Descendants()
+            .First(e => e.Name.LocalName == "tspan")
+            .Attribute("x")?.Value;
+        Assert.NotNull(written);
+        Assert.Equal(3, written!.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length);
+
+        TextItem after = SvgReader.Read(svg).Document.AllItems().OfType<TextItem>().Single();
+        Assert.Equal(new[] { 0.0, 4.0, 8.0 }, after.Runs[0].InlineOffsets!);
+
+        TextLayout again = TextLayoutEngine.Compute(after);
+        Assert.Equal(3, again.Glyphs.Count);
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.Equal(
+                original.Glyphs[i].X - original.Glyphs[0].X,
+                again.Glyphs[i].X - again.Glyphs[0].X,
+                9);
+        }
+    }
+
     /// <summary>The imported document for `abc` with whatever positioning attribute the caller adds.</summary>
     private static CadDocument Read(string attribute)
         => SvgReader.Read($"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"400\">" +
