@@ -4606,7 +4606,7 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        IReadOnlyList<PlacedArt> art = PlacedArt.Resolve(_document, path, brush);
+        IReadOnlyList<PlacedArt> art = PlacedArt.Resolve(_document, path, brush, 1.0, stroke.Pen);
         if (art.Count == 0)
         {
             return;

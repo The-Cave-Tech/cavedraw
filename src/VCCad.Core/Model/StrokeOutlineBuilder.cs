@@ -140,10 +140,12 @@ public static class StrokeOutlineBuilder
     {
         BristleBrushSpec spec = brush.BristleSpec ?? BristleBrushSpec.Default;
 
-        // A stored document holds no pen, which is the rule the scatter brush's pressure follows: the bristles are
-        // placed for a fully pressed, untilted pen and a caller that knows better passes the pen's own numbers to
-        // BristleBrushPath.Strokes.
-        BristleBundle bundle = BristleBrushPath.Strokes(path, brush, scale);
+        // **What the pen was doing travels with the stroke** (issue #107). It used to be left out here - the seam was
+        // called for a fully pressed, untilted pen because a stored document had no member recording one - so a
+        // bundle drawn under a light pen painted the width a heavy one would, and the readings the seam already
+        // honoured were unreachable at render time. `stroke.PenAt` answers a full, upright pen when nothing was
+        // recorded, which is exactly what a mouse-drawn line is drawn as.
+        BristleBundle bundle = BristleBrushPath.Strokes(path, brush, scale, stroke.Pen);
         if (bundle.Bristles.Count == 0)
         {
             return (Array.Empty<IReadOnlyList<Point2D>>(), null);

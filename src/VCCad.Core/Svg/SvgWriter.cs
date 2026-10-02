@@ -2174,7 +2174,7 @@ public static class SvgWriter
                 return;
             }
 
-            IReadOnlyList<PlacedArt> art = PlacedArt.Resolve(_document, path, brush);
+            IReadOnlyList<PlacedArt> art = PlacedArt.Resolve(_document, path, brush, 1.0, stroke.Pen);
             if (art.Count == 0)
             {
                 // A brush with no artwork, or one whose asset the document does not have: there is nothing to

@@ -46,7 +46,7 @@ public class ScatterBrushAlongPathTests
 
     private static IReadOnlyList<ScatterBrushPlacement> Place(
         PathItem path, BrushSpec brush, double scale = 1.0, double pressure = 1.0)
-        => ScatterBrushPath.Placements(path, brush, Bounds, scale, pressure);
+        => ScatterBrushPath.Placements(path, brush, Bounds, scale, PenProfile.Constant(pressure));
 
     /// <summary>
     /// A scatter brush with every axis stated; an axis left out keeps the model's own default. The size is 20 across

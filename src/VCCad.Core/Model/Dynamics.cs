@@ -136,6 +136,217 @@ public readonly record struct InputSample(
     double TiltY = 0.0);
 
 /// <summary>
+/// What a pen was doing at one place along a stroke: how hard it is pressed, and how far it is laid over.
+///
+/// **The pair, because a stroke is drawn with one pen.** Pressure and tilt are two readings of the same instrument
+/// at the same instant, and a seam that took one without the other could not say how hard a tilted pen was pressed.
+/// <see cref="Full"/> is the reading of a pen nobody described - a mouse, or a document written before pens were
+/// recorded - and it is the identity every response curve is applied to.
+/// </summary>
+/// <param name="Pressure">How hard the pen is pressed, in 0..1.</param>
+/// <param name="TiltDegrees">
+/// How far the pen is laid over, in degrees from upright. It is the **magnitude** of the tablet's two tilt
+/// components, which is the scalar a bristle brush's own turn reads; a calligraphic nib's *direction* is derived
+/// from the components at drawing time, where it becomes the nib's angle.
+/// </param>
+public readonly record struct PenReading(double Pressure, double TiltDegrees)
+{
+    /// <summary>A fully pressed, upright pen, which is what a document that records no pen is drawn as.</summary>
+    public static PenReading Full { get; } = new(1.0, 0.0);
+}
+
+/// <summary>One place on a recorded stroke: how far along it is, and what the pen was doing there.</summary>
+/// <param name="Position">How far along the stroke, 0 at its first sample and 1 at its last.</param>
+public sealed record PenSample(double Position, double Pressure, double TiltDegrees = 0.0);
+
+/// <summary>
+/// **What the pen was doing along a stroke, recorded when the stroke was drawn** (issue #107).
+///
+/// The model could already say how a drawing was *made* - <see cref="DynamicsSpec"/> is the response that was
+/// picked, and <see cref="WidthProfileSpec"/> is the width the pressure produced - but it had no member saying what
+/// the pen actually reported. That is why a scatter brush's copies and a bristle brush's bundle were placed with
+/// pressure 1 and tilt 0: the geometry seams take those numbers, and at render time a stored document had no pen to
+/// take them from. A member stored, round-tripped and asserted perfectly while the step that honours it never runs
+/// is the defect this family has produced eight times; this is the missing half of the honouring step for every
+/// brush whose response is resolved at render time rather than baked into a width profile.
+///
+/// **A profile rather than one number**, because a stroke is drawn with a pen that changes: a copy near the light
+/// end of a scatter must be smaller and fainter than one near the heavy end, and one pressure for the whole path
+/// could not say that. It is the shape <see cref="WidthProfileSpec"/> already has - a value at positions along the
+/// path, read by arc length - for the same reason.
+///
+/// **Absent means a full, upright pen.** A profile that is null is not "a pen at zero pressure": it is a document
+/// that records no pen, and every seam must draw it exactly as it drew before this type existed. That is why a
+/// recording whose every sample is full pressure and upright is **not stored at all** - a mouse reports no
+/// information, and writing it would grow the bytes of every drawing made with one.
+/// </summary>
+public sealed record PenProfile
+{
+    public PenProfile(IEnumerable<PenSample> samples)
+        => Samples = samples.OrderBy(sample => sample.Position).ToArray();
+
+    /// <summary>The samples, ordered by position - an invariant of the type, so "the pen at t" does not depend on the order a caller listed them in.</summary>
+    public IReadOnlyList<PenSample> Samples { get; init; }
+
+    /// <summary>A profile with no samples, which states nothing about the pen.</summary>
+    public bool IsEmpty => Samples.Count == 0;
+
+    /// <summary>
+    /// The pen at a position along the stroke, interpolated **linearly** between the two samples that straddle it
+    /// and clamped outside the ends.
+    ///
+    /// Linear rather than eased: the value here is a measurement, not a shape. The curve a person edits is applied
+    /// to this reading by the response that consumes it, and easing the measurement first would apply a curve
+    /// somewhere nobody asked for one.
+    /// </summary>
+    public PenReading At(double position)
+    {
+        if (Samples.Count == 0)
+        {
+            return PenReading.Full;
+        }
+
+        if (Samples.Count == 1)
+        {
+            return new PenReading(Samples[0].Pressure, Samples[0].TiltDegrees);
+        }
+
+        double t = double.IsFinite(position) ? Math.Clamp(position, 0.0, 1.0) : 0.0;
+        if (t <= Samples[0].Position)
+        {
+            return new PenReading(Samples[0].Pressure, Samples[0].TiltDegrees);
+        }
+
+        if (t >= Samples[^1].Position)
+        {
+            return new PenReading(Samples[^1].Pressure, Samples[^1].TiltDegrees);
+        }
+
+        for (int i = 1; i < Samples.Count; i++)
+        {
+            if (t > Samples[i].Position)
+            {
+                continue;
+            }
+
+            PenSample previous = Samples[i - 1];
+            PenSample next = Samples[i];
+            double span = next.Position - previous.Position;
+            if (span <= 1e-12)
+            {
+                return new PenReading(next.Pressure, next.TiltDegrees);
+            }
+
+            double f = (t - previous.Position) / span;
+            return new PenReading(
+                previous.Pressure + ((next.Pressure - previous.Pressure) * f),
+                previous.TiltDegrees + ((next.TiltDegrees - previous.TiltDegrees) * f));
+        }
+
+        return new PenReading(Samples[^1].Pressure, Samples[^1].TiltDegrees);
+    }
+
+    /// <summary>One pressure for the whole stroke, which is a profile with the same reading at both ends.</summary>
+    public static PenProfile Constant(double pressure, double tiltDegrees = 0.0)
+    {
+        double pressed = double.IsFinite(pressure) ? Math.Clamp(pressure, 0.0, 1.0) : 1.0;
+        double tilt = double.IsFinite(tiltDegrees) ? Math.Max(0.0, tiltDegrees) : 0.0;
+        return new PenProfile(new[] { new PenSample(0.0, pressed, tilt), new PenSample(1.0, pressed, tilt) });
+    }
+
+    /// <summary>
+    /// The pen record of a stroke that was drawn from pen samples, or **null when the pen said nothing**.
+    ///
+    /// The positions are the same arc-length fractions <see cref="StrokeDynamics.Positions"/> gives the width
+    /// profile, so the two halves of one drawing agree about where along the line a sample sits. A recording whose
+    /// every sample is a fully pressed, upright pen is the identity, and is not stored: a mouse reaches here as
+    /// exactly that, and a member that wrote itself for every mouse line would change the bytes of every drawing
+    /// while changing nothing about it.
+    /// </summary>
+    public static PenProfile? FromSamples(IReadOnlyList<InputSample> samples)
+    {
+        if (samples.Count == 0)
+        {
+            return null;
+        }
+
+        double[] positions = StrokeDynamics.Positions(samples);
+        var recorded = new List<PenSample>(samples.Count);
+        bool anything = false;
+
+        for (int i = 0; i < samples.Count; i++)
+        {
+            InputSample sample = samples[i];
+            double pressure = double.IsFinite(sample.Pressure) ? Math.Clamp(sample.Pressure, 0.0, 1.0) : 1.0;
+            double tilt = TiltDegrees(sample);
+
+            if (pressure < 1.0 - 1e-9 || tilt > 1e-9)
+            {
+                anything = true;
+            }
+
+            recorded.Add(new PenSample(positions[i], pressure, tilt));
+        }
+
+        return anything ? new PenProfile(recorded) : null;
+    }
+
+    /// <summary>How far a sample's pen is laid over, from the tablet's two tilt components.</summary>
+    private static double TiltDegrees(InputSample sample)
+    {
+        double x = double.IsFinite(sample.TiltX) ? sample.TiltX : 0.0;
+        double y = double.IsFinite(sample.TiltY) ? sample.TiltY : 0.0;
+        double magnitude = Math.Sqrt((x * x) + (y * y));
+        return double.IsFinite(magnitude) ? magnitude : 0.0;
+    }
+
+    /// <summary>
+    /// Two profiles are the same when every sample is the same, **written out rather than left to the record**:
+    /// the record would compare the <c>Samples</c> array by reference, so two profiles read from one file would
+    /// differ and every round-trip assertion built on equality would fail for a reason that is not the round trip.
+    /// <see cref="WidthProfileSpec"/> does the same thing for the same reason.
+    /// </summary>
+    public bool Equals(PenProfile? other)
+    {
+        if (other is null)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(this, other))
+        {
+            return true;
+        }
+
+        if (Samples.Count != other.Samples.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < Samples.Count; i++)
+        {
+            if (Samples[i] != other.Samples[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        foreach (PenSample sample in Samples)
+        {
+            hash.Add(sample);
+        }
+
+        return hash.ToHashCode();
+    }
+}
+
+/// <summary>
 /// Turns raw pen samples into the values a stroke varies by.
 ///
 /// **Speed is derived, not reported.** The platform sends positions and times, not speed, so it is computed from
@@ -426,9 +637,19 @@ public sealed class DynamicsSpec
 
     /// <summary>Pressure drives width, following a preset - the setup nearly every pen user wants.</summary>
     public static DynamicsSpec PressureToWidth(DynamicsPreset preset = DynamicsPreset.Soft)
+        => RespondingTo(DynamicsTarget.Width, preset);
+
+    /// <summary>
+    /// One target driven by the pen's reading, following a preset - the shape a **brush's** own response has.
+    ///
+    /// A brush carries its dynamics rather than the stroke carrying them, so a scatter's copy size and a stroke's
+    /// width are two specs rather than one list; this builds the one-target spec without every caller writing out
+    /// the enum's length by hand.
+    /// </summary>
+    public static DynamicsSpec RespondingTo(DynamicsTarget target, DynamicsPreset preset = DynamicsPreset.Linear)
     {
         var targets = Enum.GetValues<DynamicsTarget>().Select(_ => DynamicsTargetSpec.Off).ToArray();
-        targets[(int)DynamicsTarget.Width] = DynamicsTargetSpec.Preset(preset);
+        targets[(int)target] = DynamicsTargetSpec.Preset(preset);
         return new DynamicsSpec(targets);
     }
 

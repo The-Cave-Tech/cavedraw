@@ -42,7 +42,7 @@ public class BristleBrushAlongPathTests
 
     private static IReadOnlyList<BristleStroke> Bristles(
         PathItem path, BrushSpec brush, double pressure = 1.0, double tilt = 0.0, double scale = 1.0)
-        => BristleBrushPath.Strokes(path, brush, scale, pressure, tilt).Bristles;
+        => BristleBrushPath.Strokes(path, brush, scale, PenProfile.Constant(pressure, tilt)).Bristles;
 
     /// <summary>The direction of a bristle's own polyline, in degrees, from its first point to its last.</summary>
     private static double Direction(BristleStroke bristle)

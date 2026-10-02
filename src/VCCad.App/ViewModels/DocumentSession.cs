@@ -885,10 +885,10 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// went with them.
     ///
     /// This is where tablet dynamics stop being a pure function and become a drawing. The stroke keeps the
-    /// **width profile the pressure produced** rather than the pressure itself, for the reason
-    /// <see cref="StrokeSpec.HasDynamics"/> gives: a profile is geometry, so it draws, exports and re-opens as the
-    /// line somebody drew, while a recorded pressure would be a note saying how it had been drawn. The response
-    /// itself stays on the stroke beside it, so the pane can still show what the pen was told to do.
+    /// **width profile the pressure produced** - geometry, so it draws, exports and re-opens as the line somebody
+    /// drew - and it keeps the **pen's own record** beside it, which is what a brush whose response is resolved at
+    /// render time reads (issue #107). The response itself stays on the stroke as well, so the pane can still show
+    /// what the pen was told to do.
     ///
     /// <paramref name="style"/> is the stroke to draw with, and null means **the tool's current stroke** - the same
     /// thing the pen and the shape tools draw with, so the colour, width and brush a person picked apply to a
@@ -946,16 +946,24 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// <summary>
     /// The stroke a freehand line is drawn with: what the tool says, with the pen's own record applied to it.
     ///
-    /// **Pressure becomes a width profile and tilt becomes the nib's angle**, which are the two things a stored
-    /// document can carry: both are members of the stroke, so both reach the canvas and the exporter through the
-    /// one outline builder rather than through a renderer learning about pens. The targets that have nowhere to go
-    /// on a plain line are left alone - a scatter copy's scale and opacity belong to a brush's placements, and a
-    /// nib replaces the width rather than modulating it, so pressure-to-width has nothing to speak through on a
-    /// stroke that is swept with one.
+    /// **Pressure becomes a width profile and tilt becomes the nib's angle**, which are the two things a plain
+    /// stroke draws through, and **the raw reading is recorded beside them** (issue #107). The record is what a
+    /// brush whose response is resolved at render time reads - a scatter copy's size and opacity, a bristle
+    /// bundle's spread and turn - because those are not baked into geometry the way a width profile is. It is
+    /// carried whether or not a curve was picked, since those responses are the brush's own rather than the
+    /// stroke's, and a brush that states no response ignores it: with the target off, a factor of one.
+    ///
+    /// A width profile is still only built for a plain stroke, because a nib replaces the width rather than
+    /// modulating it.
     /// </summary>
     private StrokeSpec DrawnStroke(IReadOnlyList<InputSample> samples, StrokeSpec? style)
     {
         StrokeSpec stroke = ToolStroke(style);
+
+        // The pen that drew it, recorded for every seam that resolves a response at render time. `FromSamples`
+        // answers null for a recording that is a fully pressed, upright pen throughout - a mouse - so an ordinary
+        // line carries no member and its bytes are what they were.
+        stroke = stroke with { Pen = PenProfile.FromSamples(samples) };
 
         DynamicsSpec? dynamics = stroke.Dynamics;
         if (dynamics is null || dynamics.IsEmpty)

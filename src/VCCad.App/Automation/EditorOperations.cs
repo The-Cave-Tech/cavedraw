@@ -3639,12 +3639,13 @@ public static class EditorOperations
             "path every time they are asked for, which is why editing the path moves them with no brush re-applied. " +
             "The numbers are a pure function of the path and the brush's parameters through a stable sequence, so " +
             "asking twice gives the same drawings and two renders of a document agree. 'pressure' is the pen's " +
-            "pressure in 0..1 and moves the size and the opacity of every copy through the brush's own dynamics; " +
-            "with none recorded it changes nothing, which is what a static document is drawn as. This is the readout " +
-            "of what is drawn: the canvas and the exporter both resolve these same copies through PlacedArt.Resolve, " +
-            "so the numbers here are the picture - including the per-copy opacity, which both renderers multiply in. " +
-            "A brush that is not a scatter brush is refused by name, and so is a brush naming an item the document " +
-            "does not have.",
+            "pressure in 0..1 and overrides the stroke's own recorded pen; with neither, a path nobody drew with a " +
+            "pen is read as a fully pressed one, which is what a static document is drawn as. When nothing is stated " +
+            "the pen the copies are actually drawn at is the path's own record, and it is reported back as 'pen' - so " +
+            "the numbers here are the picture, not a second opinion about it. This is the readout of what is drawn: " +
+            "the canvas and the exporter both resolve these same copies through PlacedArt.Resolve, so the numbers " +
+            "here are the picture - including the per-copy opacity, which both renderers multiply in. A brush that " +
+            "is not a scatter brush is refused by name, and so is a brush naming an item the document does not have.",
             "name:string, itemId?:guid (default: the selected paths), pressure?:number",
             (ctx, p) =>
             {
@@ -3677,37 +3678,52 @@ public static class EditorOperations
                 }
 
                 Rect2D bounds = ItemBounds.Of(asset);
-                double pressure = p.GetDouble("pressure", 1.0);
+
+                // Stated or absent, rather than defaulted to 1: a caller who passed nothing gets the stroke's own
+                // recorded pen, which is what the renderers read. Defaulting the parameter to 1 here would make the
+                // readout disagree with the drawing the moment anybody drew with a pen.
+                double? stated = p.ValueKind == JsonValueKind.Object &&
+                                 p.TryGetProperty("pressure", out JsonElement statedPressure) &&
+                                 statedPressure.ValueKind == JsonValueKind.Number
+                    ? statedPressure.GetDouble()
+                    : null;
 
                 IEnumerable<PathItem> paths = p.TryGetGuid("itemId", out Guid id)
                     ? new[] { RequirePath(document, id) }
                     : ctx.Session.SelectedPaths();
 
-                return paths.Select(path => new
+                return paths.Select(path =>
                 {
-                    itemId = path.Id,
-                    name = path.Name,
-                    brush = name,
-                    assetId,
-                    assetName = asset.Name,
-                    pressure = Math.Round(Math.Clamp(pressure, 0.0, 1.0), 6),
-                    copies = ScatterBrushPath.Placements(path, brush, _ => bounds, 1.0, pressure).Select(copy => new
+                    PenProfile? pen = stated is { } value ? PenProfile.Constant(value) : RecordedPen(path);
+                    return new
                     {
-                        position = Math.Round(copy.Position, 4),
-                        x = Math.Round(copy.Point.X, 4),
-                        y = Math.Round(copy.Point.Y, 4),
-                        tangentDegrees = Math.Round(copy.TangentRadians * 180.0 / Math.PI, 4),
-                        length = Math.Round(copy.Length, 4),
-                        scale = Math.Round(copy.Scale, 6),
-                        rotationDegrees = Math.Round(copy.RotationDegrees, 4),
-                        offset = Math.Round(copy.Offset, 4),
-                        opacity = Math.Round(copy.Opacity, 6),
-                        transform = new[]
+                        itemId = path.Id,
+                        name = path.Name,
+                        brush = name,
+                        assetId,
+                        assetName = asset.Name,
+                        pressure = stated is { } statedValue
+                            ? Math.Round(Math.Clamp(statedValue, 0.0, 1.0), 6)
+                            : (double?)null,
+                        pen = DescribePen(pen),
+                        copies = ScatterBrushPath.Placements(path, brush, _ => bounds, 1.0, pen).Select(copy => new
                         {
-                            copy.Transform.A, copy.Transform.B, copy.Transform.C,
-                            copy.Transform.D, copy.Transform.E, copy.Transform.F,
-                        },
-                    }).ToArray(),
+                            position = Math.Round(copy.Position, 4),
+                            x = Math.Round(copy.Point.X, 4),
+                            y = Math.Round(copy.Point.Y, 4),
+                            tangentDegrees = Math.Round(copy.TangentRadians * 180.0 / Math.PI, 4),
+                            length = Math.Round(copy.Length, 4),
+                            scale = Math.Round(copy.Scale, 6),
+                            rotationDegrees = Math.Round(copy.RotationDegrees, 4),
+                            offset = Math.Round(copy.Offset, 4),
+                            opacity = Math.Round(copy.Opacity, 6),
+                            transform = new[]
+                            {
+                                copy.Transform.A, copy.Transform.B, copy.Transform.C,
+                                copy.Transform.D, copy.Transform.E, copy.Transform.F,
+                            },
+                        }).ToArray(),
+                    };
                 }).ToArray();
             });
 
@@ -3724,7 +3740,10 @@ public static class EditorOperations
             "re-applied. The numbers here are the picture: StrokeOutlineBuilder turns each of these bristles into " +
             "the loop the canvas, the PDF writer and the SVG writer all fill. 'pressure' is the pen's pressure in " +
             "0..1 and opens the bundle through the brush's own pressureSpread; 'tilt' is the pen's tilt in degrees " +
-            "and turns every bristle through its tiltTurn. A brush that is not a bristle brush is refused by name.",
+            "and turns every bristle through its tiltTurn. Either one stated overrides the pen the stroke itself " +
+            "records, and the pen actually used is reported back as 'pen' - so a driver that drew the line and then " +
+            "asked what it looks like is told the truth rather than a default. A brush that is not a bristle brush " +
+            "is refused by name.",
             "name:string, itemId?:guid (default: the selected paths), pressure?:number, tilt?:number",
             (ctx, p) =>
             {
@@ -3746,6 +3765,10 @@ public static class EditorOperations
                                     : "it sweeps a nib along the path"));
                 }
 
+                // Stated or absent, for the reason the scatter readout gives: a default of 1 here would describe a
+                // pen the stroke did not record, and the readout would stop being what is drawn.
+                bool stated = p.ValueKind == JsonValueKind.Object &&
+                              (p.TryGetProperty("pressure", out _) || p.TryGetProperty("tilt", out _));
                 double pressure = p.GetDouble("pressure", 1.0);
                 double tilt = p.GetDouble("tilt", 0.0);
 
@@ -3755,7 +3778,8 @@ public static class EditorOperations
 
                 return paths.Select(path =>
                 {
-                    BristleBundle bundle = BristleBrushPath.Strokes(path, brush, 1.0, pressure, tilt);
+                    PenProfile? pen = stated ? PenProfile.Constant(pressure, tilt) : RecordedPen(path);
+                    BristleBundle bundle = BristleBrushPath.Strokes(path, brush, 1.0, pen);
                     return new
                     {
                         itemId = path.Id,
@@ -3763,6 +3787,7 @@ public static class EditorOperations
                         brush = name,
                         pressure = Math.Round(Math.Clamp(pressure, 0.0, 1.0), 6),
                         tilt = Math.Round(tilt, 4),
+                        pen = DescribePen(pen),
                         requested = bundle.Requested,
                         countBoundHit = bundle.CountBoundHit,
                         maxBristles = BristleBrushPath.MaxBristles,
@@ -9116,7 +9141,39 @@ public static class EditorOperations
             }).ToArray()
             : null,
         dynamics = DescribeDynamics(stroke.Dynamics),
+        pen = DescribePen(stroke.Pen),
     };
+
+    /// <summary>
+    /// The pen a path records, or null when none of its strokes has one.
+    ///
+    /// The **first** stroke that recorded a pen, because a readout of a brush's geometry is asked of a path rather
+    /// than of one stroke of its stack: the renderers ask the stroke that carries the brush, and a readout that
+    /// asked a different one would describe a drawing nobody made.
+    /// </summary>
+    private static PenProfile? RecordedPen(PathItem path)
+        => path.Strokes.Select(stroke => stroke.Pen).FirstOrDefault(pen => pen is { IsEmpty: false });
+
+    /// <summary>
+    /// The pen a stroke was drawn with, as a caller reads it, or null when nothing was recorded.
+    ///
+    /// Reported because it is the input the brush seams resolve their responses from at render time: a driver that
+    /// cannot see needs to know what the pen was doing to predict what a scatter copy's size or a bristle bundle's
+    /// spread will be. Null rather than a full-pressure sample, so "nobody recorded a pen" is told apart from "the
+    /// pen was pressed all the way", which is the distinction the model and the sidecar keep.
+    /// </summary>
+    private static object? DescribePen(PenProfile? pen)
+        => pen is { IsEmpty: false }
+            ? new
+            {
+                samples = pen.Samples.Select(sample => new
+                {
+                    position = Math.Round(sample.Position, 6),
+                    pressure = Math.Round(sample.Pressure, 6),
+                    tiltDegrees = Math.Round(sample.TiltDegrees, 4),
+                }).ToArray(),
+            }
+            : null;
 
     /// <summary>
     /// A width profile as a caller reads it, or null when the stroke has none.

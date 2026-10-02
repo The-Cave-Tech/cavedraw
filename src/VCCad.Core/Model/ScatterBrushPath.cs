@@ -68,10 +68,12 @@ public readonly record struct ScatterBrushPlacement(
 /// <see cref="StrokeRenderPlan"/> is widths and outlines - so a renderer draws the asset at each placement, and the
 /// fact that this is a second step rather than part of the plan is reported rather than hidden.
 ///
-/// **Pressure is a table, not a tint.** The seam takes the pen's pressure and reads the brush's own
-/// <see cref="DynamicsSpec"/> for <see cref="DynamicsTarget.ScatterScale"/> and <see cref="DynamicsTarget.Opacity"/>.
-/// A target that is switched off contributes a factor of one rather than the pressure itself, which is the rule the
-/// width dynamics already follow: with no dynamics recorded a light sample must draw a full copy, not a faint one.
+/// **Pressure is a table, not a tint.** The seam reads the pen's **recorded pressure at each copy's own place**
+/// along the stroke through the brush's own <see cref="DynamicsSpec"/> for <see cref="DynamicsTarget.ScatterScale"/>
+/// and <see cref="DynamicsTarget.Opacity"/>. A target that is switched off contributes a factor of one rather than
+/// the pressure itself, which is the rule the width dynamics already follow: with no dynamics recorded a light
+/// sample must draw a full copy, not a faint one. A pen nobody recorded is a full one, which is what a mouse-drawn
+/// line and every document written before the member existed are drawn as.
 /// </summary>
 public static class ScatterBrushPath
 {
@@ -105,8 +107,11 @@ public static class ScatterBrushPath
     /// handed: the brush's size, its pitch and its ranges are in the stroke's units, so a path inside a scaled group
     /// scatters at that scale.
     ///
-    /// <paramref name="pressure"/> is the pen's pressure in 0..1. It is 1 - a fully pressed pen, which is what a
-    /// static document is drawn as - when nothing recorded how the path was drawn.
+    /// <paramref name="pen"/> is what the pen was doing along the path, or null when nothing recorded it. Its
+    /// pressure at each copy's own place drives that copy's size and opacity through the brush's own dynamics, so a
+    /// copy near the light end of a stroke is smaller and fainter than one near the heavy end. Null - a static
+    /// document, or a mouse-drawn line - is a fully pressed pen, which is what every copy was drawn at before the
+    /// member existed.
     ///
     /// A brush that is not a scatter brush, one that names no asset, an asset with no extent, a brush with no size
     /// and a path with no segment all answer with nothing: there is nothing to place, and inventing one would draw
@@ -117,7 +122,7 @@ public static class ScatterBrushPath
         BrushSpec brush,
         Func<Guid, Rect2D?> assetBounds,
         double scale = 1.0,
-        double pressure = 1.0)
+        PenProfile? pen = null)
     {
         if (!brush.IsScatter || brush.ScatterSpec is not { } spec || spec.Asset is not { } asset)
         {
@@ -138,12 +143,6 @@ public static class ScatterBrushPath
         // The pen's two responses, read once: a target that is off contributes one rather than the pressure itself,
         // which is what stops a light sample erasing copies when no dynamics were recorded.
         DynamicsSpec dynamics = brush.Dynamics ?? DynamicsSpec.None;
-        double fromPressure = dynamics.For(DynamicsTarget.ScatterScale).Enabled
-            ? dynamics.Apply(DynamicsTarget.ScatterScale, pressure)
-            : 1.0;
-        double opacityFromPressure = dynamics.For(DynamicsTarget.Opacity).Enabled
-            ? dynamics.Apply(DynamicsTarget.Opacity, pressure)
-            : 1.0;
 
         var copies = new List<ScatterBrushPlacement>();
 
@@ -153,7 +152,7 @@ public static class ScatterBrushPath
         IReadOnlyList<FlattenedOutline> outlines = PathFlattener.FlattenForStroke(path);
         for (int subpath = 0; subpath < outlines.Count; subpath++)
         {
-            Lay(outlines[subpath], subpath, spec, bounds, size, scale, fromPressure, opacityFromPressure, copies);
+            Lay(outlines[subpath], subpath, spec, bounds, size, scale, dynamics, pen, copies);
             if (copies.Count >= MaxCopies)
             {
                 break;
@@ -161,6 +160,28 @@ public static class ScatterBrushPath
         }
 
         return copies;
+    }
+
+    /// <summary>
+    /// The pen's two responses at one copy's place along its subpath.
+    ///
+    /// Read **per copy** rather than once for the whole run, because that is what a recorded pen means: the reading
+    /// is a position along the stroke, and a copy sits at a position. A target that is off contributes a factor of
+    /// one rather than the pressure, which is the rule the width dynamics already follow.
+    /// </summary>
+    private static (double Scale, double Opacity) Responses(
+        PenProfile? pen, DynamicsSpec dynamics, double alongFraction)
+    {
+        PenReading reading = pen is { IsEmpty: false } ? pen.At(alongFraction) : PenReading.Full;
+
+        double fromPressure = dynamics.For(DynamicsTarget.ScatterScale).Enabled
+            ? dynamics.Apply(DynamicsTarget.ScatterScale, reading.Pressure)
+            : 1.0;
+        double opacityFromPressure = dynamics.For(DynamicsTarget.Opacity).Enabled
+            ? dynamics.Apply(DynamicsTarget.Opacity, reading.Pressure)
+            : 1.0;
+
+        return (fromPressure, opacityFromPressure);
     }
 
     /// <summary>One subpath's copies: the walk from its beginning, one draw per axis per copy.</summary>
@@ -171,8 +192,8 @@ public static class ScatterBrushPath
         Rect2D bounds,
         double size,
         double rendererScale,
-        double fromPressure,
-        double opacityFromPressure,
+        DynamicsSpec dynamics,
+        PenProfile? pen,
         List<ScatterBrushPlacement> copies)
     {
         IReadOnlyList<Point2D> points = outline.Points;
@@ -209,6 +230,11 @@ public static class ScatterBrushPath
         for (double position = 0.0; position < total - Epsilon && copies.Count < MaxCopies;)
         {
             uint seed = Mix(baseSeed + ((uint)copies.Count * 0x9E3779B9u) + ((uint)subpath * 0x85EBCA6Bu));
+
+            // What the pen was doing **where this copy sits**, which is the whole difference between a recorded pen
+            // and one number for the run: the size and the opacity of a copy follow the pressure at its own place
+            // along the stroke.
+            (double fromPressure, double opacityFromPressure) = Responses(pen, dynamics, position / total);
 
             // The copy's own turn, size and offset, each drawn from its own axis of the sequence. The offset is
             // held out of the range assertion's way by being clamped nowhere: a copy across the path is a real

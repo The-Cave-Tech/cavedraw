@@ -267,7 +267,13 @@ public sealed record StrokeSpec(
     DynamicsSpec? Dynamics = null,
     BrushSpec? Brush = null,
     double? Opacity = null,
-    BlendMode? Blend = null)
+    BlendMode? Blend = null,
+
+    // What the pen was doing along the stroke (issue #107). Nullable and **absent when nothing was recorded**, so a
+    // stroke drawn by a mouse - or written before pens were recorded - carries no member and the seams draw it at a
+    // fully pressed, upright pen exactly as they did before. The last member, so every document written by an
+    // earlier build serialises to exactly the bytes it did then.
+    PenProfile? Pen = null)
 {
     /// <summary>Convenience: no visible stroke.</summary>
     public static StrokeSpec None { get; } =
@@ -315,6 +321,31 @@ public sealed record StrokeSpec(
     /// filter out here. The absence of a brush is the null member, which is the default.
     /// </summary>
     public bool HasBrush => Brush is not null;
+
+    /// <summary>
+    /// Whether the stroke records what the pen was doing when it was drawn.
+    ///
+    /// This is the raw signal, kept beside the two things derived from it: <see cref="Dynamics"/> is the response
+    /// that was picked, <see cref="WidthProfile"/> is the width the pressure produced, and this is what the pen
+    /// reported. A brush whose response is resolved at render time - a scatter's copy size, a bristle bundle's
+    /// spread - has nowhere else to read it, which is why the member exists rather than the readings being folded
+    /// into geometry at drawing time.
+    /// </summary>
+    public bool HasPen => Pen is { IsEmpty: false };
+
+    /// <summary>
+    /// What the pen was doing at a position along the stroke, or a **full, upright pen when nothing was recorded**.
+    ///
+    /// Read by the shared geometry seams rather than by each renderer, so the canvas, the PDF writer and the SVG
+    /// writer cannot come to three answers about what a scatter copy's size was.
+    /// </summary>
+    public PenReading PenAt(double position) => Pen is { IsEmpty: false } profile ? profile.At(position) : PenReading.Full;
+
+    /// <summary>The pen's pressure at a position along the stroke, and 1 when nothing was recorded.</summary>
+    public double PressureAt(double position) => PenAt(position).Pressure;
+
+    /// <summary>How far the pen is laid over at a position along the stroke, and 0 when nothing was recorded.</summary>
+    public double TiltAt(double position) => PenAt(position).TiltDegrees;
 
     /// <summary>
     /// How much of this stroke is drawn, or **null when the stroke states no opacity at all**.

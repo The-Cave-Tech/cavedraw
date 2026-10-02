@@ -114,13 +114,12 @@ public static class BristleBrushPath
     /// is handed: the brush's size, its bristles' length and thickness are in the stroke's units, so a path inside
     /// a scaled group paints at that scale.
     ///
-    /// <paramref name="pressure"/> is the pen's pressure in 0..1, which widens the bundle through
-    /// <see cref="BristleBrushSpec.PressureSpread"/>. It is 1 - a fully pressed pen, which is what a static
-    /// document is drawn as - when nothing recorded how the path was drawn.
-    ///
-    /// <paramref name="tiltDegrees"/> is how far the pen is laid over, in degrees, which turns every bristle
-    /// through <see cref="BristleBrushSpec.TiltTurn"/>. It is 0 for the same reason pressure is 1: a stored
-    /// document holds no pen.
+    /// <paramref name="pen"/> is what the pen was doing along the path, or null when nothing recorded it. Its
+    /// pressure opens the bundle through <see cref="BristleBrushSpec.PressureSpread"/> and its tilt turns every
+    /// bristle through <see cref="BristleBrushSpec.TiltTurn"/>, both read **where the bristle runs** rather than once
+    /// for the whole path - so a bundle drawn under a pen that lightens narrows with it. Null is a fully pressed,
+    /// upright pen, which is what a static document is drawn as and what every bristle was placed at before the
+    /// member existed.
     ///
     /// A brush that is not a bristle brush, one with no size, one whose bristles have no thickness and a path with
     /// no segment all answer with nothing: there is nothing to paint, and inventing a bristle would draw a stroke
@@ -131,8 +130,7 @@ public static class BristleBrushPath
         PathItem path,
         BrushSpec brush,
         double scale = 1.0,
-        double pressure = 1.0,
-        double tiltDegrees = 0.0)
+        PenProfile? pen = null)
     {
         if (!brush.IsBristle || brush.BristleSpec is not { } spec)
         {
@@ -150,16 +148,12 @@ public static class BristleBrushPath
             return new BristleBundle(Array.Empty<BristleStroke>(), requested, bound);
         }
 
-        // The pen's two responses, read once. Pressure widens the bundle and tilt turns it; a brush that states no
-        // amount for either ignores the pen entirely, which is what a document drawn without one looks like.
-        double pressed = double.IsNaN(pressure) ? 1.0 : Math.Clamp(pressure, 0.0, 1.0);
-        double spread = Math.Max(0.0, spec.Spread)
-            * (1.0 - (Math.Clamp(spec.PressureSpread, 0.0, 1.0) * (1.0 - pressed)));
-        double half = size / 2.0 * spread;
-
+        // The two amounts the pen moves the bundle by. The pen's own readings are taken per bristle, below, because
+        // a recorded pen varies along the path and a bundle drawn under a lightening pen has to narrow with it.
+        double maxSpread = Math.Max(0.0, spec.Spread);
+        double pressureSpread = Math.Clamp(spec.PressureSpread, 0.0, 1.0);
         double randomness = Math.Clamp(spec.Randomness, 0.0, 1.0);
         double stiffness = Math.Clamp(spec.Stiffness, 0.0, 1.0);
-        double fromTilt = (double.IsNaN(tiltDegrees) ? 0.0 : tiltDegrees) * spec.TiltTurn;
 
         var bristles = new List<BristleStroke>();
         IReadOnlyList<FlattenedOutline> outlines = PathFlattener.FlattenForStroke(path);
@@ -183,11 +177,6 @@ public static class BristleBrushPath
             {
                 uint seed = Mix(baseSeed + ((uint)i * 0x9E3779B9u) + ((uint)subpath * 0x85EBCA6Bu));
 
-                // Where the bristle sits across the bundle: an even fan from one edge to the other, moved by its
-                // own stray. A bundle of one is on the centreline, which is the only place it can be.
-                double fan = count == 1 ? 0.0 : ((2.0 * i) / (count - 1)) - 1.0;
-                double offset = (fan * half) + (Noise(seed, OffsetAxis) * randomness * half);
-
                 // Where along the path it starts. A bristle that runs the whole path starts at the beginning; a
                 // shorter one is spread evenly over the room it has, with its own stray, so a bundle of dashes
                 // covers the stroke rather than piling up at one end.
@@ -195,6 +184,22 @@ public static class BristleBrushPath
                     ? 0.0
                     : (((count == 1 ? 0.5 : i / (double)(count - 1)) * room)
                         + (Noise(seed, StartAxis) * randomness * room / Math.Max(1, count)));
+
+                // The pen where this bristle runs - its own middle, because a bristle is drawn at the pressure the
+                // pen was under along it rather than at one end of it, and a full-length bristle must read the
+                // middle of the stroke rather than its beginning.
+                PenReading reading = pen is { IsEmpty: false }
+                    ? pen.At(total <= Epsilon ? 0.0 : Math.Clamp((start + (run / 2.0)) / total, 0.0, 1.0))
+                    : PenReading.Full;
+
+                double spread = maxSpread * (1.0 - (pressureSpread * (1.0 - reading.Pressure)));
+                double half = size / 2.0 * spread;
+                double fromTilt = reading.TiltDegrees * spec.TiltTurn;
+
+                // Where the bristle sits across the bundle: an even fan from one edge to the other, moved by its
+                // own stray. A bundle of one is on the centreline, which is the only place it can be.
+                double fan = count == 1 ? 0.0 : ((2.0 * i) / (count - 1)) - 1.0;
+                double offset = (fan * half) + (Noise(seed, OffsetAxis) * randomness * half);
 
                 double turn = fromTilt + (Noise(seed, TurnAxis) * randomness * 90.0);
                 double shade = Math.Clamp(Noise(seed, ShadeAxis) * spec.ColourJitter, -1.0, 1.0);

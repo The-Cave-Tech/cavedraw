@@ -58,14 +58,15 @@ public readonly record struct PlacedArt(
     /// size is in the stroke's units, so a path inside a scaled group draws the art at that scale. The canvas
     /// passes 1 because it paints inside the transform; the exporter passes its stroke scale.
     /// </param>
-    /// <param name="pressure">
-    /// The pen's pressure in 0..1, which only a scatter brush reads: it drives the size and the opacity of a copy
-    /// through the brush's own dynamics. It defaults to a fully pressed pen, because a **stored** document has no
-    /// pen - the pressure a path was drawn with is not a member of the model - so both renderers leave it at the
-    /// default and a caller that does know the pressure can pass it.
+    /// <param name="pen">
+    /// What the pen was doing along the stroke, which only a scatter brush reads: its pressure drives the size and
+    /// the opacity of a copy through the brush's own dynamics, at that copy's own place. It defaults to null, which
+    /// is a fully pressed, upright pen - a **stored** document that records no pen is drawn exactly as it was before
+    /// this parameter existed, and the renderers pass the stroke's own <see cref="StrokeSpec.Pen"/> so a line drawn
+    /// with a pen keeps its response after a save and a reload.
     /// </param>
     public static IReadOnlyList<PlacedArt> Resolve(
-        CadDocument document, PathItem path, BrushSpec? brush, double scale = 1.0, double pressure = 1.0)
+        CadDocument document, PathItem path, BrushSpec? brush, double scale = 1.0, PenProfile? pen = null)
     {
         if (brush is not { } spec)
         {
@@ -83,7 +84,7 @@ public readonly record struct PlacedArt(
         // seam decides each placement and this names the item once.
         if (spec.IsScatter)
         {
-            return ResolveCopies(document, path, spec, scale, pressure);
+            return ResolveCopies(document, path, spec, scale, pen);
         }
 
         if (!spec.IsArt || spec.ArtAsset is not { } assetId)
@@ -189,7 +190,7 @@ public readonly record struct PlacedArt(
     /// renderers multiply it into the opacity they already paint the piece at.
     /// </summary>
     private static IReadOnlyList<PlacedArt> ResolveCopies(
-        CadDocument document, PathItem path, BrushSpec brush, double scale, double pressure)
+        CadDocument document, PathItem path, BrushSpec brush, double scale, PenProfile? pen)
     {
         if (brush.ScatterSpec?.Asset is not { } assetId || document.FindItem(assetId) is not { } asset)
         {
@@ -198,7 +199,7 @@ public readonly record struct PlacedArt(
 
         Rect2D bounds = ItemBounds.Of(asset);
         IReadOnlyList<ScatterBrushPlacement> copies =
-            ScatterBrushPath.Placements(path, brush, _ => bounds, scale, pressure);
+            ScatterBrushPath.Placements(path, brush, _ => bounds, scale, pen);
         if (copies.Count == 0)
         {
             return Array.Empty<PlacedArt>();

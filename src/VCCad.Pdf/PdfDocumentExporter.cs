@@ -854,7 +854,7 @@ public static class PdfDocumentExporter
                     return;
                 }
 
-                foreach (PlacedArt piece in PlacedArt.Resolve(document, path, brush, strokeScale))
+                foreach (PlacedArt piece in PlacedArt.Resolve(document, path, brush, strokeScale, stroke.Pen))
                 {
                     // The placement is the frame the asset is **written in**, not a `cm` wrapped around its own
                     // coordinates, because that is how this writer states every other item's frame: a path's
@@ -1070,7 +1070,7 @@ public static class PdfDocumentExporter
                             continue;
                         }
 
-                        foreach (PlacedArt piece in PlacedArt.Resolve(document, path, brush))
+                        foreach (PlacedArt piece in PlacedArt.Resolve(document, path, brush, 1.0, stroke.Pen))
                         {
                             CollectItemAlphas(
                                 document,

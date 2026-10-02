@@ -134,7 +134,14 @@ internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, St
     // How the stroke's colour combines with what is beneath it, when it states a mode. Written as the file's own
     // name, and absent when unstated - the same rule as the opacity above it.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? Blend = null);
+    string? Blend = null,
+
+    // What the pen was doing along the stroke (issue #107), in position order. Absent when nothing was recorded -
+    // which is a mouse, and every document written before pens were recorded - so an ordinary stroke writes no
+    // member here and serialises to exactly the bytes it did then. This is the raw reading the brush seams resolve
+    // their responses from at render time, beside the width profile the pressure produced.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    PenSampleDto[]? Pen = null);
 
 /// <summary>
 /// One dynamics target on the wire: whether it is on, and the two control points of its curve.
@@ -303,6 +310,20 @@ internal sealed record WidthProfileDto(string Name, WidthPointDto[] Points);
 
 internal sealed record WidthPointDto(
     double Position, double Left, double Right, WidthInterpolation Interpolation = WidthInterpolation.Linear);
+
+/// <summary>
+/// One reading of a recorded pen on the wire: how far along the stroke it is, how hard the pen is pressed and how
+/// far it is laid over.
+///
+/// The tilt is absent when it is zero, so a stroke drawn by pressure alone writes one number per sample rather than
+/// two - the rule every optional control in this format follows. The reading travels per sample rather than as a
+/// curve, because it is a **measurement** rather than a shape: the curve a person edits is applied to it by the
+/// response that consumes it, and storing the eased value would store an answer twice.
+/// </summary>
+internal sealed record PenSampleDto(
+    double Position,
+    double Pressure,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Tilt = null);
 
 /// <summary>
 /// A filter on the wire: its name, its primitives in evaluation order, and the region it is evaluated over.
@@ -885,7 +906,21 @@ internal abstract record ItemDto
 
             // The name, not the enum's ordinal: the file's own vocabulary is what another reader understands, and
             // an unknown mode read back as Normal is the silent rewrite `BlendModes.Parse` exists to prevent.
-            s.Blend?.ToSvgName());
+            s.Blend?.ToSvgName(),
+
+            // The pen's own record, written only when there is one. A stroke that recorded nothing writes nothing,
+            // which is what keeps a mouse-drawn document - and every document written before this member existed -
+            // byte-identical.
+            s.HasPen ? ToPenSamples(s.Pen!) : null);
+
+    /// <summary>What the pen was doing along a stroke, on the wire: one sample per reading, in position order.</summary>
+    private static PenSampleDto[] ToPenSamples(PenProfile pen)
+        => pen.Samples
+            .Select(sample => new PenSampleDto(
+                sample.Position,
+                sample.Pressure,
+                sample.TiltDegrees == 0.0 ? null : sample.TiltDegrees))
+            .ToArray();
 
     /// <summary>
     /// A brush on the wire, or null when the stroke has none.
@@ -1466,6 +1501,7 @@ internal static class ItemDtoExtensions
                 Brush = s.Brush?.ToModel(),
                 Opacity = ReadOpacity(s.Opacity),
                 Blend = ReadBlend(s.Blend),
+                Pen = ToPen(s.Pen),
             }
             : new StrokeSpec(s.Visible, new ColorRgb(s.Color.R, s.Color.G, s.Color.B, s.Color.A),
                 s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment,
@@ -1476,7 +1512,30 @@ internal static class ItemDtoExtensions
                 ToDynamics(s.Dynamics),
                 s.Brush?.ToModel(),
                 ReadOpacity(s.Opacity),
-                ReadBlend(s.Blend));
+                ReadBlend(s.Blend),
+                ToPen(s.Pen));
+
+    /// <summary>
+    /// The pen's own record as the file stated it, or null when it stated none.
+    ///
+    /// A sample whose pressure is not a finite number is read as a fully pressed one and one whose tilt is not is
+    /// read as upright, for the reason <see cref="ReadOpacity"/> gives: a NaN would poison every comparison the
+    /// profile takes part in, and neither is a reading a pen can give. An **empty** array is read as no record at
+    /// all, because a profile with no samples says nothing about the pen - which is the state the absent member
+    /// already means, and a second representation of it would be a distinction with no difference.
+    /// </summary>
+    private static PenProfile? ToPen(PenSampleDto[]? samples)
+    {
+        if (samples is not { Length: > 0 })
+        {
+            return null;
+        }
+
+        return new PenProfile(samples.Select(sample => new PenSample(
+            double.IsFinite(sample.Position) ? sample.Position : 0.0,
+            double.IsFinite(sample.Pressure) ? Math.Clamp(sample.Pressure, 0.0, 1.0) : 1.0,
+            sample.Tilt is { } tilt && double.IsFinite(tilt) ? Math.Max(0.0, tilt) : 0.0)));
+    }
 
     /// <summary>
     /// The stroke's opacity as the file stated it, or null when it stated none.
