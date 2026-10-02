@@ -186,6 +186,12 @@ public sealed class CanvasWorkspace : Control
     // The pencil's stroke, in document space, exactly as captured.
     private readonly List<Point2D> _pencilPoints = new();
 
+    // What the pen reported while that stroke was being drawn, one sample per kept point: the positions above, plus
+    // the pressure and tilt only a pen sends and the time that makes speed derivable. The clock starts at the press,
+    // so speed is a fact about this stroke rather than about when the application happened to boot.
+    private readonly List<InputSample> _pencilSamples = new();
+    private readonly System.Diagnostics.Stopwatch _pencilClock = new();
+
     // The corner tool's drag state.
     private PathItem? _roundPath;
     private PathItem? _roundBefore;
@@ -941,7 +947,7 @@ public sealed class CanvasWorkspace : Control
 
             case EditorTool.Node: NodePress(model); break;
                 case EditorTool.Corner: CornerPress(model); break;
-                case EditorTool.Pencil: PencilPress(model); break;
+                case EditorTool.Pencil: PencilPress(model, PenSample(e, model)); break;
             case EditorTool.Pen: PenPress(model); break;
             case EditorTool.Rectangle:
             case EditorTool.Ellipse:
@@ -1054,7 +1060,7 @@ public sealed class CanvasWorkspace : Control
                     break;
                 case EditorTool.Node: NodeDrag(model); break;
                 case EditorTool.Corner: CornerDrag(model); break;
-                case EditorTool.Pencil: PencilDrag(model); break;
+                case EditorTool.Pencil: PencilDrag(model, PenSample(e, model)); break;
 
                 // The lasso's path grows here. Without this case the tool recorded where the
                 // drag began and nothing after it, so every lasso enclosed a zero-area region
@@ -2712,15 +2718,18 @@ public sealed class CanvasWorkspace : Control
     // the request and it is also the right behaviour: a curve re-fitted under the pointer wanders as the
     // fit wobbles, so the line would not follow the hand but argue with it.
 
-    private void PencilPress(Point2D model)
+    private void PencilPress(Point2D model, InputSample sample)
     {
         _pencilPoints.Clear();
+        _pencilSamples.Clear();
+        _pencilClock.Restart();
         _pencilPoints.Add(model);
+        _pencilSamples.Add(sample);
         _gestureMoved = false;
         InvalidateVisual();
     }
 
-    private void PencilDrag(Point2D model)
+    private void PencilDrag(Point2D model, InputSample sample)
     {
         // Points a pointer repeats are dropped as they arrive, because fitting to them would put a
         // segment on every one.
@@ -2730,6 +2739,7 @@ public sealed class CanvasWorkspace : Control
         }
 
         _pencilPoints.Add(model);
+        _pencilSamples.Add(sample);
         _gestureMoved = true;
         InvalidateVisual();
     }
@@ -2737,14 +2747,40 @@ public sealed class CanvasWorkspace : Control
     /// <summary>Fits the stroke **once**, on release, and adds it as a path.</summary>
     private void PencilRelease()
     {
-        if (_pencilPoints.Count >= 2)
+        if (_pencilSamples.Count >= 2)
         {
-            _vm.DrawFreehand(_pencilPoints.ToList());
+            // The samples, not the bare points: this is the one place a pen's pressure and tilt enter the model,
+            // and they enter it as the width profile and nib angle the drawing keeps.
+            _vm.DrawFreehand(_pencilSamples.ToList());
         }
 
         _pencilPoints.Clear();
+        _pencilSamples.Clear();
+        _pencilClock.Reset();
         _gestureMoved = false;
         InvalidateVisual();
+    }
+
+    /// <summary>
+    /// What the pointer reported, as a sample: where it is in document space, how long the stroke has been running,
+    /// and - on a pen - how hard it is pressed and which way it is laid over.
+    ///
+    /// **A mouse is at full pressure and upright, rather than at whatever number it reports.** Platforms disagree
+    /// about what a mouse's pressure member holds: some send zero and some send a half. Obeying it would draw every
+    /// mouse line at nothing or at half width the moment anybody switched pressure dynamics on, which is the
+    /// opposite of what a device with no pressure sensor means. Tilt is a pen's answer for the same reason.
+    /// </summary>
+    private InputSample PenSample(PointerEventArgs e, Point2D model)
+    {
+        bool pen = e.Pointer.Type == PointerType.Pen;
+        PointerPointProperties properties = e.GetCurrentPoint(this).Properties;
+
+        return new InputSample(
+            model,
+            _pencilClock.Elapsed.TotalMilliseconds,
+            pen ? properties.Pressure : 1.0,
+            pen ? properties.XTilt : 0.0,
+            pen ? properties.YTilt : 0.0);
     }
 
     /// <summary>Draws the stroke being drawn: the captured points, joined, unfitted.</summary>
@@ -4020,6 +4056,52 @@ public sealed class CanvasWorkspace : Control
                     AffineTransform.CreateTranslation(artboard.X, artboard.Y));
             }
         }
+    }
+
+    /// <summary>
+    /// The viewport a painter with no paint pass of its own culls against: wider than any document, so nothing is
+    /// culled and the caller decides for itself what is worth drawing.
+    /// </summary>
+    private static readonly Rect2D WholePasteboard = new(-1e6, -1e6, 2e6, 2e6);
+
+    /// <summary>
+    /// Paints one item through the canvas's own item painter, for a caller that has no paint pass of its own - the
+    /// brush editor's live preview (issue #113).
+    ///
+    /// **The one implementation, reached rather than copied.** <see cref="PaintItem"/> is what the canvas draws every
+    /// item with, and a preview that reimplemented it would be a preview that lies - the gap the brush editor's audit
+    /// recorded. So the preview calls this and gets the same switch, the same fills, gradients, strokes and nested
+    /// brush art the canvas gets.
+    ///
+    /// It builds a **fresh** painter rather than borrowing the live one. A canvas's paint state is mid-pass by
+    /// definition - the viewport it measured, the world transform a filtered object rasterises in, the width profile
+    /// a drag is displaying - and a preview reading it would draw whatever the person happened to be dragging.
+    ///
+    /// <paramref name="paintWorld"/> is that world transform's analogue for the caller's own pass: what a filtered
+    /// item rasterises against. Null - a caller with no transform of its own - draws such an item unfiltered, which
+    /// is what the canvas does with no pass in force.
+    /// </summary>
+    internal static void PaintItemStandalone(
+        DrawingContext context,
+        CadDocument? document,
+        LayerItem item,
+        double opacity,
+        AffineTransform toWorld,
+        Avalonia.Matrix? paintWorld = null)
+    {
+        var painter = new CanvasWorkspace
+        {
+            _document = document,
+            _paintWorld = paintWorld,
+            _worldViewport = WholePasteboard,
+        };
+
+        if (document is not null)
+        {
+            RegisterEmbeddedFonts(document);
+        }
+
+        painter.PaintItem(context, item, opacity, toWorld);
     }
 
     /// <summary>

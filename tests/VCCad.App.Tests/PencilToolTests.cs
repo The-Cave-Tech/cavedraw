@@ -233,4 +233,53 @@ public class PencilToolTests
             window.Close();
         }
     }
+
+    /// <summary>
+    /// **The pencil is where a pen's record reaches the model** (issue #107). A gesture drawn with the tool's
+    /// current stroke carrying a pressure response has to come out as a stroke that keeps the response *and* the
+    /// width profile those samples produced - which is the difference between a curve stored on a stroke and a
+    /// curve that changed what was drawn.
+    ///
+    /// The pressure here is a **mouse's**: full, because a device with no pressure sensor is not at whatever number
+    /// the platform happens to report. So the profile is uniform rather than a taper, and it is the control for the
+    /// ramps the operation draws from real samples - which is the half no injected gesture can carry, because
+    /// `InputInjection` has no pressure channel. What this test proves is the seat: the gesture goes through the
+    /// same call the operation does.
+    /// </summary>
+    [AvaloniaFact]
+    public void ThePencilKeepsTheToolsResponseAndTheWidthProfileItProduced()
+    {
+        (Window window, CanvasWorkspace workspace, EditorViewModel viewModel) = Host();
+        try
+        {
+            viewModel.Tool = EditorTool.Pencil;
+            var red = new ColorRgb(0.8, 0.1, 0.1);
+            viewModel.CurrentStroke = StrokeSpec.Hairline(red) with
+            {
+                Width = 20,
+                Dynamics = DynamicsSpec.PressureToWidth(DynamicsPreset.Linear),
+            };
+
+            Draw(window, workspace, Arc(30, 80));
+
+            PathItem path = Assert.IsType<PathItem>(OnlyPath(viewModel));
+
+            // The tool's own stroke, not a black hairline the pencil invented.
+            Assert.Equal(red, path.Stroke.Color);
+            Assert.Equal(20.0, path.Stroke.Width, 6);
+
+            // The response the stroke was drawn under, and the geometry the samples made of it.
+            Assert.True(path.Stroke.HasDynamics);
+            WidthProfileSpec profile = Assert.IsType<WidthProfileSpec>(path.Stroke.WidthProfile);
+            Assert.All(profile.Points, point => Assert.Equal(20.0, point.LeftWidth, 6));
+
+            // And the drawing is a variable-width outline rather than a pen stroke, which is what makes the
+            // pressure visible at all.
+            Assert.True(StrokeOutlineBuilder.Plan(path, path.Stroke).IsOutline);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
 }

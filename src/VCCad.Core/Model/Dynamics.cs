@@ -291,16 +291,64 @@ public static class StrokeDynamics
         int smoothing = 3)
     {
         double[] scales = WidthScales(samples, dynamics, smoothing);
+        double[] positions = Positions(samples);
         var points = new List<WidthPoint>(samples.Count);
 
         for (int i = 0; i < samples.Count; i++)
         {
-            double position = samples.Count <= 1 ? 0.0 : i / (double)(samples.Count - 1);
             double width = Math.Max(0.0, baseWidth * scales[i]);
-            points.Add(WidthPoint.Even(position, width));
+            points.Add(WidthPoint.Even(positions[i], width));
         }
 
         return new WidthProfileSpec(name, points);
+    }
+
+    /// <summary>
+    /// Where each sample sits along the stroke, 0 at the first and 1 at the last, **by distance travelled** rather
+    /// than by sample number.
+    ///
+    /// A width profile is read by **arc length** along the path its outline is built from, so a profile placed by
+    /// sample index is only right when the samples happen to be evenly spaced. A hand is not a metronome: let the
+    /// pen crawl through a corner and index placement hands that corner an equal share of the whole line, which puts
+    /// the taper somewhere the pressure never was. Samples that do not move - a pen held still while it is pressed -
+    /// share the position of the one before them rather than dividing by zero.
+    /// </summary>
+    public static double[] Positions(IReadOnlyList<InputSample> samples)
+    {
+        var positions = new double[samples.Count];
+        if (samples.Count == 0)
+        {
+            return positions;
+        }
+
+        var walked = new double[samples.Count];
+        double total = 0.0;
+        for (int i = 1; i < samples.Count; i++)
+        {
+            double dx = samples[i].Position.X - samples[i - 1].Position.X;
+            double dy = samples[i].Position.Y - samples[i - 1].Position.Y;
+            total += Math.Sqrt((dx * dx) + (dy * dy));
+            walked[i] = total;
+        }
+
+        if (total <= 0.0)
+        {
+            // Every sample in the same place: there is no path to be a proportion of, so the only honest answer is
+            // the one the flatteners give a zero-length outline - an even spread over the samples that exist.
+            for (int i = 0; i < samples.Count; i++)
+            {
+                positions[i] = samples.Count <= 1 ? 0.0 : i / (double)(samples.Count - 1);
+            }
+
+            return positions;
+        }
+
+        for (int i = 0; i < samples.Count; i++)
+        {
+            positions[i] = walked[i] / total;
+        }
+
+        return positions;
     }
 
     /// <summary>
@@ -312,6 +360,33 @@ public static class StrokeDynamics
     /// a direction to consult.
     /// </summary>
     public static double CalligraphicAngle(InputSample sample, DynamicsSpec? dynamics)
+        => CalligraphicAngle(sample.TiltX, sample.TiltY, dynamics);
+
+    /// <summary>
+    /// The nib angle for a **whole stroke**, from the direction a pen was laid over in on average.
+    ///
+    /// A nib angle is one number for the stroke the outline is built from, while the pen reports a tilt per
+    /// sample, so the samples have to be reduced to the one direction they mostly describe. The tilt **vectors**
+    /// are averaged and the angle taken from the mean, rather than the angles being averaged: a tilt of +170 and
+    /// one of -170 are three degrees apart in reality and 340 apart as numbers, and averaging the numbers would
+    /// stand the nib on its end whenever the pen rolled through the back of the range.
+    ///
+    /// Tilts that cancel exactly are the same answer as no tilt at all, for the single-sample reason.
+    /// </summary>
+    public static double CalligraphicAngle(IReadOnlyList<InputSample> samples, DynamicsSpec? dynamics)
+    {
+        double tiltX = 0.0;
+        double tiltY = 0.0;
+        foreach (InputSample sample in samples)
+        {
+            tiltX += sample.TiltX;
+            tiltY += sample.TiltY;
+        }
+
+        return CalligraphicAngle(tiltX, tiltY, dynamics);
+    }
+
+    private static double CalligraphicAngle(double tiltX, double tiltY, DynamicsSpec? dynamics)
     {
         DynamicsSpec spec = dynamics ?? DynamicsSpec.None;
         if (!spec.For(DynamicsTarget.CalligraphicAngle).Enabled)
@@ -319,12 +394,12 @@ public static class StrokeDynamics
             return 0.0;
         }
 
-        if (Math.Abs(sample.TiltX) < 1e-9 && Math.Abs(sample.TiltY) < 1e-9)
+        if (Math.Abs(tiltX) < 1e-9 && Math.Abs(tiltY) < 1e-9)
         {
             return 0.0;
         }
 
-        double tilt = Math.Atan2(sample.TiltY, sample.TiltX);
+        double tilt = Math.Atan2(tiltY, tiltX);
         double normalised = (tilt + Math.PI) / (2.0 * Math.PI);
         return spec.Apply(DynamicsTarget.CalligraphicAngle, normalised) * 180.0;
     }

@@ -4747,24 +4747,65 @@ public static class EditorOperations
         Add("path.drawFreehand",
             "Draw a freehand stroke: the points are fitted **once** to cubic Bezier segments and become " +
             "an open path. The tolerance is how far the curve may sit from the points drawn - tight by " +
-            "default, because this follows a hand rather than smoothing it.",
-            "points:[x,y][], tolerance?:number",
+            "default, because this follows a hand rather than smoothing it. " +
+            "Draw from what a **pen** reported by passing `samples` instead of `points`: each carries x, y and " +
+            "optionally time, pressure and tiltX/tiltY. With a `dynamics` response stated, the pressure is turned " +
+            "into the width profile the stroke keeps - so the line that is drawn varies with the pen, and travels " +
+            "to the canvas and the PDF as geometry - and tilt turns a calligraphic nib. `width` is the stroke " +
+            "width the profile is measured from. This is the same call the canvas pencil makes, so a driver " +
+            "drawing from samples draws the line a person would.",
+            "points:[x,y][], samples:[{x,y,time?,pressure?,tiltX?,tiltY?}], tolerance?:number, width?:number, " +
+            "dynamics?:{target?,preset?|curve?[],enabled?}",
             (ctx, p) =>
             {
-                if (!p.TryGetProperty("points", out JsonElement list) || list.ValueKind != JsonValueKind.Array)
-                {
-                    throw new EditorOperationException("Parameter 'points' is required: [[x,y],...].");
-                }
-
+                var samples = new List<InputSample>();
                 var points = new List<Point2D>();
-                foreach (JsonElement entry in list.EnumerateArray())
-                {
-                    if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 2)
-                    {
-                        throw new EditorOperationException("Each point must be [x, y].");
-                    }
+                bool fromPen = false;
 
-                    points.Add(new Point2D(entry[0].GetDouble(), entry[1].GetDouble()));
+                if (p.TryGetProperty("samples", out JsonElement sampleList) &&
+                    sampleList.ValueKind == JsonValueKind.Array)
+                {
+                    fromPen = true;
+                    foreach (JsonElement entry in sampleList.EnumerateArray())
+                    {
+                        if (entry.ValueKind != JsonValueKind.Object)
+                        {
+                            throw new EditorOperationException("Each sample must be {x, y, ...}.");
+                        }
+
+                        samples.Add(new InputSample(
+                            new Point2D(entry.GetProperty("x").GetDouble(), entry.GetProperty("y").GetDouble()),
+                            entry.TryGetProperty("time", out JsonElement t) && t.ValueKind == JsonValueKind.Number
+                                ? t.GetDouble()
+                                : samples.Count,
+                            entry.TryGetProperty("pressure", out JsonElement pr) && pr.ValueKind == JsonValueKind.Number
+                                ? pr.GetDouble()
+                                : 1.0,
+                            entry.TryGetProperty("tiltX", out JsonElement tx) && tx.ValueKind == JsonValueKind.Number
+                                ? tx.GetDouble()
+                                : 0.0,
+                            entry.TryGetProperty("tiltY", out JsonElement ty) && ty.ValueKind == JsonValueKind.Number
+                                ? ty.GetDouble()
+                                : 0.0));
+                    }
+                }
+                else if (p.TryGetProperty("points", out JsonElement list) && list.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (JsonElement entry in list.EnumerateArray())
+                    {
+                        if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 2)
+                        {
+                            throw new EditorOperationException("Each point must be [x, y].");
+                        }
+
+                        var at = new Point2D(entry[0].GetDouble(), entry[1].GetDouble());
+                        points.Add(at);
+                        samples.Add(new InputSample(at, samples.Count));
+                    }
+                }
+                else
+                {
+                    throw new EditorOperationException("Parameter 'points' or 'samples' is required.");
                 }
 
                 double? tolerance = p.TryGetProperty("tolerance", out JsonElement tv) &&
@@ -4772,15 +4813,57 @@ public static class EditorOperations
                     ? tv.GetDouble()
                     : null;
 
-                PathItem? path = ctx.Session.DrawFreehand(points, tolerance);
+                // The stroke the line is drawn with is the tool's own, so `width` and `dynamics` change this line
+                // and stay put for the next one - the same "last thing chosen" a person gets from the stroke pane.
+                // Passing the stroke in rather than reaching inside the session keeps `style.setStroke` and this
+                // from being two answers to what the current stroke is.
+                StrokeSpec? style = null;
+                if (p.TryGetProperty("width", out JsonElement wv) && wv.ValueKind == JsonValueKind.Number)
+                {
+                    style = ctx.Session.CurrentStroke with { Width = Math.Max(0.0, wv.GetDouble()) };
+                }
+
+                if (p.TryGetProperty("dynamics", out JsonElement dv) && dv.ValueKind == JsonValueKind.Object)
+                {
+                    // A curve is a response to what a **pen** reported, so a caller who gave a response and only
+                    // told us where the pointer went has asked for something that cannot be done. Refused by name
+                    // rather than ignored: a curve that silently does nothing is the exact defect this operation
+                    // exists to remove.
+                    if (!fromPen)
+                    {
+                        throw new EditorOperationException(
+                            "A 'dynamics' response needs 'samples': pressure and tilt are what the curve is applied " +
+                            "to, and 'points' carries neither.");
+                    }
+
+                    DynamicsTarget target = ReadDynamicsTarget(dv);
+                    DynamicsCurve curve = ReadDynamicsCurve(dv);
+                    bool enabled = !dv.TryGetProperty("enabled", out JsonElement ev) || ev.ValueKind != JsonValueKind.False;
+                    DynamicsSpec? existing = (style ?? ctx.Session.CurrentStroke).Dynamics;
+                    style = (style ?? ctx.Session.CurrentStroke) with
+                    {
+                        Dynamics = new DynamicsSpec(Enum.GetValues<DynamicsTarget>().Select(each =>
+                            each == target
+                                ? new DynamicsTargetSpec(enabled, curve)
+                                : existing?.For(each) ?? DynamicsTargetSpec.Off)),
+                    };
+                }
+
+                PathItem? path = fromPen
+                    ? ctx.Session.DrawFreehand(samples, style, tolerance)
+                    : ctx.Session.DrawFreehand(points, tolerance, style);
                 ctx.ViewModel.NotifyDocumentChanged();
 
                 return new
                 {
                     drawn = path is not null,
                     itemId = path?.Id,
-                    points = points.Count,
+                    points = samples.Count,
                     nodes = path?.SubPaths[0].Nodes.Count ?? 0,
+                    widthProfile = path?.Stroke.WidthProfile is { IsEmpty: false } profile
+                        ? DescribeWidthPoints(profile)
+                        : null,
+                    nibAngle = path?.Stroke.Brush?.AngleDegrees,
                 };
             });
         Add("path.join", "Join two selected open paths at a shared endpoint.", "", (ctx, _) =>

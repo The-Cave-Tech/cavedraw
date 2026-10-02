@@ -252,6 +252,45 @@ public class DynamicsTests
         Assert.All(profile.Points, point => Assert.Equal(12.0, point.LeftWidth, 6));
     }
 
+    /// <summary>
+    /// **Where a width point sits is distance travelled, not sample number.** A profile is read by arc length along
+    /// the path, so samples bunched into the first twentieth of a line must not each claim an equal share of it -
+    /// that is what puts the taper in a corner the pen only passed through.
+    /// </summary>
+    [Fact]
+    public void WidthPointsSitWhereTheSamplesWereDrawn()
+    {
+        var samples = new[]
+        {
+            new InputSample(new Point2D(0, 0), 0),
+            new InputSample(new Point2D(5, 0), 1),
+            new InputSample(new Point2D(95, 0), 2),
+            new InputSample(new Point2D(100, 0), 3),
+        };
+
+        double[] positions = StrokeDynamics.Positions(samples);
+
+        Assert.Equal(new[] { 0.0, 0.05, 0.95, 1.0 }, positions.Select(p => Math.Round(p, 6)).ToArray());
+    }
+
+    /// <summary>A pen held still is at no distance along the line, so it shares a position rather than a NaN.</summary>
+    [Fact]
+    public void SamplesThatDoNotMoveHaveNoDistanceBetweenThem()
+    {
+        var samples = new[]
+        {
+            new InputSample(new Point2D(7, 7), 0),
+            new InputSample(new Point2D(7, 7), 1),
+            new InputSample(new Point2D(7, 7), 2),
+        };
+
+        double[] positions = StrokeDynamics.Positions(samples);
+
+        Assert.All(positions, p => Assert.False(double.IsNaN(p) || double.IsInfinity(p)));
+        Assert.Equal(0.0, positions[0], 9);
+        Assert.Equal(1.0, positions[^1], 9);
+    }
+
     // ---------------------------------------------------------------- tilt
 
     /// <summary>
@@ -286,5 +325,35 @@ public class DynamicsTests
 
         Assert.Equal(0.0, StrokeDynamics.CalligraphicAngle(tilted, DynamicsSpec.None), 6);
         Assert.Equal(0.0, StrokeDynamics.CalligraphicAngle(tilted, null), 6);
+    }
+
+    /// <summary>
+    /// **A whole stroke's nib angle comes from the mean tilt direction, not the mean of the angles.** A pen rolled
+    /// either side of straight back is pointing backwards on average; averaging the two angles instead - one near
+    /// +175, one near -175 - would call that straight ahead and stand the nib across the line.
+    /// </summary>
+    [Fact]
+    public void AStrokesNibAngleIsTheMeanTiltDirection()
+    {
+        var rolled = new[]
+        {
+            new InputSample(new Point2D(0, 0), 0, 1.0, -170, 30),
+            new InputSample(new Point2D(10, 0), 1, 1.0, -170, -30),
+        };
+
+        DynamicsSpec dynamics = new(new[]
+        {
+            DynamicsTargetSpec.Off,
+            DynamicsTargetSpec.Off,
+            DynamicsTargetSpec.Off,
+            DynamicsTargetSpec.Preset(DynamicsPreset.Linear),
+            DynamicsTargetSpec.Off,
+        });
+
+        // The mean direction is straight back, which a linear curve puts at the far end of 0..180; the two samples
+        // on their own sit at opposite ends of the range, so neither of them is that answer.
+        Assert.Equal(180.0, StrokeDynamics.CalligraphicAngle(rolled, dynamics), 6);
+        Assert.Equal(175.0, StrokeDynamics.CalligraphicAngle(rolled[0], dynamics), 0);
+        Assert.Equal(5.0, StrokeDynamics.CalligraphicAngle(rolled[1], dynamics), 0);
     }
 }

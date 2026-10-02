@@ -825,10 +825,52 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// wrong place, which looks like a drawing bug and is an arithmetic one.
     ///
     /// One undo step. Nothing is drawn for a stroke too short to be one - a click is not a line.
+    ///
+    /// Positions alone are the **mouse** half of this. A pen also reports how hard it is pressed and which way it
+    /// is laid over, and those are what <see cref="DrawFreehand(IReadOnlyList{InputSample}, StrokeSpec?, double?)"/>
+    /// takes. A curve is not applied here, because **there is nothing here to apply it to**: the caller has said
+    /// where the pointer went and nothing about the pen, and a response to a pen nobody described would be a width
+    /// profile invented at full pressure. That is the same refusal `style.setDynamics` makes when the thing a curve
+    /// would be applied to is absent.
     /// </summary>
-    public PathItem? DrawFreehand(IReadOnlyList<Point2D> points, double? tolerance = null)
+    public PathItem? DrawFreehand(IReadOnlyList<Point2D> points, double? tolerance = null, StrokeSpec? style = null)
+        => Draw(points.Select(point => new InputSample(point, 0.0)).ToArray(), style, tolerance, respondToPen: false);
+
+    /// <summary>
+    /// Draws a freehand stroke from what a **pen** reported: a position, a time, and the pressure and tilt that
+    /// went with them.
+    ///
+    /// This is where tablet dynamics stop being a pure function and become a drawing. The stroke keeps the
+    /// **width profile the pressure produced** rather than the pressure itself, for the reason
+    /// <see cref="StrokeSpec.HasDynamics"/> gives: a profile is geometry, so it draws, exports and re-opens as the
+    /// line somebody drew, while a recorded pressure would be a note saying how it had been drawn. The response
+    /// itself stays on the stroke beside it, so the pane can still show what the pen was told to do.
+    ///
+    /// <paramref name="style"/> is the stroke to draw with, and null means **the tool's current stroke** - the same
+    /// thing the pen and the shape tools draw with, so the colour, width and brush a person picked apply to a
+    /// pencil line too. A stroke with no visible outline would draw nothing at all, so that case falls back to a
+    /// black hairline rather than swallowing the gesture.
+    /// </summary>
+    public PathItem? DrawFreehand(
+        IReadOnlyList<InputSample> samples, StrokeSpec? style = null, double? tolerance = null)
+        => Draw(samples, style, tolerance, respondToPen: true);
+
+    /// <summary>
+    /// The one drawing path, so the pencil, the operation and this class cannot draw three different lines.
+    ///
+    /// <paramref name="respondToPen"/> is the whole difference between the two public overloads: true when the
+    /// caller described a pen, false when it only said where the pointer went.
+    /// </summary>
+    private PathItem? Draw(
+        IReadOnlyList<InputSample> samples, StrokeSpec? style, double? tolerance, bool respondToPen)
     {
-        FreehandFit fit = FreehandFitter.Fit(points, tolerance);
+        if (samples.Count == 0)
+        {
+            SetStatus("Nothing drawn: a stroke needs movement");
+            return null;
+        }
+
+        FreehandFit fit = FreehandFitter.Fit(samples.Select(sample => sample.Position).ToArray(), tolerance);
         if (fit.Nodes.Count < 2)
         {
             SetStatus("Nothing drawn: a stroke needs movement");
@@ -848,13 +890,62 @@ public sealed class DocumentSession : INotifyPropertyChanged
         }
 
         path.Fill = FillSpec.None;
-        path.Stroke = new StrokeSpec(true, ColorRgb.Black, 1, StrokeCap.Round, StrokeJoin.Round, 4);
+        path.Stroke = respondToPen ? DrawnStroke(samples, style) : ToolStroke(style);
         path.GeometryChanged();
 
         Execute(new AddItemCommand(layer, path));
         SelectObject(path);
         SetStatus($"Drew a stroke: {fit.Segments} segment(s), within {fit.WorstError:0.###} of the drawn line");
         return path;
+    }
+
+    /// <summary>
+    /// The stroke a freehand line is drawn with: what the tool says, with the pen's own record applied to it.
+    ///
+    /// **Pressure becomes a width profile and tilt becomes the nib's angle**, which are the two things a stored
+    /// document can carry: both are members of the stroke, so both reach the canvas and the exporter through the
+    /// one outline builder rather than through a renderer learning about pens. The targets that have nowhere to go
+    /// on a plain line are left alone - a scatter copy's scale and opacity belong to a brush's placements, and a
+    /// nib replaces the width rather than modulating it, so pressure-to-width has nothing to speak through on a
+    /// stroke that is swept with one.
+    /// </summary>
+    private StrokeSpec DrawnStroke(IReadOnlyList<InputSample> samples, StrokeSpec? style)
+    {
+        StrokeSpec stroke = ToolStroke(style);
+
+        DynamicsSpec? dynamics = stroke.Dynamics;
+        if (dynamics is null || dynamics.IsEmpty)
+        {
+            return stroke;
+        }
+
+        bool fromPressure = dynamics.For(DynamicsTarget.Width).Enabled;
+        bool fromSpeed = dynamics.For(DynamicsTarget.Smoothing).Enabled;
+        if (!stroke.HasBrush && (fromPressure || fromSpeed))
+        {
+            stroke = stroke with { WidthProfile = StrokeDynamics.WidthProfile(samples, stroke.Width, dynamics) };
+        }
+
+        if (stroke.Brush is { IsNib: true } nib && dynamics.For(DynamicsTarget.CalligraphicAngle).Enabled)
+        {
+            stroke = stroke with
+            {
+                Brush = nib with { AngleDegrees = StrokeDynamics.CalligraphicAngle(samples, dynamics) },
+            };
+        }
+
+        return stroke;
+    }
+
+    /// <summary>
+    /// The stroke a new freehand line starts from: the one the caller named, or the tool's own, with a black
+    /// hairline for a tool stroke that would draw nothing at all - an invisible pen is a mistake about the tool
+    /// rather than a request to draw nothing.
+    /// </summary>
+    private StrokeSpec ToolStroke(StrokeSpec? style)
+    {
+        StrokeSpec stroke = style ?? CurrentStroke;
+        return stroke.HasVisibleOutline ? stroke : StrokeSpec.Hairline(ColorRgb.Black);
     }
     /// <summary>Joins two selected paths that share an endpoint (closing the result
     /// if its ends meet).</summary>
