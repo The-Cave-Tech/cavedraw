@@ -3467,7 +3467,10 @@ public static class EditorOperations
             "six numbers of the affine transform carrying the asset's own coordinates onto the path. " +
             "**Reported rather than held**: the model has no member that says art is drawn at a place - a stroke's " +
             "render plan is widths and outlines - so the placements are computed from the path every time they are " +
-            "asked for, which is why editing the path moves the art with no brush re-applied. A nib places no art, " +
+            "asked for, which is why editing the path moves the art with no brush re-applied. This is the readout " +
+            "of what is drawn: the canvas and the exporter both resolve these same placements inside the stroke, " +
+            "so the numbers here are the picture. The brush's **colourisation** is the one member held and not " +
+            "applied, and `style.strokes` says so. A nib places no art, " +
             "and a brush whose asset the document does not have is refused by name rather than answered with an " +
             "empty list.",
             "name:string, itemId?:guid (default: the selected paths)",
@@ -8639,7 +8642,10 @@ public static class EditorOperations
                             : (double[]?)null,
 
                         // Said out loud, because the model holds the mode and not its effect: a caller reading
-                        // "tint" must not take the artwork to have been tinted by anything in this build.
+                        // "tint" must not take the artwork to have been tinted by anything in this build. The
+                        // placed art **is** drawn (the canvas and the exporter both resolve it), so this flag is
+                        // now the only part of an art brush that is recorded and not honoured - which is exactly
+                        // why it is a member of its own rather than left to be inferred.
                         colourisationApplied = false,
                     }
                     : null,
