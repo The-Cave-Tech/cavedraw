@@ -24,8 +24,8 @@ namespace VCCad.App.Views.Panes;
 ///
 /// Face members (family, size, weight, slant) are read **at the inspected run**, because the model holds them per
 /// run, and so are the four the model gained for tracking and face selection - letter spacing, word spacing, font
-/// stretch and font variant (#147) - and the glyph orientation (#127), which is likewise the run's own, and the
-/// run's own colour (#190) alongside them. Content,
+/// stretch and font variant (#147) - the glyph orientation (#127) and the baseline shift (#128), which are likewise
+/// the run's own, and the run's own colour (#190) alongside them. Content,
 /// colour, alignment and paragraph style are read from the block, because the model holds one of each per block -
 /// and so are the writing mode and the base direction (#127), which are how
 /// the block's axes are set rather than what it says. A run can carry its own colour (TextRun.Color, #161), so a
@@ -70,6 +70,8 @@ public sealed record TextSummary(
     bool FontVariantMixed,
     GlyphOrientation? Orientation,
     bool OrientationMixed,
+    double? BaselineShift,
+    bool BaselineShiftMixed,
     TextWritingMode? WritingMode,
     bool WritingModeMixed,
     TextDirection? Direction,
@@ -82,7 +84,8 @@ public sealed record TextSummary(
     public bool IsMixed => ContentMixed || FamilyMixed || FontSizeMixed || BoldMixed || ItalicMixed
         || ColorMixed || RunColorMixed || AlignmentMixed || LineSpacingMixed || ParagraphSpacingMixed
         || RotationMixed || FrameWidthMixed || LetterSpacingMixed || WordSpacingMixed
-        || FontStretchMixed || FontVariantMixed || OrientationMixed || WritingModeMixed || DirectionMixed;
+        || FontStretchMixed || FontVariantMixed || OrientationMixed || BaselineShiftMixed
+        || WritingModeMixed || DirectionMixed;
 
     /// <summary>
     /// Summarises the blocks at <paramref name="runIndex"/>, which names the run the face members are read from.
@@ -111,7 +114,7 @@ public sealed record TextSummary(
             return new TextSummary(0, 0, null, false, null, false, null, false, null, false, null, false,
                 null, false, null, false, null, false, null, false, null, false, null, false,
                 null, false, null, false, null, false, null, false, null, false, null, false,
-                null, false, null, false);
+                null, false, null, false, null, false);
         }
 
         TextItem first = blocks[0];
@@ -139,6 +142,7 @@ public sealed record TextSummary(
         bool stretchMixed = false;
         bool variantMixed = false;
         bool orientationMixed = false;
+        bool baselineShiftMixed = false;
         bool runColorMixed = false;
 
         if (runs.Count > 0)
@@ -157,6 +161,7 @@ public sealed record TextSummary(
             stretchMixed = !runs.All(r => string.Equals(r.FontStretch, firstRun.FontStretch, StringComparison.Ordinal));
             variantMixed = !runs.All(r => string.Equals(r.FontVariant, firstRun.FontVariant, StringComparison.Ordinal));
             orientationMixed = !runs.All(r => r.FontOrientation == firstRun.FontOrientation);
+            baselineShiftMixed = !runs.All(r => Math.Abs(r.BaselineShift - firstRun.BaselineShift) < 1e-9);
 
             // A run's **own** colour, one level below the block's: absent is the model's way of saying "drawn in the
             // block's", so an absent run colour and a stated one are a disagreement rather than two spellings of the
@@ -201,6 +206,8 @@ public sealed record TextSummary(
             variantMixed,
             orientationMixed ? null : runs.Count > 0 ? runs[0].FontOrientation : null,
             orientationMixed,
+            baselineShiftMixed ? null : runs.Count > 0 ? runs[0].BaselineShift : null,
+            baselineShiftMixed,
             writingModeMixed ? null : first.WritingMode,
             writingModeMixed,
             directionMixed ? null : first.Direction,

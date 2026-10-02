@@ -1194,6 +1194,11 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// choice of face, so it is not routed through <see cref="ChoseFace"/> either: a colour edit leaves the family,
     /// the name the document asked for and the embedded programme exactly as they were.
     ///
+    /// <paramref name="baselineShift"/> is the run's own too, as a fraction of its em - SVG's <c>baseline-shift</c>,
+    /// which is what raises a superscript off its line (#128). It is a value the run holds rather than a choice of
+    /// face for the same reason, and **zero is a value and not an absence**: it is how a run is put back on the
+    /// line, so the member is a nullable double rather than defaulting.
+    ///
     /// One <see cref="ReplaceTextCommand"/> per block and a composite across the selection, so a gesture is one undo
     /// step; a request that changes nothing adds no command, because an undo step that undoes to exactly where it
     /// started reads as "undo did nothing".
@@ -1203,7 +1208,8 @@ public sealed class DocumentSession : INotifyPropertyChanged
         double? letterSpacing = null, double? wordSpacing = null,
         string? fontStretch = null, string? fontVariant = null,
         GlyphOrientation? orientation = null,
-        RunColorEdit? runColor = null)
+        RunColorEdit? runColor = null,
+        double? baselineShift = null)
     {
         var edits = new List<IUndoableCommand>();
         foreach (TextItem text in SelectedTextItems())
@@ -1306,6 +1312,15 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 if (orientation is { } turn && run.FontOrientation != turn)
                 {
                     run.FontOrientation = turn;
+                    changed = true;
+                }
+
+                // The baseline shift joins it for the same reason: the run's own, and not a choice of face. Zero is
+                // an edit here - it is how a run is put back on the line - which is why the member is nullable and
+                // the comparison is against the value the run holds rather than against any notion of "unset".
+                if (baselineShift is { } raised && Math.Abs(run.BaselineShift - raised) > 1e-9)
+                {
+                    run.BaselineShift = raised;
                     changed = true;
                 }
 

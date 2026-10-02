@@ -74,6 +74,7 @@ public partial class TextPane : UserControl
     private string _shownFontStretch = string.Empty;
     private string _shownFontVariant = string.Empty;
     private int _shownOrientation = -1;
+    private int _shownBaselineShift = -1;
     private int _shownWritingMode = -1;
     private int _shownDirection = -1;
 
@@ -86,6 +87,7 @@ public partial class TextPane : UserControl
         // undo step. Content keeps AcceptsReturn, so Enter is a newline there and only losing focus commits it.
         AlignBox.SelectionChanged += (_, _) => ApplyFields();
         OrientationBox.SelectionChanged += (_, _) => ApplyFields();
+        BaselineShiftBox.SelectionChanged += (_, _) => ApplyFields();
         WritingModeBox.SelectionChanged += (_, _) => ApplyFields();
         DirectionBox.SelectionChanged += (_, _) => ApplyFields();
         FamilyBox.SelectionChanged += (_, _) => ApplyFields();
@@ -208,6 +210,21 @@ public partial class TextPane : UserControl
                     _ => GlyphOrientation.Auto,
                 };
 
+        // The baseline shift is per run too, and it stops describing anything when there is no run to name. The
+        // combo's own words are `text.update`'s - CSS's relative keywords, which is what an SVG file most often
+        // holds - and the value the item means is the same shift the reader gives a file that names one, so a
+        // person and a driver write the same number.
+        double? baselineShift = faceRun is null
+            || BaselineShiftBox.SelectedIndex == _shownBaselineShift
+            || BaselineShiftBox.SelectedIndex < 0
+                ? null
+                : BaselineShiftBox.SelectedIndex switch
+                {
+                    1 => BaselineShiftOf(1),
+                    2 => BaselineShiftOf(2),
+                    _ => 0.0,
+                };
+
         // The run's own colour is per run as well, and **it is not the block's**: the field is committed through the
         // same `ApplyTextFieldsAt` the `text.update` operation calls, one level below the Block field above. An
         // emptied field is an edit here - it is how a run gives its colour back to the block - so the value carries
@@ -279,10 +296,10 @@ public partial class TextPane : UserControl
         if (content is not null || color is not null || family is not null || size is not null
             || bold is not null || italic is not null || letterSpacing is not null || wordSpacing is not null
             || fontStretch is not null || fontVariant is not null || orientation is not null
-            || runColor is not null)
+            || runColor is not null || baselineShift is not null)
         {
             _vm.ActiveSession.ApplyTextFieldsAt(faceRun, content, family, size, bold, italic, color,
-                letterSpacing, wordSpacing, fontStretch, fontVariant, orientation, runColor);
+                letterSpacing, wordSpacing, fontStretch, fontVariant, orientation, runColor, baselineShift);
         }
 
         if (alignment is { } align)
@@ -484,6 +501,16 @@ public partial class TextPane : UserControl
                 : OrientationIndex(summary.Orientation ?? GlyphOrientation.Auto);
             _shownOrientation = OrientationBox.SelectedIndex;
 
+            // The baseline shift is read from the same summary a driver reads through `text.common`, at the inspected
+            // run like the rest of the run's own members. A run carrying an offset of its own is shown as the nearest
+            // keyword; because `_shownBaselineShift` records what was shown, an apply that the person did not touch
+            // writes nothing and the run's own value survives being looked at.
+            BaselineShiftBox.PlaceholderText = summary.BaselineShiftMixed ? MixedWord : string.Empty;
+            BaselineShiftBox.SelectedIndex = summary.BaselineShiftMixed
+                ? -1
+                : BaselineShiftIndex(summary.BaselineShift ?? 0.0);
+            _shownBaselineShift = BaselineShiftBox.SelectedIndex;
+
             BoldBox.IsChecked = summary.BoldMixed ? null : summary.Bold ?? false;
             _shownBold = BoldBox.IsChecked;
 
@@ -579,6 +606,11 @@ public partial class TextPane : UserControl
             mixed.Add("orient");
         }
 
+        if (summary.BaselineShiftMixed)
+        {
+            mixed.Add("baseline");
+        }
+
         if (summary.LineSpacingMixed)
         {
             mixed.Add("leading");
@@ -648,6 +680,8 @@ public partial class TextPane : UserControl
         FontVariantBox.Watermark = string.Empty;
         OrientationBox.PlaceholderText = string.Empty;
         OrientationBox.SelectedIndex = -1;
+        BaselineShiftBox.PlaceholderText = string.Empty;
+        BaselineShiftBox.SelectedIndex = -1;
 
         _shownContent = string.Empty;
         _shownColor = string.Empty;
@@ -666,6 +700,7 @@ public partial class TextPane : UserControl
         _shownFontStretch = string.Empty;
         _shownFontVariant = string.Empty;
         _shownOrientation = -1;
+        _shownBaselineShift = -1;
         _shownWritingMode = -1;
         _shownDirection = -1;
     }
@@ -804,4 +839,46 @@ public partial class TextPane : UserControl
         GlyphOrientation.Rotate => 2,
         _ => 0,
     };
+
+    /// <summary>
+    /// The shift the combo's item at <paramref name="index"/> stands for, which is CSS's relative keyword resolved
+    /// to the number the model keeps: <c>super</c> is half an em up and <c>sub</c> half an em down.
+    ///
+    /// These are the same two numbers the SVG reader gives a file that names a keyword, so a person's choice and a
+    /// file's own `baseline-shift="super"` produce the same drawing. The answers are spelled out here rather than
+    /// shared with the reader because the two live on either side of the Core/App boundary and the reader's are
+    /// private to the property's parsing; the values are asserted equal in `TextPaneTests`.
+    /// </summary>
+    private static double BaselineShiftOf(int index) => index switch
+    {
+        1 => 0.5,
+        2 => -0.5,
+        _ => 0.0,
+    };
+
+    /// <summary>
+    /// Which item of the baseline combo a run's shift is shown as: the nearest of the three.
+    ///
+    /// The combo offers the property's relative keywords because that is what an SVG file usually holds, and the
+    /// model keeps an exact fraction - a file may say `baseline-shift:2.4` - so a run whose shift is none of the
+    /// three is shown as the nearest one it is between. Nothing is written from that: the item is what the field
+    /// shows, and `_shownBaselineShift` is what makes an untouched combo not an edit, so the run keeps the exact
+    /// value it holds.
+    /// </summary>
+    private static int BaselineShiftIndex(double shift)
+    {
+        int nearest = 0;
+        double best = Math.Abs(shift - BaselineShiftOf(0));
+        for (int i = 1; i <= 2; i++)
+        {
+            double distance = Math.Abs(shift - BaselineShiftOf(i));
+            if (distance < best)
+            {
+                best = distance;
+                nearest = i;
+            }
+        }
+
+        return nearest;
+    }
 }

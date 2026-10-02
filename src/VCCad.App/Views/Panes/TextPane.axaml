@@ -102,6 +102,22 @@
         </ComboBox>
       </Grid>
 
+      <!-- The baseline the run hangs from (#128): SVG's `baseline-shift`, which is what makes a superscript or a
+           subscript. It is the run's own like the orientation beside it, and the model and the layout honour it -
+           the run's glyphs move off the line while the line itself and every other run stay where they were - so it
+           is edited here through `text.update`, the same operation a driver reaches. The items are the CSS relative
+           keywords, which are what an SVG file most often holds; a run carrying an offset of its own is shown as the
+           nearest of them, and is not written unless the person moves the combo. -->
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+        <TextBlock Text="Baseline" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <ComboBox x:Name="BaselineShiftBox" Grid.Column="1" HorizontalAlignment="Stretch"
+                  ToolTip.Tip="baseline-shift: baseline (on the line), super (raised) or sub (lowered)">
+          <ComboBoxItem Content="baseline"/>
+          <ComboBoxItem Content="super"/>
+          <ComboBoxItem Content="sub"/>
+        </ComboBox>
+      </Grid>
+
       <TextBlock Text="PARAGRAPH" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
       <Grid ColumnDefinitions="Auto,*,10,Auto,*" ColumnSpacing="4">
         <TextBlock Text="Leading" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>

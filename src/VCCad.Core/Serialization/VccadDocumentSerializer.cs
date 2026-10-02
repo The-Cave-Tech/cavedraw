@@ -465,7 +465,11 @@ internal sealed record TextRunDto(
     // Whether the run's glyphs are turned on their side in vertical text, as of #127. Absent at its initial value,
     // so a document without vertical writing has no member here and its bytes do not change.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] GlyphOrientation FontOrientation =
-        GlyphOrientation.Auto);
+        GlyphOrientation.Auto,
+
+    // How far the run's baseline is raised off its line's, as a fraction of its own em - SVG's `baseline-shift`, as
+    // of #128. Absent at its initial value, so a document with no superscript writes exactly the bytes it did.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] double BaselineShift = 0);
 
 /// <summary>One parameter of a live path effect, keyed and spelled as the file spelled it.</summary>
 internal sealed record PathEffectParameterDto(string Name, string Value);
@@ -741,7 +745,8 @@ internal abstract record ItemDto
         r.Color is { } color ? new ColorDto(color.R, color.G, color.B, color.A) : null,
         r.FontStretch,
         r.FontVariant,
-        r.FontOrientation);
+        r.FontOrientation,
+        r.BaselineShift);
 
     private static EmbeddedFontDto ToEmbedded(EmbeddedFont f) => new(
         f.Format,
@@ -1146,6 +1151,7 @@ internal static class ItemDtoExtensions
             FontStretch = dto.FontStretch,
             FontVariant = dto.FontVariant,
             FontOrientation = dto.FontOrientation,
+            BaselineShift = dto.BaselineShift,
         };
 
         return run;

@@ -193,6 +193,24 @@ public sealed class TextRun
     public GlyphOrientation FontOrientation { get; set; }
 
     /// <summary>
+    /// How far this run's baseline is raised above the line's own, as a fraction of the run's em - SVG's
+    /// <c>baseline-shift</c>, which is what makes a superscript or a subscript. Positive raises, which is SVG's own
+    /// sign in a y-down frame. Zero is the initial value and is what every run that says nothing holds.
+    ///
+    /// **The unit is the em, and that is the reader's own vocabulary rather than a choice about the property.** The
+    /// property's value is a length or a percentage of the line's height; the reader resolves `em`, `ex` and `%`
+    /// against the run's own font size - the one length the reading has - so a percentage of the line's height is
+    /// kept as the equivalent fraction of the em. Keeping the fraction leaves the model free of a font size and a
+    /// line height it does not carry per character, and the layout multiplies it by the run's own size, which is
+    /// exactly the arithmetic the reading did.
+    ///
+    /// A per-run member because SVG states it per element, and because the line box is one: SVG's own rule is that a
+    /// shifted run **does not grow the line box**, so a superscript draws above the ascent of the text beside it
+    /// without moving the block or the lines after it.
+    /// </summary>
+    public double BaselineShift { get; set; }
+
+    /// <summary>
     /// The ascent the block's top-left was placed with, as a fraction of the em, when it was
     /// imported. Zero means "not recorded — work it out from the face".
     ///
@@ -241,6 +259,7 @@ public sealed class TextRun
         FontStretch = FontStretch,
         FontVariant = FontVariant,
         FontOrientation = FontOrientation,
+        BaselineShift = BaselineShift,
         PlacedAscentEm = PlacedAscentEm,
         SourceFont = SourceFont,
         EmbeddedFont = EmbeddedFont,

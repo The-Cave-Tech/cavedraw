@@ -14,7 +14,7 @@ namespace VCCad.Core.Svg;
 /// know what percentage they were written as. `writing-mode`, `direction` and `glyph-orientation-vertical` are the
 /// same kind of member since #127: the mode and the base direction name the block's own axes, and the orientation
 /// says whether a glyph is turned in a vertical column, so all three reach the layout engine rather than being
-/// reported. A property the model genuinely has no field for - `text-decoration`, `baseline-shift` - is still
+/// reported. A property the model genuinely has no field for - `text-decoration` - is still
 /// **reported** with the value the file wrote, because the rule this repository enforces is that a value the reader
 /// cannot keep is said out loud, never quietly dropped.
 ///
@@ -28,6 +28,8 @@ namespace VCCad.Core.Svg;
 /// <item>`letter-spacing` and `word-spacing` to the run's tracking, resolved against its own size.</item>
 /// <item>`writing-mode` and `direction` to the block, and `glyph-orientation-vertical` (or CSS's
 /// `text-orientation`) to the run.</item>
+/// <item>`baseline-shift` to the run, as a fraction of its own em - the layout raises its baseline by it, which is
+/// what makes a superscript (#128).</item>
 /// <item>`text-anchor` to the block's alignment.</item>
 /// <item>`line-height` to the block's line spacing.</item>
 /// <item>`white-space` and `xml:space` to whether white space is collapsed or kept.</item>
@@ -47,7 +49,8 @@ internal sealed record SvgTextStyle(
     string? FontVariant,
     TextWritingMode WritingMode,
     TextDirection Direction,
-    GlyphOrientation Orientation)
+    GlyphOrientation Orientation,
+    double BaselineShift)
 {
     /// <summary>
     /// SVG's initial values: a medium (16px) upright face, anchored at the start, collapsing white space, with no
@@ -60,7 +63,7 @@ internal sealed record SvgTextStyle(
     public static SvgTextStyle Default { get; } = new(
         TextItem.DefaultFontFamily, 16.0, false, false, TextAlignment.Left, PreserveSpace: false, LineSpacing: 1.2,
         LetterSpacing: 0.0, WordSpacing: 0.0, FontStretch: null, FontVariant: null,
-        TextWritingMode.HorizontalTb, TextDirection.LeftToRight, GlyphOrientation.Auto);
+        TextWritingMode.HorizontalTb, TextDirection.LeftToRight, GlyphOrientation.Auto, BaselineShift: 0.0);
 
     /// <summary>Resolves the element's own text properties over the ones it inherits.</summary>
     public static SvgTextStyle From(
@@ -242,6 +245,15 @@ internal sealed record SvgTextStyle(
             orientation = writtenOrientation;
         }
 
+        // **The baseline shift, as of #128.** A length or a percentage of the line's height - and SVG 1.1 also names
+        // CSS's `super` and `sub`, for which no specification gives a number. Resolved against the run's own size,
+        // because that is the only length the reading has: see `ReadBaselineShift`.
+        double baselineShift = inherited.BaselineShift;
+        if (ReadBaselineShift(Value("baseline-shift"), warn) is { } writtenShift)
+        {
+            baselineShift = writtenShift;
+        }
+
         // The embedding and override codes are not layout this reader acts on, and a file that puts one in its text
         // is a file whose visual order this reader is approximating. Named once per element that holds one, with
         // the character, because the count is what tells a person whether it matters.
@@ -266,7 +278,7 @@ internal sealed record SvgTextStyle(
 
         return new SvgTextStyle(
             family, size, weight >= 600, italic, anchor, preserve, lineSpacing,
-            letterSpacing, wordSpacing, stretch, variant, mode, direction, orientation);
+            letterSpacing, wordSpacing, stretch, variant, mode, direction, orientation, baselineShift);
     }
 
     /// <summary>
@@ -397,6 +409,78 @@ internal sealed record SvgTextStyle(
     }
 
     /// <summary>
+    /// SVG's `baseline-shift`, as the fraction of the run's em the model keeps - or null when the element says
+    /// nothing, which is "keep what was inherited".
+    ///
+    /// **The property states a length or a percentage of the line's height, and the model keeps a fraction of the
+    /// em.** Those are the same statement about a small shift, which is what a superscript is: the reader resolves
+    /// `em`, `ex` and a bare number against the run's own size, which is the one length a reader of a text element
+    /// has in hand, and a percentage is then the same fraction. CSS 2.1 names its `super` and `sub` "the proper
+    /// position" and gives no number at all, so the value this reader gives a file that names one is the one every
+    /// layout engine gives it - half an em up or down (see <see cref="Super"/>/<see cref="Sub"/>) - and it is
+    /// written down here because it is the reader's choice and not the specification's.
+    ///
+    /// `baseline` is the initial value and is kept as absence, so a file that says nothing about a baseline and one
+    /// that says `baseline` hold the same run.
+    /// </summary>
+    private static double? ReadBaselineShift(string? value, Action<string>? warn)
+    {
+        if (value is null || IsCssWideKeyword(value))
+        {
+            return null;
+        }
+
+        string trimmed = value.Trim();
+        switch (trimmed.ToLowerInvariant())
+        {
+            case "baseline":
+                return 0.0;
+            case "super":
+                return Super;
+            case "sub":
+                return Sub;
+        }
+
+        int end = trimmed.Length;
+        while (end > 0 && (char.IsLetter(trimmed[end - 1]) || trimmed[end - 1] == '%'))
+        {
+            end--;
+        }
+
+        string unit = trimmed[end..].ToLowerInvariant();
+        double scale = unit switch
+        {
+            "" or "px" or "em" or "%" => 1.0,
+            "ex" => 0.5,
+            _ => 0.0,
+        };
+
+        if (scale > 0 &&
+            double.TryParse(trimmed[..end].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture,
+                out double parsed))
+        {
+            // A percentage is per cent of the line's height and a bare number is that many ems; both are the same
+            // fraction of the em for the purpose of moving a baseline, and the layout multiplies by the run's size.
+            return unit == "%" ? parsed / 100.0 : parsed * scale;
+        }
+
+        warn?.Invoke($"baseline-shift=\"{value}\" is not a baseline this reader can resolve");
+        return null;
+    }
+
+    /// <summary>
+    /// The fraction of an em this reader raises a run for SVG's `baseline-shift="super"`.
+    ///
+    /// CSS 2.1 defines both keywords as "the proper position" for a superscript or a subscript and gives no number,
+    /// so every implementation chooses one; half an em is the value the CSS box-alignment model uses and the one
+    /// the target renderers here (Chrome, Inkscape) apply. A superscript raises, so this is positive.
+    /// </summary>
+    private const double Super = 0.5;
+
+    /// <summary>The fraction of an em this reader lowers a run for <c>baseline-shift="sub"</c>. See <see cref="Super"/>.</summary>
+    private const double Sub = -0.5;
+
+    /// <summary>
     /// One of the two face requests, as the file wrote it, or null when it says nothing.
     ///
     /// The value is kept in the file's own words because the model names one family per run and does not choose a
@@ -505,11 +589,14 @@ internal sealed record SvgTextStyle(
     /// <summary>
     /// The properties that carry real layout and that the model has no field for.
     ///
-    /// Each is reported **only when it says something** - `text-decoration:none` and `baseline-shift:baseline`
-    /// are the initial values and change nothing, and warning about them would bury the one file that really is
+    /// Each is reported **only when it says something** - `text-decoration:none` and `dominant-baseline:auto` are
+    /// the initial values and change nothing, and warning about them would bury the one file that really is
     /// underlined. `font-stretch`, `font-variant`, `letter-spacing` and `word-spacing` used to be here and no
     /// longer are: the model holds all four (#147). `writing-mode` and `direction` used to be here and no longer
-    /// are either: the model holds both and the layout acts on them (#127).
+    /// are either: the model holds both and the layout acts on them (#127). `baseline-shift` used to be here and is
+    /// not any more: the model holds it on the run and the layout raises the run's baseline by it (#128).
+    /// `dominant-baseline` is still a real gap - it names which of a face's baselines the text hangs from, and the
+    /// model knows only the alphabetic one.
     /// </summary>
     private static void ReportUnkeptProperties(Func<string, string?> value, Action<string>? warn)
     {
@@ -527,7 +614,6 @@ internal sealed record SvgTextStyle(
         }
 
         Report("text-decoration", "text-decoration=\"{value}\" is not kept: a run holds no decoration");
-        Report("baseline-shift", "baseline-shift=\"{value}\" is a baseline the model does not hold");
         Report("dominant-baseline", "dominant-baseline=\"{value}\" is a baseline the model does not hold");
     }
 

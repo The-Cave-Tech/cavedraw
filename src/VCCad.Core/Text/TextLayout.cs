@@ -478,6 +478,15 @@ public static class TextLayoutEngine
         var glyphs = new List<GlyphBox>((int)Math.Max(0, total / 4));
         int[] runOf = RunIndices(text, widths.Count);
 
+        // How far each character's baseline is raised off its line's, in the block's own units. Resolved once from
+        // the one member that states it, so the glyph walk below cannot read a run's shift and a second caller's
+        // idea of it separately.
+        var shifts = new double[widths.Count];
+        for (int i = 0; i < shifts.Length; i++)
+        {
+            shifts[i] = BaselineShiftFor(text.Runs[runOf[i]]);
+        }
+
         for (int li = 0; li < lines.Count; li++)
         {
             TextLine line = lines[li];
@@ -513,23 +522,33 @@ public static class TextLayoutEngine
                 double advance = widths[index];
                 bool turned = Math.Abs(rotation[index]) > 1e-9;
 
+                // **The shift moves the glyph across its baseline and never moves the pen.** `baseline-shift`
+                // raises a run's own baseline off the line's, so the next character starts exactly where it would
+                // have and the line box is the unshifted text's - which is SVG's own rule, and what keeps a
+                // superscript from pushing the lines after it down the block.
+                double shift = shifts[index];
+
                 if (vertical)
                 {
                     // **The pen is the glyph's own origin and its baseline runs down the column line.** A turned
                     // glyph is drawn about that point with its ascent to the left, so the pen stands where the
                     // file's `x` did and the block's origin is that same point. An upright glyph is centred in the
                     // column instead, so its advance is the line box's own size - which is what makes a column of
-                    // upright CJK run at a line's pitch.
+                    // upright CJK run at a line's pitch. A column's baseline runs down the page, so a raised glyph
+                    // sits to the right of its column line rather than above it: see `ShiftUp`.
                     double step = turned ? advance : line.Height;
                     glyphs.Add(new GlyphBox(
-                        index, pen, line.Cross, step, line.Cross, pen, rotation[index],
-                        runOf[index], PieceStart(text, index)));
+                        index, pen, line.Cross, step, line.Cross + ShiftUp(vertical: true, shift), pen,
+                        rotation[index], runOf[index], PieceStart(text, index)));
                     pen += step;
                 }
                 else
                 {
+                    // A horizontal baseline runs right, so a raised glyph sits above the line: -y in this y-down
+                    // frame. The pen, the advance and the line box are untouched.
                     glyphs.Add(new GlyphBox(
-                        index, pen, line.Cross + line.Ascent, advance, pen, line.Cross + line.Ascent, 0.0,
+                        index, pen, line.Cross + line.Ascent, advance, pen,
+                        line.Cross + line.Ascent + ShiftUp(vertical: false, shift), 0.0,
                         runOf[index], PieceStart(text, index)));
                     pen += advance;
                 }
@@ -624,6 +643,29 @@ public static class TextLayoutEngine
     }
 
     /// <summary>
+    /// How far a run's baseline is raised off its line's, in the block's own units.
+    ///
+    /// <see cref="TextRun.BaselineShift"/> is the run's own em fraction - the unit SVG's <c>baseline-shift</c> is
+    /// resolved into on the way in - so the length is that fraction times the run's own size. Nothing else measures
+    /// it, so a run whose size changes moves its shift with it, which is what a superscript set in a smaller size
+    /// than its base should do.
+    /// </summary>
+    public static double BaselineShiftFor(TextRun run) => run.BaselineShift * run.FontSize;
+
+    /// <summary>
+    /// How far a glyph's origin moves across its baseline when the run's baseline is raised by
+    /// <paramref name="shift"/>, as a signed offset on the axis a shift moves it on.
+    ///
+    /// A shift moves the glyph **away from its own baseline**: for a horizontal run that is straight up the page -
+    /// <c>-y</c> in this y-down frame - and for a vertical column, whose baseline runs *down* the page, it is the
+    /// page's <c>+x</c>. A turned Latin glyph in a column carries its up axis round with it and an upright one does
+    /// not, but both point the same way here: a turned glyph's ascent is to the right of its baseline and an upright
+    /// glyph's ascent is to the right of the column line. That is the whole point - the shift is off the glyph's
+    /// own baseline, not off the page's.
+    /// </summary>
+    private static double ShiftUp(bool vertical, double shift) => vertical ? shift : -shift;
+
+    /// <summary>
     /// Whether a script is written upright in vertical text rather than turned on its side.
     ///
     /// This is what <c>glyph-orientation-vertical: auto</c> means: CJK ideographs and kana, and the fullwidth forms
@@ -698,8 +740,14 @@ public static class TextLayoutEngine
     /// This is the whole of "colinear baselines": a run is placed by its baseline, never by putting
     /// its top against the line's top. Two faces of different sizes share a bottom edge only if each
     /// is offset by its own ascent, which is what this returns.
+    ///
+    /// **A run's own <c>baseline-shift</c> is part of where its baseline is.** A superscript is a run whose baseline
+    /// is raised off the line's, so the top of its box is one ascent above *that* baseline and not above the
+    /// line's - which is what the canvas draws from and what the offset below answers. The line itself is
+    /// unmoved: a shifted run never grows the line box.
     /// </summary>
-    public static double RunTop(TextRun run, TextLine line) => line.Baseline - TextMeasurement.Ascent(run);
+    public static double RunTop(TextRun run, TextLine line)
+        => line.Baseline - BaselineShiftFor(run) - TextMeasurement.Ascent(run);
 
     /// <summary>
     /// Each run's segments, one per line it appears on.

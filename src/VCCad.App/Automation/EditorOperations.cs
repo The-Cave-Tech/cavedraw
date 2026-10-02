@@ -4265,7 +4265,8 @@ public static class EditorOperations
             "and an omitted member is left exactly as each block has it - so a mixed selection can have its size " +
             "changed without the block whose words or colour differ having them written over. One content string and " +
             "one colour are block members; family, size, weight, slant, letter spacing, word spacing, font stretch, " +
-            "font variant, the glyph orientation and the run's own colour are per run, and runIndex names the run " +
+            "font variant, the glyph orientation, the baseline shift and the run's own colour are per run, and " +
+            "runIndex names the run " +
             "they land on, with a " +
             "block that has no run there skipped rather than counted as a disagreement. With no runIndex the face " +
             "members style every run, " +
@@ -4280,12 +4281,21 @@ public static class EditorOperations
             "colour, one level below `color` (the block's), and it is what the canvas paints, the SVG writer writes " +
             "and the PDF exporter emits for that run; give it as [r,g,b] in 0..255 and null to take the block's " +
             "colour back. A colour equal to the block's is the same paint and is stored as no colour of its own, " +
-            "which leaves the file's bytes alone - as does naming the value a run already holds. " +
+            "which leaves the file's bytes alone - as does naming the value a run already holds. `baselineShift` " +
+            "raises the run's own baseline off the line's, in ems - SVG's `baseline-shift`, and what makes a " +
+            "superscript or a subscript. It changes what is drawn and what the SVG export writes: the run's glyphs " +
+            "move off the line while the line itself and every other run stay where they were, because SVG's own " +
+            "rule is that a shifted run does not grow the line box. Its own words are a length or a percentage, " +
+            "resolved against the run's own size - `0.5em`, `50%`, `4` - and CSS's relative keywords `super` and " +
+            "`sub` are the same shift the reader gives a file that names one, so a caller that wants what the file " +
+            "means need not know the reader's choice of offset. `baseline` is zero and is how a run is put back on " +
+            "the line. " +
             "Reports how many blocks changed and what the selection now reads, so a caller can tell which members " +
             "were altered and which are still mixed. One undo step.",
             "text?:string, family?:string, fontSize?:number, bold?:bool, italic?:bool, color?:[r,g,b], " +
             "runIndex?:number, letterSpacing?:number, wordSpacing?:number, fontStretch?:string, fontVariant?:string, " +
-            "orientation?:mixed|upright|sideways (SVG: auto|0|90), runColor?:[r,g,b]|null",
+            "orientation?:mixed|upright|sideways (SVG: auto|0|90), runColor?:[r,g,b]|null, " +
+            "baselineShift?:number|string (em; super|sub|baseline, 0.5em|50%)",
             (ctx, p) =>
             {
                 // A member is written only where it is **given**: the presence of the key, not its value, is what
@@ -4321,11 +4331,15 @@ public static class EditorOperations
                 // value that is not a colour is refused by name rather than read as "no colour of its own".
                 RunColorEdit? runColor = ParseRunColor(p);
 
+                // How far the run's own baseline is raised off the line's. Presence is the edit - `baseline` is
+                // given as 0 and is a shift back to the line - and an unreadable value is refused by name.
+                double? baselineShift = ParseBaselineShift(p);
+
                 // Null styles every run, which is what a whole-block face edit means; an index names one.
                 int? runIndex = OptionalNumber(p, "runIndex") is { } at ? (int)at : null;
 
                 int changed = ctx.Session.ApplyTextFieldsAt(runIndex, content, family, size, bold, italic, color,
-                    letterSpacing, wordSpacing, fontStretch, fontVariant, orientation, runColor);
+                    letterSpacing, wordSpacing, fontStretch, fontVariant, orientation, runColor, baselineShift);
 
                 // Choosing a font is what makes it recent, so the picker's "recent" list is a
                 // record of what was actually used rather than of what was scrolled past.
@@ -4351,7 +4365,8 @@ public static class EditorOperations
             "to show one value per member, and showing the first block's words, colour or size as though they were " +
             "everyone's is how a person types a number and believes it describes what they selected. runIndex names " +
             "the run the per-run members (family, size, weight, slant, letter spacing, word spacing, font stretch, " +
-            "font variant, glyph orientation, the run's own colour) are read from, and a block with no run there is a " +
+            "font variant, glyph orientation, baseline shift, the run's own colour) are read from, and a block with " +
+            "no run there is a " +
             "gap rather than a disagreement - blocks carry different numbers of runs, and counting a shorter one as " +
             "\"different\" would make every selection of unequal blocks report every face member as mixed. Without " +
             "runIndex the shared inspected run is read, which is the run the panel's face fields describe.",
@@ -9999,6 +10014,82 @@ public static class EditorOperations
     }
 
     /// <summary>
+    /// A `baselineShift` member, as the fraction of an em the model keeps, or null when it was not given - which is
+    /// "leave every run's own baseline alone".
+    ///
+    /// The member exists because SVG carries a baseline shift and the model held none: <c>SvgText</c> reported
+    /// `baseline-shift` as *"a baseline the model does not hold"*, so a file with a superscript imported with the
+    /// superscript sitting on the base line and nothing but a warning to say so. The vocabulary is the file's own -
+    /// SVG's `baseline-shift` - because the reader is what supplies the value and a caller should be able to write
+    /// what a file holds: `baseline`, and the CSS relative keywords `super` and `sub`, in the words the file uses.
+    /// `super` and `sub` are worth accepting by name because the property's own specification gives them no number,
+    /// so a caller that wants the value the reader would give the file should not have to know the reader's choice;
+    /// a caller that wants an exact offset gives the offset. The unit is the **em** and the value is in ems -
+    /// `0.5em`, `-0.25em`, `0.5`, `-8px` or `50%` all name a shift, and each is the same fraction of the run's own
+    /// size, which is what the reader resolved one into.
+    ///
+    /// An unreadable value is **refused by name** rather than read as the initial value, like `orientation`: a
+    /// driver that asked for a superscript and got a baseline cannot tell.
+    /// </summary>
+    private static double? ParseBaselineShift(JsonElement p)
+    {
+        if (p.ValueKind != JsonValueKind.Object || !p.TryGetProperty("baselineShift", out JsonElement value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double number))
+        {
+            return number;
+        }
+
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            throw new EditorOperationException("baselineShift must be a number of ems or a string");
+        }
+
+        string written = (value.GetString() ?? string.Empty).Trim();
+        if (written.Length == 0)
+        {
+            throw new EditorOperationException("baselineShift must be a number of ems or a string");
+        }
+
+        switch (written.ToLowerInvariant())
+        {
+            case "baseline":
+                return 0.0;
+            case "super":
+                return 0.5;
+            case "sub":
+                return -0.5;
+        }
+
+        int end = written.Length;
+        while (end > 0 && (char.IsLetter(written[end - 1]) || written[end - 1] == '%'))
+        {
+            end--;
+        }
+
+        string unit = written[end..].ToLowerInvariant();
+        double scale = unit switch
+        {
+            "" or "px" or "em" => 1.0,
+            "ex" => 0.5,
+            "%" => 0.01,
+            _ => 0.0,
+        };
+
+        if (scale > 0 && double.TryParse(
+                written[..end].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed))
+        {
+            return parsed * scale;
+        }
+
+        throw new EditorOperationException(
+            $"baselineShift must be a number of ems, or baseline, super or sub, not \"{value.GetString()}\"");
+    }
+
+    /// <summary>
     /// A `runColor` member, or null when it was not given - which is "leave each run's own colour alone".
     ///
     /// The member exists because the model has held <see cref="TextRun.Color"/> since #161 and the canvas, the SVG
@@ -10055,6 +10146,7 @@ public static class EditorOperations
             || summary.ItalicMixed || summary.ColorMixed || summary.RunColorMixed
             || summary.LetterSpacingMixed || summary.WordSpacingMixed
             || summary.FontStretchMixed || summary.FontVariantMixed || summary.OrientationMixed
+            || summary.BaselineShiftMixed
                 ? 0
                 : summary.Runs;
 
@@ -10096,6 +10188,13 @@ public static class EditorOperations
                 _ => null,
             },
             orientationMixed = summary.OrientationMixed,
+
+            // How far the inspected run's baseline is raised off its line's, as the fraction of its em `text.update`
+            // takes. Zero is the initial value and is reported as the number it is rather than as an absence: a
+            // driver reads a value it can write back, and `baselineShift: 0` is exactly how it would put a run back
+            // on the line.
+            baselineShift = summary.BaselineShift,
+            baselineShiftMixed = summary.BaselineShiftMixed,
             colour = summary.Color is { } colour ? DescribeColorValue(colour) : null,
             colourMixed = summary.ColorMixed,
 

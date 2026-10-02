@@ -1691,6 +1691,17 @@ public static class SvgWriter
                     "glyph-orientation-vertical",
                     run.FontOrientation == GlyphOrientation.Upright ? "0" : "90"));
             }
+
+            // **A raised or lowered baseline goes back as the property it came from.** The model keeps it as a
+            // fraction of the run's own em - the unit the reader resolved the file's value into - so writing the
+            // length back is that fraction times the run's own size, which is exactly the arithmetic the reading
+            // did. It is written only when the run asks for a shift, so an ordinary block keeps every byte it had,
+            // and it is what makes a superscript read back as one: the geometry alone cannot say whether a run was
+            // raised or merely sits there, because a shifted run does not grow the line box.
+            if (run.BaselineShift != 0)
+            {
+                element.Add(new XAttribute("baseline-shift", Number(TextLayoutEngine.BaselineShiftFor(run))));
+            }
         }
 
         /// <summary>

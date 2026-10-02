@@ -210,6 +210,12 @@ public static partial class SvgReader
                 // upright whatever this says, so a file that states `0` on horizontal text is not re-drawn.
                 FontOrientation = chunk.Style.Orientation,
 
+                // The baseline the piece hangs from, as the fraction of an em the model keeps. It is a **run**
+                // member and not a reason to start a block: SVG's own rule is that a shifted run does not grow the
+                // line box, so "a superscript beside its base" is one line with two baselines, which is exactly the
+                // shape the model states with a run and which laying it out as a second block would destroy.
+                BaselineShift = chunk.Style.BaselineShift,
+
                 // The tracking the file asked for, as the length the model keeps. It goes on the run rather than
                 // into `AdvanceWidth`, which is the whole distance to the next run: widening that to express
                 // tracking stretches every glyph in the run instead of leaving room between them.
@@ -256,7 +262,9 @@ public static partial class SvgReader
     /// canvas and the PDF exporter both read <see cref="TextItem.ColourOf"/> as of #161, so a piece in another
     /// colour stays a run of the block the file wrote - which is what makes the two-coloured line one object to
     /// edit. A *gradient* still is a reason: the model fills a run with one colour, so a change of paint server is
-    /// a change the block cannot hold run by run, and `Place` resolves it once for the block.
+    /// a change the block cannot hold run by run, and `Place` resolves it once for the block. A **baseline shift**
+    /// is not a reason either, for the same shape of reason: the run holds it and the line box does not grow, so a
+    /// superscript and its base are one line of one block (#128).
     /// </summary>
     private static bool Holds(TextBlock block, TextChunk chunk)
         => Math.Abs(chunk.Cross - block.First.Cross) < 1e-9 &&
