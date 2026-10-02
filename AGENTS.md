@@ -257,7 +257,11 @@ will not be the one who notices.
 **Write the test that catches your own mutation.** The shipped mutation above was
 found only because its author later wrote a test that failed against it — the test
 did not exist when the commit was made. A mutation you cannot catch is not a
-bite-check, it is a change.
+bite-check, it is a change. CI proved this the hard way afterwards: the commit
+carrying the mutation passed the full pipeline green, and only the next commit -
+the one that added the test which catches it - went red. **CI cannot guard what no
+test asserts.** The guard is writing the test that fails against your own mutation,
+before you believe the change.
 
 **A mutation that does not change the result is not a bite-check.** One attempt
 mutated a measure function that happened to be measured in a case where two frames
