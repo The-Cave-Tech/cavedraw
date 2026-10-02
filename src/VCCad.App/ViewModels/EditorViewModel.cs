@@ -485,11 +485,19 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     public byte[] ExportPdf()
     {
-// The command queue travels with the file as our own private data, so the
+        // The command queue travels with the file as our own private data, so the
         // document remembers how it was made as well as what it looks like.
         byte[] pdf = VCCad.Pdf.PdfDocumentExporter.Export(
-            Document, VCCad.App.Automation.SessionJournal.ReadQueue());
-        Status = $"Exported {pdf.Length:N0} bytes of PDF";
+            Document, out IReadOnlyList<string> notes, VCCad.App.Automation.SessionJournal.ReadQueue());
+
+        // **A declared loss has to reach the person, or it is not declared.** The exporter reports what it could not
+        // draw - text with no glyph in the face that resolved, for one - and until this call used the overload that
+        // returns those notes, nothing read them: a document could export a blank page and the status line would
+        // still say the export succeeded.
+        Status = notes.Count == 0
+            ? $"Exported {pdf.Length:N0} bytes of PDF"
+            : $"Exported {pdf.Length:N0} bytes of PDF, with {notes.Count} thing(s) not drawn: " +
+              string.Join("; ", notes.Take(2));
 
         // Writing the document out is what "saved" means, so nothing is pending afterwards.
         _active.MarkSaved();
