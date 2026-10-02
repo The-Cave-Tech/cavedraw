@@ -397,13 +397,14 @@ public sealed class CadDocument
     }
 
     /// <summary>
-    /// Every art brush in the library whose **asset** the document does not have.
+    /// Every art or pattern brush in the library whose **artwork** the document does not have.
     ///
-    /// An art brush names the item it maps rather than copying it, so the art has one definition and every stroke
-    /// that uses the brush follows an edit to it. The price of that is a reference that can come apart: delete the
-    /// item, or load a file whose definition did not travel, and the brush is a name for artwork that is not
-    /// there. Reported for the same reason a missing brush is, and answering it is the difference between a
-    /// known gap and a brush that quietly draws nothing.
+    /// An art brush names the item it maps rather than copying it, and a pattern brush names the item in each of
+    /// its five slots, so the artwork has one definition and every stroke that uses the brush follows an edit to
+    /// it. The price of that is a reference that can come apart: delete the item, or load a file whose definition
+    /// did not travel, and the brush is a name for artwork that is not there. Reported for the same reason a
+    /// missing brush is, and answering it is the difference between a known gap and a brush that quietly draws
+    /// nothing.
     /// </summary>
     public IEnumerable<(BrushSpec Brush, Guid Asset)> MissingBrushAssets()
     {
@@ -412,6 +413,19 @@ public sealed class CadDocument
             if (brush.IsArt && brush.ArtAsset is { } asset && FindItem(asset) is null)
             {
                 yield return (brush, asset);
+            }
+
+            if (!brush.IsPattern)
+            {
+                continue;
+            }
+
+            foreach (PatternTileKind slot in Enum.GetValues<PatternTileKind>())
+            {
+                if (brush.Tile(slot) is { Asset: { } tileAsset } && FindItem(tileAsset) is null)
+                {
+                    yield return (brush, tileAsset);
+                }
             }
         }
     }

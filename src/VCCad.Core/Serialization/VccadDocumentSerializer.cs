@@ -178,7 +178,34 @@ internal sealed record BrushDto(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ArtColourisation? Colourisation = null,
 
     // The shade a tint-and-shade colourisation modulates against. Absent unless the brush states one.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ColorDto? ShadeColour = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ColorDto? ShadeColour = null,
+
+    // The pattern brush's own members (#101): its tile set, the gap between side tiles and the threshold that
+    // decides what counts as a corner. Optional **and written only for the pattern kind**, so a nib or an art
+    // brush - including every one written before this kind existed - serialises to exactly the bytes it did then.
+    // A slot the brush does not fill is absent, so a brush with one tile writes one member.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PatternTileDto? PatternSideTile = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PatternTileDto? PatternStartTile = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PatternTileDto? PatternEndTile = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PatternTileDto? PatternInnerTile = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PatternTileDto? PatternOuterTile = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? PatternSpacing = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? PatternCornerThreshold = null);
+
+/// <summary>
+/// One tile of a pattern brush on the wire: the item whose artwork it is, and the controls that are the tile's own.
+///
+/// The asset is an id rather than a copy for the reason the art brush's is: one definition of the artwork, which
+/// every stroke that uses the brush follows. Every member is optional and absent when it holds its default, so a
+/// tile that is the item and nothing else is written as the item - the rule a document written before this kind
+/// existed depends on.
+/// </summary>
+internal sealed record PatternTileDto(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? Asset = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? FlipAcross = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? FlipAlong = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Rotation = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Scale = null);
 
 /// <summary>One outline effect on the wire: its kind, its parameters, and the seed its randomness comes from.</summary>
 internal sealed record OutlineEffectDto(
@@ -798,6 +825,11 @@ internal abstract record ItemDto
         // existed, which the absence rule forbids.
         bool art = brush.IsArt;
 
+        // The pattern members belong to the pattern kind for the same reason, and are written whenever it is that
+        // kind - including the spacing and the threshold at their defaults, because a kind's own members travel
+        // together: the art kind writes a stretch of "repeat" and two flips of false on every art brush it writes.
+        bool pattern = brush.IsPattern;
+
         return new BrushDto(
             brush.Name,
             brush.Kind,
@@ -812,8 +844,32 @@ internal abstract record ItemDto
             art ? (ArtColourisation?)brush.Colourisation : null,
             art && brush.ShadeColour is { } shade
                 ? new ColorDto(shade.R, shade.G, shade.B, shade.A)
-                : null);
+                : null,
+            pattern ? ToPatternTileDto(brush.PatternSideTile) : null,
+            pattern ? ToPatternTileDto(brush.PatternStartTile) : null,
+            pattern ? ToPatternTileDto(brush.PatternEndTile) : null,
+            pattern ? ToPatternTileDto(brush.PatternInnerTile) : null,
+            pattern ? ToPatternTileDto(brush.PatternOuterTile) : null,
+            pattern ? brush.PatternSpacing : null,
+            pattern ? brush.PatternCornerThresholdDegrees : null);
     }
+
+    /// <summary>
+    /// One tile of a pattern brush's set on the wire, or null for a slot the brush does not fill.
+    ///
+    /// The two flips, the rotation and the scale are written only when they say something: a tile that is the item
+    /// and nothing else is the item, and a member written holding its default would be this build stating a control
+    /// the file never mentioned.
+    /// </summary>
+    private static PatternTileDto? ToPatternTileDto(PatternTileSpec? tile)
+        => tile is null
+            ? null
+            : new PatternTileDto(
+                tile.Asset,
+                tile.FlipAcross ? true : null,
+                tile.FlipAlong ? true : null,
+                tile.RotationDegrees != 0.0 ? tile.RotationDegrees : null,
+                Math.Abs(tile.Scale - 1.0) > 1e-12 ? tile.Scale : null);
 
     /// <summary>
     /// The dynamics on the wire, in target order: one entry per target the enum names.
@@ -1335,7 +1391,34 @@ internal static class ItemDtoExtensions
             dto.FlipAcross ?? false,
             dto.FlipAlong ?? false,
             dto.Colourisation ?? ArtColourisation.None,
-            dto.ShadeColour is { } shade ? new ColorRgb(shade.R, shade.G, shade.B, shade.A) : null);
+            dto.ShadeColour is { } shade ? new ColorRgb(shade.R, shade.G, shade.B, shade.A) : null,
+            ToPatternTile(dto.PatternSideTile),
+            ToPatternTile(dto.PatternStartTile),
+            ToPatternTile(dto.PatternEndTile),
+            ToPatternTile(dto.PatternInnerTile),
+            ToPatternTile(dto.PatternOuterTile),
+
+            // The spacing and the threshold are read as the file wrote them, and a member it does not state keeps
+            // the model's own default rather than a value this reader chose - the same rule the art members follow.
+            dto.PatternSpacing ?? 0.0,
+            dto.PatternCornerThreshold ?? 30.0);
+
+    /// <summary>
+    /// One tile of a pattern brush's set read back from the file, or null for a slot the file does not state.
+    ///
+    /// A control the file does not mention keeps the model's default: a tile written as its item alone is a tile
+    /// with no flip, no rotation and no scale of its own, which is what the model's defaults mean rather than an
+    /// invention about the file.
+    /// </summary>
+    private static PatternTileSpec? ToPatternTile(PatternTileDto? dto)
+        => dto is null
+            ? null
+            : new PatternTileSpec(
+                dto.Asset,
+                dto.FlipAcross ?? false,
+                dto.FlipAlong ?? false,
+                dto.Rotation ?? 0.0,
+                dto.Scale ?? 1.0);
 
     /// <summary>
     /// The dynamics on the wire, or null when the stroke responds to nothing.

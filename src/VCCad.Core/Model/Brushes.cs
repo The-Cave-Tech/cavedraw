@@ -22,7 +22,65 @@ public enum BrushKind
     /// repeated, stretched to fit, or scaled proportionally. See <see cref="ArtBrushPath"/>.
     /// </summary>
     Art,
+
+    /// <summary>
+    /// A **tile set** laid along the path: a side tile repeated between the turns, a corner tile at each turn,
+    /// and one start and one end tile at the two ends. See <see cref="PatternBrushPath"/>.
+    /// </summary>
+    Pattern,
 }
+
+/// <summary>
+/// The five slots a pattern brush's tile set can hold.
+///
+/// The names are Illustrator's, and the two corner slots are the pair that has to be told apart: a path can turn
+/// either way, and the artwork that wraps the inside of a bend is not the artwork that wraps its outside. See
+/// <see cref="PatternBrushPath"/> for which turn takes which.
+/// </summary>
+public enum PatternTileKind
+{
+    /// <summary>The tile repeated along the path between the turns and the ends.</summary>
+    Side,
+
+    /// <summary>The single tile at the beginning of an open path.</summary>
+    Start,
+
+    /// <summary>The single tile at the end of an open path.</summary>
+    End,
+
+    /// <summary>The tile at a turn the path makes **to its left** - the concave side of the bend.</summary>
+    InnerCorner,
+
+    /// <summary>The tile at a turn the path makes **to its right** - the convex side of the bend.</summary>
+    OuterCorner,
+}
+
+/// <summary>
+/// One tile of a pattern brush: the document item whose artwork is the tile, and the controls that are the tile's
+/// own rather than the set's.
+///
+/// The item is a **document item** rather than a copy of its geometry, for the reason the art brush's asset is:
+/// one definition of the tile, which every stroke that uses the brush follows, so editing the tile redraws every
+/// brushed stroke with no brush re-applied. Which of the five slots it fills is not held here - the slot is the
+/// member it is stored in on <see cref="BrushSpec"/>.
+/// </summary>
+/// <param name="Asset">The item whose artwork is drawn as this tile, or null for a slot with nothing in it.</param>
+/// <param name="FlipAcross">Whether the artwork is mirrored across the path.</param>
+/// <param name="FlipAlong">Whether the artwork is mirrored along the path.</param>
+/// <param name="RotationDegrees">
+/// An extra turn of the artwork about the tile's centre, in degrees, added to the turn the path's own direction
+/// gives it. It turns the **artwork**, not the tile's foot: a rotated tile still covers the same length of path.
+/// </param>
+/// <param name="Scale">
+/// The tile's own size as a multiple of the brush's size, so one tile of a set can be drawn larger than the rest
+/// without the set being resized.
+/// </param>
+public sealed record PatternTileSpec(
+    Guid? Asset,
+    bool FlipAcross = false,
+    bool FlipAlong = false,
+    double RotationDegrees = 0.0,
+    double Scale = 1.0);
 
 /// <summary>
 /// How the asset an art brush carries is laid along the path.
@@ -85,6 +143,12 @@ public enum ArtColourisation
 /// asset is stretched, whether it is mirrored in either direction and how it is coloured. Those members live on
 /// this same record rather than in a second type for the reason the kind exists: a brush is one field on a
 /// stroke, and which kind it is decides which of its members mean anything.
+///
+/// **The pattern brush is the third kind (#101) and is a tile set rather than one asset.** Its side, start, end
+/// and two corner tiles are five optional <see cref="PatternTileSpec"/> members, each naming an item of the
+/// document, plus a spacing and the threshold that decides what counts as a corner; its geometry is
+/// <see cref="PatternBrushPath"/>. It is not a nib either, for the art brush's reason: reading its size as a
+/// half-width would draw a line where the file has tiles.
 /// </summary>
 public sealed record BrushSpec(
     string Name,
@@ -98,7 +162,25 @@ public sealed record BrushSpec(
     bool FlipAcross = false,
     bool FlipAlong = false,
     ArtColourisation Colourisation = ArtColourisation.None,
-    ColorRgb? ShadeColour = null)
+    ColorRgb? ShadeColour = null,
+
+    // The pattern brush's own members (issue #101), the third kind. Each slot holds the tile that goes in it or
+    // nothing, and the members are optional and written only for the pattern kind - so a nib or an art brush,
+    // including every one written before this kind existed, serialises to exactly the bytes it did then.
+    PatternTileSpec? PatternSideTile = null,
+    PatternTileSpec? PatternStartTile = null,
+    PatternTileSpec? PatternEndTile = null,
+    PatternTileSpec? PatternInnerTile = null,
+    PatternTileSpec? PatternOuterTile = null,
+
+    // The gap left between consecutive side tiles, in the stroke's own units. Zero is tiles laid end to end,
+    // which is what a pattern brush does unless it is told otherwise; it holds its default, so it is absent from
+    // the wire at that default.
+    double PatternSpacing = 0.0,
+
+    // How much the direction of travel has to change at a node for that node to count as a corner, in degrees.
+    // Thirty is the model's own default and is what a right angle and a gentle curve are told apart by.
+    double PatternCornerThresholdDegrees = 30.0)
 {
     /// <summary>An elliptical nib: the calligraphic brush, named for the shape rather than the kind.</summary>
     public static BrushSpec Calligraphic(
@@ -128,6 +210,31 @@ public sealed record BrushSpec(
             asset, stretch, flipAcross, flipAlong, colourisation, shadeColour);
 
     /// <summary>
+    /// A **pattern brush**: the tile set that fills the named slots, each tile drawn <paramref name="size"/> wide
+    /// across the path, with <paramref name="spacing"/> left between consecutive side tiles.
+    ///
+    /// Every slot is optional and the fallbacks are Illustrator's: a corner slot with no tile of its own is filled
+    /// with the side tile, and a missing start or end tile simply leaves the side tiles to run to that end. A
+    /// slot naming nothing the document has is not a tile either, and is reported by
+    /// <see cref="CadDocument.MissingBrushAssets"/> rather than drawn as a gap nobody can see.
+    /// </summary>
+    public static BrushSpec Pattern(
+        string name,
+        double size,
+        PatternTileSpec? side = null,
+        PatternTileSpec? start = null,
+        PatternTileSpec? end = null,
+        PatternTileSpec? innerCorner = null,
+        PatternTileSpec? outerCorner = null,
+        double spacing = 0.0,
+        double cornerThresholdDegrees = 30.0)
+        => new(
+            name, 0.0, 1.0, size, BrushKind.Pattern, null,
+            null, ArtStretch.Repeat, false, false, ArtColourisation.None, null,
+            side, start, end, innerCorner, outerCorner,
+            Math.Max(0.0, spacing), Math.Clamp(cornerThresholdDegrees, 0.0, 180.0));
+
+    /// <summary>
     /// Whether this brush is a **nib** a stroke is swept with, as against art mapped along the path.
     ///
     /// The distinction is load-bearing rather than descriptive: a nib answers "how far is the edge from the
@@ -138,6 +245,24 @@ public sealed record BrushSpec(
 
     /// <summary>Whether this brush maps an asset along the path rather than sweeping a nib along it.</summary>
     public bool IsArt => Kind is BrushKind.Art;
+
+    /// <summary>
+    /// Whether this brush lays a tile set along the path. Like the art brush it has no half-width to give, so it
+    /// is not a nib - and unlike the art brush its geometry is a **set of tiles** at chosen places rather than one
+    /// asset covering the path. See <see cref="PatternBrushPath"/>.
+    /// </summary>
+    public bool IsPattern => Kind is BrushKind.Pattern;
+
+    /// <summary>The tile in one of the five slots, or null when that slot holds nothing.</summary>
+    public PatternTileSpec? Tile(PatternTileKind slot) => slot switch
+    {
+        PatternTileKind.Side => PatternSideTile,
+        PatternTileKind.Start => PatternStartTile,
+        PatternTileKind.End => PatternEndTile,
+        PatternTileKind.InnerCorner => PatternInnerTile,
+        PatternTileKind.OuterCorner => PatternOuterTile,
+        _ => null,
+    };
 
     /// <summary>
     /// Whether the nib is a circular pen, which draws the same width however the path runs.
