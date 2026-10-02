@@ -320,6 +320,21 @@ than the container whenever a corpus is present — `test-all.ps1` probes
 `$HOME/.cache/vccad-corpora` and exports whatever it finds — so the two totals are
 not comparable and only the workflow's is the gate.
 
+**The order is: this machine, then the Docker host, then CI - and only once the issue is known resolved.**
+Running `act` for every change spent most of a day waiting on it, and it is the wrong first gate: it answers
+questions about the *environment*, not about whether the fix works. Staged:
+
+1. **Get it working here, first.** Build and run the five suites natively - all of them together are under a minute
+   (`Geometry` ~0.1 s, `Core` ~3 s, `Pdf` ~2 s, `Api` ~0.7 s, `App` ~23 s). Iterate until the change demonstrably
+   resolves the issue on this machine: the focused test synchronously, the full suite once, and the issue's own
+   reproduction checked by hand where it has one.
+2. **Then the Docker host**, once, on a change believed finished. That is what `act` is for - the clean-machine
+   facts a local run cannot see (SDK band, installed fonts, published layout), and the container's test totals.
+3. **Then push**, which is what runs CI and closes an issue carrying `Closes #NN`.
+
+Do not run `act` or CI while the change is still being worked out. A red `act` run tells you nothing a two-second
+focused test would not have told you sooner, and it makes the loop five minutes long instead of thirty seconds.
+
 **Never wait on a long run while something else can be done.** A full suite is seconds for
 Core and half a minute for App; `act` is roughly five minutes; a cold test-project build is a
 minute or more. Running those to completion before starting the next piece of work is the
