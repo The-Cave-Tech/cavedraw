@@ -432,6 +432,19 @@ public static class PdfDocumentExporter
         // out and saying so in `PdfExportSupport`.
         string? blendGs = item is ArtGroup ? null : blendStates.Gs(item.BlendMode);
 
+        // **A group's blend is not a per-object `/BM`, and dropping it silently is its own defect.** A `/BM` on a
+        // group's *contents* would composite each child against the page rather than the group against the page,
+        // which is the wrong picture - so the correct treatment is an isolated transparency group, which this
+        // exporter does not write yet. Until it does, the loss is declared rather than ignored: a person who set a
+        // blend on a group is shown it on the canvas and would otherwise find it gone from the page with nothing
+        // said, which is the same silent loss #195's fix was about.
+        if (item is ArtGroup { BlendMode: not BlendMode.Normal } blendedGroup)
+        {
+            notes?.Add(
+                $"the group '{blendedGroup.Name}' has blend mode '{blendedGroup.BlendMode.ToSvgName()}', "
+                + "which the exported page does not apply");
+        }
+
         // A clip is emitted around the item rather than baked into its geometry, because
         // that is what it is: the item is drawn whole and the outline limits what shows.
         // Several clips intersect, which is what successive W n operators do.
