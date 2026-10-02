@@ -63,6 +63,17 @@ public abstract class CadObject : INotifyPropertyChanged
     /// </summary>
     public IItemContainer? Container { get; internal set; }
 
+    /// <summary>
+    /// The document this object is part of, or null when it is detached.
+    ///
+    /// Maintained by the owner when the object is (re)homed, the same way a <see cref="Layer"/>'s
+    /// artboard is, so it travels with a reparent instead of having to be walked for. It exists because an
+    /// item's **frame** is a property of the artboard its coordinates are stored relative to, and
+    /// <see cref="CadDocument.ToWorld"/> - the composition every caller shares - cannot reach that
+    /// artboard by walking up from an item that has just been taken out of its container.
+    /// </summary>
+    public CadDocument? Document { get; internal set; }
+
     /// <summary>Raised when a simple property on this object changes.</summary>
     public event PropertyChangedEventHandler? PropertyChanged;
 

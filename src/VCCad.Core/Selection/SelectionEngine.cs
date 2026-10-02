@@ -89,12 +89,14 @@ public static class SelectionEngine
     /// <summary>
     /// The affine map from an item's placement frame into document/world coordinates - the artboard
     /// origin composed on the outside of <see cref="ToArtboard"/>, which is where the canvas draws.
+    ///
+    /// The composition itself is <see cref="CadDocument.ToWorld"/>, which the layout frame
+    /// (<see cref="InArtboard"/>) and every command that reparents art also share. Stated once there
+    /// rather than per caller, so a gesture, a panel and a command cannot come to three different answers
+    /// about which frame an item's numbers are written in (#174).
     /// </summary>
     public static AffineTransform ToWorld(LayerItem item)
-    {
-        Vector2D origin = item.ArtboardOffset();
-        return AffineTransform.CreateTranslation(origin.X, origin.Y).Compose(ToArtboard(item));
-    }
+        => item.Document is { } document ? document.ToWorld(item) : ToArtboard(item);
 
     /// <summary>
     /// The affine map from world coordinates back into an item's **placement frame** - the frame its
@@ -983,8 +985,37 @@ public static class SelectionEngine
         return any ? new Point2D((left + right) / 2, (top + bottom) / 2) : default;
     }
 
+    /// <summary>
+    /// An item's bounds in the **artboard frame** - the frame the document stores its coordinates in: the
+    /// item's own placement frame carried up through every enclosing group, with the artboard origin left
+    /// off.
+    ///
+    /// This is the frame the layout operations measure in, and stating it here is the fix for #174. Laying
+    /// objects out means comparing where they are with each other, and two objects written into different
+    /// frames have no common scale to be compared on: `ItemBounds.Of` answers about one object's own
+    /// placement frame - a group's transform and no ancestors - so a selection spanning a group boundary
+    /// produced bounds in different spaces and a delta that was wrong for both of them.
+    ///
+    /// The artboard frame rather than world coordinates because that is what the document stores, so a
+    /// displacement measured in it is one small conversion away from the geometry, and because the
+    /// artboard origin cancels out of a *difference* anyway. <see cref="WorldBounds"/> remains the answer
+    /// for an absolute position that has to be expressed in the frame the canvas draws in.
+    /// </summary>
+    public static Rect2D InArtboard(LayerItem item) => FrameBounds(item, artboard: true);
+
     /// <summary>An object's bounds in document coordinates, every enclosing group's transform composed in.</summary>
-    private static Rect2D BoundsOf(LayerItem item)    {
+    private static Rect2D BoundsOf(LayerItem item) => FrameBounds(item, artboard: false);
+
+    /// <summary>
+    /// The item's box carried into its placement frame by the groups above it, and then - when
+    /// <paramref name="artboard"/> - by the artboard origin its coordinates are stored relative to.
+    ///
+    /// The two frames differ only by that last translation, and they are computed together so they cannot
+    /// drift: a group's box is in its own local space, which its own transform carries into the frame it is
+    /// placed in, while every other item is already in the frame it is placed in.
+    /// </summary>
+    private static Rect2D FrameBounds(LayerItem item, bool artboard)
+    {
         Rect2D box = item switch
         {
             PathItem path => path.BoundingBox(),
@@ -994,13 +1025,12 @@ public static class SelectionEngine
             _ => Rect2D.Empty,
         };
 
-        // A group's box is in its own local space, which its own transform carries into the frame it is
-        // placed in; everything else is already in the frame it is placed in.
-        AffineTransform toWorld = item is ArtGroup own
-            ? ToWorld(item).Compose(own.Transform)
-            : ToWorld(item);
+        AffineTransform placement = artboard ? ToArtboard(item) : ToWorld(item);
+        AffineTransform frame = item is ArtGroup own
+            ? placement.Compose(own.Transform)
+            : placement;
 
-        return toWorld.Transform(box);
+        return frame.Transform(box);
     }
 
     /// <summary>

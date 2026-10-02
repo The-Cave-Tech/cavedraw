@@ -690,13 +690,38 @@ public sealed class SetTextOriginCommand : IUndoableCommand
 /// Moves one or more items to a new position — optionally a different container —
 /// changing stacking order and/or parenting as one undo step. Original
 /// container/index pairs are captured for the inverse.
+///
+/// **A reparent is a frame change, so the geometry is converted into the destination container's frame**
+/// (#174). The numbers an item stores mean nothing until the frame they are written in is named: a path
+/// inside `translate(150,80) scale(2)` holds coordinates in that group's space, and dropping it on a layer
+/// without converting moved it 150,80 across the page and doubled the error the other way round. The
+/// conversion is the composition the repository states once - `CadDocument.ToWorld` and
+/// <see cref="SelectionEngine.FromWorld"/> - mapped through
+/// `ToWorld(destination) ∘ FromWorld(source)`, so where the art is drawn does not change.
+///
+/// An item whose own members cannot express that transform - a text block holds an origin and an angle, a
+/// placed image holds a rectangle - is **refused** rather than stored in the wrong frame, and so is a
+/// destination whose frame collapses the plane, where no honest world position exists. That is the rule
+/// behind #140, #143, #144, #150, #151, #152, #155, #158, #160, #162, #164, #165, #169, #172 and #173, and
+/// it is applied here rather than a second rule being invented for this path.
 /// </summary>
 public sealed class MoveItemsCommand : IUndoableCommand
 {
+    /// <summary>How far two affines may differ and still be the same map, component by component.</summary>
+    private const double FrameTolerance = 1e-9;
+
     private readonly IReadOnlyList<LayerItem> _items;
     private readonly IItemContainer _target;
     private readonly int _index;
-    private List<(IItemContainer Container, int Index, LayerItem Item)>? _before;
+    private List<Move>? _before;
+    private List<AffineTransform?>? _planned;
+
+    /// <summary>
+    /// Everything an undo needs about one item's move: where it was, the geometry it had, and - for a group,
+    /// whose conversion lives in its own transform rather than in any node - the transform it had.
+    /// </summary>
+    private readonly record struct Move(
+        IItemContainer Container, int Index, LayerItem Item, PathItem? Geometry, AffineTransform? Transform);
 
     public string Description => "Reorder objects";
 
@@ -709,14 +734,24 @@ public sealed class MoveItemsCommand : IUndoableCommand
 
     public void Do()
     {
+        if (_planned is null)
+        {
+            _planned = Plan();
+        }
+
         if (_before is null)
         {
-            _before = new List<(IItemContainer, int, LayerItem)>();
+            _before = new List<Move>();
             foreach (LayerItem item in _items)
             {
                 if (item.Container is { } container)
                 {
-                    _before.Add((container, IndexOf(container, item), item));
+                    _before.Add(new Move(
+                        container,
+                        IndexOf(container, item),
+                        item,
+                        item is PathItem path ? path.GeometrySnapshot() : null,
+                        item is ArtGroup group ? group.Transform : null));
                 }
             }
         }
@@ -727,8 +762,32 @@ public sealed class MoveItemsCommand : IUndoableCommand
         }
 
         int index = Math.Clamp(_index, 0, _target.Children.Count);
-        foreach (LayerItem item in _items)
+        for (int i = 0; i < _items.Count; i++)
         {
+            LayerItem item = _items[i];
+
+            // The item's own frame, including the artboard origin it is moving between: the same conversion
+            // a gesture makes, for the same reason. A path carries the whole mapping; text and images can
+            // only carry a translation, which `Plan` has already refused anything else for.
+            if (_planned[i] is { } local)
+            {
+                switch (item)
+                {
+                    case PathItem path:
+                        path.TransformGeometry(local);
+                        break;
+                    case TextItem text:
+                        text.Origin = local.Transform(text.Origin);
+                        break;
+                    case ImageItem image:
+                        image.Placement = local.Transform(image.Placement);
+                        break;
+                    case ArtGroup group:
+                        group.Transform = local.Compose(group.Transform);
+                        break;
+                }
+            }
+
             _target.AddItem(item, index++);
         }
     }
@@ -745,11 +804,118 @@ public sealed class MoveItemsCommand : IUndoableCommand
             item.Container?.RemoveItem(item);
         }
 
-        foreach ((IItemContainer container, int index, LayerItem item) in _before)
+        foreach (Move move in _before)
         {
-            container.AddItem(item, Math.Clamp(index, 0, container.Children.Count));
+            if (move.Item is PathItem path && move.Geometry is not null)
+            {
+                path.RestoreGeometryFrom(move.Geometry);
+            }
+
+            // A group's conversion is its own transform, so putting it back is part of the inverse rather
+            // than something the container can restore.
+            if (move.Item is ArtGroup group && move.Transform is { } transform)
+            {
+                group.Transform = transform;
+            }
+
+            move.Container.AddItem(move.Item, Math.Clamp(move.Index, 0, move.Container.Children.Count));
         }
     }
+
+    /// <summary>
+    /// Works out, before anything is touched, where each item's geometry has to be written once it has
+    /// moved: the affine taking the source container's frame to the destination's, and how that item
+    /// expresses it.
+    ///
+    /// Planned as a whole rather than converted as the moves happen, because the second item of three
+    /// failing halfway through would leave a document with some art converted and some not - and the stack
+    /// has not recorded the command yet, so an undo could not put it back.
+    /// </summary>
+    private List<AffineTransform?> Plan()
+    {
+        var plan = new List<AffineTransform?>();
+
+        foreach (LayerItem item in _items)
+        {
+            if (item.Container is null)
+            {
+                plan.Add(null);
+                continue;
+            }
+
+            CadDocument? document = item.Document ?? (_target as CadObject)?.Document;
+
+            // The frame the geometry is written in now, and the frame it is going to. Both are asked for
+            // without moving anything, and both are the frame the item's **own members** are written in -
+            // which is the container's frame. For a group that distinction is everything: its own transform
+            // is one of the members being converted, so the frame handed to it has to stop at its container
+            // or the transform would be conjugated twice.
+            AffineTransform source = document is null
+                ? AffineTransform.Identity
+                : document.ToWorld(item, item.Container);
+            AffineTransform destination = document is null
+                ? AffineTransform.Identity
+                : document.ToWorld(item, _target);
+
+            if (item is ArtGroup)
+            {
+                // Its own transform is not part of the frame its own members are written in.
+                source = document?.Ancestors(item.Container) ?? AffineTransform.Identity;
+                destination = document?.Ancestors(_target) ?? AffineTransform.Identity;
+            }
+
+            if (!source.IsInvertible)
+            {
+                throw new FrameConversionException(
+                    $"Cannot move '{item.Name}' (a {item.GetType().Name}): the frame it is stored in " +
+                    "collapses the plane, so there is no world position to carry across.");
+            }
+
+            if (!destination.IsInvertible)
+            {
+                throw new FrameConversionException(
+                    $"Cannot move '{item.Name}' (a {item.GetType().Name}) into " +
+                    $"'{(_target as CadObject)?.Name ?? "the target"}': that frame is not invertible, so " +
+                    "there is no honest position for the geometry and it will not be stored in the wrong frame.");
+            }
+
+            // From the source frame, through world, into the destination frame.
+            AffineTransform relative = destination.Inverted().Compose(source);
+
+            // A path carries the mapping in its nodes and a group carries it in its own transform - the
+            // transform that establishes its children's frame and so may be any affine at all.
+            if (item is PathItem || item is ArtGroup)
+            {
+                plan.Add(relative);
+                continue;
+            }
+
+            // Text holds an origin and an angle and an image holds a rectangle: neither can hold a shear or
+            // an anisotropic scale, so the only mapping they can carry exactly is a translation. A uniform
+            // scale is representable for text (it is the font size) but is deliberately not attempted here -
+            // the operation that changes a text block's size is the one that also changes its runs.
+            if (IsTranslation(relative))
+            {
+                plan.Add(relative);
+                continue;
+            }
+
+            throw new FrameConversionException(
+                $"Cannot move '{item.Name}' (a {item.GetType().Name}) into " +
+                $"'{(_target as CadObject)?.Name ?? "the target"}': that frame scales or turns what is " +
+                "stored in it, and a text block or a placed image cannot express that mapping - so the " +
+                "move is refused rather than storing numbers in a frame they were never written in.");
+        }
+
+        return plan;
+    }
+
+    /// <summary>Whether an affine is the identity in its linear part, so it displaces without distorting.</summary>
+    private static bool IsTranslation(AffineTransform transform)
+        => Math.Abs(transform.A - 1) <= FrameTolerance &&
+           Math.Abs(transform.B) <= FrameTolerance &&
+           Math.Abs(transform.C) <= FrameTolerance &&
+           Math.Abs(transform.D - 1) <= FrameTolerance;
 
     private static int IndexOf(IItemContainer container, LayerItem item)
     {

@@ -104,7 +104,85 @@ public sealed class CadDocument
     /// <summary>Document-level container for objects that belong to no artboard
     /// (the pasteboard / orphans). These are "parentless" in the sense that no
     /// artboard owns them; their coordinates are document/world coordinates.</summary>
-    public Layer Orphans { get; } = new() { Name = "Pasteboard" };
+    public Layer Orphans { get; }
+
+    /// <summary>Creates an empty document whose pasteboard belongs to it.</summary>
+    public CadDocument()
+    {
+        Orphans = new Layer { Name = "Pasteboard" };
+        Orphans.Document = this;
+        Orphans.Artboard = null;
+    }
+
+    /// <summary>
+    /// The affine map from an item's **placement frame** into document/world coordinates: the artboard
+    /// origin it is stored relative to, composed outside every enclosing group's
+    /// <see cref="ArtGroup.Transform"/>.
+    ///
+    /// This is the one statement of where an item's numbers live, and it is here rather than beside one
+    /// caller because the canvas, the selection engine, the layout code and every command that reparents
+    /// art have to agree about it exactly: a group's transform is a local→parent map, so walking up from
+    /// the item and pre-composing each ancestor gives parent∘…∘innermost, which is the frame the item is
+    /// drawn in. Three copies of that walk is three chances to disagree about a transformed group - and a
+    /// disagreement is not a rendering artifact, it is a wrong file (#172, #173, #174).
+    ///
+    /// Read the other way round it is also what a reparent needs: `ToWorld(destination) ∘
+    /// FromWorld(source)` carries geometry from the container it was written in to the one it is going to.
+    /// </summary>
+    public AffineTransform ToWorld(LayerItem item)
+    {
+        Artboard? artboard = item.OwningLayer()?.Artboard;
+        return ToWorld(Ancestors(item.Container), artboard);
+    }
+
+    /// <summary>
+    /// The affine map from a **hypothetical** placement frame into world coordinates: the same
+    /// composition <see cref="ToWorld(LayerItem)"/> states, for an item that is not under
+    /// <paramref name="container"/> yet - or for one that has been taken out of it.
+    ///
+    /// A reparent has to know both frames before it touches the tree, and after
+    /// <see cref="IItemContainer.RemoveItem"/> the walk above can no longer see the container the item
+    /// came from. This is how that frame is asked for without moving anything first.
+    /// </summary>
+    public AffineTransform ToWorld(LayerItem item, IItemContainer? container)
+    {
+        Artboard? artboard = container is Layer layer
+            ? layer.Artboard
+            : (container as LayerItem)?.OwningLayer()?.Artboard;
+        return ToWorld(Ancestors(container), artboard);
+    }
+
+    /// <summary>
+    /// Every enclosing group's transform for a container, composed outermost last - the placement frame it
+    /// establishes, with the artboard origin left off.
+    ///
+    /// This is the half of <see cref="ToWorld(LayerItem)"/> that a **group being moved** needs, because a
+    /// group's frame is its container's while its own transform is one of the members being converted.
+    /// Handed the item's own frame instead, its transform would be conjugated twice and the whole group
+    /// would be placed twice over (#174).
+    /// </summary>
+    public AffineTransform Ancestors(IItemContainer? container)
+    {
+        AffineTransform ancestors = AffineTransform.Identity;
+
+        for (IItemContainer? walk = container;
+             walk is not null;
+             walk = (walk as LayerItem)?.Container)
+        {
+            if (walk is ArtGroup group)
+            {
+                ancestors = group.Transform.Compose(ancestors);
+            }
+        }
+
+        return ancestors;
+    }
+
+    private static AffineTransform ToWorld(AffineTransform ancestors, Artboard? artboard)
+    {
+        Vector2D origin = artboard is null ? default : new Vector2D(artboard.X, artboard.Y);
+        return AffineTransform.CreateTranslation(origin.X, origin.Y).Compose(ancestors);
+    }
 
     private string _name = "Untitled";
 
@@ -418,6 +496,15 @@ public sealed class CadDocument
         }
 
         _artboards.Add(artboard);
+
+        // Ownership travels down with the artboard: a layer learns which document it is in, and every item
+        // under it can then be asked where its frame is without walking the tree for it.
+        artboard.Document = this;
+        foreach (Layer layer in artboard.Layers)
+        {
+            ItemTree.Own(layer, this);
+        }
+
         StructureChanged?.Invoke(this, EventArgs.Empty);
     }
 

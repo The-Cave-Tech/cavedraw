@@ -96,7 +96,16 @@ public sealed class Artboard : CadObject
         }
 
         layer.Artboard = this;
+        layer.Document = Document;
         _layers.Add(layer);
+
+        // Every item already on the layer belongs to this document too - a layer restored by undo brings
+        // its contents back with it, and their frames are relative to this artboard.
+        foreach (LayerItem child in layer.Children)
+        {
+            ItemTree.Own(child, Document);
+        }
+
         StructureChanged?.Invoke(this, EventArgs.Empty);
     }
 

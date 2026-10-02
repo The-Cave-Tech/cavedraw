@@ -1,3 +1,5 @@
+using VCCad.Geometry;
+
 namespace VCCad.Core.Model;
 
 /// <summary>
@@ -48,7 +50,34 @@ internal static class ItemTree
 
         list.Insert(index, item);
         item.Container = owner;
+
+        // Ownership follows the structure: an item moved to another document, or onto (or off) the
+        // pasteboard, has to know which document its coordinates are stored relative to before anything
+        // asks where it is drawn. A reparent that skipped this would leave the item claiming the frame it
+        // no longer lives in, which is the same class of mistake as storing the wrong numbers (#174).
+        Own(item, (owner as CadObject)?.Document);
+
         return index;
+    }
+
+    /// <summary>
+    /// Records which document an object and everything under it belongs to, so an item's frame can be
+    /// asked for without walking to an artboard it may no longer be under.
+    /// </summary>
+    public static void Own(CadObject node, CadDocument? document)
+    {
+        node.Document = document;
+
+        switch (node)
+        {
+            case IItemContainer container:
+                foreach (LayerItem child in container.Children)
+                {
+                    Own(child, document);
+                }
+
+                break;
+        }
     }
 
     /// <summary>Removes the item from the list and clears its back-pointer.</summary>
