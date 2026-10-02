@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using VCCad.Core.Model;
+using VCCad.Core.Selection;
 using VCCad.Core.Text;
 using VCCad.Core.Serialization;
 using VCCad.Pdf.Fonts;
@@ -544,16 +545,26 @@ public static class PdfDocumentExporter
         // A filter is a raster operation, so an object that has one is drawn into pixels and the graph runs over
         // them - the same route the canvas takes, and the only one PDF has for a blur. Nothing else about the item
         // changes; a path with no filter, or one this build cannot carry, falls through to the vectors below.
+        //
+        // **The shape's box, the frame it is rasterised in and the answer are all read in world coordinates** -
+        // the frame the canvas gives its filtered objects and the frame `FilterRasteriser` documents. Both are
+        // asked of `SelectionEngine`, which states that frame once (the artboard origin composed on the OUTSIDE of
+        // the enclosing group transforms, `ToWorld`); the exporter does not restate the composition, so the
+        // drawing and the file cannot come to two answers about where a filtered object sits (#168). The picture
+        // is then written into the page, whose content stream is the artboard's own frame, so the artboard origin
+        // is taken back off on the way out - a translation of the answer, not a second composition of the frame,
+        // and so not two rules that merely happen to agree for a translation.
         if (document is not null &&
             path.FilterId is { Length: > 0 } filterId &&
             document.FindFilter(filterId) is { } filter &&
             FilterRasteriser.Rasterise(
-                path, filter, path.WorldBounds(), WorldTransform(path, toDoc), opacity,
+                path, filter, SelectionEngine.WorldBounds(new[] { path }),
+                SelectionEngine.ToWorld(path), opacity,
                 notes ?? new List<string>()) is { } picture &&
             images?.AddFilteredImage(picture.Pixels, filter.Name) is { } resource)
         {
             ops.Add("q");
-            ops.Add(FilterRasteriser.Placement(picture, toDoc) + " cm");
+            ops.Add(FilterRasteriser.Placement(picture, WorldToPage(path)) + " cm");
             ops.Add($"/{resource} Do");
             ops.Add("Q");
             return;
@@ -873,18 +884,23 @@ public static class PdfDocumentExporter
     }
 
     /// <summary>
-    /// The transform from a path's own coordinates to **world** units, with any group transform already applied.
+    /// World coordinates as this page's content stream states them: the artboard origin taken back off.
     ///
-    /// The canvas draws in world space and gives its filtered objects world boxes, so that is the space a filter's
-    /// region and an <c>objectBoundingBox</c> primitive length are read in. A path keeps its geometry relative to
-    /// its artboard, so the page's own origin is what turns the two into the same numbers - and getting it wrong
-    /// puts a filtered object a page-origin away from where it is drawn, which is the failure
-    /// <c>CanvasWorkspace</c> records for the same reason.
+    /// A page is one artboard whose MediaBox is that artboard's own rectangle, so the content stream never carries
+    /// the origin - a page's grid position lives in the canvas's layout and nowhere in the file. An item's world
+    /// frame (<see cref="SelectionEngine.ToWorld"/>) therefore differs from the page's frame by exactly the
+    /// artboard origin, and this is that difference and nothing else. It is a translation, so unlike two orders of
+    /// the same composition it cannot disagree with a group transform - which is what #168 was: the offset
+    /// composed inside the item frame, so a rotation turned it instead of moving it.
+    ///
+    /// The enclosing group frames are deliberately **not** a parameter. A frame that is "the item's own
+    /// coordinates under every enclosing group transform" is <see cref="SelectionEngine.ToWorld"/>'s business, and
+    /// a second caller deriving it here is the defect this method exists to leave behind.
     /// </summary>
-    private static AffineTransform WorldTransform(PathItem path, AffineTransform toDoc)
+    private static AffineTransform WorldToPage(PathItem path)
     {
         Vector2D offset = path.ArtboardOffset();
-        return toDoc.Compose(AffineTransform.CreateTranslation(offset.X, offset.Y));
+        return AffineTransform.CreateTranslation(-offset.X, -offset.Y);
     }
 
     private static void CollectAlphas(Artboard artboard, double opacity, List<double> alphas)

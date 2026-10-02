@@ -78,13 +78,123 @@ internal static class FilterRasteriser
             return null;
         }
 
-        // The region at one pixel per unit is the *placement* - where the result belongs - whatever density the
-        // evaluation then happens at. The engine is told the same density, or a blur radius would be turned into
-        // a pixel count by one number and measured by another.
-        (int regionX, int regionY, int width, int height) = FilterEngine.RegionPixels(filter, objectBounds, 1.0);
-        double scale = filter.HasFilterResolution ? 1.0 : Density(region);
-        int pixelsWide = filter.HasFilterResolution ? filter.FilterResolutionX!.Value : Math.Max(1, (int)Math.Round(width * scale));
-        int pixelsHigh = filter.HasFilterResolution ? filter.FilterResolutionY!.Value : Math.Max(1, (int)Math.Round(height * scale));
+        return Evaluate(path, new[] { filter }, objectBounds, toWorld, opacity, notes);
+    }
+
+    /// <summary>
+    /// The path drawn with the raster effects its first effect-carrying stroke holds, or null when it has none.
+    ///
+    /// **This is the filter machinery reached from the stroke side, not a second renderer.** A blur, a shadow and a
+    /// glow have no PDF operator and are not geometry, so the only honest way to carry one is the way a filter is
+    /// carried: draw the path into pixels over a region and place the answer as an image. What differs is only where
+    /// the graph comes from - <see cref="RasterEffectFilters.ToFilter"/> builds it from the stroke's effect list
+    /// rather than the document reading it out of the file - and the region, which starts from the stroke's own
+    /// extent because a stroke reaches beyond its centreline and an outer glow further still.
+    ///
+    /// The effects are applied **in order**, each taking the previous one's answer as its source, which is what makes
+    /// the model's order the picture. The region is the first effect's, exactly as <c>FilterRenderer</c> decides it
+    /// for the canvas: one chain has one canvas, or the second effect would be evaluated against a rectangle the
+    /// first one never produced.
+    ///
+    /// A path whose strokes carry **different** effects renders the first such stroke's, which is the documented
+    /// limit of drawing a path as one picture (issue #104's stack would give each stroke its own).
+    /// </summary>
+    public static FilteredPicture? RasteriseStrokeEffects(
+        PathItem path,
+        AffineTransform toWorld,
+        double opacity,
+        List<string> notes)
+    {
+        if (EffectStroke(path) is not { } stroke)
+        {
+            return null;
+        }
+
+        // A gradient or a hatch has no single colour for this rasteriser to composite, so the path is not drawn
+        // here at all - and a picture that dropped the fill would be a worse answer than the vectors below, which
+        // draw it correctly and lose only the effect.
+        if (UnsupportedPaint(path) is { } unsupportedPaint)
+        {
+            notes.Add(
+                $"the stroke's raster effect is not written: {unsupportedPaint} - the path is exported as vectors " +
+                "without the effect rather than through a picture the file did not ask for.");
+            return null;
+        }
+
+        // The stroke's own extent, not the centreline box: half the width reaches beyond the line, and an outer
+        // glow reaches further still. The canvas builds its region the same way (`RasterFiltersFor`).
+        Rect2D bounds = path.WorldBounds();
+        Rect2D strokeBounds = bounds.Inflated(Math.Max(0.0, stroke.Width) / 2);
+
+        if (strokeBounds.Width <= 0 || strokeBounds.Height <= 0)
+        {
+            notes.Add(
+                $"the stroke's raster effect is not written: the shape it is on has no area, so its region is " +
+                $"{strokeBounds.Width} by {strokeBounds.Height} model units.");
+            return null;
+        }
+
+        var filters = new List<FilterSpec>();
+        foreach (RasterEffectSpec effect in stroke.AllRasterEffects)
+        {
+            if (RasterEffectFilters.ToFilter(effect, stroke.Color, strokeBounds) is { } filter)
+            {
+                filters.Add(filter);
+            }
+        }
+
+        if (filters.Count == 0)
+        {
+            return null;
+        }
+
+        return Evaluate(path, filters, bounds, toWorld, opacity, notes);
+    }
+
+    /// <summary>The first stroke that carries raster effects, or null - the one the whole path is drawn with.</summary>
+    private static StrokeSpec? EffectStroke(PathItem path)
+    {
+        foreach (StrokeSpec stroke in path.Strokes)
+        {
+            if (stroke.AllRasterEffects is { Count: > 0 })
+            {
+                return stroke;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The shared tail of both entry points: one region, the path drawn into it, and every graph in the chain
+    /// evaluated over the previous one's answer.
+    ///
+    /// The **first** graph decides the region and the pixel grid, because the chain produces one picture and one
+    /// placement - and that is the choice <c>FilterRenderer</c> makes for the canvas, so the file and the drawing
+    /// cannot disagree about where the effect lands.
+    /// </summary>
+    private static FilteredPicture? Evaluate(
+        PathItem path,
+        IReadOnlyList<FilterSpec> filters,
+        Rect2D objectBounds,
+        AffineTransform toWorld,
+        double opacity,
+        List<string> notes)
+    {
+        FilterSpec filter = filters[0];
+
+        // The region at the **evaluation density** is both the buffer's pixel size and, divided by that density,
+        // where its first pixel sits in model units - and the engine is given the same density, or a blur radius
+        // would be turned into a pixel count by one number and measured by another. Asking at one pixel per unit
+        // and then dividing by the density is what put the drawing window half a region away on a page that is not
+        // at the document origin: the artwork is drawn at the artboard's offset, so a buffer whose origin is
+        // displaced from the region's model rectangle leaves the shape outside its own bitmap and the page draws
+        // nothing at all.
+        double density = filter.HasFilterResolution ? 1.0 : Density(RegionOf(filter, objectBounds));
+        (int regionX, int regionY, int width, int height) =
+            FilterEngine.RegionPixels(filter, objectBounds, density);
+        int pixelsWide = filter.HasFilterResolution ? filter.FilterResolutionX!.Value : width;
+        int pixelsHigh = filter.HasFilterResolution ? filter.FilterResolutionY!.Value : height;
 
         if (pixelsWide > MaximumPixels || pixelsHigh > MaximumPixels)
         {
@@ -95,50 +205,60 @@ internal static class FilterRasteriser
             return null;
         }
 
-        FilterEngine engine;
-        try
+        var engines = new List<FilterEngine>(filters.Count);
+        foreach (FilterSpec step in filters)
         {
-            engine = new FilterEngine(filter, scale);
-        }
-        catch (ArgumentOutOfRangeException exception)
-        {
-            notes.Add($"the filter '{filter.Name}' is not written: {exception.Message}.");
-            return null;
+            try
+            {
+                engines.Add(new FilterEngine(step, density));
+            }
+            catch (ArgumentOutOfRangeException exception)
+            {
+                notes.Add($"the filter '{step.Name}' is not written: {exception.Message}.");
+                return null;
+            }
         }
 
         // The pixels cover whole pixels from the rounded-outward region, so the picture's rectangle is what was
         // actually rasterised rather than the region's own corner - which is inside a pixel of it, and enough to
-        // shift a shadow by a pixel on every export.
-        double originX = regionX / scale;
-        double originY = regionY / scale;
-        var covered = new Rect2D(originX, originY, pixelsWide / scale, pixelsHigh / scale);
+        // shift a shadow by a pixel on every export. A named `filterRes` samples the same model rectangle more
+        // finely, so there the placement stays the region itself.
+        double originX = regionX / density;
+        double originY = regionY / density;
+        Rect2D covered = filter.HasFilterResolution
+            ? RegionOf(filter, objectBounds)
+            : new Rect2D(originX, originY, width / density, height / density);
 
         var buffer = new FilterBuffer(pixelsWide, pixelsHigh);
         double alpha = path.Opacity * opacity;
-        RasteriseInto(buffer, path, toWorld, originX, originY, scale, alpha);
+        RasteriseInto(buffer, path, toWorld, originX, originY, density, alpha);
 
         FilterSources? sources = SourcePictures(
-            path, filter, toWorld, originX, originY, scale, pixelsWide, pixelsHigh, alpha);
+            path, filters, toWorld, originX, originY, density, pixelsWide, pixelsHigh, alpha);
 
-        FilterBuffer filtered;
-        try
+        FilterBuffer filtered = buffer;
+        for (int i = 0; i < filters.Count; i++)
         {
-            filtered = engine.EvaluateInPlace(buffer, sources, objectBounds);
-        }
-        catch (ArgumentOutOfRangeException exception)
-        {
-            notes.Add($"the filter '{filter.Name}' is not written: {exception.Message}.");
-            return null;
-        }
+            FilterEngine engine = engines[i];
+            try
+            {
+                filtered = engine.EvaluateInPlace(filtered, sources, objectBounds);
+            }
+            catch (ArgumentOutOfRangeException exception)
+            {
+                notes.Add($"the filter '{filters[i].Name}' is not written: {exception.Message}.");
+                return null;
+            }
 
-        // Every renderer-supplied input this build can produce has been handed over, so anything the engine had to
-        // leave out is a genuine gap rather than an omission here - and saying which one it was is the difference
-        // between a reported approximation and a picture nobody can explain.
-        if (engine.UnsuppliedSourceInputs.Count > 0)
-        {
-            notes.Add(
-                $"the filter '{filter.Name}' reads {string.Join(", ", engine.UnsuppliedSourceInputs)}, which the " +
-                "export could not supply; those inputs were evaluated as transparent.");
+            // Every renderer-supplied input this build can produce has been handed over, so anything the engine had
+            // to leave out is a genuine gap rather than an omission here - and saying which one it was is the
+            // difference between a reported approximation and a picture nobody can explain.
+            if (engine.UnsuppliedSourceInputs.Count > 0)
+            {
+                notes.Add(
+                    $"the filter '{filters[i].Name}' reads {string.Join(", ", engine.UnsuppliedSourceInputs)}, " +
+                    "which the export could not supply; those inputs were evaluated as transparent.");
+            }
         }
 
         return new FilteredPicture(filtered, covered);
@@ -160,9 +280,10 @@ internal static class FilterRasteriser
             return null;
         }
 
-        (int regionX, int regionY, int width, int height) = FilterEngine.RegionPixels(filter, objectBounds, 1.0);
+        (int regionX, int regionY, int width, int height) =
+            FilterEngine.RegionPixels(filter, objectBounds, Density(region));
         double scale = Density(region);
-        var buffer = new FilterBuffer(Math.Max(1, (int)Math.Round(width * scale)), Math.Max(1, (int)Math.Round(height * scale)));
+        var buffer = new FilterBuffer(Math.Max(1, width), Math.Max(1, height));
 
         RasteriseInto(buffer, path, AffineTransform.Identity, regionX / scale, regionY / scale, scale, path.Opacity);
         return buffer;
@@ -190,16 +311,29 @@ internal static class FilterRasteriser
             }
         }
 
-        if (path.Fill.IsVisible && (path.Fill.Gradient is not null || path.Fill.Hatch is not null))
+        return UnsupportedPaint(path);
+    }
+
+    /// <summary>
+    /// The paint this rasteriser cannot draw, or null. A fill that is not one colour: a gradient is written as a
+    /// shading and a hatch as clipped line art, and neither has a single colour to composite, so the shape's own
+    /// pixels could not be produced.
+    ///
+    /// Shared by the filter and the stroke-effect entry points because both rasterise the same path
+    /// (<see cref="RasteriseInto"/>) and would drop the same fill.
+    /// </summary>
+    private static string? UnsupportedPaint(PathItem path)
+    {
+        if (!path.Fill.IsVisible || (path.Fill.Gradient is null && path.Fill.Hatch is null))
         {
-            return path.Fill.Gradient is not null
-                ? "the shape is filled with a gradient, which this exporter writes as a shading rather than as a " +
-                  "colour it can rasterise"
-                : "the shape is filled with a hatch, which this exporter writes as clipped line art rather than as " +
-                  "a colour it can rasterise";
+            return null;
         }
 
-        return null;
+        return path.Fill.Gradient is not null
+            ? "the shape is filled with a gradient, which this exporter writes as a shading rather than as a " +
+              "colour it can rasterise"
+            : "the shape is filled with a hatch, which this exporter writes as clipped line art rather than as " +
+              "a colour it can rasterise";
     }
 
     /// <summary>
@@ -216,7 +350,7 @@ internal static class FilterRasteriser
     /// </summary>
     private static FilterSources? SourcePictures(
         PathItem path,
-        FilterSpec filter,
+        IReadOnlyList<FilterSpec> filters,
         AffineTransform toWorld,
         double originX,
         double originY,
@@ -228,10 +362,13 @@ internal static class FilterRasteriser
         bool wantsFill = false;
         bool wantsStroke = false;
 
-        foreach (string name in filter.SourceInputsRead)
+        foreach (FilterSpec filter in filters)
         {
-            wantsFill |= name == "FillPaint";
-            wantsStroke |= name == "StrokePaint";
+            foreach (string name in filter.SourceInputsRead)
+            {
+                wantsFill |= name == "FillPaint";
+                wantsStroke |= name == "StrokePaint";
+            }
         }
 
         if (!wantsFill && !wantsStroke)
