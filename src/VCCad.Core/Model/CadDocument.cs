@@ -106,12 +106,35 @@ public sealed class CadDocument
     /// artboard owns them; their coordinates are document/world coordinates.</summary>
     public Layer Orphans { get; }
 
+    /// <summary>
+    /// The document's **definitions**: the content an instance (<see cref="ArtGroup.SourceId"/>) refers to by name.
+    ///
+    /// SVG states an instance as `use href="#id"`, and `defs`/`symbol` hold what the id names. That definition is
+    /// **not artwork** - a viewer draws it where it is used and nowhere else, which is why the reader has always
+    /// skipped `defs` and why it does not belong in the layer tree: putting it there would add an object the file
+    /// does not draw.
+    ///
+    /// It is an **asset**, like a width profile or a filter, and it is held the same way: an entry per id, and the
+    /// instances hold a copy of the entry's children plus a link to the entry. Editing the entry is what makes the
+    /// link worth having - "an instance is a reference, not a copy" means an edit to the definition reaches every
+    /// instance of it, and before this library existed there was nothing for such an edit to reach
+    /// (<see cref="InstanceResolver"/> is the step that follows the link).
+    ///
+    /// The entry is a holder and only its **children** travel into an instance: a `symbol` is sized by the `use`
+    /// that draws it, so the fit belongs to the instance and must not be inherited from the definition.
+    /// </summary>
+    public Layer Definitions { get; }
+
     /// <summary>Creates an empty document whose pasteboard belongs to it.</summary>
     public CadDocument()
     {
         Orphans = new Layer { Name = "Pasteboard" };
         Orphans.Document = this;
         Orphans.Artboard = null;
+
+        Definitions = new Layer { Name = "Definitions" };
+        Definitions.Document = this;
+        Definitions.Artboard = null;
     }
 
     /// <summary>
@@ -437,6 +460,60 @@ public sealed class CadDocument
     /// on the group rather than in a table, so finding them means walking the tree.
     /// </summary>
     public IEnumerable<ArtGroup> AllGroups() => AllItems().OfType<ArtGroup>();
+
+    /// <summary>
+    /// The definition an instance names, or null when there is none.
+    ///
+    /// The entry is created empty by <see cref="AddDefinition"/> and filled with the definition's content; only
+    /// its children are what an instance holds a copy of - see <see cref="Definitions"/>. Names are matched
+    /// exactly, because an id is a name the file wrote rather than one a person typed.
+    /// </summary>
+    public ArtGroup? FindDefinition(string id)
+        => Definitions.Children.OfType<ArtGroup>().FirstOrDefault(entry => entry.Name == id);
+
+    /// <summary>
+    /// The definition's entry for this id, created when the document does not have one yet.
+    ///
+    /// Created empty rather than guessed at: a caller that has the content (the reader, with the element it read)
+    /// fills it, and one that has none leaves an entry that resolves to nothing - which is a definition with no
+    /// content, and is reported as such by whatever looks at it rather than being invented.
+    /// </summary>
+    public ArtGroup AddDefinition(string id)
+    {
+        ArtGroup? existing = FindDefinition(id);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var entry = new ArtGroup { Name = id };
+        Definitions.AddItem(entry);
+        return entry;
+    }
+
+    /// <summary>Removes a definition from the library, reporting whether it was there.</summary>
+    public bool RemoveDefinition(string id)
+        => FindDefinition(id) is { } entry && Definitions.RemoveItem(entry);
+
+    /// <summary>
+    /// The instances whose definition the document does not have.
+    ///
+    /// Reported rather than defaulted, for the reason a missing filter or brush is: an instance **holds a copy**
+    /// of the definition as well as the link, so it still draws - which is what makes a lost definition invisible.
+    /// The copy is what a person sees; the dangling name is the fact that has to be said, or a definition lost in
+    /// an edit or a merge looks like a design decision. Deleting a definition is therefore not a silent
+    /// flattening: the instances keep the last content and every one of them is named here.
+    /// </summary>
+    public IEnumerable<(ArtGroup Instance, string Id)> MissingDefinitions()
+    {
+        foreach (ArtGroup instance in AllGroups())
+        {
+            if (instance.SourceId is { Length: > 0 } id && FindDefinition(id) is null)
+            {
+                yield return (instance, id);
+            }
+        }
+    }
 
     private static IEnumerable<LayerItem> Walk(IEnumerable<LayerItem> items)
     {

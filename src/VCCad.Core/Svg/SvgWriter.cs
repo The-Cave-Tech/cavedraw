@@ -114,6 +114,7 @@ public static class SvgWriter
         writer.WriteGradients(document);
         writer.WriteFilters(document);
         writer.WritePathEffects(document);
+        writer.WriteDefinitions(document);
 
         // **One artboard at the origin is written without a wrapper group.** A group would be structure the document
         // does not have, and the reader would faithfully turn it back into one - so the model would gain a level on
@@ -183,6 +184,13 @@ public static class SvgWriter
         private int _gradientCount;
         private int _clipCount;
 
+        /// <summary>
+        /// Whether what is being written is a repeat of content already written, so a loss must not be reported
+        /// twice. Set only while <see cref="WriteDefinitions"/> writes a definition, whose content is the same
+        /// picture the instances that use it already carry into the file.
+        /// </summary>
+        private bool _quiet;
+
         public Writer(XElement root, IReadOnlyDictionary<string, string>? namespaces = null)
         {
             _root = root;
@@ -205,8 +213,19 @@ public static class SvgWriter
         ///
         /// A report that only said "some text was dropped" would be true and useless - the whole point is that the
         /// person or driver reading it can tell **which** object the file is missing.
+        ///
+        /// <see cref="_quiet"/> suppresses it for the one write that repeats content already reported - see
+        /// <see cref="WriteDefinitions"/>.
         /// </summary>
-        private void Report(LayerItem item, string reason) => _missing.Add($"{Kind(item)} {Identity(item)}: {reason}");
+        private void Report(LayerItem item, string reason)
+        {
+            if (_quiet)
+            {
+                return;
+            }
+
+            _missing.Add($"{Kind(item)} {Identity(item)}: {reason}");
+        }
 
         /// <summary>The word a person would use for the item, which is what the importer's own report speaks in.</summary>
         private static string Kind(LayerItem item) => item switch
@@ -330,6 +349,83 @@ public static class SvgWriter
             if (defs.HasElements)
             {
                 _root.Add(defs);
+            }
+        }
+
+        /// <summary>
+        /// The document's **definitions**, written into `defs` so that the id an instance names still names
+        /// something after a save.
+        ///
+        /// An instance is written as the copy it holds plus `data-source`, which is what keeps the link across a
+        /// round trip and what the reader reads back. That alone leaves the definition out of the file, so a
+        /// document saved and opened again would have instances naming an id nothing defines - the link would
+        /// survive as a name with no referent, and the edit half of "a reference, not a copy" would be gone.
+        /// Writing the definition beside them is what makes the saved file say the same thing the model says.
+        ///
+        /// **A `use` element is deliberately not emitted.** It would draw the target *instead of* the copy, and the
+        /// copy is not redundant: an instance's content was read through its own `use`, so anything that `use`
+        /// stated - `fill`, `opacity`, a CSS class - is baked into what the instance holds. Writing `<use>` would
+        /// therefore change the picture on the next import, which is the substitution this writer is not allowed to
+        /// make quietly. The reference travels as an attribute, which is exactly as much structure as the model
+        /// has.
+        ///
+        /// **Its losses are not reported twice.** A definition's content is the same picture the instances that
+        /// use it already carry into the file, and those are written with their own reports; naming the
+        /// definition's copy as well would report one un-writable raster twice, which is how a report stops being
+        /// read. The suppression is only for this write, and the picture is still named where it is drawn.
+        /// </summary>
+        public void WriteDefinitions(CadDocument document)
+        {
+            ArtGroup[] entries = document.Definitions.Children
+                .OfType<ArtGroup>()
+                .Where(entry => entry.Name.Length > 0 && entry.Children.Count > 0)
+                .ToArray();
+
+            if (entries.Length == 0)
+            {
+                return;
+            }
+
+            XElement? defs = _root.Element(Svg + "defs");
+            bool created = defs is null;
+            defs ??= new XElement(Svg + "defs");
+
+            if (created)
+            {
+                _root.Add(defs);
+            }
+
+            bool wasQuiet = _quiet;
+            _quiet = true;
+
+            try
+            {
+                foreach (ArtGroup entry in entries)
+                {
+                    // One child that already carries the id **is** the definition - a `<rect id="box">` reads as a
+                    // path named `box` - and wrapping it would state the same id twice.
+                    if (entry.Children.Count == 1 && entry.Children[0].Name == entry.Name)
+                    {
+                        WriteItems(entry.Children, defs);
+                        continue;
+                    }
+
+                    // Otherwise the entry is a holder, not a group the file had: a `symbol` is a viewport whose
+                    // fit belongs to each instance, so its content is written under a plain group that states only
+                    // the id. See SvgReader.ReadDefinitions.
+                    var holder = new XElement(Svg + "g", new XAttribute("id", entry.Name));
+                    WriteItems(entry.Children, holder);
+                    defs.Add(holder);
+                }
+            }
+            finally
+            {
+                _quiet = wasQuiet;
+            }
+
+            if (created && !defs.HasElements)
+            {
+                defs.Remove();
             }
         }
 

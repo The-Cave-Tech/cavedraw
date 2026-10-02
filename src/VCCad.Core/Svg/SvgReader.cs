@@ -204,6 +204,14 @@ public static partial class SvgReader
             layer.AddItem(viewGroup);
         }
 
+        // **The definitions themselves.** An instance records the id it came from and holds a copy of the content,
+        // which is the picture and the link; neither is the same as the definition being *there*. Without it there
+        // is nothing for an edit to change and nothing for a re-resolution to read, which is exactly the half of
+        // #117 that storing the link did not deliver. Read after the tree, from the same id index the `use`
+        // elements were resolved through, so a definition that appears after its use is still found - and before
+        // the unreferenced effects are collected, because an effect a definition names is one something refers to.
+        ReadDefinitions(root, context, document);
+
         // An effect no path in the document named is a definition with no home on any item, so it is kept on the
         // document itself. Collected by id from what was read up front rather than from the XML again, so the
         // element that goes back out is the one the file wrote. See CadDocument.ForeignPathEffects (issue #155).
@@ -2239,6 +2247,151 @@ public static partial class SvgReader
         sub.Nodes.Add(new PathNode(new Point2D(x, y), inHandle, new Point2D(x, y)));
         _ = rx;
         _ = ry;
+    }
+
+    /// <summary>
+    /// The ids this document refers to as definitions: `use`'s target, and the `data-source` this reader's own
+    /// writer records on an instance it wrote as a copy.
+    ///
+    /// A `data-source` counts because a saved file has to come back with its definitions intact: the writer states
+    /// the copy and the id it is a copy of, and the definition itself travels in `defs` beside it, so reading only
+    /// `use` would lose the library on every save and every instance would resolve to nothing.
+    ///
+    /// A reference to another document (`other.svg#root`) is not an id in this one and is left to
+    /// <see cref="ReadUse"/>, which reports it - resolving it here would be guessing at a file nothing has opened.
+    /// </summary>
+    private static IEnumerable<string> ReferencedIds(XElement root)
+    {
+        XNamespace xlink = "http://www.w3.org/1999/xlink";
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (XElement element in root.Descendants())
+        {
+            bool isUse = element.Name.LocalName == "use";
+            string? reference = isUse
+                ? element.Attribute("href")?.Value ?? element.Attribute(xlink + "href")?.Value
+                : element.Attribute("data-source")?.Value;
+
+            if (reference is not { Length: > 1 })
+            {
+                continue;
+            }
+
+            // A local id is written `#id`. A `use` naming another file is not this document's definition and is
+            // reported by ReadUse rather than silently looked up as though it were.
+            if (isUse && reference[0] != '#')
+            {
+                continue;
+            }
+
+            string id = reference[0] == '#' ? reference[1..] : reference;
+
+            // The empty id is not a definition; `#` alone is reported by ReadUse as a reference to nothing.
+            if (id.Length > 0 && seen.Add(id))
+            {
+                yield return id;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The element a definition id names, preferring the definition over a **copy** of one.
+    ///
+    /// A file this writer produced states an instance as its content plus `data-source`, and that content carries
+    /// the definition's own id - so the id appears twice: once inside the instance, and once in `defs` where the
+    /// writer put the definition back. The copy is inside an element with `data-source`, which is precisely what
+    /// makes it a copy rather than the definition, so a match under one is used only when there is nothing else.
+    /// Taking the copy would read the definition out of an instance, which is the wrong place for it and would
+    /// make the library a copy of a copy.
+    /// </summary>
+    private static XElement? DefinitionOf(XElement root, string id)
+    {
+        XElement? copy = null;
+
+        foreach (XElement element in root.Descendants())
+        {
+            if (element.Attribute("id")?.Value != id)
+            {
+                continue;
+            }
+
+            if (element.Ancestors().Any(ancestor => ancestor.Attribute("data-source") is not null))
+            {
+                copy ??= element;
+                continue;
+            }
+
+            return element;
+        }
+
+        return copy;
+    }
+
+    /// <summary>
+    /// The document's definitions, read once each into <see cref="CadDocument.Definitions"/>.
+    ///
+    /// **Why the document needs them at all.** The reader keeps an instance's content as a copy, which makes one
+    /// render right and loses the thing the file meant: an edit to the definition has to change every instance of
+    /// it. A copy has nowhere to be edited *from*, so the definition is kept as an asset beside the instances - the
+    /// same shape a width profile or a filter has - and <see cref="InstanceResolver"/> is what reads it back into
+    /// the instances.
+    ///
+    /// The content is **not drawn** and does not join the layer tree: `defs` means "not here", so an entry lives in
+    /// its own library and only its children travel into an instance.
+    ///
+    /// A `symbol` is the case that has to be read differently: SVG sizes it from the `use` that draws it, so its
+    /// own root (and the fit into the port) belongs to each instance rather than to the definition. Only the
+    /// symbol's **content** is a definition, which is exactly what <see cref="ReadUse"/> puts inside an instance.
+    ///
+    /// Counts go to a scratch dictionary and the cycle set is its own: reading a definition is not drawing it, and
+    /// folding its elements into the import's own census would say the file holds two of everything a `use` names.
+    /// </summary>
+    private static void ReadDefinitions(XElement root, Context context, CadDocument document)
+    {
+        foreach (string id in ReferencedIds(root))
+        {
+            if (DefinitionOf(root, id) is not { } target)
+            {
+                // No element with that id. ReadUse has already reported the reference itself, and inventing an
+                // empty definition here would turn "the file does not contain it" into "the definition is empty".
+                continue;
+            }
+
+            ArtGroup entry = document.AddDefinition(id);
+
+            var inside = new Context
+            {
+                Layer = context.Layer,
+                Group = entry,
+                Style = PresentationStyle.Default,
+                Counts = new Dictionary<string, int>(StringComparer.Ordinal),
+                Ids = context.Ids,
+                Resolving = new HashSet<string>(StringComparer.Ordinal),
+                Missing = context.Missing,
+                UsedPathEffects = context.UsedPathEffects,
+                Sheet = context.Sheet,
+                Gradients = context.Gradients,
+                Patterns = context.Patterns,
+                Markers = context.Markers,
+                PathEffects = context.PathEffects,
+                Warnings = context.Warnings,
+                Viewport = context.Viewport,
+                BaseDirectory = context.BaseDirectory,
+                Text = context.Text,
+            };
+
+            if (target.Name.LocalName == "symbol")
+            {
+                foreach (XElement child in target.Elements())
+                {
+                    ReadElement(child, inside);
+                }
+            }
+            else
+            {
+                ReadElement(target, inside);
+            }
+        }
     }
 
     /// <summary>
