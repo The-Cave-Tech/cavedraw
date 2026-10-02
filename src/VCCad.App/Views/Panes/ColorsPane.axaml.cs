@@ -125,10 +125,7 @@ public partial class ColorsPane : UserControl
         // working colour, and color.get/color.set are the same value.
         Wheel.Model = Colors.Model;
 
-        // A re-attach must not leave the old subscription behind. Unsubscribing first
-        // makes this idempotent, so the pane is refreshed exactly once per change.
-        Colors.Changed -= OnColorStateChanged;
-        Colors.Changed += OnColorStateChanged;
+        SubscribeToColorState();
 
         vm.DocumentChanged += (_, _) => { Refresh(); RefreshRecent(); };
         vm.TransformChanged += (_, _) => RefreshRecent();
@@ -138,13 +135,66 @@ public partial class ColorsPane : UserControl
     }
 
     /// <summary>
-    /// Stops listening to the shared colour state. Attaching again re-subscribes, so a
-    /// pane that is put away and brought back does not accumulate handlers.
+    /// Stops listening to the shared colour state, and forgets the view model.
+    ///
+    /// This is explicit teardown, for a host that owns the pane's whole life. It is not the path that
+    /// keeps the process clean: a pane put away in the dock is released by leaving the visual tree, so
+    /// the pane does not depend on somebody remembering to call this.
     /// </summary>
     public void Detach()
     {
-        Colors.Changed -= OnColorStateChanged;
+        UnsubscribeFromColorState();
         _vm = null;
+    }
+
+    /// <summary>
+    /// Takes the subscription to the shared colour state.
+    ///
+    /// Unsubscribing first makes this idempotent, so the pane is refreshed exactly once per change
+    /// however many times it is attached.
+    /// </summary>
+    private void SubscribeToColorState()
+    {
+        Colors.Changed -= OnColorStateChanged;
+        Colors.Changed += OnColorStateChanged;
+    }
+
+    /// <summary>
+    /// Gives it up, so the process-wide state does not hold this pane for the life of the process.
+    /// </summary>
+    private void UnsubscribeFromColorState() => Colors.Changed -= OnColorStateChanged;
+
+    /// <summary>
+    /// The pane is on screen, so it follows the colour state again.
+    ///
+    /// <see cref="OnColorStateChanged"/> reads and writes controls, so the subscription is only worth
+    /// having while they are showing - and it has to be taken again here, because the dock puts a tab's
+    /// view away and brings the same instance back when the tab is selected again. The view model is
+    /// deliberately kept across that, so the pane is live the moment it is showing rather than needing
+    /// a second <see cref="Attach"/> that the dock's content factory does not make.
+    /// </summary>
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        SubscribeToColorState();
+    }
+
+    /// <summary>
+    /// The pane is no longer on screen: give up the subscription.
+    ///
+    /// This is what releases the pane in the product. <see cref="EditorColorState.Shared"/> outlives
+    /// every pane built over the life of the process, and a handler left on it keeps the pane alive and
+    /// keeps it working on a document it is no longer showing. The dock removes the previous tab's view
+    /// when another tab is selected - see <c>DockTabPanelView.Rebuild</c> - so this is the product path,
+    /// not a method somebody has to remember to call.
+    ///
+    /// <see cref="Detach"/> is deliberately not called here: it forgets the view model as well, and the
+    /// same pane instance is put back on screen when its tab is selected again.
+    /// </summary>
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        UnsubscribeFromColorState();
+        base.OnDetachedFromVisualTree(e);
     }
 
     /// <summary>

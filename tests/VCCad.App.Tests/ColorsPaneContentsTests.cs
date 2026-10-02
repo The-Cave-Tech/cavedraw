@@ -64,8 +64,9 @@ public class ColorsPaneContentsTests
         }
         finally
         {
-            // The pane subscribes to the process-wide colour state on Attach, so closing the window
-            // is not enough on its own: the test detaches what it built, as the panel does.
+            // The pane follows the process-wide colour state only while it is in a visual tree, so
+            // closing the window is what releases it; the detach is explicit anyway so the test does
+            // not depend on the close having happened first. See ColorsPaneLifetimeTests.
             pane.Detach();
             window.Close();
         }
