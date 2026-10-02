@@ -26,12 +26,14 @@ namespace VCCad.App.Views.Panes;
 /// FACE fields describe one run - named in the label, the run the caret is in while a block is open for editing -
 /// and content, colour and paragraph style describe the block.
 ///
-/// What the model cannot hold is **not** offered here, because a control that does nothing is worse than an absent
-/// one: vertical writing and right-to-left (issue #127) and `baseline-shift` with per-glyph positioning (#128) have
-/// no member on <see cref="TextItem"/> or <see cref="TextRun"/>. Letter and word spacing, font stretch and variant
-/// **are** offered, because the model does hold them (#147) and the canvas, the layout, the caret and the exporter
-/// already read them - see <see cref="DocumentSession.ApplyTextFieldsAt"/>. Face reporting is offered too, because
-/// the model carries the face actually used - see <see cref="FaceReport"/>.
+/// **The block's writing mode and base direction are offered too**, because the model holds both (#127) and the
+/// layout, the caret, the bounds and the SVG export all act on them: they go through
+/// <see cref="DocumentSession.ApplyTextStyle"/> (`text.style`) exactly as the leading and the turn do, so a person
+/// and a driver set them the same way and neither can set something the other cannot. What the model cannot hold is
+/// **not** offered here, because a control that does nothing is worse than an absent one: `baseline-shift` with
+/// per-glyph positioning (#128) has no member on <see cref="TextItem"/> or <see cref="TextRun"/>. Letter and word
+/// spacing, font stretch and variant **are** offered, because the model does hold them (#147). Face reporting is
+/// offered too, because the model carries the face actually used - see <see cref="FaceReport"/>.
 /// </summary>
 public partial class TextPane : UserControl
 {
@@ -63,6 +65,8 @@ public partial class TextPane : UserControl
     private string _shownWordSpacing = string.Empty;
     private string _shownFontStretch = string.Empty;
     private string _shownFontVariant = string.Empty;
+    private int _shownWritingMode = -1;
+    private int _shownDirection = -1;
 
     public TextPane()
     {
@@ -72,6 +76,8 @@ public partial class TextPane : UserControl
         // losing focus - the same commit-on-interaction-end pattern the stroke inspector uses, so one gesture is one
         // undo step. Content keeps AcceptsReturn, so Enter is a newline there and only losing focus commits it.
         AlignBox.SelectionChanged += (_, _) => ApplyFields();
+        WritingModeBox.SelectionChanged += (_, _) => ApplyFields();
+        DirectionBox.SelectionChanged += (_, _) => ApplyFields();
         FamilyBox.SelectionChanged += (_, _) => ApplyFields();
         BoldBox.IsCheckedChanged += (_, _) => ApplyFields();
         ItalicBox.IsCheckedChanged += (_, _) => ApplyFields();
@@ -202,6 +208,27 @@ public partial class TextPane : UserControl
         double? rotation = ChangedDouble(RotationBox, _shownRotation);
         double? frameWidth = ChangedDouble(FrameWidthBox, _shownFrameWidth);
 
+        // The block's own axes and its base direction are paragraph members, so they travel with the leading and the
+        // turn and are applied by the same call. A combo that has not moved is not an edit, the same rule every other
+        // field follows - and an empty selection has no index, which is not an edit either.
+        TextWritingMode? writingMode = WritingModeBox.SelectedIndex == _shownWritingMode
+            || WritingModeBox.SelectedIndex < 0
+                ? null
+                : WritingModeBox.SelectedIndex switch
+                {
+                    1 => TextWritingMode.VerticalRl,
+                    2 => TextWritingMode.VerticalLr,
+                    _ => TextWritingMode.HorizontalTb,
+                };
+
+        TextDirection? direction = DirectionBox.SelectedIndex == _shownDirection || DirectionBox.SelectedIndex < 0
+            ? null
+            : DirectionBox.SelectedIndex switch
+            {
+                1 => TextDirection.RightToLeft,
+                _ => TextDirection.LeftToRight,
+            };
+
         if (content is not null || color is not null || family is not null || size is not null
             || bold is not null || italic is not null || letterSpacing is not null || wordSpacing is not null
             || fontStretch is not null || fontVariant is not null)
@@ -215,9 +242,10 @@ public partial class TextPane : UserControl
             _vm.SetTextAlignment(align);
         }
 
-        if (leading is not null || paragraph is not null || rotation is not null || frameWidth is not null)
+        if (leading is not null || paragraph is not null || rotation is not null || frameWidth is not null
+            || writingMode is not null || direction is not null)
         {
-            _vm.ApplyTextStyle(leading, paragraph, rotation, frameWidth, null);
+            _vm.ApplyTextStyle(leading, paragraph, rotation, frameWidth, null, writingMode, direction);
         }
     }
 
@@ -286,6 +314,21 @@ public partial class TextPane : UserControl
                 ? -1
                 : AlignIndex(summary.Alignment ?? TextAlignment.Left);
             _shownAlign = AlignBox.SelectedIndex;
+
+            // The mode and the direction come from the same summary a driver reads through `text.common`, so the
+            // panel and the report cannot describe different blocks - and a selection that disagrees about either is
+            // shown as mixed rather than as the first block's value.
+            WritingModeBox.PlaceholderText = summary.WritingModeMixed ? MixedWord : string.Empty;
+            WritingModeBox.SelectedIndex = summary.WritingModeMixed
+                ? -1
+                : WritingModeIndex(summary.WritingMode ?? TextWritingMode.HorizontalTb);
+            _shownWritingMode = WritingModeBox.SelectedIndex;
+
+            DirectionBox.PlaceholderText = summary.DirectionMixed ? MixedWord : string.Empty;
+            DirectionBox.SelectedIndex = summary.DirectionMixed
+                ? -1
+                : DirectionIndex(summary.Direction ?? TextDirection.LeftToRight);
+            _shownDirection = DirectionBox.SelectedIndex;
 
             if (!LeadingBox.IsFocused)
             {
@@ -407,6 +450,16 @@ public partial class TextPane : UserControl
             mixed.Add("align");
         }
 
+        if (summary.WritingModeMixed)
+        {
+            mixed.Add("mode");
+        }
+
+        if (summary.DirectionMixed)
+        {
+            mixed.Add("direction");
+        }
+
         if (summary.FamilyMixed)
         {
             mixed.Add("family");
@@ -485,6 +538,10 @@ public partial class TextPane : UserControl
         ColorBox.Watermark = string.Empty;
         AlignBox.PlaceholderText = string.Empty;
         AlignBox.SelectedIndex = -1;
+        WritingModeBox.PlaceholderText = string.Empty;
+        WritingModeBox.SelectedIndex = -1;
+        DirectionBox.PlaceholderText = string.Empty;
+        DirectionBox.SelectedIndex = -1;
         FamilyBox.ItemsSource = new List<string>(_families);
         FamilyBox.SelectedIndex = -1;
         FamilyBox.PlaceholderText = string.Empty;
@@ -524,6 +581,8 @@ public partial class TextPane : UserControl
         _shownWordSpacing = string.Empty;
         _shownFontStretch = string.Empty;
         _shownFontVariant = string.Empty;
+        _shownWritingMode = -1;
+        _shownDirection = -1;
     }
 
     /// <summary>
@@ -640,4 +699,16 @@ public partial class TextPane : UserControl
         TextAlignment.Right => 2,
         _ => 0,
     };
+
+    /// <summary>Which item of the mode combo a block's writing mode is, which is the order the combo lists them in.</summary>
+    private static int WritingModeIndex(TextWritingMode mode) => mode switch
+    {
+        TextWritingMode.VerticalRl => 1,
+        TextWritingMode.VerticalLr => 2,
+        _ => 0,
+    };
+
+    /// <summary>Which item of the direction combo a block's base direction is.</summary>
+    private static int DirectionIndex(TextDirection direction)
+        => direction == TextDirection.RightToLeft ? 1 : 0;
 }

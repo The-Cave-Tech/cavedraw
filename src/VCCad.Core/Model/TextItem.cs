@@ -4,6 +4,60 @@ using VCCad.Core.Text;
 
 namespace VCCad.Core.Model;
 
+/// <summary>
+/// Which way a text block is laid out - CSS's and SVG's <c>writing-mode</c>.
+///
+/// This is **layout, not decoration**: under a vertical mode the pen advances down the block and the line boxes
+/// stack sideways, so every consumer that places a glyph - the layout engine, the painter, the SVG writer - has to
+/// agree about which axis is which. A block drawn horizontally and merely labelled vertical is a silent loss, which
+/// is why the member is read, laid out and written rather than reported.
+/// </summary>
+public enum TextWritingMode
+{
+    /// <summary>Left to right, lines stacked downwards - the initial value and every block that says nothing.</summary>
+    HorizontalTb,
+
+    /// <summary>Top to bottom, lines stacked leftwards. The mode of vertical Chinese, Japanese and Korean.</summary>
+    VerticalRl,
+
+    /// <summary>Top to bottom, lines stacked rightwards - vertical Mongolian.</summary>
+    VerticalLr,
+}
+
+/// <summary>
+/// The base direction of a text block - CSS's and SVG's <c>direction</c>.
+///
+/// SVG states the direction of the text, not of each run, so the model holds it on the block and the runs are
+/// reordered into visual order against it by the Unicode bidirectional algorithm.
+/// </summary>
+public enum TextDirection
+{
+    /// <summary>Left to right - the initial value.</summary>
+    LeftToRight,
+
+    /// <summary>Right to left: the block's first character is its rightmost.</summary>
+    RightToLeft,
+}
+
+/// <summary>
+/// Whether a glyph is turned on its side in vertical text - SVG's and CSS's <c>glyph-orientation-vertical</c>,
+/// known as <c>text-orientation</c> in CSS Writing Modes.
+///
+/// It is per run because SVG states it per element and the model states a face per run: a `tspan` that turns its
+/// Latin upright inside vertical CJK is a run of its own.
+/// </summary>
+public enum GlyphOrientation
+{
+    /// <summary>Upright for characters that are written upright, turned for the rest - the initial value.</summary>
+    Auto,
+
+    /// <summary>Every glyph upright, whatever the script.</summary>
+    Upright,
+
+    /// <summary>Every glyph turned a quarter turn clockwise.</summary>
+    Rotate,
+}
+
 /// <summary>A styled span of text. Rich text is a list of runs so different
 /// words can use different fonts/sizes/weights within one object.</summary>
 public sealed class TextRun
@@ -128,6 +182,17 @@ public sealed class TextRun
     public string? FontVariant { get; set; }
 
     /// <summary>
+    /// Whether this run's glyphs are turned on their side in vertical text.
+    ///
+    /// <see cref="GlyphOrientation.Auto"/> is the initial value and is what a horizontal block is drawn with, so a
+    /// document without vertical writing grows no member here. The layout keeps the run's characters in the order
+    /// the file wrote them and reports the turn per glyph instead - the same rule <see cref="TextItem.MirrorX"/>
+    /// follows, and for the same reason: a rotated string is state, and rewriting it into glyph outlines would
+    /// destroy the string and its glyph ids.
+    /// </summary>
+    public GlyphOrientation FontOrientation { get; set; }
+
+    /// <summary>
     /// The ascent the block's top-left was placed with, as a fraction of the em, when it was
     /// imported. Zero means "not recorded — work it out from the face".
     ///
@@ -175,6 +240,7 @@ public sealed class TextRun
         Color = Color,
         FontStretch = FontStretch,
         FontVariant = FontVariant,
+        FontOrientation = FontOrientation,
         PlacedAscentEm = PlacedAscentEm,
         SourceFont = SourceFont,
         EmbeddedFont = EmbeddedFont,
@@ -253,6 +319,36 @@ public sealed class TextItem : LayerItem
 
     /// <summary>Horizontal alignment of lines within the block.</summary>
     public TextAlignment Alignment { get; set; } = TextAlignment.Left;
+
+    /// <summary>
+    /// Which way the block runs: across the page, or down it.
+    ///
+    /// <see cref="TextWritingMode.HorizontalTb"/> is SVG's initial value and the value every document written
+    /// before vertical text existed loads with, so the member is absent from the sidecar for an ordinary block and
+    /// its bytes do not change. A vertical block lays its glyphs out down the page with the line boxes stacked
+    /// sideways, which is a different layout and not a rotation - see <see cref="TextLayoutEngine"/>.
+    /// </summary>
+    public TextWritingMode WritingMode { get; set; } = TextWritingMode.HorizontalTb;
+
+    /// <summary>
+    /// The block's base direction, which the bidirectional algorithm orders its characters against.
+    ///
+    /// <see cref="TextDirection.LeftToRight"/> is the initial value and is stored as the member's default rather
+    /// than as an absence, because a file that states `direction="ltr"` and one that states nothing lay the same
+    /// way - which is what lets the sidecar leave it out of every ordinary document.
+    /// </summary>
+    public TextDirection Direction { get; set; } = TextDirection.LeftToRight;
+
+    /// <summary>The way the block runs, as SVG spells it, for a writer or a report.</summary>
+    public string WritingModeName => WritingMode switch
+    {
+        TextWritingMode.VerticalRl => "vertical-rl",
+        TextWritingMode.VerticalLr => "vertical-lr",
+        _ => "horizontal-tb",
+    };
+
+    /// <summary>The base direction, as SVG spells it.</summary>
+    public string DirectionName => Direction == TextDirection.RightToLeft ? "rtl" : "ltr";
 
     /// <summary>All runs concatenated (used for simple editing/measurement).</summary>
     public string PlainText
@@ -390,6 +486,8 @@ public sealed class TextItem : LayerItem
         ParagraphSpacing = other.ParagraphSpacing;
         SourceCmyk = other.SourceCmyk is null ? null : (double[])other.SourceCmyk.Clone();
         Alignment = other.Alignment;
+        WritingMode = other.WritingMode;
+        Direction = other.Direction;
         Runs.Clear();
         Runs.AddRange(other.Runs.Select(r => r.Clone()));
     }
@@ -419,6 +517,8 @@ public sealed class TextItem : LayerItem
             ParagraphSpacing = ParagraphSpacing,
             SourceCmyk = SourceCmyk is null ? null : (double[])SourceCmyk.Clone(),
             Alignment = Alignment,
+            WritingMode = WritingMode,
+            Direction = Direction,
         };
         copy.Runs.AddRange(Runs.Select(r => r.Clone()));
         return copy;

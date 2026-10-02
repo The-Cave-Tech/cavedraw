@@ -402,7 +402,12 @@ internal sealed record TextRunDto(
 
     // The width axis and the variant the file asked the face for, in its own words. Absent when nothing said one.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? FontStretch = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? FontVariant = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? FontVariant = null,
+
+    // Whether the run's glyphs are turned on their side in vertical text, as of #127. Absent at its initial value,
+    // so a document without vertical writing has no member here and its bytes do not change.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] GlyphOrientation FontOrientation =
+        GlyphOrientation.Auto);
 
 /// <summary>One parameter of a live path effect, keyed and spelled as the file spelled it.</summary>
 internal sealed record PathEffectParameterDto(string Name, string Value);
@@ -473,7 +478,15 @@ internal sealed record TextDto(
     double LineSpacing,
     double ParagraphSpacing,
     TextRunDto[] Runs,
-    double[]? SourceCmyk = null) : ItemDto;
+    double[]? SourceCmyk = null,
+
+    // Which way the block runs, and the base direction its characters are ordered against, as of #127. Both are
+    // SVG's initial values when absent, so a document without vertical writing or right-to-left text grows neither
+    // member and its bytes are what they were.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] TextWritingMode WritingMode =
+        TextWritingMode.HorizontalTb,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] TextDirection Direction =
+        TextDirection.LeftToRight) : ItemDto;
 
 /// <summary>
 /// An embedded raster image. Samples travel as base64 because they are bytes, not text;
@@ -627,7 +640,9 @@ internal abstract record ItemDto
         t.LineSpacing,
         t.ParagraphSpacing,
         t.Runs.Select(ToRun).ToArray(),
-        t.SourceCmyk);
+        t.SourceCmyk,
+        t.WritingMode,
+        t.Direction);
 
     private static TextRunDto ToRun(TextRun r) => new(
         r.Text,
@@ -646,7 +661,8 @@ internal abstract record ItemDto
         r.WordSpacing,
         r.Color is { } color ? new ColorDto(color.R, color.G, color.B, color.A) : null,
         r.FontStretch,
-        r.FontVariant);
+        r.FontVariant,
+        r.FontOrientation);
 
     private static EmbeddedFontDto ToEmbedded(EmbeddedFont f) => new(
         f.Format,
@@ -992,6 +1008,7 @@ internal static class ItemDtoExtensions
             Color = dto.Color is { } color ? new ColorRgb(color.R, color.G, color.B, color.A) : null,
             FontStretch = dto.FontStretch,
             FontVariant = dto.FontVariant,
+            FontOrientation = dto.FontOrientation,
         };
 
         return run;
@@ -1074,6 +1091,8 @@ internal static class ItemDtoExtensions
         item.LineSpacing = t.LineSpacing;
         item.ParagraphSpacing = t.ParagraphSpacing;
         item.SourceCmyk = t.SourceCmyk;
+        item.WritingMode = t.WritingMode;
+        item.Direction = t.Direction;
         item.RestoreIdentity(t.Id);
         foreach (TextRunDto run in VccadDocumentSerializer.RequireArray(t.Runs, nameof(t.Runs)))
         {

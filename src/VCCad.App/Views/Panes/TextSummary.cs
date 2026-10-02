@@ -25,9 +25,10 @@ namespace VCCad.App.Views.Panes;
 /// Face members (family, size, weight, slant) are read **at the inspected run**, because the model holds them per
 /// run, and so are the four the model gained for tracking and face selection - letter spacing, word spacing, font
 /// stretch and font variant (#147). Content, colour, alignment and paragraph style are read from the block, because
-/// the model holds one of each per block. A run can carry its own colour (TextRun.Color, #161), so a colour change
-/// inside one block is expressible and the canvas and the exporter both read it; this summary reports the colour the
-/// blocks agree on.
+/// the model holds one of each per block - and so are the writing mode and the base direction (#127), which are how
+/// the block's axes are set rather than what it says. A run can carry its own colour (TextRun.Color, #161), so a
+/// colour change inside one block is expressible and the canvas and the exporter both read it; this summary reports
+/// the colour the blocks agree on.
 /// </summary>
 public sealed record TextSummary(
     int Blocks,
@@ -61,7 +62,11 @@ public sealed record TextSummary(
     string? FontStretch,
     bool FontStretchMixed,
     string? FontVariant,
-    bool FontVariantMixed)
+    bool FontVariantMixed,
+    TextWritingMode? WritingMode,
+    bool WritingModeMixed,
+    TextDirection? Direction,
+    bool DirectionMixed)
 {
     /// <summary>Whether the selection has nothing to describe - no selected text block.</summary>
     public bool IsEmpty => Blocks == 0;
@@ -70,7 +75,7 @@ public sealed record TextSummary(
     public bool IsMixed => ContentMixed || FamilyMixed || FontSizeMixed || BoldMixed || ItalicMixed
         || ColorMixed || AlignmentMixed || LineSpacingMixed || ParagraphSpacingMixed
         || RotationMixed || FrameWidthMixed || LetterSpacingMixed || WordSpacingMixed
-        || FontStretchMixed || FontVariantMixed;
+        || FontStretchMixed || FontVariantMixed || WritingModeMixed || DirectionMixed;
 
     /// <summary>
     /// Summarises the blocks at <paramref name="runIndex"/>, which names the run the face members are read from.
@@ -98,7 +103,7 @@ public sealed record TextSummary(
         {
             return new TextSummary(0, 0, null, false, null, false, null, false, null, false, null, false,
                 null, false, null, false, null, false, null, false, null, false, null, false,
-                null, false, null, false, null, false, null, false);
+                null, false, null, false, null, false, null, false, null, false, null, false);
         }
 
         TextItem first = blocks[0];
@@ -110,6 +115,12 @@ public sealed record TextSummary(
         bool paragraphMixed = !blocks.All(b => Math.Abs(b.ParagraphSpacing - first.ParagraphSpacing) < 1e-9);
         bool rotationMixed = !blocks.All(b => Math.Abs(b.RotationRadians - first.RotationRadians) < 1e-9);
         bool frameWidthMixed = !blocks.All(b => Math.Abs(b.FrameWidth - first.FrameWidth) < 1e-9);
+
+        // The block's own axes and its base direction are block members like the leading and the alignment: the
+        // model holds one of each per block, so a selection of a horizontal and a vertical block is genuinely mixed
+        // about the mode.
+        bool writingModeMixed = !blocks.All(b => b.WritingMode == first.WritingMode);
+        bool directionMixed = !blocks.All(b => b.Direction == first.Direction);
 
         bool familyMixed = false;
         bool sizeMixed = false;
@@ -168,7 +179,11 @@ public sealed record TextSummary(
             stretchMixed ? null : runs.Count > 0 ? runs[0].FontStretch : null,
             stretchMixed,
             variantMixed ? null : runs.Count > 0 ? runs[0].FontVariant : null,
-            variantMixed);
+            variantMixed,
+            writingModeMixed ? null : first.WritingMode,
+            writingModeMixed,
+            directionMixed ? null : first.Direction,
+            directionMixed);
     }
 
     /// <summary>

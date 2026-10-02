@@ -95,6 +95,26 @@
         <TextBlock Text="Frame" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
         <TextBox x:Name="FrameWidthBox" Grid.Column="4" ToolTip.Tip="Wrap width in points; 0 means the block grows to fit"/>
       </Grid>
+
+      <!-- The block's own axes and its base direction (#127). Both are layout, not labels: `vertical-rl` runs the pen
+           down the block and stacks the line boxes sideways, and `rtl` puts the block's first character at its
+           right-hand end and reorders the runs with the bidirectional algorithm. They go through `text.style`, the
+           same operation the paragraph members above use, so a person and a driver set them the same way. -->
+      <Grid ColumnDefinitions="Auto,*,10,Auto,*" ColumnSpacing="4">
+        <TextBlock Text="Mode" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <ComboBox x:Name="WritingModeBox" Grid.Column="1" HorizontalAlignment="Stretch"
+                  ToolTip.Tip="writing-mode: horizontal-tb, vertical-rl or vertical-lr">
+          <ComboBoxItem Content="horizontal-tb"/>
+          <ComboBoxItem Content="vertical-rl"/>
+          <ComboBoxItem Content="vertical-lr"/>
+        </ComboBox>
+        <TextBlock Text="Direction" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <ComboBox x:Name="DirectionBox" Grid.Column="4" HorizontalAlignment="Stretch"
+                  ToolTip.Tip="direction: ltr or rtl - the block's base direction, not a per-run one">
+          <ComboBoxItem Content="ltr"/>
+          <ComboBoxItem Content="rtl"/>
+        </ComboBox>
+      </Grid>
     </StackPanel>
   </ScrollViewer>
 </UserControl>

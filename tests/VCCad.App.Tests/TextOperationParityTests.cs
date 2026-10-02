@@ -581,4 +581,104 @@ public class TextOperationParityTests
         Assert.Single(second.Runs);
         Assert.Equal(10.0, second.Runs[0].FontSize, 6);
     }
+
+    // ---------------------------------------------------------------- the block's own axes (#127)
+
+    /// <summary>
+    /// **`text.style` carries the writing mode and the base direction, and `text.common` reads them back in the same
+    /// words.** Before this the model held both, the layout acted on both and the SVG export wrote both - and no
+    /// operation and no control could set either, so a driver could import a vertical block and then never make one.
+    /// A driver reads back exactly what it can write, which is why the report speaks the property's own spelling and
+    /// not the enum's.
+    /// </summary>
+    [Fact]
+    public void TheWritingModeAndDirectionAreSettableAndReported()
+    {
+        (AutomationContext context, EditorViewModel viewModel, TextItem first, TextItem second) = With(
+            Block("one"), Block("two"));
+        int depth = viewModel.ActiveSession.UndoDepth;
+
+        EditorOperations.Invoke(context, "text.style",
+            Params(new { writingMode = "vertical-rl", direction = "rtl" }));
+
+        Assert.Equal(TextWritingMode.VerticalRl, first.WritingMode);
+        Assert.Equal(TextDirection.RightToLeft, first.Direction);
+        Assert.Equal(TextWritingMode.VerticalRl, second.WritingMode);
+        Assert.Equal(TextDirection.RightToLeft, second.Direction);
+        Assert.Equal(depth + 1, viewModel.ActiveSession.UndoDepth);
+
+        JsonElement common = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "text.common", default));
+
+        Assert.Equal("vertical-rl", common.GetProperty("writingMode").GetString());
+        Assert.False(common.GetProperty("writingModeMixed").GetBoolean());
+        Assert.Equal("rtl", common.GetProperty("direction").GetString());
+        Assert.False(common.GetProperty("directionMixed").GetBoolean());
+    }
+
+    /// <summary>
+    /// **A member that is not named is left alone.** The whole reason the members are optional is that a selection is
+    /// not obliged to agree with itself: asking for `rtl` must not reset every block's writing mode to the initial
+    /// value, which is what an all-or-nothing operation would do to a selection holding one vertical block.
+    /// </summary>
+    [Fact]
+    public void AStyleEditLeavesTheMembersItDidNotName()
+    {
+        TextItem first = Block("one");
+        first.WritingMode = TextWritingMode.VerticalLr;
+        first.Direction = TextDirection.RightToLeft;
+
+        (AutomationContext context, _, TextItem _, TextItem second) = With(first, Block("two"));
+
+        EditorOperations.Invoke(context, "text.style", Params(new { lineSpacing = 1.5 }));
+
+        Assert.Equal(TextWritingMode.VerticalLr, first.WritingMode);
+        Assert.Equal(TextDirection.RightToLeft, first.Direction);
+        Assert.Equal(1.5, first.LineSpacing, 6);
+
+        // The second block kept the initial values it had, because nothing named them.
+        Assert.Equal(TextWritingMode.HorizontalTb, second.WritingMode);
+        Assert.Equal(TextDirection.LeftToRight, second.Direction);
+    }
+
+    /// <summary>
+    /// **A selection that disagrees about the mode says so**, rather than reporting the first block's. The mixed
+    /// reading is the whole point of the summary: a panel or a driver shown `vertical-rl` for a selection holding one
+    /// horizontal block believes something untrue about what it selected.
+    /// </summary>
+    [Fact]
+    public void AMixedWritingModeIsReportedAsMixed()
+    {
+        TextItem first = Block("one");
+        first.WritingMode = TextWritingMode.VerticalRl;
+        TextItem second = Block("two");
+
+        (AutomationContext context, _, TextItem _, TextItem _) = With(first, second);
+
+        JsonElement common = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "text.common", default));
+
+        Assert.True(common.GetProperty("writingModeMixed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, common.GetProperty("writingMode").ValueKind);
+        Assert.False(common.GetProperty("directionMixed").GetBoolean());
+        Assert.Equal("ltr", common.GetProperty("direction").GetString());
+    }
+
+    /// <summary>
+    /// **A value that is not one of the property's own is refused by name**, not silently read as the initial value:
+    /// a driver that asked for a vertical block and got a horizontal one has no way to notice.
+    /// </summary>
+    [Fact]
+    public void AnUnknownWritingModeIsRefused()
+    {
+        (AutomationContext context, EditorViewModel viewModel, TextItem first, TextItem _) = With(
+            Block("one"), Block("two"));
+        int depth = viewModel.ActiveSession.UndoDepth;
+
+        Assert.ThrowsAny<Exception>(() => EditorOperations.Invoke(
+            context, "text.style", Params(new { writingMode = "sideways" })));
+
+        Assert.Equal(TextWritingMode.HorizontalTb, first.WritingMode);
+        Assert.Equal(depth, viewModel.ActiveSession.UndoDepth);
+    }
 }

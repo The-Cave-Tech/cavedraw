@@ -470,11 +470,12 @@ public class SvgTextTests
     /// Each is named here rather than checked as "a warning appeared", because the point of the report is that a
     /// person can act on the one that matters to them.
     ///
-    /// Four of these used to be in the list and are not any more: `letter-spacing`, `word-spacing`, `font-stretch`
-    /// and `font-variant` have fields on the run as of #147 and are resolved onto it instead. Their half of this
-    /// test lives in `SvgTextModelExtensionTests`, where the value that arrives on the model is asserted. The
-    /// width and the variant are still *named* in a warning, as of #161, but for a different fact: the value is
-    /// kept and no face is chosen by it, so the run draws in the family's own face.
+    /// Six of these used to be in the list and are not any more: `letter-spacing`, `word-spacing`, `font-stretch`
+    /// and `font-variant` have fields on the run as of #147 and are resolved onto it instead; `writing-mode` and
+    /// `direction` have fields on the block as of #127 and are laid out instead. Their half of this test lives in
+    /// `SvgTextModelExtensionTests` and `SvgWritingModeTests`, where the value that arrives on the model is
+    /// asserted. The width and the variant are still *named* in a warning, as of #161, but for a different fact:
+    /// the value is kept and no face is chosen by it, so the run draws in the family's own face.
     /// </summary>
     [Fact]
     public void PropertiesTheModelCannotHoldAreReported()
@@ -494,13 +495,15 @@ public class SvgTextTests
         Assert.Equal("condensed", run.FontStretch);
         Assert.Equal("small-caps", run.FontVariant);
 
+        // And so did the writing mode and the direction, which the layout acts on as of #127.
+        Assert.Equal(TextWritingMode.VerticalRl, Block(result).WritingMode);
+        Assert.Equal(TextDirection.RightToLeft, Block(result).Direction);
+
         string[] expected =
         {
             "text-decoration=\"underline\"",
             "baseline-shift=\"super\"",
             "dominant-baseline=\"middle\"",
-            "writing-mode=\"vertical-rl\"",
-            "direction=\"rtl\"",
             "font-weight=\"600\"",
             "font-style=\"oblique\"",
             "textLength=\"50\"",
@@ -522,6 +525,11 @@ public class SvgTextTests
         {
             Assert.DoesNotContain(result.Warnings, w => w.Contains(gone, StringComparison.Ordinal));
         }
+
+        // `writing-mode` and `direction` are no longer losses either: the model holds them and the layout honours
+        // them. Asserted here so the report cannot creep back in.
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("writing-mode", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("direction=", StringComparison.Ordinal));
 
         Assert.Contains(result.Warnings, w =>
             w.Contains("font-stretch=\"condensed\"", StringComparison.Ordinal) &&

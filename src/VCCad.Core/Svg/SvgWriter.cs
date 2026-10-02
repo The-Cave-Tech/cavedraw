@@ -1290,7 +1290,33 @@ public static class SvgWriter
                     element.Add(new XAttribute("transform", transform));
                 }
 
-                element.Add(new XAttribute("y", Number(text.Origin.Y + placed.Top + ascent)));
+                // **The writing mode and the base direction are written before the coordinates depend on them.**
+                // SVG's own rule is that `x`/`dx` run along the line and `y`/`dy` across it, so a reader that has the
+                // mode writes the pen down the page and the columns sideways - which is what makes a vertical block
+                // come back vertical instead of collapsing into one horizontal line.
+                if (text.WritingMode != TextWritingMode.HorizontalTb)
+                {
+                    element.Add(new XAttribute("writing-mode", text.WritingModeName));
+                }
+
+                if (text.Direction == TextDirection.RightToLeft)
+                {
+                    element.Add(new XAttribute("direction", "rtl"));
+                }
+
+                if (text.WritingMode == TextWritingMode.HorizontalTb)
+                {
+                    element.Add(new XAttribute("y", Number(text.Origin.Y + placed.Top + ascent)));
+                }
+                else
+                {
+                    // A vertical column's own `x` is the line its pen runs down, which the reader takes the block's
+                    // origin from; the `y` is where the first of its characters sits.
+                    element.Add(new XAttribute(
+                        "x", Number(text.Origin.X + placed.Cross - layout.CrossShift + anchor)));
+                    element.Add(new XAttribute("y", Number(text.Origin.Y + placed.Top)));
+                }
+
 
                 // The block's leading, when it is not the default the reader assumes. A bare number is a multiple
                 // of the font size, which is what the model stores, so it comes back as it went out.
@@ -1334,7 +1360,7 @@ public static class SvgWriter
                 // between the elements is out of scope and is still stripped.
                 foreach (TextRunBox box in segments)
                 {
-                    element.Add(RunElement(text, box, anchor, runStart[box.Run], preserve));
+                    element.Add(RunElement(text, box, anchor, runStart[box.Run], preserve, layout));
                 }
 
                 Wrote("text");
@@ -1343,7 +1369,8 @@ public static class SvgWriter
         }
 
         /// <summary>One run's piece on one line, as a `tspan`.</summary>
-        private XElement RunElement(TextItem text, TextRunBox box, double anchor, int runStart, bool preserve)
+        private XElement RunElement(
+            TextItem text, TextRunBox box, double anchor, int runStart, bool preserve, TextLayout layout)
         {
             TextRun run = text.Runs[box.Run];
             int start = Math.Clamp(box.Start - runStart, 0, run.Text.Length);
@@ -1357,9 +1384,28 @@ public static class SvgWriter
                 element.Add(new XAttribute(XNamespace.Xml + "space", "preserve"));
             }
 
-            // The absolute x is the model's own, which is what lets a run whose advance differs from the face's
-            // width come back with that advance: the reader stores the room before the next run as a gap.
-            element.Add(new XAttribute("x", Number(text.Origin.X + box.X + anchor)));
+            if (text.WritingMode == TextWritingMode.HorizontalTb)
+            {
+                // The absolute x is the model's own, which is what lets a run whose advance differs from the face's
+                // width come back with that advance: the reader stores the room before the next run as a gap.
+                //
+                // **A right-to-left line's `x` is where its pen *ends*.** SVG states the start of the text, and under
+                // `rtl` the text starts at its right-hand end and runs back - so the position the file holds is the
+                // far edge of the piece, which is its own width past where the model's frame has it begin. Writing
+                // the model's own coordinate instead is what made the corpus round trip lose one line width on the
+                // first read and another on every read after it.
+                element.Add(new XAttribute("x", Number(text.Direction == TextDirection.RightToLeft
+                    ? text.Origin.X + box.X + box.Width - anchor
+                    : text.Origin.X + box.X + anchor)));
+            }
+            else
+            {
+                // **A vertical run states its pen, and relies on the element's own `x` for the column.** Repeating
+                // the column on every `tspan` would say each run stands on a line of its own, and the reader would
+                // take each one as a block - so only the pen moves here.
+                TextLine line = layout.Lines[box.Line];
+                element.Add(new XAttribute("y", Number(text.Origin.Y + line.Top)));
+            }
 
             ColorRgb colour = text.ColourOf(run);
             if (colour != text.Color)
@@ -1624,6 +1670,19 @@ public static class SvgWriter
             if (run.FontVariant is { Length: > 0 } variant)
             {
                 element.Add(new XAttribute("font-variant", variant));
+            }
+
+            // **The turn a glyph carries in a vertical column goes back as the property it came from.** It is
+            // written in SVG 1.1's own spelling - `auto`, `0` or `90` - because that is the property a vertical SVG
+            // document states, and it is written only when the run asks for something other than the initial value,
+            // so a document with no vertical text keeps every byte it had. Leaving it out made a column the file set
+            // upright come back turned: the reader cannot tell the two apart from the geometry alone, because both
+            // are a run of advance after advance down one x.
+            if (run.FontOrientation != GlyphOrientation.Auto)
+            {
+                element.Add(new XAttribute(
+                    "glyph-orientation-vertical",
+                    run.FontOrientation == GlyphOrientation.Upright ? "0" : "90"));
             }
         }
 

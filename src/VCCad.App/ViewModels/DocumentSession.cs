@@ -1049,11 +1049,18 @@ public sealed class DocumentSession : INotifyPropertyChanged
 
     /// <summary>
     /// Applies paragraph style and orientation to the selected text objects in one undo
-    /// step. These are how the block is set — leading, space between paragraphs, and the
+    /// step. These are how the block is set — leading, space between paragraphs, the
     /// angle it sits at — and they never change what the text says.
+    ///
+    /// <paramref name="writingMode"/> and <paramref name="direction"/> are part of the
+    /// same statement: the block's own axes and the base direction its runs are reordered
+    /// against are how the words are set on the page, not what they say (#127). They are
+    /// optional like the rest, so a caller that asks for one member leaves the others
+    /// exactly as each block has them.
     /// </summary>
     public void ApplyTextStyle(double? lineSpacing, double? paragraphSpacing,
-        double? rotationDegrees, double? frameWidth, TextAlignment? alignment)
+        double? rotationDegrees, double? frameWidth, TextAlignment? alignment,
+        TextWritingMode? writingMode = null, TextDirection? direction = null)
     {
         List<TextItem> targets = SelectedTextItems().ToList();
         if (targets.Count == 0)
@@ -1063,7 +1070,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
         }
 
         Execute(new TextStyleCommand(targets, lineSpacing, paragraphSpacing,
-            rotationDegrees, frameWidth, alignment));
+            rotationDegrees, frameWidth, alignment, writingMode, direction));
     }
 
     /// <summary>

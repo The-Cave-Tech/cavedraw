@@ -48,29 +48,62 @@ public static partial class SvgReader
 
         public StringBuilder Text { get; } = new();
 
-        /// <summary>Where the file puts this piece's first glyph, in the file's own user units.</summary>
-        public double X { get; set; }
+        /// <summary>
+        /// Where the file puts this piece's first glyph, in the file's own user units, on the two axes the block's
+        /// writing mode gives it.
+        ///
+        /// <see cref="Inline"/> is **along** the line - the page's x under a horizontal mode and its y under a
+        /// vertical one - and is where the pen is when the piece starts. <see cref="Cross"/> is **across** the
+        /// block: the page's y for a horizontal line, and the x of a vertical column's baseline. Naming them by the
+        /// axis they are on rather than by the page's letters is what lets a vertical file's `y` and a horizontal
+        /// file's `x` be the same thing to everything downstream.
+        /// </summary>
+        public double Inline { get; set; }
 
-        /// <summary>The baseline this piece sits on, in the file's own user units.</summary>
-        public double Y { get; set; }
+        /// <summary>The cross-axis position of this piece's baseline. See <see cref="Inline"/>.</summary>
+        public double Cross { get; set; }
 
-        /// <summary>How wide the face the file names sets this piece, through the model's own measurer.</summary>
-        public double Width { get; set; }
+        /// <summary>How far the pen moves along the line for this piece, through the model's own measurer.</summary>
+        public double Advance { get; set; }
+
+
+        /// <summary>
+        /// Whether the pen runs back along the line for this piece - a right-to-left run of a horizontal block.
+        ///
+        /// **Vertical text is never backward.** SVG's own rule for a vertical writing mode is that `y`/`dy` run
+        /// along the column and `x`/`dx` across it, so a column's pen advances down the page whatever the base
+        /// direction says: the direction changes which way the *columns* stack, not which way a column is read.
+        /// Subtracting the advance from a vertical piece's `y` moved the block up the page by one piece, which is
+        /// the same defect on the other axis.
+        /// </summary>
+        public bool Backward { get; init; }
 
         /// <summary>
         /// Whether this piece carries on from the one before it rather than starting somewhere of its own.
         ///
-        /// Same face, same paint, same baseline, and starting exactly where that piece ended - which is what makes
-        /// two pieces either side of a `<tspan>` one run rather than two halves of one. The style comparison is the
-        /// whole of what a run states, so a `tspan` that changes the tracking, the width or the variant is a
-        /// different run and not a continuation of the one before it.
+        /// Same face, same paint, on the same line, and starting exactly where that piece ended - which is what
+        /// makes two pieces either side of a `<tspan>` one run rather than two halves of one. The style comparison
+        /// is the whole of what a run states, so a `tspan` that changes the tracking, the width, the variant or the
+        /// glyph orientation is a different run and not a continuation of the one before it.
+        ///
+        /// **Which way the pen runs depends on the direction, and only horizontally.** A right-to-left line advances
+        /// backwards along its own inline axis, so the next piece starts *before* the end of this one by its advance.
+        /// A vertical column advances down the page under both directions - the direction changes which way the
+        /// *columns* stack, not which way the pen runs down a column.
         /// </summary>
-        public bool Continues(TextChunk previous) =>
-            Equals(previous.Style, Style) &&
-            Equals(previous.Paint.Fill, Paint.Fill) &&
-            previous.Paint.FillGradientId == Paint.FillGradientId &&
-            Math.Abs(Y - previous.Y) < 1e-9 &&
-            Math.Abs(X - (previous.X + previous.Width)) < 1e-9;
+        public bool Continues(TextChunk previous)
+        {
+            bool backward = previous.Backward && previous.Style.WritingMode == TextWritingMode.HorizontalTb;
+            double expected = backward
+                ? previous.Inline - previous.Advance
+                : previous.Inline + previous.Advance;
+
+            return Equals(previous.Style, Style) &&
+                   Equals(previous.Paint.Fill, Paint.Fill) &&
+                   previous.Paint.FillGradientId == Paint.FillGradientId &&
+                   Math.Abs(Cross - previous.Cross) < 1e-9 &&
+                   Math.Abs(Inline - expected) < 1e-9;
+        }
     }
 
     /// <summary>A block under construction: the item, the piece it started at, and the pieces it holds.</summary>
@@ -138,15 +171,28 @@ public static partial class SvgReader
                 // where export expects to find it. The ascent is the usual Latin one rather than a measurement of
                 // the face: the file declares no ascent, and the per-run `PlacedAscentEm` below is what puts every
                 // baseline back exactly, whatever the face's own metrics turn out to be.
+                //
+                // **A vertical block's origin is where the file's pen is**, which is SVG's own `x` under a vertical
+                // writing mode. The pen is the corner of the first glyph's box and the baseline is one ascent
+                // *after* it, because a turned glyph's ascent runs in +x - so the writer's `x` is the origin itself
+                // and needs no correction, the same way a horizontal block's origin needs none against `y`.
+                bool vertical = chunk.Style.WritingMode != TextWritingMode.HorizontalTb;
+
                 var item = new TextItem
                 {
                     Color = chunk.Paint.Fill.Color,
                     LineSpacing = chunk.Style.LineSpacing,
                     Alignment = chunk.Style.Anchor,
-                    Origin = new Point2D(
-                        chunk.X, chunk.Y - (TextMeasurement.TypicalAscentEm * chunk.Style.FontSize)),
-                };
+                    WritingMode = chunk.Style.WritingMode,
+                    Direction = chunk.Style.Direction,
 
+                    // The piece's own position, corrected below: the model's origin is where the pen *started*, and
+                    // this is where the file put the first piece's first glyph.
+                    Origin = vertical
+                        ? new Point2D(chunk.Cross, chunk.Inline)
+                        : new Point2D(
+                            chunk.Inline, chunk.Cross - (TextMeasurement.TypicalAscentEm * chunk.Style.FontSize)),
+                };
                 current = new TextBlock(item, chunk, new List<TextChunk>(), chunk.Paint.FillGradientId);
                 blocks.Add(current);
             }
@@ -160,6 +206,10 @@ public static partial class SvgReader
                 Bold = chunk.Style.Bold,
                 Italic = chunk.Style.Italic,
 
+                // The orientation the file asked for, which only a vertical column acts on - a horizontal run is
+                // upright whatever this says, so a file that states `0` on horizontal text is not re-drawn.
+                FontOrientation = chunk.Style.Orientation,
+
                 // The tracking the file asked for, as the length the model keeps. It goes on the run rather than
                 // into `AdvanceWidth`, which is the whole distance to the next run: widening that to express
                 // tracking stretches every glyph in the run instead of leaving room between them.
@@ -172,17 +222,21 @@ public static partial class SvgReader
                 FontStretch = chunk.Style.FontStretch,
                 FontVariant = chunk.Style.FontVariant,
 
-                // The fraction of *this run's own* em that the block's top-left sits above its baseline. A line of
-                // mixed sizes shares one baseline, and export puts each run's baseline back from this number - so
-                // a 10pt word beside a 24pt one lands on the line rather than below it.
-                PlacedAscentEm = (chunk.Y - current.Item.Origin.Y) / chunk.Style.FontSize,
-
                 // The colour of a run that states one of its own, written only when it differs from the block's.
                 // The block's colour is the first piece's, so a one-colour block grows no member it does not need
                 // while a `tspan` that changes the fill - which no longer starts a block - carries its colour here,
                 // and `ColourOf` answers with the file's paint for every run either way.
                 Color = chunk.Paint.Fill.Color == current.Item.Color ? null : chunk.Paint.Fill.Color,
             };
+
+            // **The ascent is measured on the axis the block's baselines run on.** A horizontal block's baseline is
+            // a `y` and the block's origin sits one ascent above it, so each run records the fraction of *its own*
+            // em that places its baseline back on the line - which is what lets a 10pt `tspan` share a baseline
+            // with a 20pt one. A vertical column's baseline is an `x` that the pen already stands on, so there is
+            // nothing to record and the renderer works the ascent out from the face.
+            run.PlacedAscentEm = chunk.Style.WritingMode == TextWritingMode.HorizontalTb
+                ? (chunk.Cross - current.Item.Origin.Y) / chunk.Style.FontSize
+                : 0.0;
 
             current.Item.Runs.Add(run);
         }
@@ -205,7 +259,9 @@ public static partial class SvgReader
     /// a change the block cannot hold run by run, and `Place` resolves it once for the block.
     /// </summary>
     private static bool Holds(TextBlock block, TextChunk chunk)
-        => Math.Abs(chunk.Y - block.First.Y) < 1e-9 &&
+        => Math.Abs(chunk.Cross - block.First.Cross) < 1e-9 &&
+           block.Item.WritingMode == chunk.Style.WritingMode &&
+           block.Item.Direction == chunk.Style.Direction &&
            block.Item.Alignment == chunk.Style.Anchor &&
            Math.Abs(block.Item.LineSpacing - chunk.Style.LineSpacing) < 1e-9 &&
            block.First.Paint.FillGradientId == chunk.Paint.FillGradientId;
@@ -229,13 +285,13 @@ public static partial class SvgReader
             if (i > 0)
             {
                 TextChunk previous = block.Chunks[i - 1];
-                double gap = chunk.X - (previous.X + previous.Width);
+                double gap = chunk.Inline - (previous.Inline + previous.Advance);
                 if (Math.Abs(gap) > 1e-9)
                 {
-                    block.Item.Runs[i - 1].AdvanceWidth = previous.Width + gap;
+                    block.Item.Runs[i - 1].AdvanceWidth = previous.Advance + gap;
                     block.Item.Runs[i - 1].GapAfter = gap;
 
-                    if (previous.Width + gap <= 0)
+                    if (previous.Advance + gap <= 0)
                     {
                         // The file pulls this piece back past the end of the one before it, which the model can
                         // only express as a run that has an advance of its own - so the two overlap instead.
@@ -247,7 +303,7 @@ public static partial class SvgReader
 
             if (i < block.Chunks.Count - 1)
             {
-                run.AdvanceWidth ??= chunk.Width;
+                run.AdvanceWidth ??= chunk.Advance;
             }
         }
 
@@ -269,15 +325,32 @@ public static partial class SvgReader
             }
         }
 
-        // The anchor is where the file put the *end* or the *middle* of the string, and the model's origin is the
-        // left edge of the block - so the block is moved back by the width its own layout gives it. Measured
-        // through the model, because that is the width the person will see and the width the caret and the bounds
-        // use; a number taken from anywhere else would put the anchored text beside the anchor rather than on it.
+        // **The anchor is where the file put the *end* or the *middle* of the string, and the model's origin is the
+        // block's own corner** - so the block is moved back by the extent its own layout gives it, along the page's
+        // x. Measured through the model, because that is the extent the person will see and the extent the caret
+        // and the bounds use; a number taken from anywhere else would put the anchored text beside the anchor
+        // rather than on it. A vertical column's extent is its columns' own width, which is the same member the
+        // layout reports as its width under a vertical mode.
+        //
+        // **A right-to-left line runs back from its anchor**, so the same shift moves the origin the other way: the
+        // file's `x` is the pen's *end* under `rtl` - the block's right edge for `start` - and the model's origin is
+        // its left one. Which is why the sign is the direction's and not a constant.
+        //
+        // **The block's origin is already correct without a correction pass.** A right-to-left piece's own start is
+        // the position `TextWalker.Flush` takes the advance off to reach, so `Origin.X` is the pen's start before
+        // this runs; the earlier version of this reader added a second, layout-derived offset here, which moved the
+        // block by one character's travel on the first read and by another one on every read after it.
         if (block.Item.Alignment != TextAlignment.Left)
         {
-            double width = TextLayoutEngine.Compute(block.Item).Width;
-            double shift = block.Item.Alignment == TextAlignment.Center ? width / 2.0 : width;
-            block.Item.Origin = new Point2D(block.Item.Origin.X - shift, block.Item.Origin.Y);
+            double extent = TextLayoutEngine.Compute(block.Item).Width;
+            double shift = block.Item.Alignment == TextAlignment.Center ? extent / 2.0 : extent;
+
+            bool backward = block.Item.Direction == TextDirection.RightToLeft &&
+                            block.Item.WritingMode == TextWritingMode.HorizontalTb;
+
+            block.Item.Origin = new Point2D(
+                backward ? block.Item.Origin.X + shift : block.Item.Origin.X - shift,
+                block.Item.Origin.Y);
         }
     }
 
@@ -317,8 +390,8 @@ public static partial class SvgReader
         private readonly Context _context;
         private readonly List<TextChunk> _chunks = new();
 
-        private double _penX;
-        private double _penY;
+        private double _penInline;
+        private double _penCross;
         private TextChunk? _current;
         private bool _atStart = true;
         private bool _lastWasSpace;
@@ -340,7 +413,7 @@ public static partial class SvgReader
                 {
                     last.Text.Clear();
                     last.Text.Append(trimmed);
-                    last.Width = Natural(last);
+                    last.Advance = Natural(last);
                 }
 
                 if (last.Text.Length == 0)
@@ -354,29 +427,34 @@ public static partial class SvgReader
 
         private void WalkElement(XElement element, PresentationStyle paint, SvgTextStyle style)
         {
-            double? x = Position(element, "x", SvgAxis.X, style.FontSize);
-            double? y = Position(element, "y", SvgAxis.Y, style.FontSize);
-            double? dx = Position(element, "dx", SvgAxis.X, style.FontSize);
-            double? dy = Position(element, "dy", SvgAxis.Y, style.FontSize);
+            // **Which of the file's two axes each of the four attributes moves depends on the writing mode.** SVG's
+            // own rule: the `x`/`dx` pair is *along the line* and the `y`/`dy` pair is *across* it, so under a
+            // vertical mode the pen advances down the page and the lines step sideways - which is exactly the axis
+            // swap this reader does, and not a conversion of its own.
+            bool vertical = style.WritingMode != TextWritingMode.HorizontalTb;
+            double? inline = Position(element, vertical ? "y" : "x", vertical ? SvgAxis.Y : SvgAxis.X, style.FontSize);
+            double? dinline = Position(element, vertical ? "dy" : "dx", vertical ? SvgAxis.Y : SvgAxis.X, style.FontSize);
+            double? cross = Position(element, vertical ? "x" : "y", vertical ? SvgAxis.X : SvgAxis.Y, style.FontSize);
+            double? dcross = Position(element, vertical ? "dx" : "dy", vertical ? SvgAxis.X : SvgAxis.Y, style.FontSize);
 
-            if (x is not null)
+            if (inline is not null)
             {
-                _penX = x.Value;
+                _penInline = inline.Value;
             }
 
-            if (dx is not null)
+            if (dinline is not null)
             {
-                _penX += dx.Value;
+                _penInline += dinline.Value;
             }
 
-            if (y is not null)
+            if (cross is not null)
             {
-                _penY = y.Value;
+                _penCross = cross.Value;
             }
 
-            if (dy is not null)
+            if (dcross is not null)
             {
-                _penY += dy.Value;
+                _penCross += dcross.Value;
             }
 
             if (element.Attribute("textLength") is { Value.Length: > 0 } textLength)
@@ -502,7 +580,29 @@ public static partial class SvgReader
         }
 
         private TextChunk Open(PresentationStyle paint, SvgTextStyle style)
-            => _current ??= new TextChunk { Style = style, Paint = paint, X = _penX, Y = _penY };
+        {
+            if (_current is null)
+            {
+                _current = new TextChunk
+                {
+                    Style = style,
+                    Paint = paint,
+
+                    // **A right-to-left piece's `x` is where its pen *ends*.** The pen runs back along the line, so
+                    // the position the element states is the far edge of the piece it holds, and the piece's own
+                    // start - what the model keeps and what the next piece continues from - is its advance short of
+                    // that. Taking it back off at the merge is what lets such a line come back as one run instead of
+                    // one run per character. A vertical column's pen runs *down* the page under either direction, so
+                    // its piece keeps the `y` the file gave it.
+                    Backward = style.Direction == TextDirection.RightToLeft &&
+                               style.WritingMode == TextWritingMode.HorizontalTb,
+                    Inline = _penInline,
+                    Cross = _penCross,
+                };
+            }
+
+            return _current;
+        }
 
         private void Flush()
         {
@@ -518,19 +618,30 @@ public static partial class SvgReader
                 return;
             }
 
-            chunk.Width = Natural(chunk);
+            chunk.Advance = Natural(chunk);
+
+            // **Merged in the frame the model stores in.** A right-to-left piece's stated `x` is the far edge of
+            // the piece it holds, so it is taken back to the pen's own position first - which is where the next
+            // piece continues from and what the model's origin is measured against.
+            if (chunk.Backward)
+            {
+                chunk.Inline -= chunk.Advance;
+            }
+
             if (_chunks.Count > 0 && chunk.Continues(_chunks[^1]))
             {
                 _chunks[^1].Text.Append(chunk.Text);
-                _chunks[^1].Width = Natural(_chunks[^1]);
+                _chunks[^1].Advance = Natural(_chunks[^1]);
             }
             else
             {
                 _chunks.Add(chunk);
             }
 
-            // Where the pen is now, which is what an absolute position on the next piece is measured against.
-            _penX = _chunks[^1].X + _chunks[^1].Width;
+            // Where the pen is for the next piece. It is the face's own width that moves it, not a recorded advance:
+            // the room a recorded advance adds is the *gap* to the next piece, which `Place` stores as the run's
+            // advance and its `GapAfter`.
+            _penInline = _chunks[^1].Inline + _chunks[^1].Advance;
         }
 
         /// <summary>

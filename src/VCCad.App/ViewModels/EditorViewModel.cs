@@ -742,8 +742,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     /// <summary>Paragraph style and orientation on the selected text, one undo step.</summary>
     public void ApplyTextStyle(double? lineSpacing = null, double? paragraphSpacing = null,
-        double? rotationDegrees = null, double? frameWidth = null, TextAlignment? alignment = null)
-        => _active.ApplyTextStyle(lineSpacing, paragraphSpacing, rotationDegrees, frameWidth, alignment);
+        double? rotationDegrees = null, double? frameWidth = null, TextAlignment? alignment = null,
+        TextWritingMode? writingMode = null, TextDirection? direction = null)
+        => _active.ApplyTextStyle(lineSpacing, paragraphSpacing, rotationDegrees, frameWidth, alignment,
+            writingMode, direction);
 
 
     private void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string? name = null)

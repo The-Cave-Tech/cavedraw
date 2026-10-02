@@ -454,4 +454,66 @@ public class TextPaneTests
         Assert.True(EditorOperations.TryGet("text.setAlignment", out _));
         Assert.True(EditorOperations.TryGet("text.style", out _));
     }
+
+    // ---------------------------------------------------------------- the block's own axes (#127)
+
+    /// <summary>
+    /// **The mode and the direction combos write the model through the operation's own method**, one undo step, and
+    /// through nothing else - the rule the rest of this panel follows. Before #127 was finished these two members were
+    /// on the model, acted on by the layout and written to SVG, and there was no way for a person or a driver to set
+    /// either: the control and the operation now land on the same call, so neither can do what the other cannot.
+    /// </summary>
+    [AvaloniaFact]
+    public void TheModeAndDirectionCombosSetTheBlock()
+    {
+        (TextPane pane, EditorViewModel viewModel, TextItem block) = Host(Run("words"));
+        int depth = viewModel.ActiveSession.UndoDepth;
+
+        ComboBox mode = Combo(pane, "WritingModeBox");
+        mode.SelectedIndex = 1;
+        Settle();
+
+        ComboBox direction = Combo(pane, "DirectionBox");
+        direction.SelectedIndex = 1;
+        Settle();
+
+        Assert.Equal(TextWritingMode.VerticalRl, block.WritingMode);
+        Assert.Equal(TextDirection.RightToLeft, block.Direction);
+        Assert.Equal(depth + 2, viewModel.ActiveSession.UndoDepth);
+
+        viewModel.Undo();
+        Assert.Equal(TextDirection.LeftToRight, block.Direction);
+    }
+
+    /// <summary>
+    /// **The panel shows what the selection actually holds, and says mixed when it disagrees.** A combo left on
+    /// `horizontal-tb` for a selection holding a vertical block is a control that lies about the document, and an
+    /// apply that read it as a value would flatten the vertical block the next time any field was committed.
+    /// </summary>
+    [AvaloniaFact]
+    public void ThePanelShowsAMixedWritingModeAsMixed()
+    {
+        TextItem first = Block(new EditorViewModel(), Run("one"));
+        first.WritingMode = TextWritingMode.VerticalRl;
+
+        var viewModel = new EditorViewModel();
+        viewModel.Document.Artboards[0].Layers[0].AddItem(first);
+        TextItem second = Block(viewModel, Run("two"));
+        viewModel.SelectObject(first);
+        viewModel.ToggleObjectSelection(second);
+
+        var pane = new TextPane();
+        pane.Attach(viewModel);
+        var window = new Window { Width = 440, Height = 780, Content = pane };
+        window.Show();
+        Settle();
+
+        ComboBox mode = Combo(pane, "WritingModeBox");
+        Assert.Equal(-1, mode.SelectedIndex);
+        Assert.Equal("mixed", mode.PlaceholderText);
+        Assert.Contains("mode", Text(pane, "MixedLabel").Text ?? string.Empty, StringComparison.Ordinal);
+
+        // And the direction they do agree on is still shown, so one disagreeing member does not blank the others.
+        Assert.Equal(0, Combo(pane, "DirectionBox").SelectedIndex);
+    }
 }

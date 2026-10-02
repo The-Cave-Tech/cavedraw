@@ -4251,10 +4251,22 @@ public static class EditorOperations
 
         Add("text.style",
             "Set paragraph style and orientation on the selected text: leading, space " +
-            "between paragraphs, the angle the block sits at, the width it wraps in, and " +
-            "alignment. One undo step. These change how the block is set, not what it says.",
+            "between paragraphs, the angle the block sits at, the width it wraps in, " +
+            "alignment, the writing mode and the base direction. One undo step. These change " +
+            "how the block is set, not what it says. " +
+            "**`writing-mode` is a layout, not a label.** `vertical-rl` and `vertical-lr` run the " +
+            "pen down the block and stack the line boxes sideways, `horizontal-tb` is the initial " +
+            "value, and the canvas, the caret, the bounds and the SVG export all read the same " +
+            "layout - so a block set vertical is drawn and exported vertical. `direction` is the " +
+            "block's base direction: `rtl` puts the block's first character at its right-hand end " +
+            "and reorders the runs into visual order with the Unicode bidirectional algorithm, " +
+            "which is why a Hebrew or Arabic line under `ltr` is not the same drawing as the same " +
+            "line under `rtl`. Both are stored per block and written to SVG on export, so they " +
+            "survive a save and a re-open." +
+            "The two names are the property's own: horizontal-tb|vertical-rl|vertical-lr and ltr|rtl.",
             "lineSpacing?:number (multiple of font size), paragraphSpacing?:number, " +
-            "rotationDegrees?:number, frameWidth?:number (0 = auto), alignment?:left|center|right",
+            "rotationDegrees?:number, frameWidth?:number (0 = auto), alignment?:left|center|right, " +
+            "writingMode?:horizontal-tb|vertical-rl|vertical-lr, direction?:ltr|rtl",
             (ctx, p) =>
             {
                 static double? Number(JsonElement parent, string name)
@@ -4270,7 +4282,9 @@ public static class EditorOperations
                     Number(p, "frameWidth"),
                     p.TryGetProperty("alignment", out JsonElement al) && al.ValueKind == JsonValueKind.String
                         ? ParseEnum(al.GetString(), TextAlignment.Left)
-                        : null);
+                        : null,
+                    ParseWritingMode(p),
+                    ParseDirection(p));
                 return Summary(ctx);
             });
 
@@ -9541,6 +9555,52 @@ public static class EditorOperations
             : null;
 
     /// <summary>
+    /// A `writingMode` member, or null when it was not given - which is "leave each block's own mode alone".
+    ///
+    /// The value is the property's own spelling, so a driver writes what the file writes and what the Text panel
+    /// offers, and there is no second vocabulary to keep in step. A value that is none of the three is reported as a
+    /// bad parameter rather than silently meaning `horizontal-tb`, because a driver that asked for a vertical block
+    /// and got a horizontal one has no way to notice.
+    /// </summary>
+    private static TextWritingMode? ParseWritingMode(JsonElement p)
+    {
+        if (p.ValueKind != JsonValueKind.Object || !p.TryGetProperty("writingMode", out JsonElement value))
+        {
+            return null;
+        }
+
+        return value.ValueKind == JsonValueKind.String
+            ? value.GetString()?.Trim().ToLowerInvariant() switch
+            {
+                "horizontal-tb" => TextWritingMode.HorizontalTb,
+                "vertical-rl" => TextWritingMode.VerticalRl,
+                "vertical-lr" => TextWritingMode.VerticalLr,
+                _ => throw new EditorOperationException(
+                    $"writingMode must be horizontal-tb, vertical-rl or vertical-lr, not \"{value.GetString()}\""),
+            }
+            : throw new EditorOperationException("writingMode must be a string");
+    }
+
+    /// <summary>A `direction` member, or null when it was not given. See <see cref="ParseWritingMode"/>.</summary>
+    private static TextDirection? ParseDirection(JsonElement p)
+    {
+        if (p.ValueKind != JsonValueKind.Object || !p.TryGetProperty("direction", out JsonElement value))
+        {
+            return null;
+        }
+
+        return value.ValueKind == JsonValueKind.String
+            ? value.GetString()?.Trim().ToLowerInvariant() switch
+            {
+                "ltr" => TextDirection.LeftToRight,
+                "rtl" => TextDirection.RightToLeft,
+                _ => throw new EditorOperationException(
+                    $"direction must be ltr or rtl, not \"{value.GetString()}\""),
+            }
+            : throw new EditorOperationException("direction must be a string");
+    }
+
+    /// <summary>
     /// What the selection's text blocks agree on, and what they do not - the report `text.common` returns and
     /// `text.update` answers with, built from the same <see cref="TextSummary"/> the Text panel reads.
     ///
@@ -9605,6 +9665,26 @@ public static class EditorOperations
             rotationMixed = summary.RotationMixed,
             frame = summary.FrameWidth,
             frameWidthMixed = summary.FrameWidthMixed,
+
+            // The block's own axes and its base direction, in the property's own spelling - the same words `text.style`
+            // accepts and the Text panel offers, so a driver reads back exactly what it can write. The names are
+            // `TextItem.WritingModeName`'s and `DirectionName`'s; they are spelled out here because the summary holds
+            // the enum and not the block it came from.
+            writingMode = summary.WritingMode switch
+            {
+                TextWritingMode.HorizontalTb => "horizontal-tb",
+                TextWritingMode.VerticalRl => "vertical-rl",
+                TextWritingMode.VerticalLr => "vertical-lr",
+                _ => null,
+            },
+            writingModeMixed = summary.WritingModeMixed,
+            direction = summary.Direction switch
+            {
+                TextDirection.LeftToRight => "ltr",
+                TextDirection.RightToLeft => "rtl",
+                _ => null,
+            },
+            directionMixed = summary.DirectionMixed,
         };
     }
 

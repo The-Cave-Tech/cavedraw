@@ -540,7 +540,8 @@ public sealed class TextStyleCommand : IUndoableCommand
 
     public TextStyleCommand(IEnumerable<TextItem> items, double? lineSpacing = null,
         double? paragraphSpacing = null, double? rotationDegrees = null,
-        double? frameWidth = null, TextAlignment? alignment = null)
+        double? frameWidth = null, TextAlignment? alignment = null,
+        TextWritingMode? writingMode = null, TextDirection? direction = null)
     {
         Description = "Text style";
         foreach (TextItem item in items)
@@ -573,14 +574,30 @@ public sealed class TextStyleCommand : IUndoableCommand
                 after.Alignment = al;
             }
 
+            // The block's own axes, which are part of how it is set rather than what it says: a horizontal block and
+            // a vertical one hold the same run and draw it down the page or along it. They belong in this command and
+            // not in a text-replacement one for the same reason the leading does - the words are untouched, so the
+            // undo step has to say "how it is set" rather than "what it says".
+            if (writingMode is { } mode)
+            {
+                after.WritingMode = mode;
+            }
+
+            if (direction is { } dir)
+            {
+                after.Direction = dir;
+            }
+
             _changes.Add((item, before, after));
         }
     }
 
     public TextStyleCommand(TextItem item, double? lineSpacing = null,
         double? paragraphSpacing = null, double? rotationDegrees = null,
-        double? frameWidth = null, TextAlignment? alignment = null)
-        : this(new[] { item }, lineSpacing, paragraphSpacing, rotationDegrees, frameWidth, alignment)
+        double? frameWidth = null, TextAlignment? alignment = null,
+        TextWritingMode? writingMode = null, TextDirection? direction = null)
+        : this(new[] { item }, lineSpacing, paragraphSpacing, rotationDegrees, frameWidth, alignment,
+            writingMode, direction)
     {
     }
 

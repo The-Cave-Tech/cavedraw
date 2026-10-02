@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Xml.Linq;
 using VCCad.Core.Model;
+using VCCad.Core.Text;
 
 namespace VCCad.Core.Svg;
 
@@ -10,9 +11,12 @@ namespace VCCad.Core.Svg;
 /// **Every property here has somewhere in the model to live**, and each is resolved to the value the model stores:
 /// `font-stretch` and `font-variant` keep the file's own spelling because the model names one face per run and
 /// cannot put a word back together from a number, and the two spacings become lengths so nothing downstream has to
-/// know what percentage they were written as. A property the model genuinely has no field for - `text-decoration`,
-/// `baseline-shift`, `writing-mode` - is still **reported** with the value the file wrote, because the rule this
-/// repository enforces is that a value the reader cannot keep is said out loud, never quietly dropped.
+/// know what percentage they were written as. `writing-mode`, `direction` and `glyph-orientation-vertical` are the
+/// same kind of member since #127: the mode and the base direction name the block's own axes, and the orientation
+/// says whether a glyph is turned in a vertical column, so all three reach the layout engine rather than being
+/// reported. A property the model genuinely has no field for - `text-decoration`, `baseline-shift` - is still
+/// **reported** with the value the file wrote, because the rule this repository enforces is that a value the reader
+/// cannot keep is said out loud, never quietly dropped.
 ///
 /// What maps where:
 /// <list type="bullet">
@@ -22,6 +26,8 @@ namespace VCCad.Core.Svg;
 /// <item>`font-weight` and `font-style` to the model's bold and italic flags.</item>
 /// <item>`font-stretch` and `font-variant` to the run's own record of the face the file asked for.</item>
 /// <item>`letter-spacing` and `word-spacing` to the run's tracking, resolved against its own size.</item>
+/// <item>`writing-mode` and `direction` to the block, and `glyph-orientation-vertical` (or CSS's
+/// `text-orientation`) to the run.</item>
 /// <item>`text-anchor` to the block's alignment.</item>
 /// <item>`line-height` to the block's line spacing.</item>
 /// <item>`white-space` and `xml:space` to whether white space is collapsed or kept.</item>
@@ -38,11 +44,14 @@ internal sealed record SvgTextStyle(
     double LetterSpacing,
     double WordSpacing,
     string? FontStretch,
-    string? FontVariant)
+    string? FontVariant,
+    TextWritingMode WritingMode,
+    TextDirection Direction,
+    GlyphOrientation Orientation)
 {
     /// <summary>
     /// SVG's initial values: a medium (16px) upright face, anchored at the start, collapsing white space, with no
-    /// tracking and no width or variant asked for.
+    /// tracking and no width or variant asked for, laid out horizontally left to right.
     ///
     /// 16 is CSS's initial font size and so SVG's `medium`, and the family is the model's own default because the
     /// initial `font-family` is the user agent's choice - the file does not name one, so there is nothing of the
@@ -50,7 +59,8 @@ internal sealed record SvgTextStyle(
     /// </summary>
     public static SvgTextStyle Default { get; } = new(
         TextItem.DefaultFontFamily, 16.0, false, false, TextAlignment.Left, PreserveSpace: false, LineSpacing: 1.2,
-        LetterSpacing: 0.0, WordSpacing: 0.0, FontStretch: null, FontVariant: null);
+        LetterSpacing: 0.0, WordSpacing: 0.0, FontStretch: null, FontVariant: null,
+        TextWritingMode.HorizontalTb, TextDirection.LeftToRight, GlyphOrientation.Auto);
 
     /// <summary>Resolves the element's own text properties over the ones it inherits.</summary>
     public static SvgTextStyle From(
@@ -197,12 +207,145 @@ internal sealed record SvgTextStyle(
             variant = writtenVariant;
         }
 
+        // **The writing mode, the base direction and the glyph orientation as of #127.** All three are inherited
+        // CSS properties, so an element that states none keeps what it inherited - which is what makes
+        // `writing-mode` on the `text` element hold for every `tspan` inside it, and what makes a `tspan` that
+        // turns its own Latin upright a run of its own.
+        TextWritingMode mode = inherited.WritingMode;
+        if (ReadWritingMode(Value("writing-mode"), warn) is { } writtenMode)
+        {
+            mode = writtenMode;
+        }
+
+        // **The direction is the file's, and only the file's.** `direction` is inherited and its initial value is
+        // `ltr`, so an element that states none anywhere up the tree runs left to right. This reader used to infer
+        // the base direction from the first strong character of the content (UAX #9 P2/P3) when the file stated
+        // nothing, on the reasoning that a block full of Hebrew "obviously" runs right to left - and that is an
+        // invention, not a reading. P2/P3 applies when no higher-level protocol states the paragraph level, and
+        // SVG's own `direction` property is that statement; its initial value is part of the file's meaning. The
+        // difference is not academic: the corpus file `test-rtl-vertical.svg` puts an untagged Arabic line at
+        // `x="50"` and its own expected rendering - `expected_rendering/test-rtl-vertical.png`, Inkscape's, the
+        // author's - draws that word with its ink at x 51..111, inside the page and starting at the file's own
+        // coordinate. Inferred `rtl` puts the ink at x -36..50 instead: one line width to the left, half of it off
+        // the artboard, for a file that draws it inside. A right-to-left *island* inside a left-to-right line is
+        // still reordered - that is a different rule and the layout still applies it. See #127.
+        TextDirection direction = inherited.Direction;
+        if (ReadDirection(Value("direction"), warn) is { } writtenDirection)
+        {
+            direction = writtenDirection;
+        }
+
+        GlyphOrientation orientation = inherited.Orientation;
+        if (ReadOrientation(Value("glyph-orientation-vertical") ?? Value("text-orientation"), warn)
+            is { } writtenOrientation)
+        {
+            orientation = writtenOrientation;
+        }
+
+        // The embedding and override codes are not layout this reader acts on, and a file that puts one in its text
+        // is a file whose visual order this reader is approximating. Named once per element that holds one, with
+        // the character, because the count is what tells a person whether it matters.
+        int embeddings = 0;
+        foreach (char c in element.Value)
+        {
+            if (Bidi.IsEmbeddingCode(c))
+            {
+                embeddings++;
+            }
+        }
+
+        if (embeddings > 0)
+        {
+            warn?.Invoke(
+                $"the text holds {embeddings} bidirectional embedding or override character(s), which this reader " +
+                "treats as neutral: the run's own order is resolved by the surrounding direction");
+        }
+
         ReportUnkeptProperties(Value, warn);
         ReportUnselectedFace(stretch, variant, warn);
 
         return new SvgTextStyle(
             family, size, weight >= 600, italic, anchor, preserve, lineSpacing,
-            letterSpacing, wordSpacing, stretch, variant);
+            letterSpacing, wordSpacing, stretch, variant, mode, direction, orientation);
+    }
+
+    /// <summary>
+    /// A `writing-mode`, as the model's own member.
+    ///
+    /// The two values SVG 1.1 defines for text are the two vertical modes, and `horizontal-tb` is the initial value
+    /// and is kept as such rather than reported. `lr` and `tb` are SVG 1.0's older spellings of the same two things
+    /// and are read too. `vertical-rl` is what Inkscape and the CSS writing-modes draft call the CJK mode, and the
+    /// model holds it as the block it is: the pen runs down the page and the columns stack sideways.
+    /// </summary>
+    private static TextWritingMode? ReadWritingMode(string? value, Action<string>? warn)
+    {
+        if (value is null || IsCssWideKeyword(value))
+        {
+            return null;
+        }
+
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "horizontal-tb":
+                return TextWritingMode.HorizontalTb;
+            case "vertical-rl":
+                return TextWritingMode.VerticalRl;
+
+            // SVG 1.0's spelling of a right-to-left vertical column, and SVG 1.1's `vertical-lr`.
+            case "tb" or "tb-rl" or "vertical-lr":
+                return TextWritingMode.VerticalLr;
+            default:
+                warn?.Invoke($"writing-mode=\"{value}\" is not a writing mode this reader knows");
+                return null;
+        }
+    }
+
+    /// <summary>A `direction`, as the model's own member. `ltr` and `rtl` are the property's whole value space.</summary>
+    private static TextDirection? ReadDirection(string? value, Action<string>? warn)
+    {
+        if (value is null || IsCssWideKeyword(value))
+        {
+            return null;
+        }
+
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "ltr":
+                return TextDirection.LeftToRight;
+            case "rtl":
+                return TextDirection.RightToLeft;
+            default:
+                warn?.Invoke($"direction=\"{value}\" is neither \"ltr\" nor \"rtl\"");
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// `glyph-orientation-vertical`, and the `text-orientation` that replaced it in CSS Writing Modes.
+    ///
+    /// SVG 1.1 spells it as an angle - `auto`, `0` or `90` - and CSS spells the same three as `mixed`, `upright`
+    /// and `sideways`. Both are read, because a file may carry either and reading only one would turn a run the
+    /// author set upright on its side.
+    /// </summary>
+    private static GlyphOrientation? ReadOrientation(string? value, Action<string>? warn)
+    {
+        if (value is null || IsCssWideKeyword(value))
+        {
+            return null;
+        }
+
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "auto" or "mixed":
+                return GlyphOrientation.Auto;
+            case "0" or "upright":
+                return GlyphOrientation.Upright;
+            case "90" or "sideways" or "sideways-right":
+                return GlyphOrientation.Rotate;
+            default:
+                warn?.Invoke($"glyph-orientation-vertical=\"{value}\" is not an orientation this reader knows");
+                return null;
+        }
     }
 
     /// <summary>
@@ -365,7 +508,8 @@ internal sealed record SvgTextStyle(
     /// Each is reported **only when it says something** - `text-decoration:none` and `baseline-shift:baseline`
     /// are the initial values and change nothing, and warning about them would bury the one file that really is
     /// underlined. `font-stretch`, `font-variant`, `letter-spacing` and `word-spacing` used to be here and no
-    /// longer are: the model holds all four. See #147.
+    /// longer are: the model holds all four (#147). `writing-mode` and `direction` used to be here and no longer
+    /// are either: the model holds both and the layout acts on them (#127).
     /// </summary>
     private static void ReportUnkeptProperties(Func<string, string?> value, Action<string>? warn)
     {
@@ -385,8 +529,6 @@ internal sealed record SvgTextStyle(
         Report("text-decoration", "text-decoration=\"{value}\" is not kept: a run holds no decoration");
         Report("baseline-shift", "baseline-shift=\"{value}\" is a baseline the model does not hold");
         Report("dominant-baseline", "dominant-baseline=\"{value}\" is a baseline the model does not hold");
-        Report("writing-mode", "writing-mode=\"{value}\" is not kept: the model sets text horizontally");
-        Report("direction", "direction=\"{value}\" is not kept: the model lays text left to right");
     }
 
     /// <summary>Whether a written value is the property's own initial value, which says nothing.</summary>
