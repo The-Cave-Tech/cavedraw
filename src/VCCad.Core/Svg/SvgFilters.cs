@@ -30,7 +30,15 @@ internal sealed class SvgFilters
     /// <summary>The filters in the document, by id - which is the name an element refers to them by.</summary>
     public IReadOnlyDictionary<string, FilterSpec> All => _filters;
 
-    public static SvgFilters Collect(XElement root, Action<string>? warn = null)
+    /// <summary>
+    /// Collects the document's filters.
+    ///
+    /// <paramref name="sheet"/> is the document's stylesheet, and it is **handed in rather than derived here** even
+    /// though the viewport below is derived from the root: a second stylesheet instance would be a second set of
+    /// cascade answers, and a `flood-color` read through the wrong one would disagree with the same declaration read
+    /// anywhere else in the same file. There is one cascade per document and the reader owns it.
+    /// </summary>
+    public static SvgFilters Collect(XElement root, SvgStylesheet? sheet = null, Action<string>? warn = null)
     {
         var filters = new SvgFilters();
 
@@ -66,7 +74,7 @@ internal sealed class SvgFilters
             {
                 WarnOnPrimitiveLengths(child, id, primitiveUserSpace, warn);
 
-                if (ReadPrimitive(child, id, warn) is not { } primitive)
+                if (ReadPrimitive(child, id, sheet, warn) is not { } primitive)
                 {
                     // A primitive this build does not read is **said**, not skipped quietly: a filter is a graph,
                     // so a step that does nothing silently changes what every step after it receives - and the
@@ -283,7 +291,8 @@ internal sealed class SvgFilters
     /// refuses - a point or spot light - because a bevel lit by the wrong kind of light is a different bevel, and
     /// doing it quietly would be the more convincing lie of the two.
     /// </summary>
-    private static FilterPrimitive? ReadPrimitive(XElement element, string filterId, Action<string>? warn)
+    private static FilterPrimitive? ReadPrimitive(
+        XElement element, string filterId, SvgStylesheet? sheet, Action<string>? warn)
     {
         string? input = element.Attribute("in")?.Value;
         string? input2 = element.Attribute("in2")?.Value;
@@ -306,9 +315,15 @@ internal sealed class SvgFilters
 
             case "feFlood":
             {
-                ColorRgb colour = SvgColour.Parse(
-                        element.Attribute("flood-color")?.Value ?? "black",
-                        PresentationStyle.ColourInForce(element, null))
+                // **Through the cascade, not straight off the attribute.** A `flood-color` stated in a `<style>`
+                // rule binds exactly as one written on the element, and `ColourInForce` is what walks a `currentColor`
+                // back to the `color` in force - its own doc comment names this property as a caller. Both were
+                // bypassed here: the value came from the attribute and the sheet was passed as null.
+                XElement[] ancestors = element.Ancestors().ToArray();
+                string floodColour = SvgProperties.Value(
+                    element, sheet?.DeclarationsFor(element, ancestors), "flood-color") ?? "black";
+
+                ColorRgb colour = SvgColour.Parse(floodColour, PresentationStyle.ColourInForce(element, sheet))
                     ?? ColorRgb.Black;
                 double opacity = Number(element.Attribute("flood-opacity")?.Value, 1.0);
                 return FilterPrimitive.Solid(colour, opacity, result);
@@ -381,7 +396,7 @@ internal sealed class SvgFilters
 
             case "feSpecularLighting":
             case "feDiffuseLighting":
-                return LightingPrimitive(element, filterId, input, result, warn);
+                return LightingPrimitive(element, filterId, input, result, sheet, warn);
         }
 
         return null;
@@ -451,7 +466,8 @@ internal sealed class SvgFilters
     /// that is honestly missing.
     /// </summary>
     private static FilterPrimitive? LightingPrimitive(
-        XElement element, string filterId, string? input, string result, Action<string>? warn)
+        XElement element, string filterId, string? input, string result, SvgStylesheet? sheet,
+        Action<string>? warn)
     {
         XElement? light = element.Elements().FirstOrDefault(child =>
             child.Name.LocalName is "feDistantLight" or "fePointLight" or "feSpotLight");
@@ -471,9 +487,16 @@ internal sealed class SvgFilters
         double azimuth = Number(light.Attribute("azimuth")?.Value, 0.0);
         double elevation = Number(light.Attribute("elevation")?.Value, 0.0);
         double surfaceScale = Number(element.Attribute("surfaceScale")?.Value, 1.0);
+        // **Through the cascade, for the same reason as `flood-color` above.** `lighting-color` is a presentation
+        // attribute: a rule in a `<style>` binds it as much as writing it on the element does, and a `currentColor`
+        // needs the `color` in force rather than the SVG initial value.
+        XElement[] ancestors = element.Ancestors().ToArray();
+        string lightingColour = SvgProperties.Value(
+            element, sheet?.DeclarationsFor(element, ancestors), "lighting-color") ?? "white";
+
         ColorRgb colour = SvgColour.Parse(
-                element.Attribute("lighting-color")?.Value ?? "white",
-                PresentationStyle.ColourInForce(element, null))
+                lightingColour,
+                PresentationStyle.ColourInForce(element, sheet))
             ?? ColorRgb.White;
 
         if (element.Name.LocalName == "feSpecularLighting")

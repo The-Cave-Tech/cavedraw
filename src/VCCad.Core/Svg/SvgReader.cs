@@ -143,7 +143,7 @@ public static partial class SvgReader
 
         // Filters are document assets: an element refers to one by id, so they are collected once and held on the
         // document rather than copied into every element that uses them.
-        foreach (FilterSpec filter in SvgFilters.Collect(root, warning => warnings.Add(warning)).All.Values)
+        foreach (FilterSpec filter in SvgFilters.Collect(root, sheet, warning => warnings.Add(warning)).All.Values)
         {
             document.AddFilter(filter);
         }
@@ -2902,7 +2902,7 @@ public static partial class SvgReader
             SvgPatterns.Collect(root),
             SvgMarkers.Collect(root),
             CollectPathEffects(root),
-            SvgFilters.Collect(root, context.Warn),
+            SvgFilters.Collect(root, sheet, context.Warn),
             directory);
     }
 
