@@ -217,4 +217,51 @@ public class StrokePaneOperationParityTests
 
         Assert.True(path.Strokes[0].Dynamics!.For(DynamicsTarget.Width).Enabled);
     }
+
+    /// <summary>
+    /// **SENTINEL.** Choosing a brush over a selection of two paths costs **two** undo steps, where issue #111 asks
+    /// for "one gesture is one undo step".
+    ///
+    /// `brush.apply` writes one `SetStrokesCommand` per path rather than composing them, so the operation - and the
+    /// pane control that drives it - put one entry on the stack per selected path. The consequence is visible rather
+    /// than bookkeeping: one Undo takes the brush off one path and leaves it on the other, so the gesture a person
+    /// made in one click cannot be taken back in one move. `style.setWidthProfile` and `style.setStroke` composite
+    /// their per-path edits (`ExecuteIfAny`), which is what makes this specific to the brush path.
+    ///
+    /// Reported on #111. When the operation composites, the depth assertion becomes `1` and the second `Undo` is
+    /// what clears the rest.
+    /// </summary>
+    [AvaloniaFact]
+    public void ChoosingABrushOverTwoPathsCostsOneUndoStepPerPath()
+    {
+        var viewModel = new EditorViewModel();
+        PathItem first = Line(viewModel, Stroke(4));
+        PathItem second = Line(viewModel, Stroke(4));
+        viewModel.SelectObject(first);
+        viewModel.ToggleObjectSelection(second);
+        viewModel.InspectedStroke = 0;
+
+        EditorOperations.Invoke(new AutomationContext { ViewModel = viewModel }, "brush.create",
+            Params(new { name = "Chisel", angle = 90, roundness = 0.25, diameter = 20 }));
+
+        var pane = new StrokePane();
+        pane.Attach(viewModel);
+        var window = new Window { Width = 460, Height = 900, Content = pane };
+        window.Show();
+        Settle();
+
+        int before = viewModel.ActiveSession.UndoDepth;
+
+        Combo(pane, "StrokeBrushBox").SelectedItem = "Chisel";
+        Settle();
+
+        Assert.Equal("Chisel", first.Strokes[0].Brush?.Name);
+        Assert.Equal("Chisel", second.Strokes[0].Brush?.Name);
+
+        // One gesture, one entry - the assertion this sentinel exists to flip.
+        Assert.Equal(2, viewModel.ActiveSession.UndoDepth - before);
+
+        viewModel.Undo();
+        Assert.Equal(1, new[] { first, second }.Count(p => p.Strokes[0].Brush is not null));
+    }
 }
