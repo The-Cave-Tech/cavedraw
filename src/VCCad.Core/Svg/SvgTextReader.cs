@@ -463,12 +463,21 @@ public static partial class SvgReader
             double? inline = Position(element, vertical ? "y" : "x", vertical ? SvgAxis.Y : SvgAxis.X, style.FontSize);
             double? dinline = Position(element, vertical ? "dy" : "dx", vertical ? SvgAxis.Y : SvgAxis.X, style.FontSize);
             double? cross = Position(element, vertical ? "x" : "y", vertical ? SvgAxis.X : SvgAxis.Y, style.FontSize);
-            double? dcross = Position(element, vertical ? "dx" : "dy", vertical ? SvgAxis.X : SvgAxis.Y, style.FontSize, listHandled: true);
 
-            // The same attribute read a second time, as the whole list: its single value places the block, and its
-            // entries are how far each character strays from that - a fact only the file holds, so it is carried
-            // rather than re-derived.
-            if (PositionList(element, vertical ? "dx" : "dy") is { } dcrossList)
+            // **The across attribute is read as a whole list or as one number, never as both.** Its entries are how
+            // far each character strays from the piece's own cross, and the first entry is the first character's own
+            // offset - so the single number is the *same* fact and must not be added to the pen as well. Doing both
+            // moved the block down by the first value and then moved its first character down by it again: a list
+            // beginning at `0` hides that, and a list beginning at anything else shows it as a run 5 units too low.
+            //
+            // A one-entry list is not a list. `PositionList` answers null for it, so it falls through to the single
+            // read above and places the piece, leaving nothing per-character behind.
+            double[]? dcrossList = PositionList(element, vertical ? "dx" : "dy");
+            double? dcross = dcrossList is null
+                ? Position(element, vertical ? "dx" : "dy", vertical ? SvgAxis.X : SvgAxis.Y, style.FontSize)
+                : null;
+
+            if (dcrossList is not null)
             {
                 _pendingOffsets = dcrossList;
             }
@@ -713,15 +722,11 @@ public static partial class SvgReader
         ///
         /// In text those units mean something - the run's own size - so they are resolved here rather than through
         /// the generic length table, which has no text context and would report an assumption this reader is not
-        /// making. A list of positions is one per character and a run is placed as a whole, so the first is used.
-        ///
-        /// <paramref name="listHandled"/> says the caller is reading the list as well, which is true only for the
-        /// **across** delta: its per-character offsets have somewhere to go (`TextRun.PositionOffsets`), so warning
-        /// that the model cannot hold them would now be false. The along-line attributes are still reported, because
-        /// the pen is measured from the face and a stated pen would need a per-character advance the model has not.
+        /// making. A list of positions is one per character and a run is placed as a whole, so the first is used and
+        /// the rest are reported: the across delta is the one exception, and it is not read here at all - its list
+        /// has somewhere to go (`TextRun.PositionOffsets`) and `PositionList` reads it whole.
         /// </summary>
-        private double? Position(XElement element, string attribute, SvgAxis axis, double fontSize,
-            bool listHandled = false)
+        private double? Position(XElement element, string attribute, SvgAxis axis, double fontSize)
         {
             string? value = element.Attribute(attribute)?.Value;
             if (string.IsNullOrWhiteSpace(value))
@@ -735,7 +740,7 @@ public static partial class SvgReader
                 end++;
             }
 
-            if (Numbers(value) is { Length: > 1 } && !listHandled)
+            if (Numbers(value) is { Length: > 1 })
             {
                 _context.Warnings.Add(
                     $"{attribute}=\"{value}\" gives a position per character, and the model places a run as a whole");

@@ -1414,6 +1414,19 @@ public static class SvgWriter
                 element.Add(new XAttribute("y", Number(text.Origin.Y + line.Top)));
             }
 
+            // **A per-character across offset travels as the list the file stated.** `dy` under a horizontal mode and
+            // `dx` under a vertical one are the across axis, and the piece here may be one line's slice of the run,
+            // so the slice of the list goes with it. Nothing can re-derive these: they are the file's own statement
+            // of where each character sits, which no face measures - so a writer that drops them sends out a document
+            // that draws differently when it comes back, and the round trip is supposed to rule that out.
+            if (run.PositionOffsets is { Length: > 0 } offsets && start < offsets.Length)
+            {
+                int count = Math.Min(length, offsets.Length - start);
+                element.Add(new XAttribute(
+                    text.WritingMode == TextWritingMode.HorizontalTb ? "dy" : "dx",
+                    string.Join(' ', offsets.Skip(start).Take(count).Select(Number))));
+            }
+
             ColorRgb colour = text.ColourOf(run);
             if (colour != text.Color)
             {

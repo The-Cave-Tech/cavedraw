@@ -469,7 +469,14 @@ internal sealed record TextRunDto(
 
     // How far the run's baseline is raised off its line's, as a fraction of its own em - SVG's `baseline-shift`, as
     // of #128. Absent at its initial value, so a document with no superscript writes exactly the bytes it did.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] double BaselineShift = 0);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] double BaselineShift = 0,
+
+    // The vertical offset the file states for each character of the run - SVG's `y`/`dy` list, as of #128. It
+    // travels because nothing can re-derive it: it is the file's own statement of where a character sits, not
+    // anything a face measures. Absent for a run with no list, which is nearly every run, so those bytes do not
+    // change. It was missing here while the layout already honoured it, which meant saving and reopening a document
+    // silently put every affected character back on the plain baseline.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double[]? PositionOffsets = null);
 
 /// <summary>One parameter of a live path effect, keyed and spelled as the file spelled it.</summary>
 internal sealed record PathEffectParameterDto(string Name, string Value);
@@ -746,7 +753,8 @@ internal abstract record ItemDto
         r.FontStretch,
         r.FontVariant,
         r.FontOrientation,
-        r.BaselineShift);
+        r.BaselineShift,
+        r.PositionOffsets);
 
     private static EmbeddedFontDto ToEmbedded(EmbeddedFont f) => new(
         f.Format,
@@ -1152,6 +1160,7 @@ internal static class ItemDtoExtensions
             FontVariant = dto.FontVariant,
             FontOrientation = dto.FontOrientation,
             BaselineShift = dto.BaselineShift,
+            PositionOffsets = dto.PositionOffsets,
         };
 
         return run;
