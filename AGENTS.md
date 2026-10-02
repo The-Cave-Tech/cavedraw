@@ -243,7 +243,7 @@ understand the screen and the document without pixels:
 A driver that cannot see should still be able to work confidently: dump first,
 describe when a visual judgement is needed.
 
-### Ten things that cost real time, learned the hard way
+### Eleven things that cost real time, learned the hard way
 
 Most of these happened in a single session; the last two were learned the hard way in
 a later one, and cost the most. They are cheap to avoid and expensive to discover.
@@ -1013,3 +1013,12 @@ Dockerfile notes:
 | Font renders as a substitute on canvas | the programme isn't registered: check `EmbeddedFontManager.Register` ran and `TextRun.GlyphIds` is non-null |
 | Headless XAML load fails with "No precompiled XAML found for VCCad.App.App" after a crashed build (`MSB4166`) | a killed MSBuild child left a *corrupted incremental* `VCCad.App.dll` missing its compiled-XAML IL. Rebuild that project: `dotnet build src/VCCad.App/VCCad.App.csproj -c Release -t:Rebuild` |
 | Editing a checkout that lives on the WSL ext4 filesystem fails with `ENOTSUP`/`EIO` | only when the repo is on the WSL filesystem over 9p, which has no hardlink+rename (ours is on `C:\`, so this does not apply - see 4.0) — VS Code / VS over `\\wsl.localhost\...` are fine, but simple atomic-replace writers are not. `scripts/stage-apply.sh <relpath>` installs a file staged under the Windows temp dir, and `scripts/replace-text.py` performs exact-substring patches |
+
+**A self-hosted runner that looks busy with no job may be starting one.** The jobs API lags the
+runner: `busy=true` with no `in_progress` job is not proof of a wedge. A session read it that way
+three times and restarted the service; twice the worker really was stuck, and the third time it
+was mid-*start* - the `systemctl restart` killed a `dotnet restore` and the job died with
+`Fatal error. Internal CLR error. (0x80131506)`, which reads exactly like a regression in the
+commit being verified. Check the worker's elapsed time first: a `Runner.Worker` at `etimes=5` is
+starting, not stuck, and one at several minutes with no child work is wedged. Restarting is the
+last resort, not the first guess.
