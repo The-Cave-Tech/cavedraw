@@ -30,9 +30,13 @@ public static class PdfExportSupport
             "Written as the outline it produces - the effects are geometry, not a decoration, so a roughened stroke " +
             "exports as the roughened shape."),
 
-        new Feature("rasterEffect", false,
-            "Not written. A blur or a glow is a pixel operation, and exporting one needs the stroke rasterised " +
-            "into an image and placed; the exporter draws vectors only."),
+        new Feature("rasterEffect", true,
+            "Written. A blur or a glow is a pixel operation with no PDF operator, so the stroke is drawn with every " +
+            "stroke the path has, the effect graphs run over those pixels and the answer is placed as an image with " +
+            "its coverage in an /SMask - the route the canvas already takes. The first stroke that carries any " +
+            "effect supplies them, which is exact for a single-stroke path and the honest limit of drawing a path " +
+            "as one picture. A gradient or hatch fill cannot be rasterised by this build, so that case exports as " +
+            "vectors without the effect and says so in the export notes rather than in silence."),
 
         new Feature("filter", true,
             "Written. A filter is a raster operation, so the filtered object is drawn into its filter region, the " +

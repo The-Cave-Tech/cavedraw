@@ -89,9 +89,10 @@ public class StrokePaneExportWarningTests
         Assert.False(Warning(pane).IsVisible);
     }
 
-    /// <summary>**A raster effect is not written, so the pane says so** - the case the issue calls the honest one.</summary>
+    /// <summary>**A raster effect is written now, so the pane stops warning about it.** It is rasterised into an
+    /// image XObject from the stroke side, which is the same route the canvas takes.</summary>
     [AvaloniaFact]
-    public void ARasterEffectShowsTheWarning()
+    public void ARasterEffectNoLongerShowsTheWarning()
     {
         (StrokePane pane, EditorViewModel viewModel) = Host();
         Selected(viewModel, path => path.Strokes[0] = path.Strokes[0] with
@@ -101,9 +102,8 @@ public class StrokePaneExportWarningTests
 
         TextBlock warning = Warning(pane);
 
-        Assert.True(warning.IsVisible);
-        Assert.Contains("Not in the PDF export", warning.Text ?? string.Empty, StringComparison.Ordinal);
-        Assert.Contains("blur", warning.Text ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.False(warning.IsVisible);
+        Assert.DoesNotContain("blur", warning.Text ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>A blend mode is per object and is declared unwritten. A filter no longer is: the PDF carries it
@@ -129,15 +129,13 @@ public class StrokePaneExportWarningTests
         Assert.Contains("blend", text, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>And clearing the selection takes the warning away with it.</summary>
+    /// <summary>And clearing the selection takes the warning away with it. A blend mode is the unwritten feature
+    /// now that a raster effect is carried, so it is what raises the warning here.</summary>
     [AvaloniaFact]
     public void ClearingTheSelectionClearsTheWarning()
     {
         (StrokePane pane, EditorViewModel viewModel) = Host();
-        Selected(viewModel, path => path.Strokes[0] = path.Strokes[0] with
-        {
-            RasterEffects = new RasterEffectStack(new[] { RasterEffectSpec.Blur(4) }),
-        });
+        Selected(viewModel, path => path.BlendMode = BlendMode.Multiply);
 
         Assert.True(Warning(pane).IsVisible);
 

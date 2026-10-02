@@ -104,7 +104,7 @@ public class PdfExportSupportTests
     }
 
     [Fact]
-    public void ARasterEffectDoesNotChangeTheFile()
+    public void ARasterEffectChangesTheFile()
     {
         Assert.Equal(PdfExportSupport.Find("rasterEffect")!.Written, Changes(document =>
         {
@@ -154,11 +154,13 @@ public class PdfExportSupportTests
     public void TheLossyListIsTheOnesThatAreNotWritten()
     {
         Assert.All(PdfExportSupport.Lossy, feature => Assert.False(feature.Written));
-        Assert.Contains(PdfExportSupport.Lossy, f => f.Name == "rasterEffect");
         Assert.Contains(PdfExportSupport.Lossy, f => f.Name == "blendMode");
         Assert.DoesNotContain(PdfExportSupport.Lossy, f => f.Name == "outlineEffect");
 
         // The filter is no longer one of them: the exporter draws the graph's answer and places it.
         Assert.DoesNotContain(PdfExportSupport.Lossy, f => f.Name == "filter");
+
+        // Nor is a stroke's raster effect: it is rasterised into an image XObject from the stroke side.
+        Assert.DoesNotContain(PdfExportSupport.Lossy, f => f.Name == "rasterEffect");
     }
 }

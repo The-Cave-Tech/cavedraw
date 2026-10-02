@@ -28,7 +28,8 @@ public class ExportSupportOperationTests
         Assert.Equal(PdfExportSupport.Lossy.Select(f => f.Name).OrderBy(n => n), lossy);
     }
 
-    /// <summary>The honest cases: a blur is not written and an outline effect is, which is what the warning says.</summary>
+    /// <summary>The honest cases: a blend mode is not written and an outline effect is, which is what the warning
+    /// says. A filter and a stroke's raster effect are both carried as image XObjects now.</summary>
     [Fact]
     public void TheLossyListNamesTheEffectsThatAreNotWritten()
     {
@@ -40,9 +41,11 @@ public class ExportSupportOperationTests
         string[] lossy = reported.GetProperty("lossy").EnumerateArray()
             .Select(e => e.GetString()!).ToArray();
 
-        Assert.Contains("rasterEffect", lossy);
-        // The PDF writes a filter now, as an image XObject, so it is no longer in the lossy list.
+        Assert.Contains("blendMode", lossy);
+        // The PDF writes a filter now, as an image XObject, so it is no longer in the lossy list...
         Assert.DoesNotContain("filter", lossy);
+        // ...and a stroke's raster effect is rasterised and placed the same way.
+        Assert.DoesNotContain("rasterEffect", lossy);
         Assert.DoesNotContain("outlineEffect", lossy);
     }
 }

@@ -542,6 +542,25 @@ public static class PdfDocumentExporter
     /// </summary>
     private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfShadingObjects? shadings = null, PdfImageObjects? images = null, CadDocument? document = null, List<string>? notes = null)
     {
+        // A **stroke's raster effects** are the same kind of thing and take the same route, reached from the stroke
+        // side: the path is drawn with every stroke it has, the effect graphs run over those pixels, and the answer
+        // is placed as an image. The frame is asked of `SelectionEngine` for the same reason the filter branch asks
+        // it - one statement of where the artwork is drawn - and the effects are checked first because that is the
+        // order the canvas draws in (`RasterFiltersFor` before the object's filter), so a path carrying both does
+        // not come out differently on the screen and in the file.
+        if (images is not null &&
+            FilterRasteriser.RasteriseStrokeEffects(
+                path, SelectionEngine.ToWorld(path), opacity,
+                notes ?? new List<string>()) is { } stroked &&
+            images.AddFilteredImage(stroked.Pixels, RasterEffectName(path)) is { } strokedResource)
+        {
+            ops.Add("q");
+            ops.Add(FilterRasteriser.Placement(stroked, WorldToPage(path)) + " cm");
+            ops.Add($"/{strokedResource} Do");
+            ops.Add("Q");
+            return;
+        }
+
         // A filter is a raster operation, so an object that has one is drawn into pixels and the graph runs over
         // them - the same route the canvas takes, and the only one PDF has for a blur. Nothing else about the item
         // changes; a path with no filter, or one this build cannot carry, falls through to the vectors below.
@@ -881,6 +900,26 @@ public static class PdfDocumentExporter
                 ops.Add("S");
             }
         }
+    }
+
+    /// <summary>
+    /// The name a stroke's raster effects are reported under in the export notes.
+    ///
+    /// The first stroke that carries any is the one the whole path is drawn with - the same one
+    /// <see cref="FilterRasteriser.RasteriseStrokeEffects"/> uses - so the note names the effect that decided the
+    /// picture rather than one of the others on the stack.
+    /// </summary>
+    private static string RasterEffectName(PathItem path)
+    {
+        foreach (StrokeSpec stroke in path.Strokes)
+        {
+            if (stroke.AllRasterEffects is { Count: > 0 } effects)
+            {
+                return $"raster effect {effects[0].Kind}";
+            }
+        }
+
+        return "raster effect";
     }
 
     /// <summary>
