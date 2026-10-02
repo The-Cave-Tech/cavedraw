@@ -190,7 +190,15 @@ public class SvgMetadataTests
 
     // ---------------------------------------------------------------- the real corpus
 
-    /// <summary>One of Inkscape's own files: whatever namespaced data it carries survives the trip.</summary>
+    /// <summary>
+    /// One of Inkscape's own files: whatever namespaced data it carries survives the trip.
+    ///
+    /// **Item by item, not as a total.** This used to compare the *count* of foreign attributes across the whole
+    /// document, and a count is not an assertion: a writer that dropped every `sodipodi:nodetypes` from a
+    /// single-stroke path while inventing an `inkscape:label` for something else kept the total exactly the same,
+    /// so the test passed on a file that had lost most of its own data. It was the round-trip dump comparison in
+    /// <see cref="SvgRoundTripTests"/> that found that, and this is the assertion that would have.
+    /// </summary>
     [Fact]
     public void ACorpusFileKeepsItsInkscapeData()
     {
@@ -204,12 +212,17 @@ public class SvgMetadataTests
         string svg = SvgWriter.Write(first.Document);
         SvgImportResult second = SvgReader.Read(svg);
 
-        int before = first.Document.AllItems().Sum(item => item.ForeignAttributes.Count);
-        int after = second.Document.AllItems().Sum(item => item.ForeignAttributes.Count);
-
-        Assert.Equal(before, after);
+        Assert.Equal(Foreign(first.Document), Foreign(second.Document));
         Assert.Equal(first.Document.SvgExtras.Count, second.Document.SvgExtras.Count);
     }
+
+    /// <summary>Every item's namespaced baggage, in document order, as one line each.</summary>
+    private static List<string> Foreign(CadDocument document)
+        => document.AllItems()
+            .Select(item => string.Join(",", item.ForeignAttributes
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => $"{pair.Key}={pair.Value}")))
+            .ToList();
 
     // ---------------------------------------------------------------- the sidecar
 

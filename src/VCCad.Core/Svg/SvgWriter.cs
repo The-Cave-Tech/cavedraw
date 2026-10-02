@@ -38,12 +38,15 @@ public sealed record SvgWriteResult(
 /// the paint and the structure survive exactly, and the element it came from does not. That is a deliberate
 /// conversion rather than a loss, and it is what lets one writer handle every shape the reader accepts.
 ///
-/// **What cannot be written is reported, not dropped.** Two things the model holds have no element this writer
-/// emits - a text block and an embedded raster - and both are left out of the file and named, with their kind and
-/// the reason, in <see cref="SvgWriteResult.Missing"/>. The rule this repository runs on is that a gap is said
-/// rather than silently skipped, and an exporter is the one place where being quiet costs somebody a document: a
-/// person opens the file and the words are simply not there. The list is empty for a document the writer wrote
-/// completely, so "nothing was lost" is a fact the caller can rely on rather than a default it has to trust.
+/// **What cannot be written is reported, not dropped.** A text block is written now - one `text` per baseline,
+/// a `tspan` per run - so the things that reach <see cref="SvgWriteResult.Missing"/> are the ones still without an
+/// element here: an embedded **raster**, whose samples are decoded and which SVG states encoded; a **hatch fill**,
+/// which SVG states as a `pattern` this writer has no output for; and each individual value a `text` element
+/// cannot carry, such as an embedded programme or a wrap width. Every one is left out of the file and **named**,
+/// with its kind and the reason. The rule this repository runs on is that a gap is said rather than silently
+/// skipped, and an exporter is the one place where being quiet costs somebody a document: a person opens the file
+/// and the words are simply not there. The list is empty for a document the writer wrote completely, so "nothing
+/// was lost" is a fact the caller can rely on rather than a default it has to trust.
 /// </summary>
 public static class SvgWriter
 {
@@ -231,13 +234,19 @@ public static class SvgWriter
         }
 
         /// <summary>
-        /// Puts back the namespaced attributes the file carried, and the label that is the item's name.
+        /// Puts back the namespaced attributes the file carried, and - where the file had one - the label that is
+        /// the item's name.
         ///
-        /// The label is written from the **name**, not from the stored attribute: it is the same fact, and writing
-        /// both would leave a renamed object disagreeing with itself.
+        /// The label is written from the **name**, not from the stored attribute, because a rename has to move it
+        /// and a stale label is an object disagreeing with itself. It is written **only for an item that already
+        /// carried a label**, because the name is carried by the `id` as well and inventing one for an element the
+        /// file left unlabelled is a rewrite in the other direction - see the note at the bottom of the method.
         /// </summary>
         private void ApplyForeign(XElement element, LayerItem item)
         {
+            _namespaces.TryGetValue("inkscape", out string? inkscape);
+            bool labelled = false;
+
             foreach (KeyValuePair<string, string> attribute in item.ForeignAttributes)
             {
                 int colon = attribute.Key.IndexOf(':');
@@ -254,6 +263,11 @@ public static class SvgWriter
                 }
 
                 element.SetAttributeValue(XName.Get(local, uri), attribute.Value);
+
+                if (local == "label" && inkscape is not null && uri == inkscape)
+                {
+                    labelled = true;
+                }
             }
 
             // A child the model does not understand goes back under the element it came from, before the label so
@@ -283,10 +297,15 @@ public static class SvgWriter
                 element.SetAttributeValue("mix-blend-mode", item.BlendMode.ToSvgName());
             }
 
-            if (!string.IsNullOrEmpty(item.Name) && _namespaces.ContainsKey("inkscape"))
+            // **The label is written from the name only where the file had a label.** The name is already carried
+            // by the `id`, which the reader reads back as the name - so writing a label as well inverts the file's
+            // own fact: an element that carried no `inkscape:label` came back with one, and the model gained a
+            // foreign attribute on a round trip that had lost none. Where the file *did* have a label, the name
+            // wins, because that is the member a rename moves and a stale label is an object disagreeing with
+            // itself.
+            if (labelled && !string.IsNullOrEmpty(item.Name) && inkscape is not null)
             {
-                element.SetAttributeValue(
-                    XName.Get("label", _namespaces["inkscape"]), item.Name);
+                element.SetAttributeValue(XName.Get("label", inkscape), item.Name);
             }
         }
 
@@ -857,8 +876,8 @@ public static class SvgWriter
                     // decode array; SVG states a picture as an encoded resource - a data URI naming PNG or JPEG -
                     // and this build reads PNG and cannot write it. Raw samples under an `image` element would be
                     // a file no viewer can read, which is the plausible-instead-of-honest answer the rule forbids,
-                    // so the raster is left out and **named**. Writing text properly is #132's work; this half of
-                    // it is not done and the issue says so.
+                    // so the raster is left out and **named**. The text half of #132 landed; this is the half that
+                    // has not, and the round-trip suite asserts the naming rather than assuming it.
                     case ImageItem image:
                         Report(image, "the writer has no SVG image output, so the raster is not in the file");
                         break;
@@ -1263,14 +1282,23 @@ public static class SvgWriter
         private static bool PreservesSpace(TextItem text)
         {
             string plain = text.PlainText;
-            if (plain.Length == 0 || char.IsWhiteSpace(plain[0]) || char.IsWhiteSpace(plain[^1]))
-            {
-                return plain.Length > 0;
-            }
 
-            for (int i = 1; i < plain.Length; i++)
+            // **Every white space that is not a lone interior space is content the collapse would rewrite.** The
+            // reader collapses with `char.IsWhiteSpace`, which is Unicode white space and not just the four XML
+            // characters - so a non-breaking space, which is what a French typesetter puts before `!`, came back as
+            // a plain one. The picture moves by less than a space and nothing was reported. The three cases the
+            // block used to check (leading, trailing, doubled) are all here; what is added is the character that is
+            // white space the file meant literally.
+            for (int i = 0; i < plain.Length; i++)
             {
-                if (plain[i] == ' ' && plain[i - 1] == ' ')
+                char c = plain[i];
+                if (!char.IsWhiteSpace(c))
+                {
+                    continue;
+                }
+
+                if (c != ' ' || i == 0 || i == plain.Length - 1 ||
+                    char.IsWhiteSpace(plain[i - 1]) || char.IsWhiteSpace(plain[i + 1]))
                 {
                     return true;
                 }
@@ -1314,6 +1342,18 @@ public static class SvgWriter
             string? fill = FillAttribute(path);
             string fillRule = path.Fill.Rule == FillRule.EvenOdd ? "evenodd" : "nonzero";
 
+            // **A hatch is art, and a colour is not a stand-in for it.** The model's fill can be a set of ruled
+            // lines, and SVG would state that as a `pattern`; this writer has no pattern output, so `FillAttribute`
+            // falls back to the fill's own colour. That fallback is a solid where the document drew hatching - a
+            // plausible substitute, which is the one answer this exporter is not allowed to give quietly - so the
+            // path is named in the report instead. The SVG reader never builds a hatch, so this cannot fire on a
+            // document that came from one; it fires on a document this editor made.
+            if (path.Fill.Hatch is { IsEmpty: false })
+            {
+                Report(path, "the fill is hatching, and the writer has no SVG pattern output for one: the file " +
+                    "states the fill's own colour as a solid instead of the lines the document draws");
+            }
+
             // The clips this path carries, written once for however many elements it becomes: the outline is in the
             // path's own space, and a path is not a container, so there is no transform between them.
             string? clip = WriteClips(path, AffineTransform.Identity);
@@ -1334,9 +1374,18 @@ public static class SvgWriter
                 }
 
                 element.Add(new XAttribute("fill", fill ?? "none"));
-                if (fill is not null)
+
+                // **`fill-rule` is written even when the fill is `none`.** The reader reads it either way, so a
+                // file that stated `fill-rule:evenodd` on an unfilled shape came back with `NonZero`: a value the
+                // file wrote, silently replaced. The picture is identical - there is no fill for a rule to apply
+                // to - which is why this one is easy to miss and why the round trip is what catches it.
+                if (fill is not null || path.Fill.Rule == FillRule.EvenOdd)
                 {
                     element.Add(new XAttribute("fill-rule", fillRule));
+                }
+
+                if (fill is not null)
+                {
                     WriteFillOpacity(element, path);
                 }
 
@@ -1350,14 +1399,20 @@ public static class SvgWriter
                     element.Add(new XAttribute("filter", $"url(#{path.FilterId})"));
                 }
 
+                // **The namespaced baggage goes on whatever element carries the path, stroke or no stroke.** This
+                // used to be inside the `else`, so a path with exactly one natively-writable stroke - the common
+                // case, and the one every Inkscape file is made of - was written without any of its foreign
+                // attributes and without its label. The picture was right, nothing was reported, and the
+                // `sodipodi:nodetypes` a person's hand-edited path carried was gone.
+                ApplyForeign(element, path);
+
                 if (strokes.Count == 1)
                 {
                     WriteNativeStrokeAttributes(element, strokes[0]);
                 }
                 else
                 {
-                    ApplyForeign(element, path);
-                element.Add(new XAttribute("stroke", "none"));
+                    element.Add(new XAttribute("stroke", "none"));
                 }
 
                 if (clip is not null)
@@ -1382,9 +1437,13 @@ public static class SvgWriter
                 }
 
                 element.Add(new XAttribute("fill", fill ?? "none"));
-                if (fill is not null)
+                if (fill is not null || path.Fill.Rule == FillRule.EvenOdd)
                 {
                     element.Add(new XAttribute("fill-rule", fillRule));
+                }
+
+                if (fill is not null)
+                {
                     WriteFillOpacity(element, path);
                 }
 
@@ -1986,7 +2045,12 @@ public static class SvgWriter
             value = 0.0;
         }
 
-        return value.ToString("0.#####", CultureInfo.InvariantCulture);
+        // **The shortest spelling that reads back as the same double.** This was `0.#####`, which rounds every
+        // coordinate to five decimals - and a round trip is required to return the numbers it started with, not a
+        // rendering of them. The loss is invisible in the picture, which is why it survived until a model-dump
+        // comparison was run over the corpus: a node rounded by 0.00004pt draws the same and is a different
+        // document, and a transform composed from a view-box fit loses more than that.
+        return value.ToString("R", CultureInfo.InvariantCulture);
     }
 
     /// <summary>

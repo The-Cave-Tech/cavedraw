@@ -147,11 +147,24 @@ internal sealed record PresentationStyle(
 
         // Object opacity multiplies the paint's own, because that is what it is: how much of the finished object
         // shows through, applied after its fill and stroke have been composited.
+        //
+        // **Only a paint that is drawn has an opacity to multiply.** Applying it to a `fill:none` or a stroke with
+        // no outline writes an alpha into a member nothing reads - and the writer, which states only a stroke it
+        // can see, cannot put that alpha back. The round trip then differed on a value with no picture behind it,
+        // which is the kind of difference that gets waved away as noise until it hides a real one.
         if (opacity is not null && double.TryParse(
                 opacity.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double alpha))
         {
-            fill = fill with { Color = ApplyOpacity(fill.Color, opacity) };
-            stroke = stroke with { Color = ApplyOpacity(stroke.Color, opacity) };
+            if (fill.IsVisible)
+            {
+                fill = fill with { Color = ApplyOpacity(fill.Color, opacity) };
+            }
+
+            if (stroke.HasVisibleOutline)
+            {
+                stroke = stroke with { Color = ApplyOpacity(stroke.Color, opacity) };
+            }
+
             _ = alpha;
         }
 
