@@ -1690,9 +1690,12 @@ public static class EditorOperations
 
         Add("style.setStroke", "Stroke the selected paths.",
             "color:[r,g,b], width:number, cap?:butt|round|square, join?:miter|round|bevel, miterLimit?, " +
-            "alignment?:center|inside|outside, dash?:number[], index?:number. index edits one stroke of the stack " +
+            "alignment?:center|inside|outside, dash?:number[], index?:number, opacity?:number, " +
+            "blend?:normal|multiply|screen|darken|lighten|overlay|color-dodge|color-burn|hard-light|soft-light|" +
+            "difference|exclusion|hue|saturation|color|luminosity. index edits one stroke of the stack " +
             "and an omitted member is left as that stroke has it; without index the whole path is restroked and an " +
-            "omitted member takes the default named above.",
+            "omitted member takes the default named above. opacity and blend are per stroke and need an index: " +
+            "they are what makes a path a thin line under a translucent highlight rather than one stroke.",
             (ctx, p) =>
             {
                 // Only when it was actually given: ParseColor reports its fallback for a parameter that is
@@ -1709,6 +1712,18 @@ public static class EditorOperations
                     {
                         dash = new DashPattern(pattern);
                     }
+                }
+
+                // A blend mode this build does not know is **refused by name**, not read as Normal: silently
+                // painting a stroke over its backdrop when the caller asked for multiply gives a picture nobody
+                // asked for and says nothing about it. The same reading the SVG reader takes of the same names.
+                BlendMode? blend = null;
+                if (Given(p, "blend"))
+                {
+                    blend = BlendModes.Parse(p.GetString("blend"))
+                        ?? throw new EditorOperationException(
+                            $"Unknown blend mode '{p.GetString("blend")}'. Known: " +
+                            string.Join(", ", Enum.GetValues<BlendMode>().Select(m => m.ToSvgName())));
                 }
 
                 // index edits that stroke of the stack rather than the top one, which is what the stroke
@@ -1733,10 +1748,22 @@ public static class EditorOperations
                         Given(p, "miterLimit") ? p.GetDouble("miterLimit") : null,
                         Given(p, "alignment") ? alignment : null,
                         dash,
-                        color);
+                        color,
+                        Given(p, "opacity") ? p.GetDouble("opacity") : null,
+                        blend);
                 }
                 else
                 {
+                    // The per-stroke paint members are refused without an index rather than being applied to the
+                    // top stroke, because there is no honest way to choose: "set the opacity" on a path with three
+                    // strokes could mean the first, the last, or all three, and each is a different document.
+                    if (Given(p, "opacity") || blend is not null)
+                    {
+                        throw new EditorOperationException(
+                            "opacity and blend belong to one stroke of the stack, so they need an index. " +
+                            "Without it there is no way to say which stroke was meant.");
+                    }
+
                     ctx.Session.ApplyStroke(
                         p.GetDouble("width", 1), cap, join, p.GetDouble("miterLimit", 4), alignment, dash, color);
                 }
@@ -3356,8 +3383,9 @@ public static class EditorOperations
             "or explicitly mixed. A panel editing a selection has to show one value per member, and showing the " +
             "first path's value as though it were everyone's is how a person types a number and believes it " +
             "describes what they selected. index picks the stroke in the stack, counted from the bottom, and " +
-            "defaults to the top. Width, cap, join, miter limit, alignment, dash, width profile and tablet " +
-            "dynamics are each reported with their own mixed flag, so a member one path disagrees about does not " +
+            "defaults to the top. Width, cap, join, miter limit, alignment, dash, width profile, tablet " +
+            "dynamics and the per-stroke paint (opacity, blend) are each reported with their own mixed flag, so a " +
+            "member one path disagrees about does not " +
             "hide the members the rest agree on; a path with no stroke at that index is a gap, not a disagreement.",
             "index?:number",
             (ctx, p) =>
@@ -3392,6 +3420,13 @@ public static class EditorOperations
                     profileMixed = summary.WidthProfileMixed,
                     dynamics = DescribeDynamics(summary.Dynamics),
                     dynamicsMixed = summary.DynamicsMixed,
+
+                    // Null when the selection agrees that no stroke states one, which a panel shows as a blank
+                    // field rather than as "1" - and null with the mixed flag set is a genuine disagreement.
+                    opacity = summary.Opacity is { } statedOpacity ? Math.Round(statedOpacity, 6) : (double?)null,
+                    opacityMixed = summary.OpacityMixed,
+                    blend = summary.Blend?.ToSvgName(),
+                    blendMixed = summary.BlendMixed,
                 };
             });
 
@@ -8119,6 +8154,14 @@ public static class EditorOperations
         alignment = stroke.Alignment.ToString().ToLowerInvariant(),
         dash = stroke.Dash.IsEmpty ? null : stroke.Dash.Segments.ToArray(),
         dashOffset = Math.Round(stroke.Dash.Offset, 4),
+
+        // Null when the stroke states nothing, rather than 1 and "normal": a caller reading this has to be able
+        // to tell "nobody said" from "somebody chose fully opaque", which is the same distinction the model and
+        // the sidecar keep. `effectiveOpacity` is the value a renderer uses, so a caller that only wants to know
+        // what it looks like does not have to decide what the absence means.
+        opacity = stroke.Opacity is { } stated ? Math.Round(stated, 6) : (double?)null,
+        effectiveOpacity = Math.Round(stroke.EffectiveOpacity, 6),
+        blend = stroke.Blend?.ToSvgName(),
         profile = DescribeWidthProfile(stroke.WidthProfile),
         brush = DescribeBrush(stroke.Brush),
         effects = stroke.HasEffects

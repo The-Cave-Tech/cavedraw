@@ -30,14 +30,22 @@ public sealed record StrokeSummary(
     WidthProfileSpec? WidthProfile = null,
     bool WidthProfileMixed = false,
     DynamicsSpec? Dynamics = null,
-    bool DynamicsMixed = false)
+    bool DynamicsMixed = false,
+
+    // The per-stroke paint members. Null is a value here in its own right: a selection whose strokes all state no
+    // opacity agrees on "unstated", and one whose strokes state 1 agrees on 1 - and a selection where one states
+    // and another does not is genuinely mixed, because the two are different documents.
+    double? Opacity = null,
+    bool OpacityMixed = false,
+    BlendMode? Blend = null,
+    bool BlendMixed = false)
 {
     /// <summary>Whether the selection has nothing to describe - no selected path carries a stroke.</summary>
     public bool IsEmpty => Strokes == 0;
 
     /// <summary>Whether any member disagrees across the selection.</summary>
     public bool IsMixed => WidthMixed || CapMixed || JoinMixed || MiterMixed || AlignmentMixed
-        || DashMixed || WidthProfileMixed || DynamicsMixed;
+        || DashMixed || WidthProfileMixed || DynamicsMixed || OpacityMixed || BlendMixed;
 
     /// <summary>
     /// Summarises the strokes at <paramref name="index"/> across the paths, counting from the bottom.
@@ -61,7 +69,19 @@ public sealed record StrokeSummary(
 
         if (strokes.Count == 0)
         {
-            return new StrokeSummary(0, pathCount, null, false, null, false, null, false, null, false, null, false);
+            return new StrokeSummary(
+                Strokes: 0,
+                Paths: pathCount,
+                Width: null,
+                WidthMixed: false,
+                Cap: null,
+                CapMixed: false,
+                Join: null,
+                JoinMixed: false,
+                MiterLimit: null,
+                MiterMixed: false,
+                Alignment: null,
+                AlignmentMixed: false);
         }
 
         bool widthMixed = !strokes.All(s => Math.Abs(s.Width - strokes[0].Width) < 1e-9);
@@ -78,6 +98,11 @@ public sealed record StrokeSummary(
         bool dashMixed = !strokes.All(s => s.Dash.Equals(strokes[0].Dash));
         bool profileMixed = !strokes.All(s => SameProfile(s, strokes[0]));
         bool dynamicsMixed = !strokes.All(s => SameDynamics(s, strokes[0]));
+
+        // The paint members compare **as stated**, so "unstated" is a value a selection can agree on - which is what
+        // lets a panel show a blank field rather than 1 for a selection where nobody has said anything.
+        bool opacityMixed = !strokes.All(s => s.Opacity == strokes[0].Opacity);
+        bool blendMixed = !strokes.All(s => s.Blend == strokes[0].Blend);
 
         return new StrokeSummary(
             strokes.Count,
@@ -97,7 +122,11 @@ public sealed record StrokeSummary(
             profileMixed ? null : Profile(strokes[0]),
             profileMixed,
             dynamicsMixed ? null : strokes[0].Dynamics,
-            dynamicsMixed);
+            dynamicsMixed,
+            opacityMixed ? null : strokes[0].Opacity,
+            opacityMixed,
+            blendMixed ? null : strokes[0].Blend,
+            blendMixed);
     }
 
     /// <summary>

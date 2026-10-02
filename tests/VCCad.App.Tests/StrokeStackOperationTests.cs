@@ -212,4 +212,179 @@ public class StrokeStackOperationTests
         Assert.Equal(new[] { 4.0, 1.5 }, restored.Strokes.Select(s => s.Width).ToArray());
         Assert.Equal(1.0, restored.Strokes[1].Color.B, 3);
     }
+
+    // ---------------------------------------------------------------- per-stroke paint
+
+    /// <summary>
+    /// **A person selects a stroke of the stack, and a driver names its index - they act on the same one.**
+    ///
+    /// This is the question a stack raises that a single stroke does not: "set the opacity" has to name *which*
+    /// stroke it means. The answer here is the index, counted from the bottom, and the assertion is that setting
+    /// it on index 1 leaves index 0 exactly as it was. An operation that wrote the top of the stack, or every
+    /// stroke, would pass a test that only looked at the stroke it changed.
+    /// </summary>
+    [Fact]
+    public void OpacityAndBlendReachTheStrokeTheIndexNamesAndNoOther()
+    {
+        (AutomationContext context, PathItem path) = Host();
+        EditorOperations.Invoke(context, "style.addStroke", Params(new { width = 2 }));
+
+        EditorOperations.Invoke(context, "style.setStroke",
+            Params(new { index = 1, opacity = 0.35, blend = "multiply" }));
+
+        Assert.Equal(0.35, path.Strokes[1].Opacity!.Value, 6);
+        Assert.Equal(BlendMode.Multiply, path.Strokes[1].Blend);
+
+        // The stroke beneath is untouched, including staying **unstated** - not turned into an explicit 1.
+        Assert.Null(path.Strokes[0].Opacity);
+        Assert.Null(path.Strokes[0].Blend);
+    }
+
+    /// <summary>
+    /// **An unstated opacity is left as the stroke has it**, so naming one member of one stroke does not reset
+    /// the others. The stroke pane's other fields already behave this way; the paint members have to as well, or
+    /// typing an opacity would silently make every stroke opaque.
+    /// </summary>
+    [Fact]
+    public void SettingBlendAloneLeavesTheOpacityAsTheStrokeHasIt()
+    {
+        (AutomationContext context, PathItem path) = Host();
+        EditorOperations.Invoke(context, "style.setStroke", Params(new { index = 0, opacity = 0.5 }));
+
+        EditorOperations.Invoke(context, "style.setStroke", Params(new { index = 0, blend = "screen" }));
+
+        Assert.Equal(0.5, path.Strokes[0].Opacity!.Value, 6);
+        Assert.Equal(BlendMode.Screen, path.Strokes[0].Blend);
+    }
+
+    /// <summary>
+    /// **The stroke a caller set is the stroke a caller reads.** A readout that omitted the two members would
+    /// make the operation's effect invisible to a driver with no eyes, which is the same defect as not having
+    /// the operation at all. `effectiveOpacity` is reported beside the stated value so a caller that only wants
+    /// to know what is drawn does not have to decide what an absent member means.
+    /// </summary>
+    [Fact]
+    public void ReadingTheStackReportsOpacityAndBlendPerStroke()
+    {
+        (AutomationContext context, PathItem path) = Host();
+        EditorOperations.Invoke(context, "style.addStroke", Params(new { width = 2 }));
+        EditorOperations.Invoke(context, "style.setStroke", Params(new { index = 1, opacity = 0.25, blend = "screen" }));
+
+        JsonElement rows = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "style.strokes", default));
+        JsonElement strokes = rows[0].GetProperty("strokes");
+
+        Assert.Equal(JsonValueKind.Null, strokes[0].GetProperty("opacity").ValueKind);
+        Assert.Equal(1.0, strokes[0].GetProperty("effectiveOpacity").GetDouble(), 6);
+        Assert.Equal(JsonValueKind.Null, strokes[0].GetProperty("blend").ValueKind);
+
+        Assert.Equal(0.25, strokes[1].GetProperty("opacity").GetDouble(), 6);
+        Assert.Equal(0.25, strokes[1].GetProperty("effectiveOpacity").GetDouble(), 6);
+        Assert.Equal("screen", strokes[1].GetProperty("blend").GetString());
+    }
+
+    /// <summary>
+    /// **A blend mode this build does not know is refused, not painted as normal.**
+    ///
+    /// Reading an unknown name as `Normal` would composite the stroke over its backdrop and say nothing about
+    /// it - a picture nobody asked for, arrived at silently. The refusal names the modes that do work, so a
+    /// driver can correct itself from the error alone.
+    /// </summary>
+    [Fact]
+    public void AnUnknownBlendModeIsRefusedByName()
+    {
+        (AutomationContext context, PathItem path) = Host();
+
+        EditorOperationException error = Assert.Throws<EditorOperationException>(
+            () => EditorOperations.Invoke(context, "style.setStroke",
+                Params(new { index = 0, blend = "colour-burn" })));
+
+        Assert.Contains("colour-burn", error.Message, StringComparison.Ordinal);
+        Assert.Contains("multiply", error.Message, StringComparison.Ordinal);
+
+        // Refused means the stroke is exactly as it was, not partly edited.
+        Assert.Null(path.Strokes[0].Blend);
+        Assert.Null(path.Strokes[0].Opacity);
+    }
+
+    /// <summary>
+    /// **The paint members need an index, and are refused without one rather than guessed at.**
+    ///
+    /// `style.setStroke` without an index replaces the whole stack, so "opacity 0.4" could mean the first
+    /// stroke, the last, or all of them - three different documents. A refusal is the only honest answer, and
+    /// it leaves the path untouched.
+    /// </summary>
+    [Fact]
+    public void OpacityWithoutAnIndexIsRefusedRatherThanAppliedToOneStroke()
+    {
+        (AutomationContext context, PathItem path) = Host();
+        EditorOperations.Invoke(context, "style.addStroke", Params(new { width = 2 }));
+
+        EditorOperationException error = Assert.Throws<EditorOperationException>(
+            () => EditorOperations.Invoke(context, "style.setStroke", Params(new { opacity = 0.4 })));
+
+        Assert.Contains("index", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.All(path.Strokes, stroke => Assert.Null(stroke.Opacity));
+    }
+
+    /// <summary>
+    /// **One undo step, and it restores the absence rather than an explicit 1.** An undo that put back "opacity
+    /// 1" where the stroke had stated nothing would leave a document that is not the one the person started
+    /// with, and every save after that would carry the difference.
+    /// </summary>
+    [Fact]
+    public void SettingOpacityIsOneUndoStepThatRestoresTheAbsence()
+    {
+        (AutomationContext context, PathItem path) = Host();
+        EditorOperations.Invoke(context, "style.addStroke", Params(new { width = 2 }));
+
+        EditorOperations.Invoke(context, "style.setStroke", Params(new { index = 1, opacity = 0.2 }));
+        Assert.Equal(0.2, path.Strokes[1].Opacity!.Value, 6);
+
+        context.ViewModel.ActiveSession.Undo();
+
+        Assert.Null(path.Strokes[1].Opacity);
+        Assert.Equal(2, path.Strokes.Count);
+    }
+
+    /// <summary>
+    /// **`style.commonStroke` says when a selection disagrees about the paint**, and stays null - not 1 - when
+    /// the whole selection agrees that nobody stated anything. A panel reading 1 for a stroke with no stated
+    /// opacity would show a number the document does not contain.
+    /// </summary>
+    [Fact]
+    public void TheCommonStrokeReportDistinguishesUnstatedFromMixed()
+    {
+        (AutomationContext context, PathItem path) = Host();
+        EditorOperations.Invoke(context, "style.addStroke", Params(new { width = 2 }));
+
+        JsonElement agreed = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "style.commonStroke", Params(new { index = 1 })));
+        Assert.Equal(JsonValueKind.Null, agreed.GetProperty("opacity").ValueKind);
+        Assert.False(agreed.GetProperty("opacityMixed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, agreed.GetProperty("blend").ValueKind);
+
+        // Two selected paths that disagree: one states an opacity on this stroke, the other does not.
+        var other = new PathItem { Name = "other", Fill = FillSpec.None };
+        SubPath sub = other.AddSubPath(closed: false);
+        sub.Nodes.Add(new PathNode(new Point2D(0, 0)));
+        sub.Nodes.Add(new PathNode(new Point2D(10, 0)));
+        other.Strokes.Clear();
+        other.Strokes.Add(path.Strokes[0]);
+        other.Strokes.Add(new StrokeSpec(true, ColorRgb.Black, 2, StrokeCap.Butt, StrokeJoin.Miter, 4)
+        {
+            Opacity = 0.5,
+            Blend = BlendMode.Multiply,
+        });
+        context.ViewModel.Document.Artboards[0].Layers[0].AddItem(other);
+        context.ViewModel.SelectRange(new LayerItem[] { path, other }, additive: false);
+
+        JsonElement mixed = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "style.commonStroke", Params(new { index = 1 })));
+
+        Assert.True(mixed.GetProperty("opacityMixed").GetBoolean());
+        Assert.True(mixed.GetProperty("blendMixed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, mixed.GetProperty("opacity").ValueKind);
+        Assert.Equal(JsonValueKind.Null, mixed.GetProperty("blend").ValueKind);
+    }
 }

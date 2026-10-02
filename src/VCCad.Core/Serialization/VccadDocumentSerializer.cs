@@ -123,7 +123,18 @@ internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, St
     // so a document written before brushes existed serialises to exactly the bytes it did then, which is the
     // rule the width profile, the effects and the stroke stack all follow.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    BrushDto? Brush = null);
+    BrushDto? Brush = null,
+
+    // The stroke's own opacity, when it states one. Nullable **and absent when unstated**, which is a different
+    // document from one whose opacity is stated as 1: the first says nothing, the second records a decision. The
+    // same distinction the dynamics member makes, and the reason an ordinary stroke still writes no member here.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? Opacity = null,
+
+    // How the stroke's colour combines with what is beneath it, when it states a mode. Written as the file's own
+    // name, and absent when unstated - the same rule as the opacity above it.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Blend = null);
 
 /// <summary>
 /// One dynamics target on the wire: whether it is on, and the two control points of its curve.
@@ -719,7 +730,16 @@ internal abstract record ItemDto
                 : null,
             s.Dynamics is not null ? ToDynamicsDto(s.Dynamics) : null,
 
-            s.HasBrush ? ToBrushDto(s.Brush!) : null);
+            s.HasBrush ? ToBrushDto(s.Brush!) : null,
+
+            // Read off the member rather than off `EffectiveOpacity`, so a stroke that states nothing writes
+            // nothing while one that states 1.0 writes 1. The two are different documents, and a writer that
+            // collapsed them would make the first impossible to tell from the second after a save.
+            s.Opacity,
+
+            // The name, not the enum's ordinal: the file's own vocabulary is what another reader understands, and
+            // an unknown mode read back as Normal is the silent rewrite `BlendModes.Parse` exists to prevent.
+            s.Blend?.ToSvgName());
 
     /// <summary>
     /// A brush on the wire, or null when the stroke has none.
@@ -1195,6 +1215,8 @@ internal static class ItemDtoExtensions
                 RasterEffects = ToRasterEffects(s.RasterEffects),
                 Dynamics = ToDynamics(s.Dynamics),
                 Brush = s.Brush?.ToModel(),
+                Opacity = ReadOpacity(s.Opacity),
+                Blend = ReadBlend(s.Blend),
             }
             : new StrokeSpec(s.Visible, new ColorRgb(s.Color.R, s.Color.G, s.Color.B, s.Color.A),
                 s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment,
@@ -1203,7 +1225,33 @@ internal static class ItemDtoExtensions
                 ToEffects(s.Effects),
                 ToRasterEffects(s.RasterEffects),
                 ToDynamics(s.Dynamics),
-                s.Brush?.ToModel());
+                s.Brush?.ToModel(),
+                ReadOpacity(s.Opacity),
+                ReadBlend(s.Blend));
+
+    /// <summary>
+    /// The stroke's opacity as the file stated it, or null when it stated none.
+    ///
+    /// Clamped into [0,1] rather than refused, because a value outside it is a file that means "invisible" or
+    /// "opaque" and a reader that dropped the whole stroke over an out-of-range number would lose the artwork. A
+    /// **non-finite** value is treated as unstated: NaN would poison every comparison the stroke takes part in and
+    /// an infinity is not an opacity, so neither is worth keeping even to report.
+    /// </summary>
+    private static double? ReadOpacity(double? opacity)
+        => opacity is { } value && double.IsFinite(value)
+            ? Math.Clamp(value, 0.0, 1.0)
+            : null;
+
+    /// <summary>
+    /// The stroke's blend mode as the file named it, or null when it stated none.
+    ///
+    /// A name this build does not know is read as **unstated** rather than as Normal. Normal is a real value that
+    /// composites the stroke over the backdrop, and calling an unrecognised mode Normal would draw a picture the
+    /// file did not ask for while reporting nothing - the outcome <see cref="BlendModes.Parse"/> returns null to
+    /// avoid. Unstated at least keeps the stroke's own colour and opacity intact.
+    /// </summary>
+    private static BlendMode? ReadBlend(string? blend)
+        => blend is { Length: > 0 } name ? BlendModes.Parse(name) : null;
 
     /// <summary>
     /// A brush read back from the file, or null when the stroke has none.

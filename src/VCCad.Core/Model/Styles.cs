@@ -247,6 +247,10 @@ public readonly struct DashPattern : IEquatable<DashPattern>
 /// the width a nib lays down depends on the direction of travel, which a width profile cannot express. A
 /// brush therefore replaces the width rather than modulating it, and is the last member so that a stroke
 /// written before brushes existed is byte-identical to one written now.
+///
+/// [Opacity] and [Blend] are the **paint** members, and they are per stroke rather than per path: they are what
+/// lets one path be a thin black line under a broad translucent highlight. Both are nullable and last, so a stroke
+/// that states neither - which is every stroke written before this - serialises to exactly the bytes it did then.
 /// </summary>
 public sealed record StrokeSpec(
     bool IsVisible,
@@ -261,7 +265,9 @@ public sealed record StrokeSpec(
     EffectStack? Effects = null,
     RasterEffectStack? RasterEffects = null,
     DynamicsSpec? Dynamics = null,
-    BrushSpec? Brush = null)
+    BrushSpec? Brush = null,
+    double? Opacity = null,
+    BlendMode? Blend = null)
 {
     /// <summary>Convenience: no visible stroke.</summary>
     public static StrokeSpec None { get; } =
@@ -309,6 +315,43 @@ public sealed record StrokeSpec(
     /// filter out here. The absence of a brush is the null member, which is the default.
     /// </summary>
     public bool HasBrush => Brush is not null;
+
+    /// <summary>
+    /// How much of this stroke is drawn, or **null when the stroke states no opacity at all**.
+    ///
+    /// Null rather than 1.0, and the difference is not pedantry: the model already distinguishes "stores nothing"
+    /// from "stores a decision" for tablet dynamics, and this is the same distinction one level down. A stroke
+    /// that states nothing is written without the member - so an ordinary document is byte-identical to what this
+    /// build wrote before per-stroke opacity existed - while a stroke whose opacity is stated as 1.0 is a decision
+    /// somebody made on that stroke of the stack, and it is written and read back as one.
+    ///
+    /// It is separate from the **alpha of the colour**, which is the paint's own transparency. Both apply, and they
+    /// multiply: a stroke whose colour is half-transparent and whose opacity is 0.5 is drawn at a quarter.
+    /// </summary>
+    public double? Opacity { get; init; } = Opacity;
+
+    /// <summary>
+    /// How this stroke's colour combines with what is already drawn beneath it, or **null when it states none**,
+    /// for the reason <see cref="Opacity"/> gives.
+    ///
+    /// Per **stroke** rather than per path, which is what the appearance stack needs: the highlight is multiplied
+    /// over the line beneath it while the line itself is drawn normally, and a blend mode on the path cannot say
+    /// that. Null is not the same as <see cref="BlendMode.Normal"/> written explicitly.
+    /// </summary>
+    public BlendMode? Blend { get; init; } = Blend;
+
+    /// <summary>
+    /// The opacity this stroke is actually drawn at: the member when it states one, and fully opaque when it does
+    /// not. Callers that paint or export should use this rather than reading <see cref="Opacity"/> and deciding
+    /// for themselves what the absence means.
+    /// </summary>
+    public double EffectiveOpacity => Opacity ?? 1.0;
+
+    /// <summary>Whether this stroke states an opacity, as opposed to leaving it unstated.</summary>
+    public bool HasOpacity => Opacity is not null;
+
+    /// <summary>Whether this stroke states a blend mode, as opposed to leaving it unstated.</summary>
+    public bool HasBlend => Blend is not null;
 
     /// <summary>True when a stroke is visible and has positive width.</summary>
     public bool HasVisibleOutline => IsVisible && Width > 0.0;

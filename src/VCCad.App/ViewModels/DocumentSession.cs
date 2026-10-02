@@ -2341,7 +2341,8 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// exactly where it started reads as "undo did nothing".
     /// </summary>
     public int ApplyStrokeFieldsAt(int index, double? width, StrokeCap? cap, StrokeJoin? join, double? miterLimit,
-        StrokeAlignment? alignment, DashPattern? dash = null, ColorRgb? color = null)
+        StrokeAlignment? alignment, DashPattern? dash = null, ColorRgb? color = null,
+        double? opacity = null, BlendMode? blend = null)
     {
         if (index < 0)
         {
@@ -2369,6 +2370,13 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 Alignment = alignment ?? before.Alignment,
                 Dash = dash ?? before.Dash,
                 Color = color ?? before.Color,
+
+                // Clamped rather than refused, the way a width is: an opacity outside the range is a caller
+                // meaning "invisible" or "opaque", and throwing the edit away would leave the two routes
+                // disagreeing about one value. Null still means "leave it as the stroke has it", which is what
+                // tells an unstated opacity apart from a stated 1.
+                Opacity = opacity is { } o ? Math.Clamp(o, 0.0, 1.0) : before.Opacity,
+                Blend = blend ?? before.Blend,
             };
 
             if (stack[index] == before)

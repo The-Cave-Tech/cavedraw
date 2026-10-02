@@ -161,4 +161,150 @@ public class StrokeStackTests
         StrokeSpec only = Assert.Single(reloaded.Strokes);
         Assert.Equal(reloaded.Stroke.Width, only.Width, 6);
     }
+
+    // ---------------------------------------------------------------- per-stroke paint
+
+    /// <summary>
+    /// **Per-stroke opacity and blending are members of a stroke, and they survive the sidecar.**
+    ///
+    /// This is the half of the appearance stack the model did not have: the stack carried widths, colours and
+    /// dashes, so a broad translucent highlight under a thin black line was still only expressible as a colour
+    /// with a low alpha - which is not the same thing, because the alpha belongs to the paint and the opacity
+    /// belongs to the stroke. Two strokes that differ only in these two members are two different documents, and
+    /// the check is that they come back as two different strokes rather than as the same one twice.
+    /// </summary>
+    [Fact]
+    public void PerStrokeOpacityAndBlendSurviveSaveAndReload()
+    {
+        PathItem path = Line();
+        path.Strokes.Clear();
+        path.Strokes.Add(Stroke(6, 1, 0, 0) with { Opacity = 1.0 });
+        path.Strokes.Add(Stroke(2, 0, 0, 0) with { Opacity = 0.35, Blend = BlendMode.Multiply });
+
+        PathItem reloaded = RoundTrip(path);
+
+        Assert.Equal(2, reloaded.Strokes.Count);
+        Assert.Equal(1.0, reloaded.Strokes[0].Opacity!.Value, 6);
+        Assert.Null(reloaded.Strokes[0].Blend);
+        Assert.Equal(0.35, reloaded.Strokes[1].Opacity!.Value, 6);
+        Assert.Equal(BlendMode.Multiply, reloaded.Strokes[1].Blend);
+    }
+
+    /// <summary>
+    /// **Absent at its default, asserted against the bytes rather than assumed.**
+    ///
+    /// An ordinary stroke states no opacity and no blend mode, so a document that has one serialises to exactly
+    /// the bytes it did before either member existed. The assertion is on the absence of the member **names** in
+    /// the written JSON, because "the value happens to be 1" is what a writer that always wrote the member would
+    /// also produce.
+    ///
+    /// The reading is of the **stroke object** rather than of the whole document, and that is not a convenience:
+    /// a path carries its own `Opacity`, so a whole-document substring test finds that member and passes for a
+    /// reason that has nothing to do with the stroke.
+    /// </summary>
+    [Fact]
+    public void AnOrdinaryStrokeWritesNoOpacityOrBlendMember()
+    {
+        PathItem path = Line();
+        path.Stroke = Stroke(2, 0, 0, 0);
+
+        string stroke = StrokeJson(path);
+
+        Assert.DoesNotContain("\"Opacity\"", stroke, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Blend\"", stroke, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// **Null stores nothing; an explicit value stores a decision - the distinction this issue warns about.**
+    ///
+    /// A stroke with no opacity member is not the same document as one whose opacity is 1.0: the first says
+    /// nothing, the second records that somebody chose full opacity on that stroke of the stack. The sidecar has
+    /// to write the decision or a file cannot carry it, and it has to write **nothing** for the absent case or
+    /// every document in the world changes on the way out. Both halves are asserted on the member itself rather
+    /// than through a value that the two states happen to share.
+    /// </summary>
+    [Fact]
+    public void AnExplicitFullyOpaqueStrokeIsWrittenAndTheAbsentOneIsNot()
+    {
+        PathItem stated = Line();
+        stated.Stroke = Stroke(2, 0, 0, 0) with { Opacity = 1.0, Blend = BlendMode.Normal };
+
+        PathItem silent = Line();
+        silent.Stroke = Stroke(2, 0, 0, 0);
+
+        Assert.Contains("\"Opacity\":1", StrokeJson(stated), StringComparison.Ordinal);
+        Assert.Contains("\"Blend\":\"normal\"", StrokeJson(stated), StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Opacity\"", StrokeJson(silent), StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Blend\"", StrokeJson(silent), StringComparison.Ordinal);
+
+        // And the decision comes back as a decision rather than being collapsed to "unstated" on the way in.
+        Assert.Equal(1.0, RoundTrip(stated).Stroke.Opacity!.Value, 6);
+        Assert.Equal(BlendMode.Normal, RoundTrip(stated).Stroke.Blend);
+        Assert.Null(RoundTrip(silent).Stroke.Opacity);
+        Assert.Null(RoundTrip(silent).Stroke.Blend);
+    }
+
+    /// <summary>
+    /// **The order of the stack is what decides the drawing, and the members are per stroke.**
+    ///
+    /// A stack whose two strokes differ only in opacity and blending must come back differing **at that index**,
+    /// not agreeing on one value because the reader took the first stroke's. This is the stack-shaped half of the
+    /// issue: a path can be a thin black line under a broad translucent highlight rather than one stroke.
+    /// </summary>
+    [Fact]
+    public void TheStackKeepsEachStrokesOwnOpacityAndBlendAtItsOwnIndex()
+    {
+        PathItem path = Line();
+        path.Strokes.Clear();
+        path.Strokes.Add(Stroke(20, 1, 1, 0) with { Opacity = 0.25, Blend = BlendMode.Screen });
+        path.Strokes.Add(Stroke(1, 0, 0, 0));
+
+        PathItem reloaded = RoundTrip(path);
+
+        Assert.Equal(new[] { 0.25, 1.0 }, reloaded.Strokes.Select(s => s.Opacity ?? 1.0).ToArray());
+        Assert.Equal(BlendMode.Screen, reloaded.Strokes[0].Blend);
+        Assert.Null(reloaded.Strokes[1].Blend);
+    }
+
+    private static string BytesOf(PathItem path)
+    {
+        CadDocument document = CadDocument.CreateDefault();
+        document.Artboards[0].Layers[0].AddItem(path);
+        return System.Text.Encoding.UTF8.GetString(VccadDocumentSerializer.SerializeToBytes(document));
+    }
+
+    /// <summary>
+    /// The written stroke object alone, from its key to the end of its braces.
+    ///
+    /// Reading the stroke rather than the whole document is load-bearing: a **path** carries its own `Opacity`
+    /// member, and the fill and the paths write `fillOpacity` attributes, so a whole-document substring search for
+    /// "Opacity" finds one of those and passes whether or not the stroke ever stated anything. The stroke is what
+    /// these tests are about, so the stroke is what they read.
+    /// </summary>
+    private static string StrokeJson(PathItem path)
+    {
+        string json = BytesOf(path);
+        int at = json.IndexOf("\"Stroke\":", StringComparison.Ordinal);
+        Assert.True(at >= 0, "the document has no stroke member at all");
+
+        int open = json.IndexOf('{', at);
+        int depth = 0;
+        for (int i = open; i < json.Length; i++)
+        {
+            if (json[i] == '{')
+            {
+                depth++;
+            }
+            else if (json[i] == '}')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    return json.Substring(open, i - open + 1);
+                }
+            }
+        }
+
+        return json.Substring(open);
+    }
 }

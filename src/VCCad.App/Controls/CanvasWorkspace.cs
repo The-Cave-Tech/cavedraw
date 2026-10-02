@@ -4402,7 +4402,7 @@ public sealed class CanvasWorkspace : Control
         Pen StrokePen(StrokeSpec stroke, double thickness)
         {
             var pen = new Pen(
-                ToBrush(stroke.Color, opacity),
+                ToBrush(stroke.Color, opacity * stroke.EffectiveOpacity),
                 thickness: Math.Max(0.01, thickness),
                 lineCap: ToLineCap(stroke.Cap),
                 lineJoin: ToLineJoin(stroke.Join),
@@ -4444,7 +4444,9 @@ public sealed class CanvasWorkspace : Control
             // which is how it went unnoticed until a test compared the two renderers.
             if (StrokeOutlineBuilder.Plan(path, stroke).IsOutline)
             {
-                context.DrawGeometry(ToBrush(stroke.Color, opacity), null, BuildProfileGeometry(path, stroke));
+                context.DrawGeometry(
+                    ToBrush(stroke.Color, opacity * stroke.EffectiveOpacity), null,
+                    BuildProfileGeometry(path, stroke));
                 continue;
             }
 

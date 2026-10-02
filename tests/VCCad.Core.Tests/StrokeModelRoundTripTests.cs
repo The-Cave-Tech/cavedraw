@@ -387,15 +387,31 @@ public class StrokeModelRoundTripTests
             "\"Clips\":null}]}]}],\"Orphans\":[]}";
 
         // None of the members this issue is about is in the literal, so the byte comparison below is a comparison
-        // against a document that carries none of the features.
+        // against a document that carries none of the features. Quoted, because an unquoted search for "Effects"
+        // matches "RasterEffects" - a test that then proves the opposite of what it says.
+        //
+        // "Opacity" is deliberately **not** in this list. The literal does contain it, twice: the layer's own
+        // opacity, and the path's. Those are the item's, not the stroke's, so the absence that matters is checked
+        // against the stroke object itself, on the next line.
         foreach (string member in new[]
-                 { "WidthProfile", "Effects", "RasterEffects", "Dynamics", "Brush", "Brushes", "WidthProfiles" })
+                 {
+                     "\"WidthProfile\"", "\"Effects\"", "\"RasterEffects\"", "\"Dynamics\"", "\"Brush\"",
+                     "\"Brushes\"", "\"WidthProfiles\"", "\"Blend\"",
+                 })
         {
             Assert.DoesNotContain(member, legacy, StringComparison.Ordinal);
         }
 
         CadDocument document = VccadDocumentSerializer.Deserialize(legacy);
         Assert.Equal(legacy, VccadDocumentSerializer.Serialize(document));
+
+        // The stroke object itself states no opacity and no blend, which is the absence the byte comparison above
+        // is really about - read out of the stroke rather than out of the document, because the layer and the path
+        // both have an Opacity of their own and either would satisfy a whole-document search.
+        int strokeAt = legacy.IndexOf("\"Stroke\":", StringComparison.Ordinal);
+        string legacyStroke = legacy.Substring(strokeAt, legacy.IndexOf("\"Opacity\"", strokeAt) - strokeAt);
+        Assert.DoesNotContain("\"Opacity\"", legacyStroke, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Blend\"", legacyStroke, StringComparison.Ordinal);
 
         StrokeSpec stroke = document.Artboards[0].Layers[0].Children.OfType<PathItem>().Single().Stroke;
         Assert.False(stroke.HasWidthProfile);
@@ -406,5 +422,12 @@ public class StrokeModelRoundTripTests
         Assert.Null(stroke.Dynamics);
         Assert.Null(stroke.Brush);
         Assert.Null(stroke.WidthProfile);
+
+        // The members this change adds are unstated on a stroke written before they existed, rather than being
+        // read back as the value that means "opaque" or "normal". A reader that invented either would have
+        // changed the meaning of every document in the world, and the bytes above would not have shown it.
+        Assert.Null(stroke.Opacity);
+        Assert.Null(stroke.Blend);
+        Assert.Equal(1.0, stroke.EffectiveOpacity, 6);
     }
 }

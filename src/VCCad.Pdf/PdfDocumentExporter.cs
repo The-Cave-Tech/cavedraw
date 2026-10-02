@@ -807,6 +807,12 @@ public static class PdfDocumentExporter
                 continue;
             }
 
+            // The stroke's own opacity, multiplied with the item's - the same product the canvas paints, because
+            // an object at 50% whose second stroke is at 50% is a quarter-covered pixel. Read through
+            // `EffectiveOpacity` so an unstated opacity is opaque here and in the painter, rather than the two
+            // renderers each deciding for themselves what the absence means.
+            double strokeOpacity = opacity * stroke.EffectiveOpacity;
+
             // What this stroke is drawn as is decided in one place, in the model, so the canvas and this writer
             // cannot come to different conclusions about a stroke that varies along its length.
             StrokeRenderPlan plan = StrokeOutlineBuilder.Plan(path, stroke, strokeScale);
@@ -824,7 +830,7 @@ public static class PdfDocumentExporter
                     stroke.Color,
                     ReferenceEquals(stroke, path.Strokes[0]) ? path.SourceStrokeCmyk : null,
                     stroke: false));
-                WriteOutline(ops, plan.Outlines, toDoc, stroke, opacity, alphaStates);
+                WriteOutline(ops, plan.Outlines, toDoc, stroke, strokeOpacity, alphaStates);
                 continue;
             }
 
@@ -853,7 +859,7 @@ public static class PdfDocumentExporter
 
             if (alphaStates.HasTransparency)
             {
-                ops.Add($"{alphaStates.NameFor(stroke.Color.A * opacity)} gs");
+                ops.Add($"{alphaStates.NameFor(stroke.Color.A * strokeOpacity)} gs");
             }
 
             // --- Stroke: honour Inside/Outside by clipping ------------------
@@ -974,7 +980,18 @@ public static class PdfDocumentExporter
         {
             case PathItem path:
                 alphas.Add(path.Fill.Color.A * opacity * path.Opacity);
-                alphas.Add(path.Stroke.Color.A * opacity * path.Opacity);
+
+                // **Every** stroke, not the bottom one, and not a sample of them: the alpha states are built from
+                // this list, so an alpha no stroke contributed to does not exist as a name. A stack whose top
+                // stroke is translucent while the bottom one is opaque would otherwise find `HasTransparency`
+                // false and write no `gs` at all - the stroke drawn at full strength while the exporter believed
+                // it had honoured the opacity. Reading `path.Stroke` here is precisely the "first stroke only"
+                // mistake the stack was introduced to end, one layer below where it was being looked for.
+                foreach (StrokeSpec stroke in path.Strokes)
+                {
+                    alphas.Add(stroke.Color.A * opacity * path.Opacity * stroke.EffectiveOpacity);
+                }
+
                 break;
             case TextItem text:
                 // Every colour the block draws with, not only the block's own: a run may carry its own, and a
