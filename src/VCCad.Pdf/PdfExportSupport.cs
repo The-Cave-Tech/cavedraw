@@ -46,8 +46,17 @@ public static class PdfExportSupport
             "what this build will allocate is not, so those two export unfiltered and say so in the export notes " +
             "rather than in silence."),
 
-        new Feature("blendMode", false,
-            "Not written. The value travels in the sidecar and the SVG export; the PDF is painted without it."),
+        new Feature("blendMode", true,
+            "Written. A leaf item's blend, and a stroke's, are composited with what is already on the page: a " +
+            "PDF blend is the graphics state's /BM, so the mode becomes an ExtGState and the paint switches to it " +
+            "with gs before it is drawn - a q/Q around a stroke keeps the mode off the strokes beside it in the " +
+            "stack, and around a leaf item keeps it off the items painted after it."),
+
+        new Feature("blendModeGroup", false,
+            "Not written. CSS composites a group as a unit against the backdrop, which PDF expresses with an " +
+            "isolated transparency group - a form XObject with /Group << /S /Transparency /I true /K false >>. " +
+            "This exporter emits no form XObjects, and blending each child against the backdrop separately is a " +
+            "different picture rather than a cheaper one, so a group's blend is left out and named here."),
     };
 
     /// <summary>The declaration for a feature, or null when this list does not know about it.</summary>

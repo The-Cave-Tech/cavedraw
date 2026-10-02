@@ -140,6 +140,12 @@ public static class PdfDocumentExporter
 
         var alphaStates = new PdfAlphaStates(assembler, alphas);
 
+        // Blend states are **allocated while the content is written**, because a mode only becomes a resource when
+        // something actually switches to it. Alpha is collected first (the painter has to know whether any
+        // transparency exists at all), but a blend needs no such scan: the switch is written at the paint it
+        // belongs to and the resource dictionary is assembled afterwards.
+        var blendStates = new PdfBlendStates(assembler);
+
         // Every embedded image is written back into the file as its own XObject, keeping
         // the colour space the document stores — a CMYK scan stays a CMYK scan. The
         // resource dictionary is shared across pages, so an image is written once however
@@ -154,12 +160,16 @@ public static class PdfDocumentExporter
         for (int i = 0; i < document.Artboards.Count; i++)
         {
             contents[i] = BuildArtboardContent(
-                document.Artboards[i], document, embedder, alphaStates, imageObjects, shadingObjects,
+                document.Artboards[i], document, embedder, alphaStates, blendStates, imageObjects, shadingObjects,
                 notes ?? new List<string>());
         }
 
+        // One `/ExtGState` key carrying both halves. Two dictionaries under the same key would be a duplicate
+        // entry, and a reader that kept the later one would lose every alpha state.
+        string extGState = ExtGStateDict(alphaStates.Entries, blendStates.Entries);
+
         string resources =
-            $"/Resources << {embedder.FontDict()}{alphaStates.Dict()}{imageObjects.Dict()}{shadingObjects.Dict()}>>";
+            $"/Resources << {embedder.FontDict()}{extGState}{imageObjects.Dict()}{shadingObjects.Dict()}>>";
 
         // ------------------------------------------------------------------
         // Sidecar: lossless model JSON, zlib (RFC 1950) compressed — the PDF
@@ -270,11 +280,47 @@ public static class PdfDocumentExporter
     /// mapping rules. The returned bytes are the plain content (uncompressed);
     /// callers wrap them via <see cref="MakeStreamObject"/>.
     /// </summary>
+    /// <summary>
+    /// The page's <c>/ExtGState</c> resource dictionary, from every group of states that shares the key.
+    ///
+    /// One key, one dictionary: alpha (<c>/ca</c>, <c>/CA</c>) and blend (<c>/BM</c>) both live under
+    /// <c>/ExtGState</c>, and writing two dictionaries under it would be a duplicate entry - a reader that kept
+    /// the later one would lose every alpha state in the file, which is a silent change to the whole picture.
+    /// Empty when there is nothing to name, so a caller can concatenate the result unconditionally.
+    /// </summary>
+    private static string ExtGStateDict(params IEnumerable<(string Name, int Object)>[] groups)
+    {
+        var sb = new StringBuilder();
+        int count = 0;
+
+        foreach (IEnumerable<(string Name, int Object)> group in groups)
+        {
+            foreach ((string name, int obj) in group)
+            {
+                if (count == 0)
+                {
+                    sb.Append("/ExtGState << ");
+                }
+
+                sb.Append(name).Append(' ').Append(obj).Append(" 0 R ");
+                count++;
+            }
+        }
+
+        if (count == 0)
+        {
+            return string.Empty;
+        }
+
+        return sb.Append(">> ").ToString();
+    }
+
     private static byte[] BuildArtboardContent(
         Artboard artboard,
         CadDocument document,
         PdfFontEmbedder embedder,
         PdfAlphaStates alphaStates,
+        PdfBlendStates blendStates,
         PdfImageObjects? images = null,
         PdfShadingObjects? shadings = null,
         List<string>? notes = null)
@@ -298,8 +344,8 @@ public static class PdfDocumentExporter
 
                 foreach (LayerItem item in layer.Children)
                 {
-                    PaintItem(ops, item, AffineTransform.Identity, 1.0, alphaStates, embedder, images, shadings,
-                        document, notes);
+                    PaintItem(ops, item, AffineTransform.Identity, 1.0, alphaStates, blendStates, embedder, images,
+                        shadings, document, notes);
                 }
             }
         }
@@ -368,12 +414,23 @@ public static class PdfDocumentExporter
     /// an ancestor's clip is the half that giving it a frame could not reach: a second loop that re-derives the
     /// frame is a second place for it to disagree, so the walk is the only one left.
     /// </summary>
-    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfFontEmbedder embedder, PdfImageObjects? images = null, PdfShadingObjects? shadings = null, CadDocument? document = null, List<string>? notes = null, int artDepth = 0)
+    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfBlendStates blendStates, PdfFontEmbedder embedder, PdfImageObjects? images = null, PdfShadingObjects? shadings = null, CadDocument? document = null, List<string>? notes = null, int artDepth = 0)
     {
         if (!item.IsEffectivelyVisible())
         {
             return;
         }
+
+        // **A leaf item's blend is the graphics state's `/BM`.** PDF composites the paint with whatever is already
+        // on the group's backdrop, which is exactly what the model means by an item's blend, and CSS's
+        // `mix-blend-mode` on a leaf element is the same picture - so no isolation is needed.
+        //
+        // **A group's blend is not this**, and is deliberately not written here: CSS composites a group as a unit,
+        // which PDF expresses with an **isolated transparency group** - a form XObject with
+        // `/Group << /S /Transparency /I true /K false >>` - and this exporter emits no form XObjects. Blending
+        // each child against the backdrop instead would be a different picture, which is worse than leaving it
+        // out and saying so in `PdfExportSupport`.
+        string? blendGs = item is ArtGroup ? null : blendStates.Gs(item.BlendMode);
 
         // A clip is emitted around the item rather than baked into its geometry, because
         // that is what it is: the item is drawn whole and the outline limits what shows.
@@ -382,21 +439,34 @@ public static class PdfDocumentExporter
         // One item's clips go through here once, for every kind of item - a text block's own clips included,
         // which is what #164 fixed separately while text still had its own loop. Nothing else writes them, so
         // there is no second clip stack to disagree with this one.
+        //
+        // The `q`/`Q` is the item's own either way. For a blend it is what keeps the state off the items painted
+        // after it; the item's own clips then go inside the same pair.
         bool clipped = item.Clips.Count > 0;
-        if (clipped)
+        bool wrapped = clipped || blendGs is not null;
+        if (wrapped)
         {
             ops.Add("q");
-            foreach (ClipSpec clip in item.Clips)
+
+            if (blendGs is not null)
             {
-                AppendClip(ops, clip, toDoc);
+                ops.Add(blendGs);
+            }
+
+            if (clipped)
+            {
+                foreach (ClipSpec clip in item.Clips)
+                {
+                    AppendClip(ops, clip, toDoc);
+                }
             }
         }
 
         switch (item)
         {
             case PathItem path:
-                PaintPath(ops, path, toDoc, opacity, alphaStates, embedder, shadings, images, document, notes,
-                    artDepth);
+                PaintPath(ops, path, toDoc, opacity, alphaStates, blendStates, embedder, shadings, images, document,
+                    notes, artDepth);
                 break;
 
             case TextItem text:
@@ -415,14 +485,14 @@ public static class PdfDocumentExporter
                 AffineTransform childToDoc = toDoc.Compose(group.Transform);
                 foreach (LayerItem child in group.Children)
                 {
-                    PaintItem(ops, child, childToDoc, opacity * group.Opacity, alphaStates, embedder, images,
-                        shadings, document, notes, artDepth);
+                    PaintItem(ops, child, childToDoc, opacity * group.Opacity, alphaStates, blendStates, embedder,
+                        images, shadings, document, notes, artDepth);
                 }
 
                 break;
         }
 
-        if (clipped)
+        if (wrapped)
         {
             ops.Add("Q");
         }
@@ -551,7 +621,7 @@ public static class PdfDocumentExporter
     /// closed (fillable) and open (stroke-only), so the renderer never fills an
     /// open path as PDF would implicitly do.
     /// </summary>
-    private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfFontEmbedder embedder, PdfShadingObjects? shadings = null, PdfImageObjects? images = null, CadDocument? document = null, List<string>? notes = null, int artDepth = 0)
+    private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfBlendStates blendStates, PdfFontEmbedder embedder, PdfShadingObjects? shadings = null, PdfImageObjects? images = null, CadDocument? document = null, List<string>? notes = null, int artDepth = 0)
     {
         // A **stroke's raster effects** are the same kind of thing and take the same route, reached from the stroke
         // side: the path is drawn with every stroke it has, the effect graphs run over those pixels, and the answer
@@ -824,6 +894,16 @@ public static class PdfDocumentExporter
             // renderers each deciding for themselves what the absence means.
             double strokeOpacity = opacity * stroke.EffectiveOpacity;
 
+            // **A stroke's blend is its own, and it is entered and left around that stroke alone.** The stack is
+            // why: a blend belongs to one stroke of it, so the state has to be taken after the stroke below is
+            // painted and given back before the one above starts - otherwise the whole stack blends, or the
+            // strokes after it do. `q`/`Q` is the only way to give a graphics state back, because `gs` writes
+            // parameters rather than replacing the state wholesale.
+            //
+            // Normal is PDF's default, so it writes nothing: a stroke that states no blend, or states Normal,
+            // produces byte-for-byte the file it did before this existed.
+            string? strokeBlend = blendStates.Gs(stroke.Blend);
+
             // **The art the brush maps, written over the stroke the pen drew.** A plan is a width or an outline
             // and an art brush is neither, so the placements are resolved from the shared seam and each piece is
             // written as the asset's own artwork under the placement's transform. The canvas resolves the same
@@ -863,7 +943,7 @@ public static class PdfDocumentExporter
                     AffineTransform placed = toDoc.Compose(piece.Placement.Transform);
 
                     ops.Add("q");
-                    PaintItem(ops, piece.Asset, placed, strokeOpacity * piece.Opacity, alphaStates, embedder, images, shadings,
+                    PaintItem(ops, piece.Asset, placed, strokeOpacity * piece.Opacity, alphaStates, blendStates, embedder, images, shadings,
                         document, notes, artDepth + 1);
                     ops.Add("Q");
                 }
@@ -882,13 +962,31 @@ public static class PdfDocumentExporter
             // it is filled with, and none of the stroke graphics state below applies.
             if (plan.IsOutline)
             {
+                if (strokeBlend is not null)
+                {
+                    ops.Add("q");
+                    ops.Add(strokeBlend);
+                }
+
                 ops.Add(ColorOperator(
                     stroke.Color,
                     ReferenceEquals(stroke, path.Strokes[0]) ? path.SourceStrokeCmyk : null,
                     stroke: false));
                 WriteOutline(ops, plan.Outlines, toDoc, stroke, strokeOpacity, alphaStates, plan.Paints);
                 WriteStrokeArt();
+
+                if (strokeBlend is not null)
+                {
+                    ops.Add("Q");
+                }
+
                 continue;
+            }
+
+            if (strokeBlend is not null)
+            {
+                ops.Add("q");
+                ops.Add(strokeBlend);
             }
 
             // The original ink values belong to the item rather than to a stroke, so they describe the first
@@ -964,6 +1062,11 @@ public static class PdfDocumentExporter
             }
 
             WriteStrokeArt();
+
+            if (strokeBlend is not null)
+            {
+                ops.Add("Q");
+            }
         }
     }
 

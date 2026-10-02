@@ -106,10 +106,12 @@ public class StrokePaneExportWarningTests
         Assert.DoesNotContain("blur", warning.Text ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>A blend mode is per object and is declared unwritten. A filter no longer is: the PDF carries it
-    /// as an image XObject, so the pane must stop warning about it.</summary>
+    /// <summary>
+    /// **A leaf item's blend is carried now, so the pane stops warning about it** - the PDF composites it with an
+    /// `ExtGState /BM` the item switches to. A filter is carried too, as an image XObject.
+    /// </summary>
     [AvaloniaFact]
-    public void ABlendModeShowsTheWarningAndAFilterNoLongerDoes()
+    public void APathBlendModeAndAFilterNoLongerShowTheWarning()
     {
         (StrokePane pane, EditorViewModel viewModel) = Host();
         Selected(viewModel, path =>
@@ -122,20 +124,39 @@ public class StrokePaneExportWarningTests
             path.FilterId = "soft";
         });
 
-        string text = Warning(pane).Text ?? string.Empty;
+        TextBlock warning = Warning(pane);
 
-        Assert.True(Warning(pane).IsVisible);
-        Assert.DoesNotContain("filter", text, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("blend", text, StringComparison.OrdinalIgnoreCase);
+        Assert.False(warning.IsVisible);
+        Assert.DoesNotContain("blend", warning.Text ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("filter", warning.Text ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>And clearing the selection takes the warning away with it. A blend mode is the unwritten feature
-    /// now that a raster effect is carried, so it is what raises the warning here.</summary>
+    /// <summary>
+    /// **A group's blend is the one the PDF still leaves out**, and the pane says so.
+    ///
+    /// CSS composites a group as a unit against the backdrop, which PDF expresses with an isolated transparency
+    /// group - a form XObject this exporter does not emit. Blending each child separately would be a different
+    /// picture, so the honest answer is to say the group's blend is not in the export.
+    /// </summary>
+    [AvaloniaFact]
+    public void AGroupBlendModeShowsTheWarning()
+    {
+        (StrokePane pane, EditorViewModel viewModel) = Host();
+        SelectedGroup(viewModel);
+
+        TextBlock warning = Warning(pane);
+
+        Assert.True(warning.IsVisible);
+        Assert.Contains("blend", warning.Text ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>And clearing the selection takes the warning away with it. A group's blend is the unwritten
+    /// feature now that a leaf item's is carried, so it is what raises the warning here.</summary>
     [AvaloniaFact]
     public void ClearingTheSelectionClearsTheWarning()
     {
         (StrokePane pane, EditorViewModel viewModel) = Host();
-        Selected(viewModel, path => path.BlendMode = BlendMode.Multiply);
+        SelectedGroup(viewModel);
 
         Assert.True(Warning(pane).IsVisible);
 
@@ -143,5 +164,21 @@ public class StrokePaneExportWarningTests
         Settle();
 
         Assert.False(Warning(pane).IsVisible);
+    }
+
+    /// <summary>A selected group whose blend the PDF will not carry, with a path inside it so the selection is a
+    /// real one.</summary>
+    private static ArtGroup SelectedGroup(EditorViewModel viewModel)
+    {
+        PathItem path = Selected(viewModel);
+
+        var group = new ArtGroup { Name = "group", BlendMode = BlendMode.Multiply };
+        viewModel.Document.Artboards[0].Layers[0].RemoveItem(path);
+        group.AddItem(path);
+        viewModel.Document.Artboards[0].Layers[0].AddItem(group);
+
+        viewModel.SelectObject(group);
+        Settle();
+        return group;
     }
 }

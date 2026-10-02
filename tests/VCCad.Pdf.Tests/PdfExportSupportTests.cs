@@ -130,11 +130,43 @@ public class PdfExportSupportTests
         }));
     }
 
+    /// <summary>A blend mode is composited now: the mode becomes an ExtGState and the item switches to it.</summary>
     [Fact]
-    public void ABlendModeDoesNotChangeTheFile()
+    public void ABlendModeChangesTheFile()
     {
         Assert.Equal(PdfExportSupport.Find("blendMode")!.Written, Changes(document =>
             Shape(document).BlendMode = BlendMode.Multiply));
+    }
+
+    /// <summary>A stroke's blend is composited the same way, and it is the same declaration.</summary>
+    [Fact]
+    public void AStrokeBlendModeChangesTheFile()
+    {
+        Assert.Equal(PdfExportSupport.Find("blendMode")!.Written, Changes(document =>
+        {
+            PathItem shape = Shape(document);
+            shape.Strokes[0] = shape.Strokes[0] with { Blend = BlendMode.Screen };
+        }));
+    }
+
+    /// <summary>
+    /// **A group's blend is not written**, and this is the derived half of that declaration. CSS composites a group
+    /// as a unit, which PDF needs an isolated transparency group for - and that is a form XObject this exporter does
+    /// not emit. Blending each child separately would be a different picture, so the file is unchanged and the
+    /// declaration says so.
+    /// </summary>
+    [Fact]
+    public void AGroupBlendModeDoesNotChangeTheFile()
+    {
+        Assert.Equal(PdfExportSupport.Find("blendModeGroup")!.Written, Changes(document =>
+        {
+            PathItem shape = Shape(document);
+            var group = new ArtGroup { Name = "group" };
+            document.Artboards[0].Layers[0].RemoveItem(shape);
+            group.AddItem(shape);
+            document.Artboards[0].Layers[0].AddItem(group);
+            group.BlendMode = BlendMode.Multiply;
+        }));
     }
 
     /// <summary>Every feature in the declaration is probed above, so none can be left unverified.</summary>
@@ -143,7 +175,7 @@ public class PdfExportSupportTests
     {
         string[] probed =
         {
-            "gradient", "widthProfile", "outlineEffect", "rasterEffect", "filter", "blendMode",
+            "gradient", "widthProfile", "outlineEffect", "rasterEffect", "filter", "blendMode", "blendModeGroup",
         };
 
         Assert.Equal(probed.OrderBy(n => n), PdfExportSupport.All.Select(f => f.Name).OrderBy(n => n));
@@ -154,8 +186,13 @@ public class PdfExportSupportTests
     public void TheLossyListIsTheOnesThatAreNotWritten()
     {
         Assert.All(PdfExportSupport.Lossy, feature => Assert.False(feature.Written));
-        Assert.Contains(PdfExportSupport.Lossy, f => f.Name == "blendMode");
         Assert.DoesNotContain(PdfExportSupport.Lossy, f => f.Name == "outlineEffect");
+
+        // A leaf item's blend and a stroke's are composited now, as an ExtGState the paint switches to...
+        Assert.DoesNotContain(PdfExportSupport.Lossy, f => f.Name == "blendMode");
+
+        // ...but a group's is not, because that needs a transparency group this exporter cannot emit.
+        Assert.Contains(PdfExportSupport.Lossy, f => f.Name == "blendModeGroup");
 
         // The filter is no longer one of them: the exporter draws the graph's answer and places it.
         Assert.DoesNotContain(PdfExportSupport.Lossy, f => f.Name == "filter");

@@ -897,15 +897,13 @@ public partial class StrokePane : UserControl
     /// </summary>
     private void Refresh()
     {
-        PathItem? path = _vm?.ActiveSession.SelectedPaths().FirstOrDefault();
-
         // The same words the appearance panel uses, so the two panels cannot be describing different strokes without
         // saying so.
         StrokeTargetLabel.Text = _vm?.InspectedStrokeLabel ?? "none";
 
-        // The export warning is about the object (its filter, its blend mode, whether any of its strokes carries a
-        // raster effect), so it reads the path even when no stroke is inspected.
-        ShowExportWarning(path);
+        // The export warning is about the selected objects (a filter, a blend mode, whether any stroke carries a
+        // raster effect), so it reads the whole selection even when no stroke is inspected.
+        ShowExportWarning();
 
         // One read for the geometry, the sections and the effects list, so none of them can describe a different
         // stroke from the others - a list showing the top of the stack while the buttons edited it was the same
@@ -1044,27 +1042,41 @@ public partial class StrokePane : UserControl
     /// one it has grown. Saying it here is the point: a person should not have to open the exported file to find
     /// out that a blur was not in it.
     /// </summary>
-    private void ShowExportWarning(PathItem? path)
+    private void ShowExportWarning()
     {
         var present = new List<string>();
 
-        if (path is not null)
+        foreach (LayerItem item in _vm?.SelectedObjects ?? (IReadOnlyList<LayerItem>)Array.Empty<LayerItem>())
         {
-            // Raster effects are per stroke; a filter and a blend mode are per object. All three are declared as
-            // not written, and the declaration is asked rather than a list being repeated here.
-            if (path.Strokes.Any(stroke => stroke.HasRasterEffects))
+            switch (item)
             {
-                present.Add("rasterEffect");
-            }
+                // Raster effects are per stroke; a filter and a blend mode are per object. The leaf cases are all
+                // written now, so they are listed and then filtered by the declaration rather than being assumed -
+                // a warning that fires on something the exporter carries is one nobody reads.
+                case PathItem path:
+                    if (path.Strokes.Any(stroke => stroke.HasRasterEffects))
+                    {
+                        present.Add("rasterEffect");
+                    }
 
-            if (path.FilterId is { Length: > 0 })
-            {
-                present.Add("filter");
-            }
+                    if (path.FilterId is { Length: > 0 })
+                    {
+                        present.Add("filter");
+                    }
 
-            if (path.BlendMode != BlendMode.Normal)
-            {
-                present.Add("blendMode");
+                    if (path.BlendMode != BlendMode.Normal)
+                    {
+                        present.Add("blendMode");
+                    }
+
+                    break;
+
+                // **A group's blend is the one that is still not carried.** CSS composites a group as a unit
+                // against the backdrop, which PDF needs an isolated transparency group for - and that is a form
+                // XObject this exporter does not emit. The declaration is asked rather than the fact repeated here.
+                case ArtGroup group when group.BlendMode != BlendMode.Normal:
+                    present.Add("blendModeGroup");
+                    break;
             }
         }
 

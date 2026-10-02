@@ -6,6 +6,11 @@ namespace VCCad.Pdf;
 /// PDF constant-alpha support. PDF has no per-colour alpha, so each distinct
 /// alpha value becomes an ExtGState with <c>/ca</c> (fill) and <c>/CA</c> (stroke);
 /// content streams switch with <c>/GSn gs</c> before painting.
+///
+/// The entries are published rather than the dictionary text, because alpha and blend states share **one**
+/// <c>/ExtGState</c> resource key: two dictionaries under the same key would be a duplicate entry, and a reader
+/// that kept the later one would lose every alpha state. <see cref="PdfBlendStates"/> contributes the other half
+/// and the exporter writes them together.
 /// </summary>
 internal sealed class PdfAlphaStates
 {
@@ -40,23 +45,8 @@ internal sealed class PdfAlphaStates
     /// <summary>Resource name for an alpha value (bucketed to 0.001).</summary>
     public string NameFor(double alpha) => _names[Bucket(alpha)];
 
-    /// <summary>The <c>/ExtGState</c> resource dictionary entry (or empty).</summary>
-    public string Dict()
-    {
-        if (_objects.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        var sb = new System.Text.StringBuilder("/ExtGState << ");
-        foreach ((string name, int obj) in _objects)
-        {
-            sb.Append(name).Append(' ').Append(obj).Append(" 0 R ");
-        }
-
-        sb.Append(">> ");
-        return sb.ToString();
-    }
+    /// <summary>The <c>/ExtGState</c> entries, in allocation order.</summary>
+    public IReadOnlyList<(string Name, int Object)> Entries => _objects;
 
     private static int Bucket(double alpha)
         => (int)Math.Round(Math.Clamp(alpha, 0.0, 1.0) * 1000.0);
