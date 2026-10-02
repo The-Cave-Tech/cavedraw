@@ -518,7 +518,19 @@ public static partial class SvgReader
         }
     }
 
-    /// <summary>Reads an SVG document from a file.</summary>
+    /// <summary>
+    /// Reads an SVG document from a file.
+    ///
+    /// **Gzipped SVG is SVG.** A `.svgz` is an ordinary document whose bytes are gzip-compressed, and both
+    /// SVG 1.1 and SVG 2 expect a viewer to decompress it on the way in. Reading it as text hands the parser
+    /// binary - the document does not merely lose detail, it fails to parse - so the magic number is checked
+    /// first.
+    ///
+    /// **The output is checked, not only for an exception.** `GZipStream` does not throw on a *truncated*
+    /// stream: it silently decompresses to nothing, and the empty string then reaches the XML parser, so the
+    /// diagnosis a person gets points at XML rather than at the file being unreadable. A buffer with nothing
+    /// in it is therefore treated as a failure in its own right.
+    /// </summary>
     public static SvgImportResult ReadFile(string path)
     {
         if (!File.Exists(path))
@@ -526,7 +538,54 @@ public static partial class SvgReader
             throw new SvgImportException($"there is no file at '{path}'");
         }
 
-        return Read(File.ReadAllText(path), System.IO.Path.GetDirectoryName(path));
+        byte[] bytes = File.ReadAllBytes(path);
+
+        return Read(
+            IsGzipped(bytes) ? Inflate(bytes, path) : Decode(bytes),
+            System.IO.Path.GetDirectoryName(path));
+    }
+
+    /// <summary>The gzip magic number, which is what distinguishes a `.svgz` from a `.svg` on disk.</summary>
+    private static bool IsGzipped(byte[] bytes) => bytes.Length >= 2 && bytes[0] == 0x1F && bytes[1] == 0x8B;
+
+    private static string Inflate(byte[] bytes, string path)
+    {
+        byte[] plain;
+
+        try
+        {
+            using var source = new MemoryStream(bytes);
+            using var gzip = new System.IO.Compression.GZipStream(
+                source, System.IO.Compression.CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            gzip.CopyTo(output);
+            plain = output.ToArray();
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new SvgImportException($"'{path}' is not a readable gzip stream: {exception.Message}");
+        }
+
+        if (plain.Length == 0)
+        {
+            throw new SvgImportException(
+                $"'{path}' carries a gzip header but decompressed to nothing; the file is truncated or corrupt");
+        }
+
+        return Decode(plain);
+    }
+
+    /// <summary>
+    /// Decodes document bytes as text, honouring a byte-order mark. This replaces <c>File.ReadAllText</c>,
+    /// which did the same thing - reading the bytes directly is what makes the gzip check possible, and it
+    /// must not quietly change how an ordinary document is decoded.
+    /// </summary>
+    private static string Decode(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var reader = new StreamReader(
+            stream, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
     }
 
     // ------------------------------------------------------------------ the view box

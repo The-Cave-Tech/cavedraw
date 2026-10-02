@@ -358,3 +358,90 @@ public class SvgReaderTests
         Assert.Throws<SvgImportException>(() => SvgReader.Read("<svg"));
     }
 }
+
+/// <summary>
+/// **Gzipped SVG is SVG.** A `.svgz` is the same document with its bytes gzip-compressed, and both SVG 1.1 and
+/// SVG 2 expect a viewer to decompress it on the way in. Reading it as text hands the parser binary, so the
+/// document does not merely lose detail - it fails to parse entirely.
+///
+/// The assertion is the **model**: the compressed and plain forms must place the same anchor at the same point.
+/// "It opened" would pass for a reader that decompressed the bytes and then dropped the geometry.
+/// </summary>
+public class SvgGzipTests
+{
+    private const string Document =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\" viewBox=\"0 0 200 100\">" +
+        "<path d=\"M10 20 L30 40\"/>" +
+        "</svg>";
+
+    private static string WriteTemp(byte[] bytes, string extension)
+    {
+        string path = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), $"vccad-svgz-{Guid.NewGuid():N}{extension}");
+        File.WriteAllBytes(path, bytes);
+        return path;
+    }
+
+    private static byte[] Gzipped(string text)
+    {
+        byte[] raw = System.Text.Encoding.UTF8.GetBytes(text);
+        using var output = new MemoryStream();
+        using (var gzip = new System.IO.Compression.GZipStream(
+                   output, System.IO.Compression.CompressionMode.Compress, leaveOpen: true))
+        {
+            gzip.Write(raw, 0, raw.Length);
+        }
+
+        return output.ToArray();
+    }
+
+    private static Point2D FirstAnchor(SvgImportResult result)
+        => result.Document.AllPaths().First().SubPaths[0].Nodes[0].Anchor;
+
+    [Fact]
+    public void AGzippedDocumentPlacesTheSameAnchorAsThePlainOne()
+    {
+        string plainPath = WriteTemp(System.Text.Encoding.UTF8.GetBytes(Document), ".svg");
+        string gzippedPath = WriteTemp(Gzipped(Document), ".svgz");
+
+        try
+        {
+            Point2D plain = FirstAnchor(SvgReader.ReadFile(plainPath));
+            Point2D gzipped = FirstAnchor(SvgReader.ReadFile(gzippedPath));
+
+            Assert.Equal(plain.X, gzipped.X);
+            Assert.Equal(plain.Y, gzipped.Y);
+
+            // And the shared value is the file's own, so two equally broken parses cannot agree with each other.
+            Assert.Equal(10.0, gzipped.X);
+            Assert.Equal(20.0, gzipped.Y);
+        }
+        finally
+        {
+            File.Delete(plainPath);
+            File.Delete(gzippedPath);
+        }
+    }
+
+    /// <summary>
+    /// A stream that carries the gzip header but holds no usable content is a **parse failure naming the file**,
+    /// not an empty document. `GZipStream` does not throw on a truncated stream - it yields nothing - so this
+    /// cannot be caught; the empty output has to be checked for.
+    /// </summary>
+    [Fact]
+    public void ATruncatedGzipStreamIsReportedByName()
+    {
+        byte[] truncated = { 0x1F, 0x8B, 0x08, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06 };
+        string path = WriteTemp(truncated, ".svgz");
+
+        try
+        {
+            SvgImportException error = Assert.Throws<SvgImportException>(() => SvgReader.ReadFile(path));
+            Assert.Contains(path, error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+}
