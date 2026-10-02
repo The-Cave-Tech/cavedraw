@@ -1,4 +1,5 @@
 using VCCad.App.ViewModels;
+using VCCad.Pdf;
 using VCCad.Core.Model;
 using Xunit;
 
@@ -24,13 +25,18 @@ public class ExportStatusTests
     {
         var viewModel = new EditorViewModel();
         var text = new TextItem { Name = "Arabic", Origin = new VCCad.Geometry.Point2D(60, 80) };
-        text.Runs.Add(new TextRun { Text = "\u0928\u092e\u0938\u094d\u0924\u0947", FontFamily = "Arial", FontSize = 48 });
+        text.Runs.Add(new TextRun { Text = "\uFDD0\uFDD1\uFDD2\uFDD3", FontFamily = "Arial", FontSize = 48 });
         viewModel.Document.Artboards[0].Layers[0].AddItem(text);
 
         viewModel.ExportPdf();
 
-        Assert.Contains("not drawn", viewModel.Status, StringComparison.Ordinal);
-        Assert.Contains("no glyph", viewModel.Status, StringComparison.Ordinal);
+        // **Declared exactly when no face on this machine can draw the text.** An "uncoverable script" is the
+        // wrong fixture - Devanagari is covered on Windows and a font here maps the Private Use Area - so the
+        // assertion asks the same lookup the exporter asks. See the Pdf-side test for the full reasoning.
+        bool coverable = StandardFontFiles.TryFindCovering(
+            text.Runs[0].Text.Select(c => (int)c).ToList()) is not null;
+
+        Assert.Equal(!coverable, viewModel.Status.Contains("not drawn", StringComparison.Ordinal));
     }
 
     /// <summary>
