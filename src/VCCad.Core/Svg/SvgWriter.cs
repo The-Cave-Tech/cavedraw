@@ -1960,7 +1960,14 @@ public static class SvgWriter
             string? clip = WriteClips(path, AffineTransform.Identity);
 
             var strokes = path.Strokes.Where(s => s.HasVisibleOutline).ToList();
-            bool plain = strokes.Count <= 1 && strokes.All(Native);
+
+            // **A blended stroke cannot share its element with the fill.** `mix-blend-mode` is an element property
+            // and one element carries one fill and one stroke, so an element that carries both would blend the
+            // fill as well - a different picture from the one the model means. A stroke whose blend is not Normal
+            // therefore takes the multi-element route below, exactly as a multi-stroke path already does, so the
+            // blend lands on the element that carries only the stroke.
+            bool plain = strokes.Count <= 1 && strokes.All(Native) &&
+                strokes.All(s => s.Blend is null or BlendMode.Normal);
 
             // **One element when there is one plain stroke**, with the fill and the stroke on it - because that is
             // what a viewer draws and what the reader reads back. Splitting the fill and the stroke into two
@@ -2120,6 +2127,15 @@ public static class SvgWriter
             // an instance would have nothing to follow (issue #135). The colour itself travels beside it, because
             // the keyword is worth nothing without the `color` it stands for.
             element.Add(new XAttribute("stroke", stroke.FromCurrentColor ? "currentColor" : Hex(stroke.Color)));
+
+            // **A stroke's blend mode is an element property, so it is stated on the stroke's own element.**
+            // SVG has no per-stroke blend, which is why `plain` in WritePath sends a blended stroke down the
+            // multi-element route; this is where that element is told the mode. A stroke that states none writes
+            // no attribute at all, so an ordinary document's bytes are unchanged.
+            if (stroke.Blend is { } blend && blend != BlendMode.Normal)
+            {
+                element.Add(new XAttribute("mix-blend-mode", blend.ToSvgName()));
+            }
 
             if (stroke.Color.A < 1.0)
             {
@@ -2313,6 +2329,16 @@ public static class SvgWriter
 
             element.Add(new XAttribute("d", data));
             element.Add(new XAttribute("stroke", stroke.FromCurrentColor ? "currentColor" : Hex(stroke.Color)));
+
+            // **A stroke's blend mode is stated here, on the stroke's own element.** This branch writes the stroke
+            // attributes directly rather than through WriteNativeStrokeAttributes, so both places have to say it -
+            // and the test that pins this caught exactly that: the attribute was added to the shared helper, which
+            // this path never calls, and the file still came out unblended.
+            if (stroke.Blend is { } blendMode && blendMode != BlendMode.Normal)
+            {
+                element.Add(new XAttribute("mix-blend-mode", blendMode.ToSvgName()));
+            }
+
             WriteCurrentColour(element, stroke);
             if (itemClip is not null)
             {

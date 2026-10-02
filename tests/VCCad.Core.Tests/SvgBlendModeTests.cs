@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using VCCad.Core.Model;
 using VCCad.Core.Serialization;
 using VCCad.Core.Svg;
@@ -90,6 +91,47 @@ public class SvgBlendModeTests
         SvgImportResult result = Read("<rect width=\"10\" height=\"10\"/>");
 
         Assert.DoesNotContain("mix-blend-mode", SvgWriter.Write(result.Document), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// **A stroke's blend mode reaches the file, on an element of its own.** SVG has no per-stroke blend:
+    /// `mix-blend-mode` is an element property and one element carries one fill and one stroke, so a blended stroke
+    /// has to be written as a second element rather than sharing the fill's, or the fill would be blended too - a
+    /// different picture from the one the model means. This pins both halves: the attribute is written, and the
+    /// path stopped being a single element in order to carry it.
+    /// </summary>
+    [Fact]
+    public void AStrokesBlendModeIsWrittenOnTheStrokesOwnElement()
+    {
+        SvgImportResult result = Read(
+            "<rect width=\"10\" height=\"10\" fill=\"#ff0000\" stroke=\"#0000ff\" stroke-width=\"2\"/>");
+
+        PathItem path = result.Document.AllPaths().Single();
+        path.Strokes[0] = path.Strokes[0] with { Blend = BlendMode.Multiply };
+
+        string svg = SvgWriter.Write(result.Document);
+
+        Assert.Contains("mix-blend-mode=\"multiply\"", svg, StringComparison.Ordinal);
+        Assert.True(
+            Regex.Matches(svg, "<path ").Count > 1,
+            "a blended stroke must not share the fill's element, or the fill blends with it");
+    }
+
+    /// <summary>
+    /// And a stroke that states no blend still writes the fill and the stroke as one element, so an ordinary
+    /// document gains no structure. That is the rule the stack already follows, and it is what keeps this fix from
+    /// doubling the paths in every file the writer touches.
+    /// </summary>
+    [Fact]
+    public void AStrokeWithNoBlendStillSharesTheFillsElement()
+    {
+        SvgImportResult result = Read(
+            "<rect width=\"10\" height=\"10\" fill=\"#ff0000\" stroke=\"#0000ff\" stroke-width=\"2\"/>");
+
+        string svg = SvgWriter.Write(result.Document);
+
+        Assert.Equal(1, Regex.Matches(svg, "<path ").Count);
+        Assert.DoesNotContain("mix-blend-mode", svg, StringComparison.Ordinal);
     }
 
     [Fact]
