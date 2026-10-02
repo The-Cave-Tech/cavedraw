@@ -1470,7 +1470,13 @@ public static class PdfDocumentExporter
         // block, and a column's characters are not on one baseline - they are separated down the page. The per-run
         // loop below places each one from the layout's own glyph positions instead.
         bool column = text.WritingMode != TextWritingMode.HorizontalTb;
-        if (!column && TryWriteRunsAsOneTextObject(ops, text, embedder, alphaStates, toDoc))
+
+        // **Nor can a per-character across offset.** `TryWriteRunsAsOneTextObject` writes one `Tm` and one show for
+        // the block's text, which has no way to state that a character sits off the baseline - and a `y`/`dy` list is
+        // exactly that statement. Those lists come from the SVG reader, which never produces an embedded programme,
+        // so the reachable case is a run drawn with a face from this machine.
+        bool offsetGlyphs = text.Runs.Any(r => r.PositionOffsets is { Length: > 0 });
+        if (!column && !offsetGlyphs && TryWriteRunsAsOneTextObject(ops, text, embedder, alphaStates, toDoc))
         {
             return;
         }
@@ -1586,8 +1592,11 @@ public static class PdfDocumentExporter
                 int charBase = FlattenedOffsetOf(text, run);
                 double lineHeight = run.FontSize * text.LineSpacing;
 
-                // A column's characters are placed one by one where the layout puts them. Computed once per run.
-                VCCad.Core.Text.TextLayout columnLayout = column
+                // A column's characters are placed one by one where the layout puts them, and so are the characters
+                // of a run that states its own across offsets - from the same source the canvas draws from, so the
+                // page and the screen cannot disagree about where a `dy` list put a character.
+                bool perCharacter = column || run.PositionOffsets is { Length: > 0 };
+                VCCad.Core.Text.TextLayout glyphLayout = perCharacter
                     ? VCCad.Core.Text.TextLayoutEngine.Compute(text)
                     : VCCad.Core.Text.TextLayout.Empty;
 
@@ -1625,12 +1634,13 @@ public static class PdfDocumentExporter
                         hex.Append(gid.ToString("X4", CultureInfo.InvariantCulture));
                         lineAdvance += font.Advance1000(gid) * run.FontSize / 1000.0;
 
-                        // **One show operation per character for a column.** The line-level flush below stays for
-                        // every other block; here each character is placed where the layout says, which is the same
-                        // source the canvas draws from - `GlyphBox.X` across, `GlyphBox.Y` down the column.
-                        if (column && i < columnLayout.Glyphs.Count)
+                        // **One show operation per character when the layout places them.** The line-level flush
+                        // below stays for a run whose characters share a baseline; here each character is placed
+                        // where the layout says, which is the same source the canvas draws from - `GlyphBox.X` across,
+                        // `GlyphBox.Y` down the column.
+                        if (perCharacter && i < glyphLayout.Glyphs.Count)
                         {
-                            VCCad.Core.Text.GlyphBox glyph = columnLayout.Glyphs[i];
+                            VCCad.Core.Text.GlyphBox glyph = glyphLayout.Glyphs[i];
                             Flush(text.Origin.X + glyph.X, text.Origin.Y + glyph.Y);
                         }
                     }
