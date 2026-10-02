@@ -512,9 +512,26 @@ public static partial class SvgReader
             // means the sum; the list is then rebased on the first character's place, which is where the piece
             // starts. The single values above still place the piece - and for a list they are the same fact, so
             // nothing is counted twice here: this list is *positions*, and the pen is the first of them.
+            //
+            // **A right-to-left line is declined and named.** Its places descend in the file's own order while the
+            // pen walks the line in visual order, so applying them as they stand puts the characters in the right
+            // places and gives them *negative* advances - a run whose box, caret and far edge are all wrong, which is
+            // a fix that looks right glyph by glyph. Settling that frame is the work; until then the first value
+            // places the run, as it did before the list was kept at all, and the file is told rather than drawn
+            // mirrored.
             if (AlongOffsets(element, vertical, style.FontSize) is { Length: > 0 } along)
             {
-                _pendingAlong = along;
+                if (style.Direction == TextDirection.RightToLeft &&
+                    style.WritingMode == TextWritingMode.HorizontalTb)
+                {
+                    _context.Warnings.Add(
+                        "a right-to-left line states a position per character, and the model's places run along "
+                        + "such a line the other way: the first value places the run and the list is not honoured");
+                }
+                else
+                {
+                    _pendingAlong = along;
+                }
             }
 
             if (inline is not null)

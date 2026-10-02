@@ -24,6 +24,68 @@ public class SvgPositionListTests
     private static TextItem Block(string body) =>
         SvgReader.Read(Head + body + "</svg>").Document.AllItems().OfType<TextItem>().Single();
 
+    /// <summary>A measurer that sets every character at one width, so the geometry below is arithmetic.</summary>
+    private sealed class FixedAdvance(double advance) : ITextMetrics
+    {
+        public IReadOnlyList<double> Advances(TextRun run)
+            => Enumerable.Repeat(advance, run.Text.Length).ToArray();
+
+        public double Ascent(TextRun run) => run.FontSize * 0.8;
+
+        public double Descent(TextRun run) => run.FontSize * 0.2;
+    }
+
+    private static void Measured(double advance, Action body)
+    {
+        ITextMetrics? previous = TextMeasurement.Current;
+        try
+        {
+            TextMeasurement.Current = new FixedAdvance(advance);
+            body();
+        }
+        finally
+        {
+            TextMeasurement.Current = previous;
+        }
+    }
+
+    /// <summary>
+    /// **A right-to-left line's list is reported, and the run is placed by its first value.**
+    ///
+    /// The places such a file states descend in the file's own order while the pen walks the line in visual order, so
+    /// the model's frame for them is not yet settled: applying them as they stand puts the glyphs in the right places
+    /// and gives them *negative* advances, which breaks the run's box, its caret and its far edge. The honest state
+    /// until that is worked out is the one this pins - the first value places the run, no list is recorded, and the
+    /// file is told - rather than a mirrored or half-applied line.
+    /// </summary>
+    [Fact]
+    public void AnRtlAlongListIsReportedRatherThanHalfApplied() => Measured(6, () =>
+    {
+        SvgImportResult result = SvgReader.Read(
+            Head + "<text x=\"40 30 20\" y=\"10\" font-size=\"10\" direction=\"rtl\">abc</text></svg>");
+        TextItem item = result.Document.AllItems().OfType<TextItem>().Single();
+
+        Assert.Null(item.Runs[0].InlineOffsets);
+        Assert.Contains(
+            result.Warnings,
+            w => w.Contains("right-to-left", StringComparison.Ordinal) &&
+                 w.Contains("position per character", StringComparison.Ordinal));
+
+        TextLayout layout = TextLayoutEngine.Compute(item);
+        Assert.Equal(3, layout.Glyphs.Count);
+
+        // **The list changes nothing, which is what declining it means.** The same file without the list places the
+        // run exactly the same way - by its first value and the face's own advances - so this pins the decline rather
+        // than a convention about which way a right-to-left line runs, which is not what is at issue here.
+        SvgImportResult single = SvgReader.Read(
+            Head + "<text x=\"40\" y=\"10\" font-size=\"10\" direction=\"rtl\">abc</text></svg>");
+        TextLayout plain = TextLayoutEngine.Compute(
+            single.Document.AllItems().OfType<TextItem>().Single());
+
+        Assert.Equal(plain.Glyphs.Select(g => g.X), layout.Glyphs.Select(g => g.X));
+        Assert.Equal(plain.Glyphs.Select(g => g.Advance), layout.Glyphs.Select(g => g.Advance));
+    });
+
     /// <summary>
     /// **The acceptance.** Three characters with `dy="0 5 10"` sit 5 units further down the page than the one
     /// before, in order, while their along-line positions are unchanged - because a `dy` moves a character without
