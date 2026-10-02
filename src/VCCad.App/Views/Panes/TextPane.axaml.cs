@@ -36,11 +36,12 @@ namespace VCCad.App.Views.Panes;
 /// and a driver set them the same way and neither can set something the other cannot. The **glyph orientation** is
 /// offered for the same reason, one level down: it is the run's own (#127), the layout turns every glyph by it and
 /// the SVG writer writes it back, and it goes through <see cref="DocumentSession.ApplyTextFieldsAt"/> (`text.update`)
-/// exactly as the tracking and the variant do. What the model cannot hold is **not** offered here, because a control
-/// that does nothing is worse than an absent one: `baseline-shift` with per-glyph positioning (#128) has no member
-/// on <see cref="TextItem"/> or <see cref="TextRun"/>. Letter and word spacing, font stretch and variant **are**
-/// offered, because the model does hold them (#147). Face reporting is offered too, because the model carries the
-/// face actually used - see <see cref="FaceReport"/>.
+/// exactly as the tracking and the variant do. So is the **baseline shift** (#128), which is the run's own and which
+/// the layout raises the run's baseline by. What the model cannot hold is **not** offered here, because a control
+/// that does nothing is worse than an absent one: `dominant-baseline` names which of a face's baselines the text
+/// hangs from, and the model knows only the alphabetic one. Letter and word spacing, font stretch and variant
+/// **are** offered, because the model does hold them (#147). Face reporting is offered too, because the model
+/// carries the face actually used - see <see cref="FaceReport"/>.
 /// </summary>
 public partial class TextPane : UserControl
 {
