@@ -58,13 +58,6 @@ jobs:
           fi
           test -d /usr/share/fonts/opentype/urw-base35
           echo "VCCAD_URW_FONTS=/usr/share/fonts/opentype/urw-base35" >> "$GITHUB_ENV"
-      - name: Cache NuGet
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-          restore-keys: ${{ runner.os }}-nuget-
-
       - name: Restore
         run: dotnet restore VCCad.sln
 
