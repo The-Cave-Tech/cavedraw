@@ -63,6 +63,15 @@ public static partial class SvgReader
         /// <summary>The cross-axis position of this piece's baseline. See <see cref="Inline"/>.</summary>
         public double Cross { get; set; }
 
+        /// <summary>
+        /// **How far each of this piece's characters strays from <see cref="Cross"/>**, in the file's own units -
+        /// SVG's `dy` for a horizontal block and `dx` for a vertical one, whose values are per character.
+        ///
+        /// `Cross` places the piece; this is what each character does relative to that. Null when the file stated a
+        /// single position rather than a list, which is the common case and the one that needs no member.
+        /// </summary>
+        public double[]? PositionOffsets { get; set; }
+
         /// <summary>How far the pen moves along the line for this piece, through the model's own measurer.</summary>
         public double Advance { get; set; }
 
@@ -289,6 +298,7 @@ public static partial class SvgReader
         {
             TextChunk chunk = block.Chunks[i];
             TextRun run = block.Item.Runs[i];
+            run.PositionOffsets = chunk.PositionOffsets;
 
             if (i > 0)
             {
@@ -400,6 +410,16 @@ public static partial class SvgReader
 
         private double _penInline;
         private double _penCross;
+
+        /// <summary>
+        /// **The per-character across offsets the current chunk stated, waiting for the run that carries them.**
+        ///
+        /// Held here rather than accumulated with the pen because it belongs to **one run**, not to the block: the
+        /// pen's cross is the block's base position and keeps adding, while this is how each character deviates from
+        /// it. It is cleared when a run consumes it, so a later chunk that states no list of its own does not inherit
+        /// an earlier one's - which a single-`tspan` test would never catch.
+        /// </summary>
+        private double[]? _pendingOffsets;
         private TextChunk? _current;
         private bool _atStart = true;
         private bool _lastWasSpace;
@@ -443,7 +463,15 @@ public static partial class SvgReader
             double? inline = Position(element, vertical ? "y" : "x", vertical ? SvgAxis.Y : SvgAxis.X, style.FontSize);
             double? dinline = Position(element, vertical ? "dy" : "dx", vertical ? SvgAxis.Y : SvgAxis.X, style.FontSize);
             double? cross = Position(element, vertical ? "x" : "y", vertical ? SvgAxis.X : SvgAxis.Y, style.FontSize);
-            double? dcross = Position(element, vertical ? "dx" : "dy", vertical ? SvgAxis.X : SvgAxis.Y, style.FontSize);
+            double? dcross = Position(element, vertical ? "dx" : "dy", vertical ? SvgAxis.X : SvgAxis.Y, style.FontSize, listHandled: true);
+
+            // The same attribute read a second time, as the whole list: its single value places the block, and its
+            // entries are how far each character strays from that - a fact only the file holds, so it is carried
+            // rather than re-derived.
+            if (PositionList(element, vertical ? "dx" : "dy") is { } dcrossList)
+            {
+                _pendingOffsets = dcrossList;
+            }
 
             if (inline is not null)
             {
@@ -606,7 +634,13 @@ public static partial class SvgReader
                                style.WritingMode == TextWritingMode.HorizontalTb,
                     Inline = _penInline,
                     Cross = _penCross,
+
+                    // Consumed here: the list belongs to this piece, so the next one must not inherit it. A chunk
+                    // that states no list of its own gets null, which is the common case.
+                    PositionOffsets = _pendingOffsets,
                 };
+
+                _pendingOffsets = null;
             }
 
             return _current;
@@ -653,14 +687,41 @@ public static partial class SvgReader
         }
 
         /// <summary>
+        /// **The whole list a positioning attribute states, one entry per character** - where every other attribute
+        /// is answered by a single number because the model places a run as a whole.
+        ///
+        /// Only the **across** attribute is read this way. Its per-character offset is the file's own statement of
+        /// where each character sits, which no face measurement can supply, so a run that states one carries it.
+        /// The along-line attributes keep their single-value read and their warning: the pen is measured from the
+        /// installed face, and honouring the file's own along-line positions would need a per-character advance the
+        /// model does not hold - so accepting the list there would be the same lie in the other direction.
+        /// </summary>
+        private static double[]? PositionList(XElement element, string attribute)
+        {
+            string? value = element.Attribute(attribute)?.Value;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            double[]? numbers = Numbers(value);
+            return numbers is { Length: > 1 } ? numbers : null;
+        }
+
+        /// <summary>
         /// One positioning attribute, with `em` and `ex` resolved against the size in force.
         ///
         /// In text those units mean something - the run's own size - so they are resolved here rather than through
         /// the generic length table, which has no text context and would report an assumption this reader is not
-        /// making. A list of positions is one per character, and a run is placed as a whole: reported, and the first
-        /// is used.
+        /// making. A list of positions is one per character and a run is placed as a whole, so the first is used.
+        ///
+        /// <paramref name="listHandled"/> says the caller is reading the list as well, which is true only for the
+        /// **across** delta: its per-character offsets have somewhere to go (`TextRun.PositionOffsets`), so warning
+        /// that the model cannot hold them would now be false. The along-line attributes are still reported, because
+        /// the pen is measured from the face and a stated pen would need a per-character advance the model has not.
         /// </summary>
-        private double? Position(XElement element, string attribute, SvgAxis axis, double fontSize)
+        private double? Position(XElement element, string attribute, SvgAxis axis, double fontSize,
+            bool listHandled = false)
         {
             string? value = element.Attribute(attribute)?.Value;
             if (string.IsNullOrWhiteSpace(value))
@@ -674,7 +735,7 @@ public static partial class SvgReader
                 end++;
             }
 
-            if (Numbers(value) is { Length: > 1 })
+            if (Numbers(value) is { Length: > 1 } && !listHandled)
             {
                 _context.Warnings.Add(
                     $"{attribute}=\"{value}\" gives a position per character, and the model places a run as a whole");

@@ -528,6 +528,16 @@ public static class TextLayoutEngine
                 // superscript from pushing the lines after it down the block.
                 double shift = shifts[index];
 
+                // **The file's own per-character across offset.** It moves the glyph across its baseline and
+                // nothing else - `dy` shifts a character without moving where the next one starts, which is the rule
+                // the baseline shift above already follows. A list shorter than the run applies where it reaches and
+                // is zero beyond: SVG repeats a short list's last value, and repeating it here would silently move
+                // characters the file said nothing about.
+                int within = PieceStart(text, index);
+                double across = text.Runs[runOf[index]].PositionOffsets is { } offsets && within < offsets.Length
+                    ? offsets[within]
+                    : 0.0;
+
                 if (vertical)
                 {
                     // **The pen is the glyph's own origin and its baseline runs down the column line.** A turned
@@ -538,7 +548,7 @@ public static class TextLayoutEngine
                     // sits to the right of its column line rather than above it: see `ShiftUp`.
                     double step = turned ? advance : line.Height;
                     glyphs.Add(new GlyphBox(
-                        index, pen, line.Cross, step, line.Cross + ShiftUp(vertical: true, shift), pen,
+                        index, pen, line.Cross, step, line.Cross + ShiftUp(vertical: true, shift) + across, pen,
                         rotation[index], runOf[index], PieceStart(text, index)));
                     pen += step;
                 }
@@ -548,7 +558,7 @@ public static class TextLayoutEngine
                     // frame. The pen, the advance and the line box are untouched.
                     glyphs.Add(new GlyphBox(
                         index, pen, line.Cross + line.Ascent, advance, pen,
-                        line.Cross + line.Ascent + ShiftUp(vertical: false, shift), 0.0,
+                        line.Cross + line.Ascent + ShiftUp(vertical: false, shift) + across, 0.0,
                         runOf[index], PieceStart(text, index)));
                     pen += advance;
                 }

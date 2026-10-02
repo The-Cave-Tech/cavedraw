@@ -5114,7 +5114,11 @@ public sealed class CanvasWorkspace : Control
             // glyphs came out wider than the face rather than further apart. The model, the caret, the
             // selection highlight and the exported PDF all said otherwise, which is the one thing this
             // canvas must never do.
-            if (run.LetterSpacing != 0 || run.WordSpacing != 0)
+            // **A run that states per-character across offsets is drawn glyph by glyph too.** The file's `dy` list
+            // moves each character without moving the pen, and a `FormattedText` has no per-character placement at
+            // all - so a run-level draw would put the column the file asked for back on one line, which is exactly
+            // what the model and the layout say it must not be. Same route as tracking, for the same reason.
+            if (run.LetterSpacing != 0 || run.WordSpacing != 0 || run.PositionOffsets is { Length: > 0 })
             {
                 DrawTrackedSegment(context, brush, run, box, pieceStart, origin);
                 continue;
@@ -5213,7 +5217,11 @@ public sealed class CanvasWorkspace : Control
         for (int i = 0; i < box.Length; i++)
         {
             int index = pieceStart + i;
-            DrawOneGlyph(context, brush, run, index, new Point(origin.X + pen, origin.Y),
+
+            // **The file's own across offset for this character**, where it stated one. It moves the glyph and not
+            // the pen, which is the rule the layout follows too - so the next character starts where it would have.
+            double across = run.PositionOffsets is { } offsets && i < offsets.Length ? offsets[i] : 0.0;
+            DrawOneGlyph(context, brush, run, index, new Point(origin.X + pen, origin.Y + across),
                 advanceScale, program, typeface, ids);
 
             pen += advanceScale * (index < advances.Count ? advances[index] : TextMeasurement.AdvanceAtEnd(run));

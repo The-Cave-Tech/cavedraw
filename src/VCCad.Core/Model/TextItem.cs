@@ -244,6 +244,18 @@ public sealed class TextRun
     /// (bare CFF has no Unicode cmap, so the canvas draws by glyph id).</summary>
     public ushort[]? GlyphIds { get; set; }
 
+    /// <summary>
+    /// **The vertical offset the file states for each character, in its own units** - SVG's `y` or `dy` list on a
+    /// `<text>`/`<tspan>`. Null when the file states none, which is the common case.
+    ///
+    /// This is **not** the same fact as <see cref="Advances"/>. That is the pen the face measures, and it answers
+    /// where each character sits *along* the line. This is the file's own statement of where a character sits
+    /// **across** it, which no face measurement can supply - so a run that states one carries it rather than having
+    /// it re-derived. `SvgTextReader.Position` used to warn that a list "gives a position per character, and the
+    /// model places a run as a whole" and take the first; the list now has somewhere to go.
+    /// </summary>
+    public double[]? PositionOffsets { get; set; }
+
     public TextRun Clone() => new()
     {
         Text = Text,
@@ -265,6 +277,7 @@ public sealed class TextRun
         EmbeddedFont = EmbeddedFont,
         RawCodes = RawCodes,
         GlyphIds = GlyphIds,
+        PositionOffsets = PositionOffsets is null ? null : (double[])PositionOffsets.Clone(),
     };
 }
 
