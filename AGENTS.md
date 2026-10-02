@@ -243,7 +243,7 @@ understand the screen and the document without pixels:
 A driver that cannot see should still be able to work confidently: dump first,
 describe when a visual judgement is needed.
 
-### Seven things that cost real time, learned the hard way
+### Eight things that cost real time, learned the hard way
 
 Most of these happened in a single session; the last two were learned the hard way in
 a later one, and cost the most. They are cheap to avoid and expensive to discover.
@@ -310,6 +310,27 @@ published layout. It also settles counts, because a local run reports *more* tes
 than the container whenever a corpus is present — `test-all.ps1` probes
 `$HOME/.cache/vccad-corpora` and exports whatever it finds — so the two totals are
 not comparable and only the workflow's is the gate.
+
+**Never wait on a long run while something else can be done.** A full suite is seconds for
+Core and half a minute for App; `act` is roughly five minutes; a cold test-project build is a
+minute or more. Running those to completion before starting the next piece of work is the
+single biggest cost in a session, and it is entirely avoidable:
+
+- **Start long runs in the background and keep working.** `act` in particular runs detached
+  on the Docker host while the next change, the issue comment or the capture harness is
+  written - nothing about it needs supervising.
+- **Take the focused test synchronously and the full suite in the background.** Iterating on
+  one behaviour wants that filter's answer in seconds; the regression check does not need to
+  block the next edit, and the push gate is the run that matters.
+- **Parallelise independent work rather than queueing it** - two captures, or a capture and
+  an `act`, or a suite and a documentation change. Only the push is a genuine barrier.
+- **One build, then `--no-build`.** `dotnet test --no-build` after a single build is a few
+  seconds; letting each `dotnet test` rebuild pays the cost on every iteration. And
+  `-t:Rebuild` is mis-parsed on this SDK - build the project with `-t:Rebuild`, then test
+  with `--no-build`.
+
+The rule is not "run fewer tests" - it is that testing and thinking are the two things that
+should always be able to happen at once.
 
 ---
 
