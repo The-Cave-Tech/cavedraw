@@ -54,12 +54,26 @@ internal sealed class PdfFontEmbedder
             StandardFonts.TryResolve(key.Family, key.Bold, key.Italic, out StandardFace face);
             byte[]? program = StandardFontFiles.TryReadProgram(face);
 
-            if (program is null)
+            // **A face that cannot draw the run's characters is no use.** The standard chain supplies the URW Core 35
+            // faces, which cover Latin, Greek and Cyrillic and nothing else - so a document in another script lost
+            // every character of its runs, silently, into a blank page; `8274395` made that loss declared. Nothing is
+            // bundled: a face that covers the text is looked for **on this machine**, the rule that applies to
+            // Helvetica as much as to anything else. When there is none, the run stays declared.
+            TrueTypeFont? font = program is null ? null : new TrueTypeFont(program);
+            if (font is null || !Covers(font, codePoints))
+            {
+                string? covering = StandardFontFiles.TryFindCovering(codePoints);
+                if (covering is not null)
+                {
+                    font = new TrueTypeFont(File.ReadAllBytes(covering));
+                }
+            }
+
+            if (font is null)
             {
                 continue;
             }
 
-            TrueTypeFont font = new(program);
             string name = $"/F{index++}";
 
             int type0 = assembler.Allocate();
@@ -78,6 +92,20 @@ internal sealed class PdfFontEmbedder
 
             _fonts[key] = new Entry(name, font, type0);
         }
+    }
+
+    /// <summary>Whether the face has a glyph for every code point the run uses.</summary>
+    private static bool Covers(TrueTypeFont font, HashSet<int> codePoints)
+    {
+        foreach (int codePoint in codePoints)
+        {
+            if (codePoint is < 0 or > 0xFFFF || font.GlyphFor((char)codePoint) == 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
 

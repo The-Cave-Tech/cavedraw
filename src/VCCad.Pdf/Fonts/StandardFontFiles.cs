@@ -83,6 +83,93 @@ public static class StandardFontFiles
     }
 
     /// <summary>
+    /// Directories searched for a face of **any** kind, including the platform's own font folder.
+    ///
+    /// Deliberately separate from <see cref="SearchDirectories"/>: widening that one would change how the fourteen
+    /// *standard* faces resolve, which is a decision of its own. This is only for the lookup below, which asks a
+    /// different question - "is there a face anywhere that can draw these characters" rather than "where is Helvetica".
+    /// </summary>
+    public static IReadOnlyList<string> CoverageDirectories()
+    {
+        var roots = new List<string>(SearchDirectories());
+
+        string fonts = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+        if (!string.IsNullOrEmpty(fonts))
+        {
+            roots.Add(fonts);
+        }
+
+        roots.Add("/usr/share/fonts");
+        roots.Add("/usr/local/share/fonts");
+        roots.Add(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".fonts"));
+
+        return roots.Where(Directory.Exists).ToArray();
+    }
+
+    /// <summary>
+    /// The file for a face on this machine that has a glyph for **every** code point asked for, or null.
+    ///
+    /// This is the answer to a run the standard-font chain cannot draw - a document in a script the URW faces do not
+    /// cover. Nothing is shipped: the face is read from where it already lives, which is the rule that applies to
+    /// Helvetica as much as to anything else.
+    ///
+    /// Only **glyf** programmes are read, because that is what <see cref="TrueTypeFont"/> parses. A CFF-only face is
+    /// skipped rather than mis-read, so the answer is "no face found" and the caller declares the loss.
+    /// </summary>
+    public static string? TryFindCovering(IReadOnlyCollection<int> codePoints)
+    {
+        if (codePoints.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (string directory in CoverageDirectories())
+        {
+            IEnumerable<string> files;
+            try
+            {
+                files = Directory.EnumerateFiles(directory, "*.ttf", SearchOption.AllDirectories);
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            foreach (string file in files)
+            {
+                try
+                {
+                    VCCad.Pdf.Fonts.TrueTypeFont candidate = new(File.ReadAllBytes(file));
+                    if (Covers(candidate, codePoints))
+                    {
+                        return file;
+                    }
+                }
+                catch (Exception)
+                {
+                    // Not a programme this reader understands - a CFF-only face, or not a font at all.
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool Covers(VCCad.Pdf.Fonts.TrueTypeFont font, IReadOnlyCollection<int> codePoints)
+    {
+        foreach (int codePoint in codePoints)
+        {
+            if (codePoint is < 0 or > 0xFFFF || font.GlyphFor((char)codePoint) == 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// The file for a face, or null. Ghostscript ships the fonts without a file
     /// extension, so that form is tried as well as <c>.otf</c> and <c>.ttf</c>.
     /// </summary>
