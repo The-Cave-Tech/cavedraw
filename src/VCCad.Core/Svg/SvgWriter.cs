@@ -89,7 +89,7 @@ public static class SvgWriter
         root.Add(new XAttribute("viewBox",
             $"{Number(extent.X)} {Number(extent.Y)} {Number(extent.Width)} {Number(extent.Height)}"));
 
-        var writer = new Writer(root, document.SvgNamespaces);
+        var writer = new Writer(root, document, document.SvgNamespaces);
 
         // The prefixes the file declared, declared again - so every namespaced attribute written below uses the
         // name it had rather than a generated one.
@@ -179,6 +179,7 @@ public static class SvgWriter
     private sealed class Writer
     {
         private readonly XElement _root;
+        private readonly CadDocument _document;
         private readonly Dictionary<GradientSpec, string> _gradientIds = new(GradientKey.Instance);
         private readonly IReadOnlyDictionary<string, string> _namespaces;
         private readonly List<string> _missing = new();
@@ -187,15 +188,27 @@ public static class SvgWriter
         private int _clipCount;
 
         /// <summary>
+        /// How deep the walk is inside artwork a brush placed, and the ceiling on it.
+        ///
+        /// An art brush names an item by id, that item may be a path with an art brush of its own, and a cycle
+        /// through two brushes would otherwise recurse forever. The cap is the same one the canvas and the PDF
+        /// exporter use, so the picture stops nesting at the same place in all three renderers.
+        /// </summary>
+        private const int MaxArtDepth = 8;
+
+        private int _artDepth;
+
+        /// <summary>
         /// Whether what is being written is a repeat of content already written, so a loss must not be reported
         /// twice. Set only while <see cref="WriteDefinitions"/> writes a definition, whose content is the same
         /// picture the instances that use it already carry into the file.
         /// </summary>
         private bool _quiet;
 
-        public Writer(XElement root, IReadOnlyDictionary<string, string>? namespaces = null)
+        public Writer(XElement root, CadDocument document, IReadOnlyDictionary<string, string>? namespaces = null)
         {
             _root = root;
+            _document = document;
             _namespaces = namespaces ?? new Dictionary<string, string>(StringComparer.Ordinal);
         }
 
@@ -1933,6 +1946,15 @@ public static class SvgWriter
 
                 parent.Add(element);
                 Wrote("path");
+
+                // The artwork the stroke's brush maps goes over the stroke the pen drew, exactly where the canvas
+                // and the PDF exporter put it - a brush is a stroke property, so it is written beside the stroke
+                // rather than instead of it.
+                if (strokes.Count == 1)
+                {
+                    WriteStrokeArt(path, strokes[0], parent, clip);
+                }
+
                 return;
             }
 
@@ -1972,6 +1994,7 @@ public static class SvgWriter
             foreach (StrokeSpec stroke in strokes)
             {
                 WriteStroke(path, stroke, data, parent, clip);
+                WriteStrokeArt(path, stroke, parent, clip);
             }
         }
 
@@ -2043,6 +2066,98 @@ public static class SvgWriter
                 {
                     element.Add(new XAttribute("stroke-dashoffset", Number(stroke.Dash.Offset)));
                 }
+            }
+        }
+
+        /// <summary>
+        /// The artwork a stroke's brush maps along the path, written once per placement (issue #186).
+        ///
+        /// **A brush is a stroke property and the plan is not where it lives.** <see cref="StrokeRenderPlan"/> is
+        /// widths and outlines and an art brush is neither, so `WriteStroke` wrote the stroke's own outline and the
+        /// art the model places was dropped - the same defect the canvas and the PDF exporter were each fixed for,
+        /// in the third renderer. The placements come from <see cref="PlacedArt.Resolve"/>, the one seam the other
+        /// two consume, so the file and the screen cannot come to two answers about where the art sits.
+        ///
+        /// **Each piece is written through the existing item path**, as a group at the placement's own transform
+        /// with the asset's artwork inside it: that is what "the item is drawn in its own frame and the placement
+        /// carries that frame onto the path" means in SVG, and it reuses <see cref="WriteItems"/> rather than
+        /// writing a second renderer for a path, a raster or a group. The transform is stated on the group rather
+        /// than baked into the asset's coordinates, so a raster's placement - which an <see cref="ImageItem"/>
+        /// cannot state, having no rotation - travels as the matrix SVG is turned by.
+        ///
+        /// **A pattern brush's tiles and a scatter brush's copies come through here too.** They are artwork placed
+        /// along the path in the same sense, and <see cref="PlacedArt.Resolve"/> answers for all three, so no kind
+        /// needs a writing route of its own.
+        ///
+        /// **The stroke's clip goes on a group of its own.** A `clip-path` is applied in the user space the
+        /// element's own `transform` establishes, and a placement turns that space - so the outline, which the
+        /// model recorded in the path's frame, would be moved and turned with the art if the two shared one
+        /// element. The host group states no transform, and the pieces hang under it.
+        ///
+        /// A piece's own opacity is multiplied into the stroke's rather than replacing it, which is the product
+        /// the canvas paints and the exporter writes: a scatter brush's translucent copies are a fact about the
+        /// copy, and losing it would draw them fully opaque.
+        /// </summary>
+        private void WriteStrokeArt(PathItem path, StrokeSpec stroke, XElement parent, string? itemClip)
+        {
+            if (stroke.Brush is not { } brush || _artDepth >= MaxArtDepth ||
+                (!brush.IsArt && !brush.IsPattern && !brush.IsScatter))
+            {
+                return;
+            }
+
+            IReadOnlyList<PlacedArt> art = PlacedArt.Resolve(_document, path, brush);
+            if (art.Count == 0)
+            {
+                // A brush with no artwork, or one whose asset the document does not have: there is nothing to
+                // place, and substituting something would draw art the model never described.
+                return;
+            }
+
+            XElement host = parent;
+            if (itemClip is not null)
+            {
+                host = new XElement(Svg + "g", new XAttribute("clip-path", $"url(#{itemClip})"));
+                parent.Add(host);
+                Wrote("g");
+            }
+
+            _artDepth++;
+            try
+            {
+                foreach (PlacedArt piece in art)
+                {
+                    var group = new XElement(Svg + "g");
+
+                    string transform = TransformAttribute(piece.Placement.Transform);
+                    if (transform.Length > 0)
+                    {
+                        group.Add(new XAttribute("transform", transform));
+                    }
+
+                    double opacity = path.Opacity * stroke.EffectiveOpacity * piece.Opacity;
+                    if (opacity < 1.0)
+                    {
+                        group.Add(new XAttribute("opacity", Number(opacity)));
+                    }
+
+                    WriteItems(new[] { piece.Asset }, group);
+
+                    // **The copy is anonymous.** The asset is an item of the document and is written where it
+                    // lives; its artwork here is a second element of the same shape, so keeping the `id` would
+                    // state one id twice - which a reader resolves in whichever order it happens to walk the tree.
+                    foreach (XElement written in group.DescendantsAndSelf())
+                    {
+                        written.Attribute("id")?.Remove();
+                    }
+
+                    host.Add(group);
+                    Wrote("g");
+                }
+            }
+            finally
+            {
+                _artDepth--;
             }
         }
 
