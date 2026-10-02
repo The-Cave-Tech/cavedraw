@@ -722,6 +722,32 @@ public static class EditorOperations
             return Summary(ctx);
         });
 
+        // ---- definitions and instances -----------------------------------
+        Add("instance.refresh",
+            "Rebuild every instance in the document from the definition it names, as one undo step. An instance " +
+            "holds a copy of its definition's content as well as the id it came from, so an edit to a definition - " +
+            "a moved node, a changed fill, a shape added or removed - reaches its instances only when this runs. " +
+            "It is the **document-wide** step and takes no scope: no definition id is accepted, because the command " +
+            "behind it re-resolves every instance there is, and a parameter that silently refreshed the whole " +
+            "document would make a driver believe a scope had taken effect. An instance keeps its own placement; " +
+            "only its content is replaced, and instances nested inside a definition are followed the whole chain " +
+            "down. A link that cannot be followed - a definition the document does not have, or a reference that " +
+            "leads back to itself - is refused by name in notFollowed and the instance keeps the copy it holds, " +
+            "which is what it draws. 'refreshed' counts the instances whose content was replaced, so 0 is a no-op " +
+            "and anything else is a refresh.",
+            "",
+            (ctx, _) =>
+            {
+                var command = new RefreshInstancesCommand(ctx.Document);
+                ctx.Session.Execute(command);
+
+                return new
+                {
+                    refreshed = command.LastResolution?.Refreshed ?? 0,
+                    notFollowed = command.LastResolution?.NotFollowed ?? (IReadOnlyList<string>)Array.Empty<string>(),
+                };
+            });
+
         // ---- selection ---------------------------------------------------
         Add("selection.get", "Currently selected objects.", "",
             (ctx, _) => Describe(ctx.Session.SelectedObjects).ToArray());
@@ -3035,22 +3061,31 @@ public static class EditorOperations
                 .ToArray());
 
         Add("brush.create",
-            "Create a reusable brush in the document. Two kinds: 'calligraphic', an elliptical nib with an angle, " +
-            "a roundness and a diameter; and 'art', which maps a piece of the document's own artwork along the " +
-            "stroke instead of stroking a line. For a nib, angle is the direction the nib's long axis points, in " +
+            "Create a reusable brush in the document. Three kinds: 'calligraphic', an elliptical nib with an angle, " +
+            "a roundness and a diameter; 'art', which maps a piece of the document's own artwork along the " +
+            "stroke instead of stroking a line; and 'pattern', which lays a tile set along it - a side tile " +
+            "repeated between the turns, a corner tile at each turn, and one start and one end tile at the two " +
+            "ends. For a nib, angle is the direction the nib's long axis points, in " +
             "degrees from the +X axis towards +Y, the same sense a path direction is measured in; roundness is " +
             "the nib's short axis as a fraction of its long one, so 1 is a circular pen and a small number is a " +
             "flat nib. For an art brush, 'asset' is the id of the document item whose artwork is mapped - a group, " +
             "a path or an embedded image - and 'size' (or 'diameter') is how wide that artwork is drawn across " +
             "the stroke; 'stretch' says whether it spans the path once (stretchToFit), keeps its proportions and " +
-            "is drawn once (scaleProportionally) or repeats along the path (repeat). The name has to be free: two " +
+            "is drawn once (scaleProportionally) or repeats along the path (repeat). For a pattern brush, each of " +
+            "'side', 'start', 'end', 'innerCorner' and 'outerCorner' is the id of an item of the document whose " +
+            "artwork is that tile, or null to leave the slot empty; 'size' (or 'diameter') is how wide a tile is " +
+            "drawn across the stroke, 'spacing' is the gap left between consecutive side tiles and " +
+            "'cornerThreshold' is how many degrees the path has to turn at a node for that node to count as a " +
+            "corner. A corner slot left empty is drawn with the side tile, which is the documented fallback. " +
+            "The name has to be free: two " +
             "brushes with one name would make 'the brush called X' ambiguous, and it is the name that strokes " +
             "refer to. Creating a brush does not apply it - an asset sits in the document until something uses " +
             "it. One undo step.",
-            "name:string, kind?:calligraphic|art (default calligraphic), angle?:number, roundness?:number, " +
-            "diameter?:number, asset?:guid, size?:number (an art brush's diameter), " +
+            "name:string, kind?:calligraphic|art|pattern (default calligraphic), angle?:number, roundness?:number, " +
+            "diameter?:number, asset?:guid, size?:number (an art or pattern brush's diameter), " +
             "stretch?:stretchToFit|scaleProportionally|repeat, flipAcross?:bool, flipAlong?:bool, " +
-            "colourisation?:none|tint|tintAndShade, shadeColour?:[r,g,b]",
+            "colourisation?:none|tint|tintAndShade, shadeColour?:[r,g,b], side?:guid, start?:guid, end?:guid, " +
+            "innerCorner?:guid, outerCorner?:guid, spacing?:number, cornerThreshold?:number",
             (ctx, p) =>
             {
                 string name = p.GetString("name") ?? string.Empty;
@@ -3222,13 +3257,16 @@ public static class EditorOperations
 
         Add("brush.set",
             "Change a stored brush. A nib's angle, roundness or diameter; an art brush's asset, size, stretch, " +
-            "flips and colourisation. Only the members given change. Setting 'asset' on an art brush re-points it " +
+            "flips and colourisation; a pattern brush's size, spacing and corner threshold - its tiles are set one " +
+            "at a time with brush.setTile, because a tile carries controls of its own and one operation taking " +
+            "five slots and five sets of controls would be five operations wearing a hat. Only the members given " +
+            "change. Setting 'asset' on an art brush re-points it " +
             "at another item of the document rather than copying its artwork, which is what keeps the brush a " +
             "reference. The strokes that use the brush are re-pointed with it, because that is what makes it an " +
             "asset rather than a copy. One undo step.",
             "name:string, angle?:number, roundness?:number, diameter?:number, asset?:guid, size?:number, " +
             "stretch?:stretchToFit|scaleProportionally|repeat, flipAcross?:bool, flipAlong?:bool, " +
-            "colourisation?:none|tint|tintAndShade, shadeColour?:[r,g,b]",
+            "colourisation?:none|tint|tintAndShade, shadeColour?:[r,g,b], spacing?:number, cornerThreshold?:number",
             (ctx, p) =>
             {
                 string name = p.GetString("name") ?? string.Empty;
@@ -3251,9 +3289,159 @@ public static class EditorOperations
                     FlipAlong = Given(p, "flipAlong") ? p.GetBool("flipAlong", brush.FlipAlong) : brush.FlipAlong,
                     Colourisation = Given(p, "colourisation") ? ReadColourisation(p) : brush.Colourisation,
                     ShadeColour = Given(p, "shadeColour") ? ReadShadeColour(p) : brush.ShadeColour,
+                    PatternSpacing = Given(p, "spacing")
+                        ? Math.Max(0.0, p.GetDouble("spacing", brush.PatternSpacing))
+                        : brush.PatternSpacing,
+                    PatternCornerThresholdDegrees = Given(p, "cornerThreshold")
+                        ? Math.Clamp(p.GetDouble("cornerThreshold", brush.PatternCornerThresholdDegrees), 0.0, 180.0)
+                        : brush.PatternCornerThresholdDegrees,
                 };
 
                 return ApplyBrushEdit(ctx, document, brush, name, updated, "Edit brush");
+            });
+
+        Add("brush.setTile",
+            "Put an item of the document's artwork into one slot of a pattern brush's tile set, or change the " +
+            "controls that are that tile's own. The slot is named with 'slot' and is one of side, start, end, " +
+            "innerCorner or outerCorner. 'asset' names the item whose artwork is the tile - a group, a path or an " +
+            "embedded image - and passing null empties the slot, which is how a slot that was filled is cleared; " +
+            "an empty corner slot is drawn with the side tile, which is the documented fallback, and an empty " +
+            "side slot simply places nothing. 'flipAcross' and 'flipAlong' mirror that tile's artwork, 'rotation' " +
+            "turns it about its own centre by that many degrees on top of the turn the path gives it, and 'scale' " +
+            "resizes it as a multiple of the brush's size. Rotation turns the artwork and not the tile's foot: a " +
+            "rotated tile still covers the same length of path. Only the members given change. The strokes that " +
+            "use the brush are re-pointed with it. One undo step.",
+            "name:string, slot:side|start|end|innerCorner|outerCorner, asset?:guid|null, flipAcross?:bool, " +
+            "flipAlong?:bool, rotation?:number, scale?:number",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                CadDocument document = ctx.Document;
+                BrushSpec brush = document.FindBrush(name)
+                    ?? throw new EditorOperationException($"there is no brush called '{name}'");
+
+                if (!brush.IsPattern)
+                {
+                    throw new EditorOperationException(
+                        $"'{name}' is a {brush.Kind.ToString().ToLowerInvariant()} brush, which has no tile set; " +
+                        "create it with kind 'pattern' to give it tiles");
+                }
+
+                PatternTileKind slot = ReadTileSlot(p);
+                PatternTileSpec? current = brush.Tile(slot);
+                bool givenAsset = Given(p, "asset");
+                Guid? asset = givenAsset ? ReadTileAsset(p, document, slot) : current?.Asset;
+
+                PatternTileSpec? tile;
+                if (asset is null)
+                {
+                    if (!givenAsset && current is null)
+                    {
+                        throw new EditorOperationException(
+                            $"the {SlotName(slot)} slot of '{name}' holds nothing; give 'asset' to put an item in it");
+                    }
+
+                    tile = null;
+                }
+                else
+                {
+                    tile = new PatternTileSpec(
+                        asset,
+                        Given(p, "flipAcross") ? p.GetBool("flipAcross", current?.FlipAcross ?? false) : current?.FlipAcross ?? false,
+                        Given(p, "flipAlong") ? p.GetBool("flipAlong", current?.FlipAlong ?? false) : current?.FlipAlong ?? false,
+                        Given(p, "rotation") ? p.GetDouble("rotation", current?.RotationDegrees ?? 0.0) : current?.RotationDegrees ?? 0.0,
+                        Given(p, "scale") ? Math.Max(0.0, p.GetDouble("scale", current?.Scale ?? 1.0)) : current?.Scale ?? 1.0);
+                }
+
+                var updated = brush with
+                {
+                    PatternSideTile = slot == PatternTileKind.Side ? tile : brush.PatternSideTile,
+                    PatternStartTile = slot == PatternTileKind.Start ? tile : brush.PatternStartTile,
+                    PatternEndTile = slot == PatternTileKind.End ? tile : brush.PatternEndTile,
+                    PatternInnerTile = slot == PatternTileKind.InnerCorner ? tile : brush.PatternInnerTile,
+                    PatternOuterTile = slot == PatternTileKind.OuterCorner ? tile : brush.PatternOuterTile,
+                };
+
+                ApplyBrushEdit(ctx, document, brush, name, updated, "Set pattern tile");
+                return new
+                {
+                    brush = name,
+                    slot = SlotName(slot),
+                    tile = DescribeTile(tile),
+                    changed = updated != brush,
+                };
+            });
+
+        Add("brush.tiles",
+            "Where a pattern brush's tile set goes along a path - the read half of a pattern brush, and the only " +
+            "way to learn what the tiles are drawn as without seeing them. Each tile names the **slot** it fills " +
+            "(side, start, end, innerCorner or outerCorner), the artwork it is drawn with by id and name, the arc " +
+            "length of its centre, the path point there, the direction it is turned to in degrees, the length of " +
+            "path it covers and the six numbers of the affine transform carrying the tile's own coordinates onto " +
+            "the path. The slot is reported rather than the artwork alone because a corner slot with no corner " +
+            "tile of its own is filled with the side tile: the slot says a turn was recognised, the artwork says " +
+            "what filled it. **Reported rather than held**: the model has no member that says a tile is drawn at a " +
+            "place - a stroke's render plan is widths and outlines - so the tiles are computed from the path every " +
+            "time they are asked for, which is why editing the path moves them with no brush re-applied. A brush " +
+            "that is not a pattern brush is refused by name, and so is a slot naming an item the document does " +
+            "not have.",
+            "name:string, itemId?:guid (default: the selected paths)",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                CadDocument document = ctx.Document;
+                BrushSpec brush = document.FindBrush(name)
+                    ?? throw new EditorOperationException($"there is no brush called '{name}'");
+
+                if (!brush.IsPattern)
+                {
+                    throw new EditorOperationException(
+                        $"'{name}' is a {brush.Kind.ToString().ToLowerInvariant()} brush, which has no tile set; " +
+                        (brush.IsArt ? "use brush.placements for where its artwork goes" : "it sweeps a nib along the path"));
+                }
+
+                // A slot whose artwork is gone is named rather than omitted: a tile that quietly vanishes is the
+                // difference between a known gap and a drawing that looks like someone meant it. Only **this**
+                // brush's slots are asked about - another brush's missing artwork is that brush's business.
+                foreach (PatternTileKind slot in Enum.GetValues<PatternTileKind>())
+                {
+                    if (brush.Tile(slot) is { Asset: { } asset } && document.FindItem(asset) is null)
+                    {
+                        throw new EditorOperationException(
+                            $"the pattern brush '{name}' names the item {asset} for its {SlotName(slot)} tile, " +
+                            "and this document has no such item");
+                    }
+                }
+
+                IEnumerable<PathItem> paths = p.TryGetGuid("itemId", out Guid id)
+                    ? new[] { RequirePath(document, id) }
+                    : ctx.Session.SelectedPaths();
+
+                Rect2D? Bounds(Guid asset)
+                    => document.FindItem(asset) is { } item ? ItemBounds.Of(item) : null;
+
+                return paths.Select(path => new
+                {
+                    itemId = path.Id,
+                    name = path.Name,
+                    brush = name,
+                    tiles = PatternBrushPath.Placements(path, brush, Bounds).Select(tile => new
+                    {
+                        slot = SlotName(tile.Slot),
+                        asset = tile.Asset,
+                        assetName = document.FindItem(tile.Asset)?.Name,
+                        position = Math.Round(tile.Position, 4),
+                        x = Math.Round(tile.Point.X, 4),
+                        y = Math.Round(tile.Point.Y, 4),
+                        tangentDegrees = Math.Round(tile.TangentRadians * 180.0 / Math.PI, 4),
+                        length = Math.Round(tile.Length, 4),
+                        transform = new[]
+                        {
+                            tile.Transform.A, tile.Transform.B, tile.Transform.C,
+                            tile.Transform.D, tile.Transform.E, tile.Transform.F,
+                        },
+                    }).ToArray(),
+                }).ToArray();
             });
 
         Add("brush.missing",
@@ -3293,8 +3481,10 @@ public static class EditorOperations
                 if (!brush.IsArt)
                 {
                     throw new EditorOperationException(
-                        $"'{name}' is a {brush.Kind.ToString().ToLowerInvariant()} brush, which sweeps a nib along " +
-                        "the path; it places no artwork");
+                        $"'{name}' is a {brush.Kind.ToString().ToLowerInvariant()} brush, which " +
+                        (brush.IsPattern
+                            ? "lays a tile set along the path; use brush.tiles for where its tiles go"
+                            : "sweeps a nib along the path; it places no artwork"));
                 }
 
                 if (brush.ArtAsset is not { } assetId)
@@ -7180,10 +7370,58 @@ public static class EditorOperations
                     Given(p, "colourisation") ? ReadColourisation(p) : ArtColourisation.None,
                     Given(p, "shadeColour") ? ReadShadeColour(p) : null);
 
+            case "pattern":
+                return BrushSpec.Pattern(
+                    name,
+                    BrushSize(p, p.GetDouble("diameter", p.GetDouble("size", 1.0))),
+                    ReadTile(p, "side", document),
+                    ReadTile(p, "start", document),
+                    ReadTile(p, "end", document),
+                    ReadTile(p, "innerCorner", document),
+                    ReadTile(p, "outerCorner", document),
+                    p.GetDouble("spacing", 0.0),
+                    p.GetDouble("cornerThreshold", 30.0));
+
             default:
                 throw new EditorOperationException(
-                    $"'{kind}' is not a brush kind this build makes; use calligraphic or art");
+                    $"'{kind}' is not a brush kind this build makes; use calligraphic, art or pattern");
         }
+    }
+
+    /// <summary>
+    /// One slot of a pattern brush's tile set, refused by name when the slot names an item the document does not
+    /// have.
+    ///
+    /// The refusal is the art brush's, for the art brush's reason: a slot pointing at an id nothing answers to is
+    /// a slot that draws nothing, and creating the brush is the moment to say so while the caller can still pass
+    /// the right id. An explicit null leaves the slot empty, which is a different thing from leaving it out: one
+    /// clears a slot that was filled, the other says nothing about it.
+    /// </summary>
+    private static PatternTileSpec? ReadTile(JsonElement p, string slot, CadDocument document)
+    {
+        if (!Given(p, slot))
+        {
+            return null;
+        }
+
+        if (p.TryGetProperty(slot, out JsonElement value) && value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (!p.TryGetGuid(slot, out Guid asset))
+        {
+            throw new EditorOperationException(
+                $"'{slot}' has to be the id of an item in this document, or null to leave the slot empty");
+        }
+
+        if (document.FindItem(asset) is null)
+        {
+            throw new EditorOperationException(
+                $"the document has no item {asset} for the {slot} tile; name an item that is in the drawing");
+        }
+
+        return new PatternTileSpec(asset);
     }
 
     /// <summary>
@@ -8373,9 +8611,8 @@ public static class EditorOperations
     ///
     /// The **art members are reported only for an art brush**, keyed off the kind rather than off "is the asset
     /// set": a nib written with an asset would be a brush this build cannot draw, and reporting the member would
-    /// hide that. What the art brush does *not* report is a claim that anything draws it - the asset and its
-    /// placements are as far as the model goes, and which item that is comes back by id and name so a caller can
-    /// find it.
+    /// hide that. The asset and its placements are what the canvas draws and the exporter writes; the one art
+    /// member that is held rather than honoured is the colourisation, and `colourisationApplied` says so.
     /// </summary>
     private static object? DescribeBrush(BrushSpec? brush)
         => brush is null
@@ -8406,7 +8643,98 @@ public static class EditorOperations
                         colourisationApplied = false,
                     }
                     : null,
+
+                // The pattern brush's members, reported only for the pattern kind for the reason the art members
+                // are: a nib carrying a tile would be a brush this build cannot draw, and reporting the member
+                // would hide that. Every slot is reported whether or not it is filled, so "the file filled no
+                // corner slot" is visible as null rather than as an absent key a caller has to guess about.
+                pattern = brush.IsPattern
+                    ? (object?)new
+                    {
+                        side = DescribeTile(brush.PatternSideTile),
+                        start = DescribeTile(brush.PatternStartTile),
+                        end = DescribeTile(brush.PatternEndTile),
+                        innerCorner = DescribeTile(brush.PatternInnerTile),
+                        outerCorner = DescribeTile(brush.PatternOuterTile),
+                        spacing = Math.Round(brush.PatternSpacing, 4),
+                        cornerThreshold = Math.Round(brush.PatternCornerThresholdDegrees, 4),
+
+                        // The slot is not reported here: it is the key this entry sits under.
+                    }
+                    : null,
             };
+
+    /// <summary>
+    /// One tile of a pattern brush's set as a caller reads it, or null for a slot the brush does not fill.
+    ///
+    /// The slot is not part of it - a tile is read under the name of the slot it is in - and the controls are
+    /// reported as the model holds them rather than as a list of what was changed, so what a driver reads is what
+    /// the next render will use.
+    /// </summary>
+    private static object? DescribeTile(PatternTileSpec? tile)
+        => tile is null
+            ? null
+            : new
+            {
+                asset = tile.Asset,
+                flipAcross = tile.FlipAcross,
+                flipAlong = tile.FlipAlong,
+                rotation = Math.Round(tile.RotationDegrees, 4),
+                scale = Math.Round(tile.Scale, 6),
+            };
+
+    /// <summary>The five slot names as a caller names them, which is also the key they are read back under.</summary>
+    private static string SlotName(PatternTileKind slot) => slot switch
+    {
+        PatternTileKind.Side => "side",
+        PatternTileKind.Start => "start",
+        PatternTileKind.End => "end",
+        PatternTileKind.InnerCorner => "innerCorner",
+        PatternTileKind.OuterCorner => "outerCorner",
+        _ => slot.ToString().ToLowerInvariant(),
+    };
+
+    /// <summary>The slot a caller named, refused by name when it is not one of the five.</summary>
+    private static PatternTileKind ReadTileSlot(JsonElement p)
+        => (p.GetString("slot") ?? string.Empty).Trim().ToLowerInvariant() switch
+        {
+            "side" or "sidetile" => PatternTileKind.Side,
+            "start" or "starttile" => PatternTileKind.Start,
+            "end" or "endtile" => PatternTileKind.End,
+            "innercorner" or "inner" or "inner-corner" => PatternTileKind.InnerCorner,
+            "outercorner" or "outer" or "outer-corner" => PatternTileKind.OuterCorner,
+            var other => throw new EditorOperationException(
+                $"'{other}' is not a pattern brush slot; use side, start, end, innerCorner or outerCorner"),
+        };
+
+    /// <summary>
+    /// The item a caller is putting in a tile slot, or null when they are emptying it.
+    ///
+    /// The reference is checked here rather than only at render time, for the reason an art brush's asset is: a
+    /// slot pointing at an id nothing answers to is a slot that draws nothing, and setting it is the moment to
+    /// say so while the caller can still pass the right id.
+    /// </summary>
+    private static Guid? ReadTileAsset(JsonElement p, CadDocument document, PatternTileKind slot)
+    {
+        if (p.TryGetProperty("asset", out JsonElement value) && value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (!p.TryGetGuid("asset", out Guid asset))
+        {
+            throw new EditorOperationException(
+                "'asset' has to be the id of an item in this document, or null to empty the slot");
+        }
+
+        if (document.FindItem(asset) is null)
+        {
+            throw new EditorOperationException(
+                $"the document has no item {asset} for the {SlotName(slot)} tile; name an item that is in the drawing");
+        }
+
+        return asset;
+    }
 
     /// <summary>
     /// A tablet response as a caller reads it: the targets that are switched on, with their curves - null when

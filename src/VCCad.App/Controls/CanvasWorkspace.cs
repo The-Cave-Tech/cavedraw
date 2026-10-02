@@ -51,6 +51,18 @@ public sealed class CanvasWorkspace : Control
     /// offscreen in the same space. Set at the start of every pass, so it always describes the pass in progress.</summary>
     private Avalonia.Matrix? _paintWorld;
     private PasteboardLayout _layout = new(Rect2D.Empty);
+
+    /// <summary>
+    /// How deep the art a stroke's brush maps is currently nested.
+    ///
+    /// An art brush names a document item, and that item may be a path whose own stroke carries an art brush -
+    /// so drawing the art can reach back into this painter. A depth cap ends a cycle (or a chain long enough to
+    /// be one) as art that stops nesting, rather than as a stack overflow while a person is drawing.
+    /// </summary>
+    private int _artDepth;
+
+    private const int MaxArtDepth = 8;
+
     private Vector2D _offset;
     private bool _isPanning;
     private bool _hasLaidOutOnce;
@@ -4290,7 +4302,7 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
-        PaintPathDirect(context, path, opacity);
+        PaintPathDirect(context, path, opacity, toWorld);
     }
 
     /// <summary>The path as it is drawn without a filter.</summary>
@@ -4329,13 +4341,13 @@ public sealed class CanvasWorkspace : Control
             bounds,
             world,
             scale,
-            ctx => PaintPathDirect(ctx, path, opacity),
+            ctx => PaintPathDirect(ctx, path, opacity, toWorld),
             // SVG's `FillPaint` and `StrokePaint` are the shape painted in one of the two and not the other, which
             // the pixels of both together cannot be taken apart into - so the two passes are handed over separately
             // for the graph to read. `BackgroundImage` is not passed: this renderer draws one item at a time and has
             // no backdrop picture, so the engine names it as unsupplied rather than being handed an invented one.
             ctx => PaintPathFill(ctx, path, opacity),
-            ctx => PaintPathStroke(ctx, path, opacity),
+            ctx => PaintPathStroke(ctx, path, opacity, toWorld),
             // The shape's own box, which is what an `objectBoundingBox` primitive length is a fraction of. It is the
             // geometry's box rather than the alpha's extent: SVG's bounding box is the shape's, and for a stroked
             // path the two differ by exactly the stroke width the blur would otherwise be measured against.
@@ -4357,10 +4369,10 @@ public sealed class CanvasWorkspace : Control
     /// Kept as the two halves rather than one call because a filter graph may read the fill and the stroke as
     /// separate pictures, and because they are the two things SVG's `FillPaint` and `StrokePaint` mean.
     /// </summary>
-    private void PaintPathDirect(DrawingContext context, PathItem path, double opacity)
+    private void PaintPathDirect(DrawingContext context, PathItem path, double opacity, AffineTransform toWorld)
     {
         PaintPathFill(context, path, opacity);
-        PaintPathStroke(context, path, opacity);
+        PaintPathStroke(context, path, opacity, toWorld);
     }
 
     /// <summary>The path's fill alone - what a graph reading `FillPaint` sees.</summary>
@@ -4384,7 +4396,7 @@ public sealed class CanvasWorkspace : Control
     }
 
     /// <summary>The path's strokes alone - what a graph reading `StrokePaint` sees.</summary>
-    private void PaintPathStroke(DrawingContext context, PathItem path, double opacity)
+    private void PaintPathStroke(DrawingContext context, PathItem path, double opacity, AffineTransform toWorld)
     {
         if (!path.HasVisibleStroke)
         {
@@ -4447,29 +4459,101 @@ public sealed class CanvasWorkspace : Control
                 context.DrawGeometry(
                     ToBrush(stroke.Color, opacity * stroke.EffectiveOpacity), null,
                     BuildProfileGeometry(path, stroke));
-                continue;
             }
-
-            double width = Math.Max(
-                Math.Max(0.01, stroke.Width),
-                MinDevicePixels / Math.Max(_layout.Zoom, 1e-6));
-
-            bool aligned = stroke.Alignment != StrokeAlignment.Center && anyClosed;
-            if (!aligned)
+            else
             {
-                context.DrawGeometry(null, StrokePen(stroke, width), geometry);
-                continue;
+                double width = Math.Max(
+                    Math.Max(0.01, stroke.Width),
+                    MinDevicePixels / Math.Max(_layout.Zoom, 1e-6));
+
+                bool aligned = stroke.Alignment != StrokeAlignment.Center && anyClosed;
+                if (!aligned)
+                {
+                    context.DrawGeometry(null, StrokePen(stroke, width), geometry);
+                }
+                else
+                {
+                    Avalonia.Media.Geometry clip = stroke.Alignment == StrokeAlignment.Inside
+                        ? geometry
+                        : BuildGeometry(path, outsideClip: true);
+                    using (context.PushGeometryClip(clip))
+                    {
+                        context.DrawGeometry(null, StrokePen(stroke, width * 2), geometry);
+                    }
+                }
             }
 
-            Avalonia.Media.Geometry clip = stroke.Alignment == StrokeAlignment.Inside
-                ? geometry
-                : BuildGeometry(path, outsideClip: true);
-            using (context.PushGeometryClip(clip))
-            {
-                context.DrawGeometry(null, StrokePen(stroke, width * 2), geometry);
-            }
+            // **The art the brush maps, drawn over the stroke the pen laid down.** A plan is a width or an
+            // outline and an art brush is neither, so the artwork is a second step and its own path here rather
+            // than something the plan carries. It is resolved from the same shared seam the exporter uses, so
+            // the two cannot disagree about where the art goes.
+            PaintStrokeArt(context, path, stroke, opacity * stroke.EffectiveOpacity, toWorld);
         }
     }
+
+    /// <summary>
+    /// Draws the artwork a stroke's art brush maps along the path, once per placement.
+    ///
+    /// **Why the transform is pushed rather than baked.** An <see cref="ImageItem"/> holds an axis-aligned
+    /// placement and two mirrors and **no rotation**, so a turned raster placement cannot be stated by the item
+    /// and has to be applied by the renderer - which is what the pushed matrix below is. The same push is what
+    /// puts a vector asset's frame onto the path.
+    ///
+    /// The pushed matrix is <c>T(-asset origin) ∘ placement</c>, because the item's own painters draw it at its
+    /// artboard origin and the placement is stated against its own frame; the frame handed to the painter is the
+    /// composed one, so its off-screen test measures where the art actually lands rather than where the asset
+    /// sits in its own right.
+    ///
+    /// **A cycle is stopped rather than followed.** An art brush names an item by id, and that item may be a path
+    /// whose own stroke carries an art brush - including, through a pair of brushes, one that leads back here.
+    /// The depth cap ends that as a picture that stops nesting rather than as a stack overflow.
+    ///
+    /// **A pattern brush draws its tiles through here too.** Its tiles are artwork placed along the path in
+    /// exactly the sense this method means, and `PlacedArt.Resolve` answers for both kinds, so one loop draws
+    /// them both and the two renderers cannot come to different conclusions about where a tile sits.
+    /// </summary>
+    private void PaintStrokeArt(
+        DrawingContext context, PathItem path, StrokeSpec stroke, double opacity, AffineTransform toWorld)
+    {
+        if (stroke.Brush is not { } brush || _document is null || _artDepth >= MaxArtDepth ||
+            (!brush.IsArt && !brush.IsPattern))
+        {
+            return;
+        }
+
+        IReadOnlyList<PlacedArt> art = PlacedArt.Resolve(_document, path, brush);
+        if (art.Count == 0)
+        {
+            return;
+        }
+
+        _artDepth++;
+        try
+        {
+            foreach (PlacedArt piece in art)
+            {
+                // The item's own frame is its artboard-local one: its painters add `ArtboardOffset()` to the
+                // coordinates it stores, so the push takes that back off before the placement carries the frame
+                // onto the path.
+                Vector2D origin = piece.Asset.ArtboardOffset();
+                AffineTransform ontoThePath = piece.Placement.Transform.Compose(
+                    AffineTransform.CreateTranslation(-origin.X, -origin.Y));
+
+                using (context.PushTransform(MatrixOf(ontoThePath)))
+                {
+                    PaintItem(context, piece.Asset, opacity, toWorld.Compose(ontoThePath));
+                }
+            }
+        }
+        finally
+        {
+            _artDepth--;
+        }
+    }
+
+    /// <summary>An affine transform as the matrix Avalonia pushes, which is the same six numbers.</summary>
+    private static Avalonia.Matrix MatrixOf(AffineTransform transform)
+        => new(transform.A, transform.B, transform.C, transform.D, transform.E, transform.F);
 
     /// <summary>
     /// The stroke to draw: while a width-profile grip is being dragged, the profile the pointer is

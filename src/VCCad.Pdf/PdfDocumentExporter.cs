@@ -368,7 +368,7 @@ public static class PdfDocumentExporter
     /// an ancestor's clip is the half that giving it a frame could not reach: a second loop that re-derives the
     /// frame is a second place for it to disagree, so the walk is the only one left.
     /// </summary>
-    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfFontEmbedder embedder, PdfImageObjects? images = null, PdfShadingObjects? shadings = null, CadDocument? document = null, List<string>? notes = null)
+    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfFontEmbedder embedder, PdfImageObjects? images = null, PdfShadingObjects? shadings = null, CadDocument? document = null, List<string>? notes = null, int artDepth = 0)
     {
         if (!item.IsEffectivelyVisible())
         {
@@ -395,7 +395,8 @@ public static class PdfDocumentExporter
         switch (item)
         {
             case PathItem path:
-                PaintPath(ops, path, toDoc, opacity, alphaStates, shadings, images, document, notes);
+                PaintPath(ops, path, toDoc, opacity, alphaStates, embedder, shadings, images, document, notes,
+                    artDepth);
                 break;
 
             case TextItem text:
@@ -415,7 +416,7 @@ public static class PdfDocumentExporter
                 foreach (LayerItem child in group.Children)
                 {
                     PaintItem(ops, child, childToDoc, opacity * group.Opacity, alphaStates, embedder, images,
-                        shadings, document, notes);
+                        shadings, document, notes, artDepth);
                 }
 
                 break;
@@ -540,8 +541,11 @@ public static class PdfDocumentExporter
     /// closed (fillable) and open (stroke-only), so the renderer never fills an
     /// open path as PDF would implicitly do.
     /// </summary>
-    private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfShadingObjects? shadings = null, PdfImageObjects? images = null, CadDocument? document = null, List<string>? notes = null)
+    private static void PaintPath(List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfFontEmbedder embedder, PdfShadingObjects? shadings = null, PdfImageObjects? images = null, CadDocument? document = null, List<string>? notes = null, int artDepth = 0)
     {
+        // How deep the art a stroke's brush maps is nested, matching the canvas's cap so a cycle stops at the
+        // same place on the screen and in the file.
+        const int MaxArtDepth = 8;
         // A **stroke's raster effects** are the same kind of thing and take the same route, reached from the stroke
         // side: the path is drawn with every stroke it has, the effect graphs run over those pixels, and the answer
         // is placed as an image. The frame is asked of `SelectionEngine` for the same reason the filter branch asks
@@ -813,6 +817,47 @@ public static class PdfDocumentExporter
             // renderers each deciding for themselves what the absence means.
             double strokeOpacity = opacity * stroke.EffectiveOpacity;
 
+            // **The art the brush maps, written over the stroke the pen drew.** A plan is a width or an outline
+            // and an art brush is neither, so the placements are resolved from the shared seam and each piece is
+            // written as the asset's own artwork under the placement's transform. The canvas resolves the same
+            // seam, which is what stops the screen and the file disagreeing about where the art sits.
+            //
+            // **The transform is written, not baked into the artwork**, and that is what carries a turned
+            // **raster** placement: an `ImageItem` holds an axis-aligned placement and two mirrors and no
+            // rotation, so a piece turned to a tangent is a matrix the file has to state. That matrix is the
+            // image's own `cm`, and a vector asset's frame is the same combination applied to its coordinates -
+            // so both kinds take one route.
+            //
+            // The depth cap matches the canvas's, for its reason: an art brush names an item by id, that item may
+            // be a path with an art brush of its own, and a cycle through two brushes would otherwise recurse
+            // forever.
+            //
+            // **A pattern brush's tiles are written through here too.** They are artwork placed along the path in
+            // the same sense, and `PlacedArt.Resolve` answers for both kinds - so one route writes both, and the
+            // screen and the file cannot disagree about where a tile sits.
+            void WriteStrokeArt()
+            {
+                if (document is null || artDepth >= MaxArtDepth ||
+                    stroke.Brush is not { } brush || (!brush.IsArt && !brush.IsPattern))
+                {
+                    return;
+                }
+
+                foreach (PlacedArt piece in PlacedArt.Resolve(document, path, brush, strokeScale))
+                {
+                    // The placement is the frame the asset is **written in**, not a `cm` wrapped around its own
+                    // coordinates, because that is how this writer states every other item's frame: a path's
+                    // anchors are written transformed, and an image's placement is written as its matrix. It also
+                    // means the turn is on the numbers a renderer reads, rather than on a stack it has to follow.
+                    AffineTransform placed = toDoc.Compose(piece.Placement.Transform);
+
+                    ops.Add("q");
+                    PaintItem(ops, piece.Asset, placed, strokeOpacity, alphaStates, embedder, images, shadings,
+                        document, notes, artDepth + 1);
+                    ops.Add("Q");
+                }
+            }
+
             // What this stroke is drawn as is decided in one place, in the model, so the canvas and this writer
             // cannot come to different conclusions about a stroke that varies along its length.
             StrokeRenderPlan plan = StrokeOutlineBuilder.Plan(path, stroke, strokeScale);
@@ -831,6 +876,7 @@ public static class PdfDocumentExporter
                     ReferenceEquals(stroke, path.Strokes[0]) ? path.SourceStrokeCmyk : null,
                     stroke: false));
                 WriteOutline(ops, plan.Outlines, toDoc, stroke, strokeOpacity, alphaStates);
+                WriteStrokeArt();
                 continue;
             }
 
@@ -905,6 +951,8 @@ public static class PdfDocumentExporter
                 WriteContours(ops, open);
                 ops.Add("S");
             }
+
+            WriteStrokeArt();
         }
     }
 
