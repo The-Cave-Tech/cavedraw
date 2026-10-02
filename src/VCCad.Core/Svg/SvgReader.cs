@@ -449,6 +449,12 @@ public static partial class SvgReader
             path.ForeignElements.Add(definition.Xml);
         }
 
+        // The description is kept as state as well as as XML, so the converted profile can be re-derived against
+        // the geometry as it stands later (issue #180). Kept whether or not the translation succeeds: the path
+        // carries the effect either way, and an effect this build cannot translate is one a driver should still be
+        // told about by name when a refresh is asked for.
+        path.PathEffect = definition.Spec;
+
         PathEffectTranslation translation = PathEffects.Translate(definition.Spec, path, path.Stroke);
 
         // Named by the id the file used *and* by the effect's own name, because the two are what a person has to
@@ -781,6 +787,18 @@ public static partial class SvgReader
         /// which is a value the file did not write.
         /// </summary>
         public required SvgViewport? Viewport { get; set; }
+
+        /// <summary>
+        /// The viewport a `use` states for an `svg` target it draws, in the file's own units, or null when this
+        /// read is not that case.
+        ///
+        /// SVG 2 lets a `use` override the width and height of an `svg` or `symbol` it refers to. The symbol half is
+        /// arithmetic on the instance group in <see cref="ReadUse"/>; the `svg` half is a *viewport*, so it is
+        /// carried here and consumed by <see cref="ReadNestedSvg"/>, which is the one place that knows how to fit
+        /// a view box into a port. Deliberately **not** copied into a child context: it sizes the target element
+        /// alone, not anything the target happens to contain.
+        /// </summary>
+        public SvgViewport? PortOverride { get; set; }
 
         /// <summary>The directory a file reference in the document is resolved against, when it came from disk.</summary>
         public required string? BaseDirectory { get; init; }
@@ -1160,8 +1178,14 @@ public static partial class SvgReader
             return;
         }
 
-        if (NestedPort(element, "width", SvgAxis.X, context) is not { } portWidth ||
-            NestedPort(element, "height", SvgAxis.Y, context) is not { } portHeight)
+        // **A `use` of this element may state the port itself.** SVG 2 sizes the viewport a `use` establishes over
+        // an `svg` target from the use's own `width` and `height`, so those are the dimensions carried on the
+        // context by ReadUse; without them the element's own attributes - or SVG 1.1 §5.1.2's `100%` - are the port,
+        // exactly as for any other nested `svg`. Reading them the same way the element's own are read means the
+        // override cannot be resolved twice or against a different reference.
+        double? statedWidth = context.PortOverride?.Width ?? NestedPort(element, "width", SvgAxis.X, context);
+        double? statedHeight = context.PortOverride?.Height ?? NestedPort(element, "height", SvgAxis.Y, context);
+        if (statedWidth is not { } portWidth || statedHeight is not { } portHeight)
         {
             return;
         }
@@ -2410,14 +2434,26 @@ public static partial class SvgReader
     /// is being resolved, so a second attempt at the same id is the cycle itself and the report says which one.
     /// That is what makes a file that would loop terminate and say why rather than recursing without bound.
     ///
-    /// A `use` whose target is an `svg` and which states a `width` or `height` of its own is reported, because
-    /// SVG 2 would size that viewport from the use and this reader draws the target at its own size - see the
-    /// `else` branch below for why a plain shape is a different case.
+    /// A `use` that names **another document** is resolved when the reader has that document, and reported with
+    /// its reason when it does not - see <see cref="ReadExternalUse"/>, which owns that path.
     /// </summary>
     private static IEnumerable<LayerItem> ReadUse(XElement element, Context context, PresentationStyle style)
     {
         XNamespace xlink = "http://www.w3.org/1999/xlink";
         string? href = element.Attribute("href")?.Value ?? element.Attribute(xlink + "href")?.Value;
+
+        // **A reference to another document.** `other.svg#id`, or `other.svg` for the whole file. This is tested
+        // before the local form because the two are distinguished by the first character and a reference that is
+        // not `#`-prefixed is never an id in this document.
+        if (href is { Length: > 1 } && href[0] != '#')
+        {
+            foreach (LayerItem used in ReadExternalUse(element, href, context, style))
+            {
+                yield return used;
+            }
+
+            yield break;
+        }
 
         string id = href is { Length: > 1 } && href[0] == '#' ? href[1..] : string.Empty;
         if (id.Length == 0)
@@ -2476,13 +2512,37 @@ public static partial class SvgReader
                 context.Warn),
         };
 
+        ReadUsedTarget(target, id, element, context, inside, group);
+
+        context.Resolving.Remove(id);
+        yield return group;
+    }
+
+    /// <summary>
+    /// Reads a `use`'s target into the instance group, honouring the two things SVG 2 lets a `use` state about the
+    /// viewport an `svg` or `symbol` target establishes.
+    ///
+    /// **`width` and `height` on a `use` size a `symbol` or an `svg` target, and nothing else.** The symbol half is
+    /// arithmetic on the instance group - the use's size over the symbol's view box, falling back to the symbol's
+    /// own geometry properties - and the `svg` half is a *viewport*, so it is handed to the nested-`svg` reader as
+    /// <see cref="Context.PortOverride"/> and fitted there with `preserveAspectRatio` exactly as any other nested
+    /// port is. A plain shape is the case where the attributes have no effect at all, so leaving them alone is
+    /// honouring the specification rather than dropping a value.
+    ///
+    /// The two contexts are separate because the target may come from **another document**, whose assets are its
+    /// own: <paramref name="context"/> is the frame the `use` is written in, and <paramref name="inside"/> carries
+    /// whichever document's ids, stylesheet and paint servers the target must be read against.
+    /// </summary>
+    private static void ReadUsedTarget(
+        XElement target, string id, XElement use, Context context, Context inside, ArtGroup group)
+    {
         if (target.Name.LocalName == "symbol")
         {
             // A symbol is sized by the `use` that draws it: the use's width and height over the symbol's view box,
             // with the symbol's own width and height - SVG 2's geometry properties - as the fallback.
-            double symbolWidth = context.Length(element.Attribute("width")?.Value, SvgAxis.X, "width")
+            double symbolWidth = context.Length(use.Attribute("width")?.Value, SvgAxis.X, "width")
                 ?? context.Length(target.Attribute("width")?.Value, SvgAxis.X, "width") ?? 0.0;
-            double symbolHeight = context.Length(element.Attribute("height")?.Value, SvgAxis.Y, "height")
+            double symbolHeight = context.Length(use.Attribute("height")?.Value, SvgAxis.Y, "height")
                 ?? context.Length(target.Attribute("height")?.Value, SvgAxis.Y, "height") ?? 0.0;
             double[]? box = Numbers(target.Attribute("viewBox")?.Value);
 
@@ -2505,31 +2565,254 @@ public static partial class SvgReader
             {
                 ReadElement(child, inside);
             }
+
+            return;
         }
-        else
+
+        // **An `svg` target takes the use's own port.** SVG 2 sizes that viewport from the use; the dimensions are
+        // read here, in the frame the use is written in, and fitted against the target's view box by the nested
+        // reader. A use that names only one of the two falls back to the target's own for the other rather than
+        // inventing a value or reporting a width it can honour.
+        if (target.Name.LocalName == "svg" && StatesSize(use))
         {
-            // A shape or a group: read it into this group, which is what makes the instance hold the definition's
-            // content rather than pointing at it from nowhere.
-            //
-            // **A `use` of an `svg` is the case this reader cannot honour.** SVG 2 sizes the viewport a `use`
-            // establishes from the use's own `width` and `height` when the target is a `symbol` **or an `svg`**;
-            // the symbol half is honoured above, and an `svg` target is drawn at its own size because that is the
-            // size its own attributes state. A use that gives a different one is therefore reported by name rather
-            // than drawn at a size the file did not ask for - a value this reader cannot honour is never
-            // substituted, and `width` on a use of a plain shape is *not* this case: SVG gives it no effect at all
-            // there, so ignoring it is honouring it.
-            if (target.Name.LocalName == "svg" && StatesSize(element))
+            inside.PortOverride = new SvgViewport(
+                context.Length(use.Attribute("width")?.Value, SvgAxis.X, "width")
+                    ?? NestedPort(target, "width", SvgAxis.X, context) ?? 0.0,
+                context.Length(use.Attribute("height")?.Value, SvgAxis.Y, "height")
+                    ?? NestedPort(target, "height", SvgAxis.Y, context) ?? 0.0);
+        }
+
+        // A shape or a group: read it into this group, which is what makes the instance hold the definition's
+        // content rather than pointing at it from nowhere.
+        ReadElement(target, inside);
+    }
+
+    /// <summary>
+    /// A `use` that names **another document**: `other.svg#id`, or `other.svg` for the whole file.
+    ///
+    /// **It is resolved when the reader has the other document.** `test-use.svg` in the corpus is exactly this - a
+    /// two-line document whose only content is `xlink:href="test-use-ref.svg#root"` - and it used to import as
+    /// **zero objects** with the raw href in the report. The reader already opens a file beside the document for
+    /// `image`, so it does the same here: the other file is parsed, the fragment is looked up among its ids, and
+    /// the element is read with **that document's** own ids, stylesheet, paint servers, markers and path effects.
+    /// Reading it against this document's assets would draw the right shapes in the wrong paint, which is the
+    /// substitution this reader does not make.
+    ///
+    /// **What cannot be resolved is named with its reason.** A URL is not fetched, a file that is not there is
+    /// named with its path, a file that is not an SVG or is not well-formed says which, and a fragment the other
+    /// document does not define is named as that. A bare href would merge four different findings into one line
+    /// that sends a person looking in the wrong place.
+    ///
+    /// **The definition is not invented here.** The id belongs to the other document, and this document holds the
+    /// resolved copy on the instance plus the id it came from, exactly as a local `use` does. The model has no
+    /// cross-document provenance, so a local definition entry would assert the file contains something it does
+    /// not; the instances that name it are reported by <see cref="CadDocument.MissingDefinitions"/> as the links
+    /// this document cannot follow on its own.
+    ///
+    /// A cycle **through another document** is refused by name for the same reason a local one is: the file and the
+    /// fragment together are the key, because two documents may hold an id of the same name.
+    /// </summary>
+    private static IEnumerable<LayerItem> ReadExternalUse(
+        XElement element, string href, Context context, PresentationStyle style)
+    {
+        if (href.Contains("://", StringComparison.Ordinal))
+        {
+            context.Missing.Add(
+                $"{href} (a reference to another document, and this reader does not fetch over the network)");
+            yield break;
+        }
+
+        int hash = href.IndexOf('#');
+        string file = hash >= 0 ? href[..hash] : href;
+        string fragment = hash >= 0 ? href[(hash + 1)..] : string.Empty;
+
+        if (file.Length == 0)
+        {
+            // `#id` with no file is the local form, which ReadUse handled before calling this.
+            context.Missing.Add(href);
+            yield break;
+        }
+
+        if (context.BaseDirectory is not { Length: > 0 } directory)
+        {
+            context.Missing.Add(
+                $"{href} (a reference to another document, and this import has no directory to resolve it against)");
+            yield break;
+        }
+
+        string path;
+        try
+        {
+            path = System.IO.Path.GetFullPath(System.IO.Path.Combine(directory, Uri.UnescapeDataString(file)));
+        }
+        catch (Exception exception)
+            when (exception is ArgumentException or NotSupportedException or UriFormatException or PathTooLongException)
+        {
+            context.Missing.Add($"{href} (the reference is not a path this reader can open: {exception.Message})");
+            yield break;
+        }
+
+        if (!File.Exists(path))
+        {
+            context.Missing.Add($"{href} (there is no file at '{path}')");
+            yield break;
+        }
+
+        if (LoadExternal(path, href, context) is not { } external)
+        {
+            // LoadExternal has reported what is wrong with the file itself.
+            yield break;
+        }
+
+        XElement? target = fragment.Length == 0 ? external.Root : external.Ids.GetValueOrDefault(fragment);
+        if (target is null)
+        {
+            context.Missing.Add($"{href} (the referenced document defines no element with the id '{fragment}')");
+            yield break;
+        }
+
+        string key = path + "#" + fragment;
+        if (!context.Resolving.Add(key))
+        {
+            context.Missing.Add($"{href} (circular)");
+            yield break;
+        }
+
+        try
+        {
+            string id = fragment.Length > 0 ? fragment : System.IO.Path.GetFileNameWithoutExtension(path);
+            double x = context.Length(element.Attribute("x")?.Value, SvgAxis.X, "x") ?? 0.0;
+            double y = context.Length(element.Attribute("y")?.Value, SvgAxis.Y, "y") ?? 0.0;
+
+            var group = new ArtGroup
             {
-                context.Warn(
-                    $"a use of the <svg> '{id}' states a width or height, which this reader cannot honour: the " +
-                    "target is drawn at its own size");
+                Name = element.Attribute("id")?.Value ?? id,
+                SourceId = id,
+                Transform = AffineTransform.CreateTranslation(x, y)
+                    .Compose(Transform(element.Attribute("transform")?.Value)),
+            };
+
+            // The referenced document's filters are document state here, because a `filter="url(#f)"` on the
+            // element that was read has to name one this document can find. A name this document already defines
+            // is left alone: two documents may legitimately both call a filter `blur`, and replacing this
+            // document's own with the other one's would repaint artwork that was never involved.
+            if (context.Layer.Document is { } document)
+            {
+                foreach (FilterSpec filter in external.Filters.All.Values)
+                {
+                    if (document.FindFilter(filter.Name) is null)
+                    {
+                        document.AddFilter(filter);
+                    }
+                }
             }
 
-            ReadElement(target, inside);
+            // The `use`'s own declarations cascade into the instance, and the other document's root on top of
+            // them - that is the order the SVG tree has, since the target is rendered as though it were a child of
+            // the use.
+            SvgTextStyle useText = SvgTextStyle.From(
+                element,
+                context.Text,
+                context.Sheet.DeclarationsFor(element, element.Ancestors().ToArray()),
+                context.Warn);
+
+            var inside = new Context
+            {
+                Layer = context.Layer,
+                Group = group,
+                Style = PresentationStyle.From(element, style, viewport: context.Viewport, warn: context.Warn),
+                Counts = context.Counts,
+                Ids = external.Ids,
+                Resolving = context.Resolving,
+                Missing = context.Missing,
+                // A fresh set: the other document's effect ids are its own, and marking one used in *this*
+                // document's set would drop a local effect that nothing here refers to.
+                UsedPathEffects = new HashSet<string>(StringComparer.Ordinal),
+                Sheet = external.Sheet,
+                Gradients = external.Gradients,
+                Patterns = external.Patterns,
+                Markers = external.Markers,
+                PathEffects = external.PathEffects,
+                Warnings = context.Warnings,
+                Viewport = context.Viewport,
+                BaseDirectory = external.BaseDirectory,
+                Text = SvgTextStyle.From(
+                    external.Root,
+                    useText,
+                    external.Sheet.DeclarationsFor(external.Root, Array.Empty<XElement>()),
+                    context.Warn),
+            };
+
+            ReadUsedTarget(target, id, element, context, inside, group);
+            yield return group;
+        }
+        finally
+        {
+            context.Resolving.Remove(key);
+        }
+    }
+
+    /// <summary>
+    /// Everything a read of an element needs from the document it lives in, so a `use` of another file reads it
+    /// against the other file's assets rather than this one's.
+    ///
+    /// The definitions and the root's own properties are the document's, not the element's: a paint server is
+    /// referred to by id and lives in `defs` wherever it was written, and a font or a line property on the other
+    /// root is inherited down into everything the referenced element holds.
+    /// </summary>
+    private sealed record ExternalSvg(
+        XElement Root,
+        Dictionary<string, XElement> Ids,
+        SvgStylesheet Sheet,
+        SvgGradients Gradients,
+        SvgPatterns Patterns,
+        SvgMarkers Markers,
+        IReadOnlyDictionary<string, PathEffectDefinition> PathEffects,
+        SvgFilters Filters,
+        string? BaseDirectory);
+
+    /// <summary>
+    /// Parses another document and collects its assets, or reports why it could not be read and returns null.
+    ///
+    /// Nothing but the file's own definitions is gathered here; the referenced element is read by the caller with
+    /// the context this builds. **No size and no view port**: a file this reader was pointed at is a source of
+    /// definitions, not a page, and the artboard belongs to the document that was opened.
+    /// </summary>
+    private static ExternalSvg? LoadExternal(string path, string href, Context context)
+    {
+        XDocument xml;
+        try
+        {
+            xml = XDocument.Parse(File.ReadAllText(path), LoadOptions.None);
+        }
+        catch (Exception exception) when (exception is XmlException or IOException or UnauthorizedAccessException)
+        {
+            context.Missing.Add($"{href} (the file could not be read: {exception.Message})");
+            return null;
         }
 
-        context.Resolving.Remove(id);
-        yield return group;
+        if (xml.Root is not { } root || root.Name.LocalName != "svg")
+        {
+            context.Missing.Add($"{href} (the file's root element is not <svg>)");
+            return null;
+        }
+
+        var ids = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        Index(root, ids);
+
+        string? directory = System.IO.Path.GetDirectoryName(path);
+        var sheet = SvgStylesheet.Parse(CollectStyles(root), directory);
+
+        return new ExternalSvg(
+            root,
+            ids,
+            sheet,
+            SvgGradients.Collect(root, sheet),
+            SvgPatterns.Collect(root),
+            SvgMarkers.Collect(root),
+            CollectPathEffects(root),
+            SvgFilters.Collect(root, context.Warn),
+            directory);
     }
 
     /// <summary>

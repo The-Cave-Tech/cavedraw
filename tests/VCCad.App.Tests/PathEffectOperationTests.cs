@@ -223,6 +223,94 @@ public class PathEffectOperationTests
     }
 
     /// <summary>
+    /// **The honouring step, through the registry.** An imported effect is converted once, and the conversion is
+    /// only correct for the path it was translated against - a powerstroke stores its knots as a segment index over
+    /// the whole path. Edit the path and <c>pathEffect.refresh</c> re-derives the profile from it, as one undo step,
+    /// which is the half issue #180 says was missing.
+    /// </summary>
+    [Fact]
+    public void RefreshingReDerivesTheProfileFromTheEditedPath()
+    {
+        var vm = new EditorViewModel();
+        var context = new AutomationContext { ViewModel = vm };
+
+        // Knot at segment index 1 of a two-segment path, so the conversion puts it at 1/2.
+        const string Inkscape =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" " +
+            "width=\"100\" height=\"100\" viewBox=\"0 0 100 100\">" +
+            "<defs><inkscape:path-effect effect=\"powerstroke\" id=\"path-effect1\" lpeversion=\"1.4\" " +
+            "offset_points=\"1,3\" interpolator_type=\"Linear\" linejoin_type=\"extrp_arc\" " +
+            "start_linecap_type=\"zerowidth\" end_linecap_type=\"zerowidth\" miter_limit=\"4\" scale_width=\"1\" /></defs>" +
+            "<path id=\"p1\" style=\"fill:none;stroke:#000000\" d=\"M 0,0 L 10,0 L 20,0\" " +
+            "inkscape:original-d=\"M 0,0 L 10,0 L 20,0\" inkscape:path-effect=\"#path-effect1\" /></svg>";
+
+        EditorOperations.Invoke(context, "document.importSvg", Params(new { svgBase64 = Base64(Inkscape) }));
+
+        PathItem path = context.Document.AllPaths().Single();
+        Assert.Equal(0.5, path.Stroke.WidthProfile!.Points[0].Position, 9);
+
+        // The edit: the same path, extended from two segments to four.
+        SubPath sub = path.SubPaths[0];
+        sub.Nodes.Add(new PathNode(new Point2D(30, 0)));
+        sub.Nodes.Add(new PathNode(new Point2D(40, 0)));
+        path.GeometryChanged();
+
+        string json = JsonSerializer.Serialize(
+            EditorOperations.Invoke(context, "pathEffect.refresh", default));
+
+        Assert.Contains("\"refreshed\":1", json, StringComparison.Ordinal);
+        Assert.Equal(0.25, path.Stroke.WidthProfile!.Points[0].Position, 9);
+
+        // One undo step, restoring the converted result rather than deriving it again.
+        vm.ActiveSession.Undo();
+        Assert.Equal(0.5, path.Stroke.WidthProfile!.Points[0].Position, 9);
+    }
+
+    /// <summary>
+    /// **The live effect itself is legible to a driver, not only its conversion.** `pathEffect.list` names the
+    /// reference by id; `pathEffect.get` reports the description stored on the path - the effect's name and every
+    /// parameter the file wrote - and what that description derives to against the path as it stands now, which is
+    /// what `pathEffect.refresh` re-derives from.
+    /// </summary>
+    [Fact]
+    public void TheLiveEffectIsReadWithItsDescriptionAndItsDerivation()
+    {
+        var vm = new EditorViewModel();
+        var context = new AutomationContext { ViewModel = vm };
+
+        const string Inkscape =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" " +
+            "width=\"100\" height=\"100\" viewBox=\"0 0 100 100\">" +
+            "<defs><inkscape:path-effect effect=\"powerstroke\" id=\"path-effect1\" lpeversion=\"1.4\" " +
+            "offset_points=\"1,3\" interpolator_type=\"Linear\" linejoin_type=\"extrp_arc\" " +
+            "start_linecap_type=\"zerowidth\" end_linecap_type=\"zerowidth\" miter_limit=\"4\" scale_width=\"1\" /></defs>" +
+            "<path id=\"p1\" style=\"fill:none;stroke:#000000\" d=\"M 0,0 L 10,0 L 20,0\" " +
+            "inkscape:original-d=\"M 0,0 L 10,0 L 20,0\" inkscape:path-effect=\"#path-effect1\" /></svg>";
+
+        EditorOperations.Invoke(context, "document.importSvg", Params(new { svgBase64 = Base64(Inkscape) }));
+        PathItem path = context.Document.AllPaths().Single();
+        vm.SelectObject(path);
+
+        JsonElement item = Assert.Single(JsonSerializer
+            .SerializeToElement(EditorOperations.Invoke(context, "pathEffect.get", default))
+            .GetProperty("items")
+            .EnumerateArray());
+
+        Assert.Equal("powerstroke", item.GetProperty("effect").GetProperty("effect").GetString());
+        Assert.Equal("path-effect1", item.GetProperty("effect").GetProperty("id").GetString());
+        Assert.Equal(
+            "1,3",
+            item.GetProperty("effect").GetProperty("parameters").GetProperty("offset_points").GetString());
+
+        // And the derivation, against the path as it stands: two segments, so the knot is at 1/2.
+        Assert.Equal(2, item.GetProperty("segments").GetInt32());
+        Assert.True(item.GetProperty("supported").GetBoolean());
+
+        JsonElement point = Assert.Single(item.GetProperty("profile").GetProperty("points").EnumerateArray());
+        Assert.Equal(0.5, point.GetProperty("position").GetDouble(), 9);
+    }
+
+    /// <summary>
     /// **One undo step.** Converting an effect writes a new asset and the strokes that refer to it, and the model
     /// refuses to hold a stroke naming a profile that is not there - so undo has to take both halves back
     /// together, or it leaves the document in a state it should not be able to reach.

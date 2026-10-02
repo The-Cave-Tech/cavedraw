@@ -1692,6 +1692,68 @@ public sealed class DocumentSession : INotifyPropertyChanged
         ExecuteIfAny(edits, "Fill");
     }
 
+    /// <summary>
+    /// Chooses <paramref name="colour"/> in the picker: it becomes the editor's current fill (or stroke), and
+    /// every selected path is painted with it, as one undo step. Returns how many paths changed.
+    ///
+    /// This is the operation's half of a colour the picker chooses. It is here, on the session, because the pane
+    /// is not always on screen: <c>color.set</c> used to reach the document only through a live colour pane's
+    /// subscription to the shared colour state, so with the Color tab hidden the working colour moved and the
+    /// selection did not (#184). A change that has to be undoable and selection-aware belongs beside
+    /// <see cref="ApplyFill"/> and <see cref="ApplyStrokeColor"/>, not in a control's event handler.
+    ///
+    /// Each path keeps its **own** winding rule for a fill and its own width, caps and joins for a stroke, which
+    /// is what the picker's live application does: recolouring is a change of colour, not of shape. That is the
+    /// difference from <see cref="ApplyFill"/>, whose caller supplies one rule for the whole selection - forcing a
+    /// holed outline from even-odd to nonzero fills its hole in.
+    ///
+    /// A command is added only for a path that actually changes, so choosing the colour a path already has adds no
+    /// undo step: an undo that undoes to exactly where it started reads as "undo did nothing".
+    /// </summary>
+    public int ApplyWorkingColour(ColorRgb colour, bool stroke)
+    {
+        var edits = new List<IUndoableCommand>();
+
+        if (stroke)
+        {
+            // What the stroke's geometry becomes: the selected path's own, or the current style's when the choice
+            // is made with nothing selected - the same basis the picker's circles stand on.
+            StrokeSpec basis = PrimarySelection is PathItem selected ? selected.Stroke : CurrentStroke;
+
+            foreach (PathItem path in SelectedPaths().ToList())
+            {
+                double width = path.Stroke.Width > 0 ? path.Stroke.Width : 1.0;
+                var after = new StrokeSpec(true, colour, width, path.Stroke.Cap, path.Stroke.Join,
+                    path.Stroke.MiterLimit, path.Stroke.Alignment, path.Stroke.Dash);
+                if (after != path.Stroke)
+                {
+                    edits.Add(new SetStrokeCommand(path, after, path.Stroke));
+                }
+            }
+
+            CurrentStroke = new StrokeSpec(true, colour, basis.Width > 0 ? basis.Width : 1.0,
+                basis.Cap, basis.Join, basis.MiterLimit, basis.Alignment, basis.Dash);
+        }
+        else
+        {
+            FillRule rule = PrimarySelection is PathItem selected ? selected.Fill.Rule : CurrentFill.Rule;
+
+            foreach (PathItem path in SelectedPaths().ToList())
+            {
+                FillSpec after = FillSpec.Solid(colour, path.Fill.Rule);
+                if (after != path.Fill)
+                {
+                    edits.Add(new SetFillCommand(path, after, path.Fill));
+                }
+            }
+
+            CurrentFill = FillSpec.Solid(colour, rule);
+        }
+
+        ExecuteIfAny(edits, stroke ? "Stroke colour" : "Fill");
+        return edits.Count;
+    }
+
     /// <summary>Clears the fill of every selected path (one undo step).</summary>
     public void ClearFill()
     {

@@ -215,12 +215,23 @@ public partial class ColorsPane : UserControl
     /// </summary>
     private void OnColorStateChanged(object? sender, EventArgs e)
     {
+        // Read here rather than inside the UI work: a change from another thread is posted to the UI thread, and by
+        // the time it runs the caller may have closed its scope. Whether the caller applied the colour is a fact
+        // about the change, not about the moment it is painted.
+        bool appliedByCaller = Colors.IsAppliedByCaller;
+
         if (!Dispatcher.UIThread.CheckAccess())
         {
-            Dispatcher.UIThread.Post(() => OnColorStateChanged(sender, e));
+            Dispatcher.UIThread.Post(() => FollowStateChange(appliedByCaller));
             return;
         }
 
+        FollowStateChange(appliedByCaller);
+    }
+
+    /// <summary>Repaints the picker from the shared state, and applies it when nobody else has.</summary>
+    private void FollowStateChange(bool appliedByCaller)
+    {
         if (_syncing || _refreshingFromState)
         {
             return;
@@ -236,7 +247,15 @@ public partial class ColorsPane : UserControl
             // An external colour set (color.set through the API) is the same act as choosing
             // a colour in the picker: the active current value, the selection and the diagram
             // must all follow it, or a driver and a person would see different colours.
-            ApplyLive();
+            //
+            // The operation applies the colour to the document itself, through DocumentSession, and says so -
+            // because a driver's call must not depend on this pane being on screen (#184). It then only repaints
+            // here. A change nobody else applied, which is a colour written straight to the shared state, is still
+            // carried into the document from this handler, which is what ColorsPaneLifetimeTests pins.
+            if (!appliedByCaller)
+            {
+                ApplyLive();
+            }
         }
         finally
         {
@@ -441,6 +460,9 @@ public partial class ColorsPane : UserControl
 
         try
         {
+            // The target is named, because the operation applies the picked colour to the document itself and
+            // the fill/stroke circles are a choice this pane holds: without it, picking with the stroke circle
+            // armed would recolour the fill a driver would have described.
             await EditorOperations.InvokeAsync(
                 new AutomationContext
                 {
@@ -448,7 +470,8 @@ public partial class ColorsPane : UserControl
                     PickFromScreenAsync = () => Picking.ScreenPickOverlay.PickFor(this),
                 },
                 "color.pickScreen",
-                default);
+                System.Text.Json.JsonSerializer.SerializeToElement(
+                    new { target = _strokeTarget ? "stroke" : "fill" }));
         }
         catch (EditorOperationException)
         {

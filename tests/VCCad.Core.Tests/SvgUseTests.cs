@@ -274,22 +274,54 @@ public class SvgUseTests
     }
 
     /// <summary>
-    /// **A `use` of an `svg` that states its own size is reported by name.** SVG 2 sizes that viewport from the
-    /// use; this reader draws the target at the size its own attributes state. That is a value the file wrote and
-    /// the model cannot honour, so it is named rather than substituted - the same discipline a refused `clip-path`
-    /// follows.
+    /// **A `use` of an `svg` is sized by the use's own `width` and `height`.** SVG 2 sizes that viewport from the
+    /// use and fits the target's view box into it, which is exactly the arithmetic a nested `svg` already uses one
+    /// level in - so the value is honoured rather than reported.
     /// </summary>
     [Fact]
-    public void AWidthOnAUseOfAnSvgIsReportedRatherThanIgnored()
+    public void AUseOfAnSvgIsSizedByTheUsesOwnWidthAndHeight()
+    {
+        SvgImportResult result = Read(
+            "<defs><svg id=\"port\" width=\"10\" height=\"10\" viewBox=\"0 0 10 10\">" +
+            "<rect width=\"10\" height=\"10\"/></svg></defs>" +
+            "<use href=\"#port\" x=\"0\" y=\"0\" width=\"50\" height=\"50\"/>");
+
+        PathItem path = Assert.Single(result.Document.AllPaths());
+
+        // The box is ten units square and the use draws it fifty wide, so one unit is five: 50 user units of
+        // artboard is 37.5 pt.
+        Assert.Equal(37.5, At(path, 2).X, 9);
+        Assert.Equal(37.5, At(path, 2).Y, 9);
+
+        // Honoured, so there is nothing left to report.
+        Assert.Empty(result.Warnings);
+    }
+
+    /// <summary>
+    /// **`width` and `height` on a `use` of an `svg` state the port, and are honoured.**
+    ///
+    /// This case used to assert the opposite - that the attributes were *reported* as something the reader could
+    /// not honour - and it changed meaning when the nested-`svg` reader learned to take the port from the `use`
+    /// (issue #117). What it pins now is the half that is easy to get wrong once the size is honoured: an `svg`
+    /// target with **no view box** has no fit, so the port is re-established at the use's size while the content
+    /// stays in its own user units - twenty over ten stretches nothing, and a reader that treated the size as a
+    /// scale would draw this five times too big.
+    /// </summary>
+    [Fact]
+    public void AWidthOnAUseOfAnSvgEstablishesThePort()
     {
         SvgImportResult result = Read(
             "<defs><svg id=\"port\" width=\"10\" height=\"10\"><rect width=\"10\" height=\"10\"/></svg></defs>"
             + "<use href=\"#port\" width=\"50\" height=\"50\"/>");
 
-        string report = Assert.Single(
-            result.Warnings, warning => warning.Contains("port", StringComparison.Ordinal));
-        Assert.Contains("width", report, StringComparison.Ordinal);
-        Assert.Contains("cannot honour", report, StringComparison.Ordinal);
+        PathItem path = Assert.Single(result.Document.AllPaths());
+
+        // Ten user units across, not fifty: 7.5 pt, because a port with no view box scales nothing.
+        Assert.Equal(7.5, At(path, 2).X, 9);
+        Assert.Equal(7.5, At(path, 2).Y, 9);
+
+        // Honoured, so there is nothing left to report.
+        Assert.Empty(result.Warnings);
     }
 
     // ---------------------------------------------------------------- nesting
@@ -368,7 +400,160 @@ public class SvgUseTests
         Assert.Equal(22.5, At(path, 0).Y, 9);
     }
 
+    // ---------------------------------------------------------------- another document
+
+    /// <summary>
+    /// **A `use` that names another document is resolved when the reader has that document.**
+    ///
+    /// `test-use.svg` in the corpus is exactly this - `xlink:href="test-use-ref.svg#root"`. Before this it
+    /// imported as **zero objects**: the reference was reported as missing under its raw href, so the whole
+    /// drawing vanished behind a line nobody could act on. The file sits beside the one that names it, so the
+    /// reader opens it the way it opens a raster beside a document and reads the element with **that document's**
+    /// own stylesheet and assets rather than this one's - `.green` is defined in the other file, so a fill that
+    /// arrives green is the proof the other file's stylesheet was the one in force.
+    /// </summary>
+    [Fact]
+    public void AUseOfAnotherDocumentsElementIsResolved()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "vccad-use-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(directory, "ref.svg"),
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" id=\"root\" width=\"100\" height=\"100\" " +
+                "viewBox=\"0 0 100 100\"><style>.green { fill: #00ff00; }</style>" +
+                "<rect class=\"green\" x=\"10\" y=\"10\" width=\"20\" height=\"20\"/></svg>");
+
+            string main = Path.Combine(directory, "main.svg");
+            File.WriteAllText(
+                main,
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" " +
+                "width=\"100\" height=\"100\" viewBox=\"0 0 100 100\">" +
+                "<use xlink:href=\"ref.svg#root\"/></svg>");
+
+            SvgImportResult result = SvgReader.ReadFile(main);
+
+            Assert.Empty(result.Missing);
+            Assert.True(result.Objects > 0, "the referenced document's content is drawn");
+
+            PathItem path = Assert.Single(result.Document.AllPaths());
+            Assert.Equal(7.5, At(path, 0).X, 9);
+            Assert.Equal(7.5, At(path, 0).Y, 9);
+
+            // Green from the *other* document's stylesheet: the importing file defines no `.green`, so a reader
+            // that read the target against its own sheet would draw this black.
+            Assert.True(path.Fill.IsVisible);
+            Assert.Equal(0.0, path.Fill.Color.R, 3);
+            Assert.Equal(1.0, path.Fill.Color.G, 3);
+
+            ArtGroup instance = Assert.Single(result.Document.AllGroups(), g => g.SourceId is not null);
+            Assert.Equal("root", instance.SourceId);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A reference to another document that **cannot** be resolved is reported with the reason, not as the bare
+    /// href: a person reading `other.svg#root` in a report has to be able to tell a missing file from a missing
+    /// element, or the report sends them looking in the wrong place.
+    /// </summary>
+    [Fact]
+    public void AnExternalReferenceWithNoFileIsReportedWithTheReason()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "vccad-use-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            string main = Path.Combine(directory, "main.svg");
+            File.WriteAllText(
+                main,
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" " +
+                "width=\"100\" height=\"100\"><use xlink:href=\"absent.svg#root\"/></svg>");
+
+            SvgImportResult result = SvgReader.ReadFile(main);
+
+            string report = Assert.Single(result.Missing);
+            Assert.Contains("absent.svg#root", report, StringComparison.Ordinal);
+            Assert.Contains("no file", report, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>A reference to another document with no directory to resolve it against is a gap, not an id.</summary>
+    [Fact]
+    public void AnExternalReferenceWithNoBaseDirectoryIsReportedWithTheReason()
+    {
+        SvgImportResult result = Read("<use xlink:href=\"other.svg#root\"/>");
+
+        string report = Assert.Single(result.Missing);
+        Assert.Contains("other.svg#root", report, StringComparison.Ordinal);
+        Assert.Contains("no directory", report, StringComparison.Ordinal);
+    }
+
     // ---------------------------------------------------------------- the corpus
+
+    /// <summary>
+    /// **The corpus's own cross-document `use` resolves.** `test-use.svg` and `test-use-ref.svg` are two real
+    /// Inkscape files, the first a two-line document whose only content is a `use` of the second - the exact case
+    /// this issue was still open for.
+    ///
+    /// The counts are asserted rather than "something arrived", because the failure this replaces was **zero
+    /// objects** behind one reported href: a reader that resolved the file but read none of it would satisfy an
+    /// `Any()` and still draw nothing. The referenced file holds six `rect`s, two `path`s and three `use`s of its
+    /// own, all of which travel into the instance.
+    /// </summary>
+    [Fact]
+    public void TheCorpusCrossDocumentUseResolvesItsReference()
+    {
+        string? file = CorpusFile("test-use.svg");
+        if (file is null)
+        {
+            return;
+        }
+
+        SvgImportResult result = SvgReader.ReadFile(file);
+
+        Assert.Empty(result.Missing);
+
+        // One `use` in test-use.svg, three in the document it refers to.
+        Assert.Equal(4, result.ByElement.GetValueOrDefault("use"));
+        Assert.Equal(6, result.ByElement.GetValueOrDefault("rect"));
+        Assert.Equal(8, result.Document.AllPaths().Count());
+        Assert.Equal(4, result.Document.AllGroups().Count(group => group.SourceId is not null));
+
+        Assert.Contains(result.Document.AllGroups(), group => group.SourceId == "root");
+    }
+
+    /// <summary>
+    /// **The real file behind the sizing gap.** `symbol-svg2-geometry-properties.svg` is Inkscape's own test for
+    /// sizing a `use` over both a `symbol` and an `svg`, and the `svg` half used to be reported by name as
+    /// something this reader could not honour. It is honoured now, so the report must be gone: a reader that still
+    /// emitted it would be claiming a gap it no longer has, which is its own kind of wrong answer.
+    /// </summary>
+    [Fact]
+    public void TheCorpusSizesAUseOfAnSvgTarget()
+    {
+        string? file = CorpusFile("symbol-svg2-geometry-properties.svg");
+        if (file is null)
+        {
+            return;
+        }
+
+        SvgImportResult result = SvgReader.ReadFile(file);
+
+        Assert.DoesNotContain(result.Warnings, warning => warning.Contains("cannot honour", StringComparison.Ordinal));
+        Assert.Empty(result.Missing);
+        Assert.True(result.Document.AllPaths().Any(), "the file's own drawing is imported");
+    }
 
     /// <summary>
     /// The corpus files that exist for this feature import, and produce instances rather than nothing. `use` is
@@ -406,6 +591,19 @@ public class SvgUseTests
 
         Assert.True(files.Length > 0, "the corpus has files that use `use`");
         Assert.True(instances > 0, $"those files produced instances: {instances} from {files.Length} files");
+    }
+
+    /// <summary>A named file in the Inkscape corpus, or null when the corpus is not on this machine.</summary>
+    private static string? CorpusFile(string name)
+    {
+        string? directory = SvgCorpusDirectory();
+        if (directory is null)
+        {
+            return null;
+        }
+
+        string path = Path.Combine(directory, name);
+        return File.Exists(path) ? path : null;
     }
 
     private static string? SvgCorpusDirectory()

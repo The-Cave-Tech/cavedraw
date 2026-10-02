@@ -1835,11 +1835,12 @@ public static class EditorOperations
 
         Add("pathEffect.list",
             "The live path effects this build implements, and the live path effect each selected path says it has. " +
-            "A path's live path effect is a reference to an element the file defined elsewhere, and this build has " +
-            "no place to keep that element, so the reference travels with the path as one of the foreign attributes " +
-            "it carries and is reported here by id. sourcePathData is what the file wrote in inkscape:original-d - " +
-            "the path the effect was applied to, as opposed to the effect's output that the path's own geometry " +
-            "holds - which is what a translation is built from.",
+            "A path's live path effect is a reference to an element the file defined elsewhere; the element travels " +
+            "with the path as one of the foreign attributes it carries and is reported here by id, and the " +
+            "description read out of it is kept on the path (pathEffect.get reports it, pathEffect.refresh " +
+            "re-derives the converted width profile from it). sourcePathData is what the file wrote in " +
+            "inkscape:original-d - the path the effect was applied to, as opposed to the effect's output that the " +
+            "path's own geometry holds - which is what a translation is built from.",
             "",
             (ctx, _) => new
             {
@@ -1987,6 +1988,69 @@ public static class EditorOperations
                     strokes = edits.Count,
                     profiles = profiles.ToArray(),
                     refused = refused.ToArray(),
+                };
+            });
+
+        Add("pathEffect.get",
+            "The live path effect each selected path carries, as the description stored on it, together with what " +
+            "that description derives to against the path as it stands now. pathEffect.list reports the reference " +
+            "by id; this reports the effect itself - name, id, lpeversion and every parameter - and the geometry " +
+            "the current path makes of it: the segment count its knots are parameterised over, whether this build " +
+            "can derive it, why not when it cannot, and the width profile it produces. This is the half of #130 " +
+            "that survived: the file's own description, kept as state, rather than only the conversion it once " +
+            "produced.",
+            "",
+            (ctx, _) => new
+            {
+                items = ctx.Session.SelectedPaths().Select(path =>
+                {
+                    StrokeSpec baseStroke = path.Strokes.FirstOrDefault() ?? StrokeSpec.None;
+                    PathEffectTranslation? translation = path.PathEffect is { } live
+                        ? PathEffects.Translate(live, path, baseStroke)
+                        : null;
+
+                    return new
+                    {
+                        itemId = path.Id,
+                        name = path.Name,
+                        effect = path.PathEffect is { } spec
+                            ? new
+                            {
+                                effect = spec.Effect,
+                                id = spec.Id,
+                                version = spec.Version,
+                                parameters = spec.Parameters.ToDictionary(e => e.Key, e => e.Value),
+                            }
+                            : null,
+                        segments = PathEffects.CurveCount(path),
+                        supported = translation?.IsSupported,
+                        refusal = translation?.Refusal,
+                        profile = translation?.Stroke?.WidthProfile is { } derived
+                            ? new { name = derived.Name, points = DescribeWidthPoints(derived) }
+                            : null,
+                    };
+                }).ToArray(),
+            });
+
+        Add("pathEffect.refresh",
+            "Re-derive every path's converted stroke from the live path effect it carries, as one undo step. An " +
+            "imported Inkscape effect is converted once, at import, into a width profile - and a powerstroke " +
+            "stores its knots as a segment index over the whole path, so that profile is only correct for the " +
+            "path it was translated against. After the geometry is edited this re-reads the description and " +
+            "rebuilds the profile from the current path, so the widths follow the edit instead of staying where " +
+            "the knots used to be. An effect that cannot be re-derived - a knot the edit has left off the path, " +
+            "a path left with no segments, an effect this build does not implement - changes nothing and is named " +
+            "in notRefreshed, because the path keeps the last conversion it has rather than losing its width.",
+            "",
+            (ctx, _) =>
+            {
+                var command = new RefreshPathEffectsCommand(ctx.Document);
+                ctx.Session.Execute(command);
+
+                return new
+                {
+                    refreshed = command.LastResolution?.Refreshed ?? 0,
+                    notRefreshed = command.LastResolution?.NotRefreshed ?? (IReadOnlyList<string>)Array.Empty<string>(),
                 };
             });
 
@@ -4549,41 +4613,50 @@ public static class EditorOperations
             });
 
         Add("color.set",
-            "Set the working colour from any one of its forms: hex, rgb, hsl or a ring angle. " +
-            "Whatever a person can set in the picker, a driver can set here.",
+            "Set the working colour from any one of its forms: hex, rgb, hsl or a ring angle, and paint it onto " +
+            "the selection - choosing a colour in the picker is both at once. Whatever a person can set in the " +
+            "picker, a driver can set here.",
             "hex?:string, r?,g?,b?:number (0..1), h?,s?,l? (degrees and 0..1), angle? (degrees), " +
-            "alpha?:number (0..1)",
+            "alpha?:number (0..1), target?:fill|stroke (default fill)",
             (ctx, p) =>
             {
                 EditorColorState state = EditorColorState.Shared;
 
-                if (p.GetString("hex") is { Length: > 0 } hex)
+                // The colour is carried into the document here, through the session, rather than by whichever
+                // colour pane happens to be subscribed: that coupling made a driver's call behave differently
+                // depending on which tab a person had open (#184). The scope tells a live pane that this caller
+                // has applied the change itself, so it repaints the picker without applying it a second time.
+                using (state.AppliedByCaller())
                 {
-                    state.SetColor(HexColor.Parse(hex).WithAlpha(state.Alpha));
-                }
-                else if (p.TryGetProperty("r", out _) || p.TryGetProperty("g", out _) ||
-                         p.TryGetProperty("b", out _))
-                {
-                    state.SetColor(new ColorRgb(
-                        p.GetDouble("r", 0), p.GetDouble("g", 0), p.GetDouble("b", 0)));
-                }
-                else if (p.TryGetProperty("h", out _) || p.TryGetProperty("s", out _) ||
-                         p.TryGetProperty("l", out _))
-                {
-                    state.SetColor(new HslColor(
-                        p.GetDouble("h", 0), p.GetDouble("s", 0), p.GetDouble("l", 0))
-                        .ToRgb(state.Alpha));
-                }
-                else if (p.TryGetProperty("angle", out _))
-                {
-                    state.SelectAngle(p.GetDouble("angle", 0));
+                    if (p.GetString("hex") is { Length: > 0 } hex)
+                    {
+                        state.SetColor(HexColor.Parse(hex).WithAlpha(state.Alpha));
+                    }
+                    else if (p.TryGetProperty("r", out _) || p.TryGetProperty("g", out _) ||
+                             p.TryGetProperty("b", out _))
+                    {
+                        state.SetColor(new ColorRgb(
+                            p.GetDouble("r", 0), p.GetDouble("g", 0), p.GetDouble("b", 0)));
+                    }
+                    else if (p.TryGetProperty("h", out _) || p.TryGetProperty("s", out _) ||
+                             p.TryGetProperty("l", out _))
+                    {
+                        state.SetColor(new HslColor(
+                            p.GetDouble("h", 0), p.GetDouble("s", 0), p.GetDouble("l", 0))
+                            .ToRgb(state.Alpha));
+                    }
+                    else if (p.TryGetProperty("angle", out _))
+                    {
+                        state.SelectAngle(p.GetDouble("angle", 0));
+                    }
+
+                    if (p.TryGetProperty("alpha", out _))
+                    {
+                        state.SetAlpha(p.GetDouble("alpha", 1));
+                    }
                 }
 
-                if (p.TryGetProperty("alpha", out _))
-                {
-                    state.SetAlpha(p.GetDouble("alpha", 1));
-                }
-
+                ctx.Session.ApplyWorkingColour(state.Color.WithAlpha(state.Alpha), IsStrokeTarget(p));
                 return DescribeColor();
             });
 
@@ -4868,14 +4941,20 @@ public static class EditorOperations
             });
 
         Add("color.pickInTriangle",
-            "Click inside the triangle: selects the colour at that point and moves the marker " +
-            "there. A point outside is pulled onto the nearest edge rather than ignored.",
-            "x:number, y:number (relative to the ring's centre)",
+            "Click inside the triangle: selects the colour at that point, moves the marker there and paints it " +
+            "onto the selection. A point outside is pulled onto the nearest edge rather than ignored.",
+            "x:number, y:number (relative to the ring's centre), target?:fill|stroke (default fill)",
             (ctx, p) =>
             {
-                EditorColorState.Shared.SelectTrianglePoint(new VCCad.Geometry.Point2D(
-                    p.GetDouble("x", 0), p.GetDouble("y", 0)));
+                EditorColorState state = EditorColorState.Shared;
 
+                using (state.AppliedByCaller())
+                {
+                    state.SelectTrianglePoint(new VCCad.Geometry.Point2D(
+                        p.GetDouble("x", 0), p.GetDouble("y", 0)));
+                }
+
+                ctx.Session.ApplyWorkingColour(state.Color.WithAlpha(state.Alpha), IsStrokeTarget(p));
                 return DescribeColor();
             });
 
@@ -4884,7 +4963,7 @@ public static class EditorOperations
             "pixels, and the sampled pixel comes from the screen rather than from this application's " +
             "rendering, so a colour in another window is picked correctly. Reads what the platform can see and " +
             "says so when it cannot.",
-            "x:number, y:number",
+            "x:number, y:number, target?:fill|stroke (default fill)",
             (ctx, p) =>
             {
                 int x = (int)Math.Round(p.GetDouble("x", 0));
@@ -4905,7 +4984,16 @@ public static class EditorOperations
                     };
                 }
 
-                EditorColorState.Shared.SetPicked(colour);
+                EditorColorState state = EditorColorState.Shared;
+                using (state.AppliedByCaller())
+                {
+                    state.SetPicked(colour);
+                }
+
+                // Picking a colour is choosing one, so it reaches the selection like any other choice. The
+                // reporting operation is color.picked, which reads the result without changing anything.
+                ctx.Session.ApplyWorkingColour(state.Color.WithAlpha(state.Alpha), IsStrokeTarget(p));
+
                 return new
                 {
                     picked = true,
@@ -4942,8 +5030,8 @@ public static class EditorOperations
             "chosen, Escape cancels. What is sampled is the screen pixel, not this application's rendering of " +
             "it, so a colour in another window is picked correctly. Refused with its reason where the platform " +
             "cannot do it; a headless host has no window to pick with and should use color.pickAt.",
-            "",
-            async (ctx, _, ct) =>
+            "target?:fill|stroke (default fill)",
+            async (ctx, p, ct) =>
             {
                 if (ctx.PickFromScreenAsync is null)
                 {
@@ -4967,7 +5055,16 @@ public static class EditorOperations
                     return new { picked = false, cancelled = true };
                 }
 
-                EditorColorState.Shared.SetPicked(chosen);
+                EditorColorState state = EditorColorState.Shared;
+                using (state.AppliedByCaller())
+                {
+                    state.SetPicked(chosen);
+                }
+
+                // The colour picked off the screen is chosen, so it reaches the selection here rather than through
+                // whichever pane happens to be subscribed - and the pane's eyedropper names its own target.
+                ctx.Session.ApplyWorkingColour(state.Color.WithAlpha(state.Alpha), IsStrokeTarget(p));
+
                 return new
                 {
                     picked = true,
@@ -5011,7 +5108,14 @@ public static class EditorOperations
                 var color = new ColorRgb(
                     p.GetDouble("r", 0), p.GetDouble("g", 0), p.GetDouble("b", 0));
 
-                EditorColorState.Shared.Remember(color);
+                // Remembering a swatch is not choosing it: the working colour does not move, so the selection must
+                // not either. The scope stops a live pane recoating the selection with whatever colour happened to
+                // be current, which is what it did while this reached the document only through the pane (#184).
+                using (EditorColorState.Shared.AppliedByCaller())
+                {
+                    EditorColorState.Shared.Remember(color);
+                }
+
                 return new { hex = HexColor.Format(color), count = EditorColorState.Shared.Recent.Count };
             });
 
@@ -6373,6 +6477,17 @@ public static class EditorOperations
             angleDegrees = Math.Round(snap.AngleDegrees, 4),
         };
     }
+
+    /// <summary>
+    /// Whether a colour operation names the stroke rather than the fill.
+    ///
+    /// The fill/stroke circles beside the picker are a choice between two current values, so a colour operation
+    /// has to be able to state which one it means rather than reading it off whichever pane is on screen (#184).
+    /// Both this and the pane's circles mean the same thing; the fill is the default, which is the value a new
+    /// object is drawn with.
+    /// </summary>
+    private static bool IsStrokeTarget(JsonElement p)
+        => string.Equals(p.GetString("target"), "stroke", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The canvas, or a failure saying why there is none.</summary>
     private static CanvasWorkspace RequireCanvas(AutomationContext ctx)

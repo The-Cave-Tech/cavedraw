@@ -110,6 +110,24 @@ public sealed class PathItem : LayerItem
     /// <summary>Whether any stroke on this path has a visible outline.</summary>
     public bool HasVisibleStroke => _strokes.Any(s => s.HasVisibleOutline);
 
+    /// <summary>
+    /// The live path effect this path carries, as the file described it, or null when it has none.
+    ///
+    /// This is the **description**, not a translation of it: Inkscape's effect name, id, version and every parameter
+    /// the element carried. The converted result is <see cref="StrokeSpec.WidthProfile"/>, which is what draws - and
+    /// it is a *derived* value, so it goes stale the moment the geometry it was derived from changes. A powerstroke
+    /// stores its knots as a segment index over the whole path, so the same element means 0.5 on a two-segment path
+    /// and 0.25 on a four-segment path; a path that keeps only the converted profile keeps the old number forever
+    /// (issue #180).
+    ///
+    /// Keeping the description is what makes re-derivation possible without re-reading the file, and it is the same
+    /// move <see cref="ArtGroup.SourceId"/> makes for `use`: the picture is right in a single render either way, and
+    /// the link is what lets an edit reach what it was derived from. The element itself still travels verbatim in
+    /// <see cref="LayerItem.ForeignElements"/>, because that is what an export writes back;
+    /// <see cref="Commands.RefreshPathEffectsCommand"/> is the step that honours this.
+    /// </summary>
+    public PathEffectSpec? PathEffect { get; set; }
+
     /// <summary>Whole-object opacity in [0,1]; the layer and artboard apply on top.</summary>
     public double Opacity
     {
@@ -413,6 +431,10 @@ public sealed class PathItem : LayerItem
         // Shared, not cloned: the definition is immutable, and a copy that forgot it would turn a
         // duplicated star into an anonymous outline.
         copy.Shape = Shape;
+
+        // And the same for the live path effect: it is the description the stroke's width profile was derived
+        // from, so a copy that dropped it would keep the converted widths and lose the reason they are those.
+        copy.PathEffect = PathEffect;
         return copy;
     }
 }

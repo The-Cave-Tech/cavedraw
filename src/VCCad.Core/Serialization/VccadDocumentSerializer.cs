@@ -343,6 +343,23 @@ internal sealed record TextRunDto(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? FontStretch = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? FontVariant = null);
 
+/// <summary>One parameter of a live path effect, keyed and spelled as the file spelled it.</summary>
+internal sealed record PathEffectParameterDto(string Name, string Value);
+
+/// <summary>
+/// A live path effect as it travels in the sidecar: the description the path's converted stroke was derived from.
+///
+/// It travels because the converted result is *derived* state, and a save/reopen that kept only the conversion
+/// would hand back a document whose effect could never be re-derived - the same flattening the SVG export avoids by
+/// keeping the element. Absent for a path with no effect, so a document without live effects is byte-identical to
+/// one written before this existed.
+/// </summary>
+internal sealed record PathEffectDto(
+    string Effect,
+    string Id,
+    string Version,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PathEffectParameterDto[]? Parameters = null);
+
 internal sealed record PathDto(
     Guid Id,
     string Name,
@@ -364,7 +381,11 @@ internal sealed record PathDto(
     // The stroke stack, when a path has more than one. Omitting it for the ordinary single-stroke path is what
     // keeps a document written before strokes became a stack byte-identical to one written now, and a file
     // without the member loads as a stack of one - the same rule gradients and clips follow.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] StrokeDto[]? Strokes = null) : ItemDto;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] StrokeDto[]? Strokes = null,
+
+    // The live path effect this path carries, when it has one, so the converted width profile the stroke holds can
+    // be re-derived after the geometry changes. Absent for every ordinary path.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PathEffectDto? PathEffect = null) : ItemDto;
 
 internal sealed record GroupDto(
     Guid Id,
@@ -633,7 +654,28 @@ internal abstract record ItemDto
 
         // Only when there is more than one: a single stroke travels as `Stroke` alone, so nothing that has one
         // changes on the way out.
-        p.Strokes.Count > 1 ? p.Strokes.Select(ToStroke).ToArray() : null);
+        p.Strokes.Count > 1 ? p.Strokes.Select(ToStroke).ToArray() : null,
+
+        ToPathEffect(p.PathEffect));
+
+    /// <summary>
+    /// A path's live effect as the sidecar carries it, or null when it has none.
+    ///
+    /// The parameters keep the file's own order, because that order is what the model's equality and hash depend
+    /// on and a re-ordered set would make two reads of one effect compare unequal for no reason.
+    /// </summary>
+    private static PathEffectDto? ToPathEffect(PathEffectSpec? effect)
+        => effect is null
+            ? null
+            : new PathEffectDto(
+                effect.Effect,
+                effect.Id,
+                effect.Version,
+                effect.Parameters.Count == 0
+                    ? null
+                    : effect.Parameters
+                        .Select(parameter => new PathEffectParameterDto(parameter.Key, parameter.Value))
+                        .ToArray());
 
     private static GroupDto ToGroup(ArtGroup g) => new(
         g.Id,
@@ -941,6 +983,17 @@ internal static class ItemDtoExtensions
             // reported: the shape is what the file says it is, and regenerating is a deliberate act.
             Shape = p.ShapeKind is { } kind && p.ShapeParameters is { } parameters
                 ? new ShapeDefinition(kind, parameters)
+                : null,
+
+            // The description the stroke's width profile was derived from. Without it a reopened document has the
+            // converted widths and no way to re-derive them, which is the flattening the sidecar exists to avoid.
+            PathEffect = p.PathEffect is { } effect
+                ? new PathEffectSpec(
+                    effect.Effect,
+                    effect.Id,
+                    effect.Version,
+                    (effect.Parameters ?? Array.Empty<PathEffectParameterDto>())
+                        .Select(parameter => new KeyValuePair<string, string>(parameter.Name, parameter.Value)))
                 : null,
         };
         path.RestoreIdentity(p.Id);

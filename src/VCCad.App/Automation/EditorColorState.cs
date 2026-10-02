@@ -35,6 +35,49 @@ public sealed class EditorColorState
     public ColorPickerModel Model { get; } = new(
         new VCCad.Geometry.Point2D(0, 0), 100, new ColorRgb(0.13, 0.13, 0.13));
 
+    private int _appliedByCaller;
+
+    /// <summary>
+    /// True while the caller of a change is carrying that change into the document itself.
+    ///
+    /// The colour pane applies a change it hears about here, which is what makes a colour written straight to this
+    /// state reach the artwork - and what a pane put away must stop doing, which <c>ColorsPaneLifetimeTests</c>
+    /// pins. An operation does the same job through <c>DocumentSession</c> before it publishes the colour, and says
+    /// so with <see cref="AppliedByCaller"/>, so the pane then only repaints the picker.
+    /// </summary>
+    public bool IsAppliedByCaller => _appliedByCaller > 0;
+
+    /// <summary>
+    /// Marks the changes made inside the returned scope as ones the caller is applying to the document itself.
+    ///
+    /// This exists so a colour reaches the document **once**. Before it, <c>color.set</c> reached the document only
+    /// because a live pane was subscribed and applied it, so a host with no pane on screen - the Color tab hidden,
+    /// or a headless driver - moved the working colour and left the selection alone (#184). The operation now
+    /// applies the colour and publishes it inside this scope; the pane sees the flag and repaints without applying
+    /// it a second time.
+    /// </summary>
+    public IDisposable AppliedByCaller()
+    {
+        _appliedByCaller++;
+        return new ApplicationScope(this);
+    }
+
+    private sealed class ApplicationScope(EditorColorState state) : IDisposable
+    {
+        private bool _closed;
+
+        public void Dispose()
+        {
+            if (_closed)
+            {
+                return;
+            }
+
+            _closed = true;
+            state._appliedByCaller--;
+        }
+    }
+
     /// <summary>The selected colour.</summary>
     public ColorRgb Color => Model.Color;
 
