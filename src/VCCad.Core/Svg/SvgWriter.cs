@@ -2077,9 +2077,18 @@ public static class SvgWriter
             }
         }
 
-        /// <summary>Whether SVG can carry this stroke as a stroke rather than as an outline.</summary>
+        /// <summary>
+        /// Whether SVG can carry this stroke as a stroke rather than as an outline.
+        ///
+        /// **A bristle brush cannot.** SVG has no attribute for one and the stroke it draws is not the stroke the
+        /// model means: the brush replaces the line with the union of its bristles, so writing `stroke-width` here
+        /// and placing nothing would draw a line where the document paints a bundle. Every other brush *can*: an
+        /// art, pattern or scatter brush is artwork laid over the stroke the pen drew, which
+        /// <see cref="WriteStrokeArt"/> writes beside it.
+        /// </summary>
         private static bool Native(StrokeSpec stroke)
-            => !stroke.HasWidthProfile && !stroke.HasEffects && stroke.Alignment == StrokeAlignment.Center;
+            => !stroke.HasWidthProfile && !stroke.HasEffects && stroke.Alignment == StrokeAlignment.Center &&
+               stroke.Brush is not { IsBristle: true };
 
         /// <summary>The attributes of a stroke SVG can carry natively.</summary>
         private static void WriteNativeStrokeAttributes(XElement element, StrokeSpec stroke)
@@ -2238,12 +2247,22 @@ public static class SvgWriter
             ApplyForeign(element, path);
             element.Add(new XAttribute("fill", "none"));
 
-            if (stroke.HasWidthProfile || stroke.HasEffects)
+            if (stroke.HasWidthProfile || stroke.HasEffects || stroke.Brush is { IsBristle: true })
             {
                 StrokeRenderPlan plan = StrokeOutlineBuilder.Plan(path, stroke);
                 string outline = Outlines(plan.Outlines);
                 if (outline.Length == 0)
                 {
+                    return;
+                }
+
+                // **A brush whose bristles differ in colour writes one path per bristle.** A colour jitter is a
+                // colour per loop, and an SVG `path` carries one fill, so the loops are written apart rather than
+                // merged - which is also the only way the file can say what the canvas paints. A brush that does
+                // not jitter leaves `Paints` null and takes the one-path route below, unchanged.
+                if (plan.Paints is { } paints)
+                {
+                    WriteBristles(path, stroke, plan, paints, parent, itemClip);
                     return;
                 }
 
@@ -2339,6 +2358,66 @@ public static class SvgWriter
 
             parent.Add(element);
             Wrote("path");
+        }
+
+        /// <summary>
+        /// A bristle brush written as one `path` per bristle, each filled with the colour the model gave it.
+        ///
+        /// **A brush whose bristles differ in colour has no single `path` that states it.** The plan carries one
+        /// colour per loop, and seeing them drawn is the whole point of a colour jitter, so the loops are written
+        /// apart. That is also why this is not folded into <see cref="WriteStroke"/>'s one-element route: an
+        /// element carries one `fill`, and merging the bristles would paint them all the stroke's colour - the
+        /// recording-without-honouring defect this writer has already been fixed for twice.
+        ///
+        /// The `id` and the item's foreign attributes go on the first bristle only. An `id` states one element, and
+        /// repeating it would leave a reader resolving one name to whichever it happened to walk first, which is
+        /// the rule <see cref="WriteStrokeArt"/> already follows for a copy of an asset.
+        /// </summary>
+        private void WriteBristles(
+            PathItem path,
+            StrokeSpec stroke,
+            StrokeRenderPlan plan,
+            IReadOnlyList<ColorRgb> paints,
+            XElement parent,
+            string? itemClip)
+        {
+            for (int i = 0; i < plan.Outlines.Count; i++)
+            {
+                var element = new XElement(Svg + "path");
+                if (i == 0 && !string.IsNullOrEmpty(path.Name))
+                {
+                    element.Add(new XAttribute("id", path.Name));
+                }
+
+                if (i == 0)
+                {
+                    ApplyForeign(element, path);
+                }
+
+                string data = Outlines(new[] { plan.Outlines[i] });
+                if (data.Length == 0)
+                {
+                    continue;
+                }
+
+                element.SetAttributeValue("d", data);
+                element.SetAttributeValue("fill-rule", "nonzero");
+
+                ColorRgb paint = i < paints.Count ? paints[i] : stroke.Color;
+                element.SetAttributeValue("fill", Hex(paint));
+                if (paint.A < 1.0)
+                {
+                    element.SetAttributeValue("fill-opacity", Number(paint.A));
+                }
+
+                if (itemClip is not null)
+                {
+                    element.SetAttributeValue("clip-path", $"url(#{itemClip})");
+                }
+
+                parent.Add(element);
+                Wrote("path");
+            }
         }
 
         /// <summary>

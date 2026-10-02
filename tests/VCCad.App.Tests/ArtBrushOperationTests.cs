@@ -109,11 +109,12 @@ public class ArtBrushOperationTests
     /// <summary>
     /// A kind this build does not make is refused by name rather than quietly made a nib.
     ///
-    /// **Turned over when the scatter kind landed (#102), not deleted.** This test used to name 'scatter' as the
-    /// example of a kind that did not exist, and that is now one this build does make - so the refusal is pinned
-    /// with a kind that genuinely is not made (a bristle brush), and the kind that used to stand in for "not made"
-    /// is asserted to be **accepted**. Leaving it naming 'scatter' would have made the test a lie; deleting it
-    /// would have thrown away the gap it recorded. This is the failing-on-improvement rule working as intended.
+    /// **Turned over twice now, never deleted.** This test used to name 'scatter' as the example of a kind that did
+    /// not exist; when #102 landed, that became a kind this build does make, and the refusal was pinned with
+    /// 'bristle' instead. #103 has now landed too, so 'bristle' joins 'scatter' on the accepted side and the
+    /// refusal is pinned with a name no brush engine here has - which is the only thing left that genuinely stands
+    /// for "not made". Leaving the old name in place would have made the test a lie; deleting it would have thrown
+    /// away the gap it recorded. This is the failing-on-improvement rule working as intended.
     /// </summary>
     [Fact]
     public void AKindThisBuildDoesNotMakeIsRefusedByName()
@@ -122,21 +123,25 @@ public class ArtBrushOperationTests
 
         EditorOperationException error = Assert.Throws<EditorOperationException>(
             () => EditorOperations.Invoke(context, "brush.create",
-                Params(new { name = "Bristle", kind = "bristle", diameter = 4 })));
+                Params(new { name = "Chalk", kind = "chalk", diameter = 4 })));
 
-        Assert.Contains("bristle", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("chalk", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(document.Brushes);
 
-        // The refusal names every kind this build does make, including the one that used to be the example.
+        // The refusal names every kind this build does make, including the two that used to be the examples.
         Assert.Contains("scatter", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("bristle", error.Message, StringComparison.OrdinalIgnoreCase);
 
-        // And the kind that used to be refused is now made, with its own kind on the brush.
+        // And the kinds that used to be refused are now made, each with its own kind on the brush.
         EditorOperations.Invoke(context, "brush.create",
             Params(new { name = "Spray", kind = "scatter", diameter = 4, spacing = 10 }));
+        EditorOperations.Invoke(context, "brush.create",
+            Params(new { name = "Bristle", kind = "bristle", diameter = 4, count = 9 }));
 
-        BrushSpec created = Assert.Single(document.Brushes);
-        Assert.Equal(BrushKind.Scatter, created.Kind);
-        Assert.True(created.IsScatter);
+        Assert.Equal(new[] { BrushKind.Scatter, BrushKind.Bristle }, document.Brushes.Select(b => b.Kind).ToArray());
+        Assert.True(document.FindBrush("Spray")!.IsScatter);
+        Assert.True(document.FindBrush("Bristle")!.IsBristle);
+        Assert.Equal(9, document.FindBrush("Bristle")!.BristleSpec!.Count);
     }
 
     /// <summary>**Reading a stroke back says what kind of brush it carries**, art members and all.</summary>

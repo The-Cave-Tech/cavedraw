@@ -4536,11 +4536,10 @@ public sealed class CanvasWorkspace : Control
             // question made the canvas draw an ordinary pen stroke while the exporter and the SVG writer filled the
             // effected outline: the same document, two different pictures, and the effect invisible on screen,
             // which is how it went unnoticed until a test compared the two renderers.
-            if (StrokeOutlineBuilder.Plan(path, stroke).IsOutline)
+            StrokeRenderPlan plan = StrokeOutlineBuilder.Plan(path, stroke);
+            if (plan.IsOutline)
             {
-                context.DrawGeometry(
-                    ToBrush(stroke.Color, opacity * stroke.EffectiveOpacity), null,
-                    BuildProfileGeometry(path, stroke));
+                PaintOutline(context, path, stroke, plan, opacity * stroke.EffectiveOpacity);
             }
             else
             {
@@ -4658,6 +4657,59 @@ public sealed class CanvasWorkspace : Control
            ReferenceEquals(path, WidthProfileTarget)
             ? stroke with { WidthProfile = preview }
             : stroke;
+
+    /// <summary>
+    /// Paints the region a stroke covers, one fill when every loop is the stroke's colour and one fill per loop
+    /// when the plan carries a colour for each.
+    ///
+    /// **The loops come from the plan, not from a second call.** A bristle brush's loops are its bristles, and the
+    /// colours are parallel to them, so re-deriving the geometry here to paint it would be reading a second
+    /// computation of one answer - equal only because the sequence is deterministic. The one-path case still goes
+    /// through <see cref="BuildProfileGeometry"/> for the reason that method gives: it is where the artboard's
+    /// origin is added, and everything painted under <see cref="Render"/> is already inside the world transform.
+    ///
+    /// The fill rule is **nonzero**, which is the plan's own rule and what makes overlapping loops fill rather
+    /// than cancel: two bristles crossing is ink on ink, not a hole.
+    /// </summary>
+    private void PaintOutline(
+        DrawingContext context, PathItem path, StrokeSpec stroke, StrokeRenderPlan plan, double opacity)
+    {
+        if (plan.Paints is not { } paints)
+        {
+            context.DrawGeometry(ToBrush(stroke.Color, opacity), null, BuildProfileGeometry(path, stroke));
+            return;
+        }
+
+        Vector2D origin = path.ArtboardOffset();
+        for (int i = 0; i < plan.Outlines.Count; i++)
+        {
+            // A plan whose colours ran short would otherwise paint nothing: the fallback is the stroke's own
+            // colour, which is what a loop with no paint of its own means.
+            ColorRgb paint = i < paints.Count ? paints[i] : stroke.Color;
+            context.DrawGeometry(ToBrush(paint, opacity), null, LoopGeometry(plan.Outlines[i], origin));
+        }
+    }
+
+    /// <summary>One loop of a plan as geometry, with the artboard's origin added - which is the frame the canvas paints in.</summary>
+    private static StreamGeometry LoopGeometry(IReadOnlyList<Point2D> loop, Vector2D origin)
+    {
+        var geometry = new StreamGeometry();
+        using StreamGeometryContext g = geometry.Open();
+        g.SetFillRule(MediaFillRule.NonZero);
+
+        if (loop.Count > 0)
+        {
+            g.BeginFigure(new Point(loop[0].X + origin.X, loop[0].Y + origin.Y), isFilled: true);
+            for (int i = 1; i < loop.Count; i++)
+            {
+                g.LineTo(new Point(loop[i].X + origin.X, loop[i].Y + origin.Y));
+            }
+
+            g.EndFigure(true);
+        }
+
+        return geometry;
+    }
 
     /// <summary>
     /// The region a variable-width stroke covers, as geometry ready to draw.

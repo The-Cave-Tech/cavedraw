@@ -195,7 +195,34 @@ internal sealed record BrushDto(
     // The scatter brush's own member (#102), the fourth kind: its artwork and the five ranged controls a copy is
     // drawn from, in one optional spec. Written **only for the scatter kind**, so every brush written before this
     // kind existed - nib, art and pattern alike - serialises to exactly the bytes it did then.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ScatterBrushDto? Scatter = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ScatterBrushDto? Scatter = null,
+
+    // The bristle brush's own member (#103), the fifth kind: the whole bundle in one optional spec. Written **only
+    // for the bristle kind**, so every brush written before this kind existed - nib, art, pattern and scatter alike
+    // - serialises to exactly the bytes it did then. Every control inside is absent when it holds the model's own
+    // default, so a bundle that states one number writes one number.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] BristleBrushDto? Bristle = null);
+
+/// <summary>
+/// A bristle brush on the wire: how many bristles the bundle holds, how long and thick each is, how stiffly it
+/// follows the path, how far it spreads, how much a bristle may stray, how far pressure and tilt move it, and how
+/// far a bristle's colour may stray.
+///
+/// One member rather than nine on the brush for the reason the scatter spec is one: the bundle is one setting, and
+/// a brush whose count arrived without its thickness would paint a bundle the file does not describe. Every control
+/// is absent when it holds the model's own default, so a document written before a control existed keeps the bytes
+/// it had and reads back as the model's default rather than as a value this reader chose.
+/// </summary>
+internal sealed record BristleBrushDto(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Count = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Length = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Stiffness = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Thickness = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Spread = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Randomness = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? PressureSpread = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? TiltTurn = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? ColourJitter = null);
 
 /// <summary>
 /// A scatter brush on the wire: the item it repeats and the five controls each copy is drawn from.
@@ -885,6 +912,11 @@ internal abstract record ItemDto
         // its controls holds the model's default. A brush of another kind writes nothing here.
         bool scatter = brush.IsScatter;
 
+        // The bristle members belong to the bristle kind for the same reason, and are written whenever it is that
+        // kind: a kind's own members travel together, so a bristle brush says what its bundle is even when every
+        // control holds the model's default. A brush of another kind writes nothing here.
+        bool bristle = brush.IsBristle;
+
         return new BrushDto(
             brush.Name,
             brush.Kind,
@@ -907,7 +939,35 @@ internal abstract record ItemDto
             pattern ? ToPatternTileDto(brush.PatternOuterTile) : null,
             pattern ? brush.PatternSpacing : null,
             pattern ? brush.PatternCornerThresholdDegrees : null,
-            scatter ? ToScatterDto(brush.ScatterSpec) : null);
+            scatter ? ToScatterDto(brush.ScatterSpec) : null,
+            bristle ? ToBristleDto(brush.BristleSpec) : null);
+    }
+
+    /// <summary>
+    /// A bristle brush's bundle on the wire, or null for a bristle brush that states none.
+    ///
+    /// A control the model holds is written, and a control that holds the model's own default is written as absent:
+    /// a bundle that states its count and nothing else is a bundle of that many of the model's bristles, and a
+    /// member written holding a default would be this build stating a control the file never mentioned.
+    /// </summary>
+    private static BristleBrushDto? ToBristleDto(BristleBrushSpec? spec)
+    {
+        if (spec is null)
+        {
+            return null;
+        }
+
+        BristleBrushSpec defaults = BristleBrushSpec.Default;
+        return new BristleBrushDto(
+            spec.Count != defaults.Count ? spec.Count : null,
+            spec.Length != defaults.Length ? spec.Length : null,
+            spec.Stiffness != defaults.Stiffness ? spec.Stiffness : null,
+            spec.Thickness != defaults.Thickness ? spec.Thickness : null,
+            spec.Spread != defaults.Spread ? spec.Spread : null,
+            spec.Randomness != defaults.Randomness ? spec.Randomness : null,
+            spec.PressureSpread != defaults.PressureSpread ? spec.PressureSpread : null,
+            spec.TiltTurn != defaults.TiltTurn ? spec.TiltTurn : null,
+            spec.ColourJitter != defaults.ColourJitter ? spec.ColourJitter : null);
     }
 
     /// <summary>
@@ -1485,7 +1545,29 @@ internal static class ItemDtoExtensions
 
             // The scatter parameters, for the reason the art and pattern members are read: a member the file does
             // not state keeps the model's own default rather than a value this reader invented.
-            ToScatterModel(dto.Scatter));
+            ToScatterModel(dto.Scatter),
+            ToBristleModel(dto.Bristle));
+
+    /// <summary>
+    /// A bristle brush's bundle read back from the file, or null for a brush that states none.
+    ///
+    /// A control the file does not mention keeps the model's own default, for the reason the art, pattern and
+    /// scatter members do: those defaults are the model's, not a value this reader chose. A file that states the
+    /// spec but no controls is a bundle of the model's own bristles, which is a real setting rather than an absence.
+    /// </summary>
+    private static BristleBrushSpec? ToBristleModel(BristleBrushDto? dto)
+        => dto is null
+            ? null
+            : BristleBrushSpec.Stating(
+                dto.Count,
+                dto.Length,
+                dto.Stiffness,
+                dto.Thickness,
+                dto.Spread,
+                dto.Randomness,
+                dto.PressureSpread,
+                dto.TiltTurn,
+                dto.ColourJitter);
 
     /// <summary>
     /// A scatter brush's parameters read back from the file, or null for a brush that states none.

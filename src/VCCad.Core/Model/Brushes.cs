@@ -34,6 +34,99 @@ public enum BrushKind
     /// looks hand-placed rather than machined. See <see cref="ScatterBrushPath"/>.
     /// </summary>
     Scatter,
+
+    /// <summary>
+    /// A **bundle of bristles**, each drawn as its own stroke, so the line looks painted rather than inked. See
+    /// <see cref="BristleBrushPath"/>.
+    /// </summary>
+    Bristle,
+}
+
+/// <summary>
+/// A bristle brush's parameters: how many bristles the bundle holds, how long and how thick each one is, how
+/// stiffly it follows the path, how far the bundle spreads across it, how much each bristle's own place, length and
+/// direction may stray, and how much the pen's pressure and tilt move it (issue #103).
+///
+/// **Why the bristles are not held one by one.** A bristle is not a thing a person edits - nobody drags the
+/// forty-third hair - so the bundle is one spec of numbers, and a bristle's own place, length and turn are
+/// **derived** from the path and these parameters through a stable sequence. That is what makes the brush
+/// deterministic: the same document paints the same bristles on every frame and in every exported file, which a
+/// fresh <see cref="Random"/> per render could not. It is the rule <see cref="ScatterBrushSpec"/> already follows,
+/// and for the same reason.
+///
+/// **Every member is a modulation amount rather than a switch.** The model already has one place a pen's signal
+/// becomes a number, so a bristle brush states how much pressure spreads the bundle and how far tilt turns the
+/// bristles, and nothing else: a response stated twice is how two answers to one question come apart.
+/// </summary>
+/// <param name="Count">
+/// How many bristles the bundle holds. Bounded by <see cref="BristleBrushPath.MaxBristles"/> at render time, and
+/// the bound is **reported** by <see cref="BristleBundle.CountBoundHit"/> rather than quietly drawing fewer.
+/// </param>
+/// <param name="Length">
+/// How far along the path one bristle runs, in the stroke's own units. Zero is the model's own default and means
+/// the whole path: the bristles are parallel streaks spanning the stroke rather than short dashes on it.
+/// </param>
+/// <param name="Stiffness">
+/// How much a bristle resists being straightened, in 0..1. One follows the path's own curve exactly; zero draws
+/// each bristle as a straight line from where it starts, which is what makes a limp brush splay through a bend.
+/// </param>
+/// <param name="Thickness">How thick one bristle is, in the stroke's own units.</param>
+/// <param name="Spread">
+/// How far the bundle spreads across the path, as a multiple of the brush's own size. One spreads the bristles
+/// across the whole of <see cref="BrushSpec.Diameter"/>, zero piles them on the centreline.
+/// </param>
+/// <param name="Randomness">
+/// How far a bristle's own place across the bundle, its start and its turn may stray, in 0..1. Zero is the
+/// model's ideal bundle - bristles evenly spaced and all pointing the way the path runs - which is what lets a
+/// caller pin a bristle brush down and assert it to the last bit.
+/// </param>
+/// <param name="PressureSpread">
+/// How much the pen's pressure widens the bundle, in 0..1. Zero ignores pressure; one collapses the bundle to the
+/// centreline at no pressure and opens it to <see cref="Spread"/> at full pressure.
+/// </param>
+/// <param name="TiltTurn">
+/// How many degrees of turn one unit of the pen's tilt gives the bristles. Zero ignores tilt.
+/// </param>
+/// <param name="ColourJitter">
+/// How far a bristle's own colour may stray from the stroke's, in 0..1. Zero paints every bristle the stroke's
+/// colour, which is what keeps the plan a single fill; a stated jitter paints each bristle its own shade and the
+/// renderers fill them one at a time.
+/// </param>
+public sealed record BristleBrushSpec(
+    int Count = 12,
+    double Length = 0.0,
+    double Stiffness = 0.5,
+    double Thickness = 0.5,
+    double Spread = 1.0,
+    double Randomness = 0.35,
+    double PressureSpread = 0.5,
+    double TiltTurn = 1.0,
+    double ColourJitter = 0.0)
+{
+    /// <summary>The bundle an untouched bristle brush has: the model's own defaults, not a writer's guesses.</summary>
+    public static BristleBrushSpec Default { get; } = new();
+
+    /// <summary>A spec with whichever controls were stated, and the model's own defaults for the rest.</summary>
+    public static BristleBrushSpec Stating(
+        int? count = null,
+        double? length = null,
+        double? stiffness = null,
+        double? thickness = null,
+        double? spread = null,
+        double? randomness = null,
+        double? pressureSpread = null,
+        double? tiltTurn = null,
+        double? colourJitter = null)
+        => new(
+            Math.Max(0, count ?? Default.Count),
+            Math.Max(0.0, length ?? Default.Length),
+            Math.Clamp(stiffness ?? Default.Stiffness, 0.0, 1.0),
+            Math.Max(0.0, thickness ?? Default.Thickness),
+            Math.Max(0.0, spread ?? Default.Spread),
+            Math.Clamp(randomness ?? Default.Randomness, 0.0, 1.0),
+            Math.Clamp(pressureSpread ?? Default.PressureSpread, 0.0, 1.0),
+            tiltTurn ?? Default.TiltTurn,
+            Math.Clamp(colourJitter ?? Default.ColourJitter, 0.0, 1.0));
 }
 
 /// <summary>
@@ -238,6 +331,13 @@ public enum ArtColourisation
 /// ranged controls travel together in one optional <see cref="ScatterBrushSpec"/>, whose absence is every brush
 /// that is not this kind; its geometry is <see cref="ScatterBrushPath"/>. It is not a nib for the art brush's
 /// reason, and unlike the art brush its copies need no bend and no stretch - each is an independent placement.
+///
+/// **The bristle brush is the fifth kind (#103) and is a bundle of strokes rather than one.** Its count, length,
+/// stiffness, thickness, spread, randomness, pressure and tilt responses, and colour jitter travel together in one
+/// optional <see cref="BristleBrushSpec"/>; its geometry is <see cref="BristleBrushPath"/>, which answers with one
+/// stroke per bristle. It is not a nib - there is no single edge to measure - and its answer reaches the renderers
+/// as the **outline** of those strokes, so the canvas, the PDF writer and the SVG writer fill the same union
+/// without any of them learning a fifth drawing route.
 /// </summary>
 public sealed record BrushSpec(
     string Name,
@@ -275,7 +375,14 @@ public sealed record BrushSpec(
     // together in one optional spec, and null is every brush that is not this kind - so a nib, an art brush or a
     // pattern brush, including every one written before this kind existed, serialises to exactly the bytes it did
     // then. Absent at its default, and written whenever the kind is scatter: a kind's own members travel together.
-    ScatterBrushSpec? ScatterSpec = null)
+    ScatterBrushSpec? ScatterSpec = null,
+
+    // The bristle brush's own member (issue #103), the fifth kind. The whole bundle is one optional spec, for the
+    // reason the scatter brush's controls are: the bristles are one setting each, and a reader that took some of
+    // them would paint a bundle the file does not describe. Null is every brush that is not this kind - so a nib,
+    // an art brush, a pattern brush or a scatter brush, including every one written before this kind existed,
+    // serialises to exactly the bytes it did then.
+    BristleBrushSpec? BristleSpec = null)
 {
     /// <summary>An elliptical nib: the calligraphic brush, named for the shape rather than the kind.</summary>
     public static BrushSpec Calligraphic(
@@ -359,6 +466,25 @@ public sealed record BrushSpec(
             ScatterBrushSpec.Stating(asset, spacing, rotation, scale, offset, opacity));
 
     /// <summary>
+    /// A **bristle brush**: a bundle of bristles swept along the path, each drawn as its own stroke, so the line
+    /// looks painted rather than inked.
+    ///
+    /// <paramref name="size"/> is the width of the bundle across the path - the same member every other kind's size
+    /// is - and <paramref name="bristles"/> says how many hairs fill it, how long and thick each is, how stiffly it
+    /// follows the path, how far the bundle spreads, how much a bristle may stray, and how far the pen's pressure
+    /// and tilt move it. A brush that states no bundle carries the model's own defaults, which is what
+    /// <see cref="BristleBrushSpec.Default"/> is for.
+    /// </summary>
+    public static BrushSpec Bristle(
+        string name, double size, BristleBrushSpec? bristles = null, DynamicsSpec? dynamics = null)
+        => new(
+            name, 0.0, 1.0, size, BrushKind.Bristle, dynamics,
+            null, ArtStretch.Repeat, false, false, ArtColourisation.None, null,
+            null, null, null, null, null, 0.0, 30.0,
+            null,
+            bristles ?? BristleBrushSpec.Default);
+
+    /// <summary>
     /// Whether this brush is a **nib** a stroke is swept with, as against art mapped along the path.
     ///
     /// The distinction is load-bearing rather than descriptive: a nib answers "how far is the edge from the
@@ -383,6 +509,14 @@ public sealed record BrushSpec(
     /// placement with its own turn, size and offset. See <see cref="ScatterBrushPath"/>.
     /// </summary>
     public bool IsScatter => Kind is BrushKind.Scatter;
+
+    /// <summary>
+    /// Whether this brush sweeps a **bundle of bristles** along the path. Like the other three it maps something
+    /// rather than sweeping one nib, so it is not a nib either - and unlike them what it sweeps is a set of
+    /// strokes, each of which becomes its own loop in the outline the renderers fill. See
+    /// <see cref="BristleBrushPath"/>.
+    /// </summary>
+    public bool IsBristle => Kind is BrushKind.Bristle;
 
     /// <summary>The tile in one of the five slots, or null when that slot holds nothing.</summary>
     public PatternTileSpec? Tile(PatternTileKind slot) => slot switch

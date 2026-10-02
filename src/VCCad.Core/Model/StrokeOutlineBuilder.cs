@@ -10,18 +10,27 @@ namespace VCCad.Core.Model;
 /// in width, or that a brush has mapped, has no stroke to draw, so it becomes the outline that would be filled
 /// instead. Both answers come out of here so that no two renderers have to decide for themselves.
 /// </summary>
+/// <param name="Paints">
+/// The colour of each loop in <paramref name="Outlines"/>, or null when every loop takes the stroke's own colour.
+/// It is parallel to the outlines and present only for a **bristle brush** whose bristles differ in colour: a
+/// bristle brush paints each bristle as its own stroke, and a colour jitter that reached the model and not the
+/// pixels would be exactly the "stored, round-tripped and never honoured" defect. Null is the ordinary case, and
+/// it is what keeps every other kind's rendering a single fill.
+/// </param>
 public sealed record StrokeRenderPlan(
     bool IsOutline,
     double Width,
-    IReadOnlyList<IReadOnlyList<Point2D>> Outlines)
+    IReadOnlyList<IReadOnlyList<Point2D>> Outlines,
+    IReadOnlyList<ColorRgb>? Paints = null)
 {
     /// <summary>An ordinary stroked path at this width.</summary>
     public static StrokeRenderPlan Stroked(double width)
         => new(false, width, Array.Empty<IReadOnlyList<Point2D>>());
 
-    /// <summary>A filled outline covering this region.</summary>
-    public static StrokeRenderPlan Filled(IReadOnlyList<IReadOnlyList<Point2D>> outlines)
-        => new(true, 0.0, outlines);
+    /// <summary>A filled outline covering this region, optionally painted loop by loop.</summary>
+    public static StrokeRenderPlan Filled(
+        IReadOnlyList<IReadOnlyList<Point2D>> outlines, IReadOnlyList<ColorRgb>? paints = null)
+        => new(true, 0.0, outlines, paints);
 }
 
 /// <summary>
@@ -56,6 +65,12 @@ public static class StrokeOutlineBuilder
     /// answers. So a stroke carrying one keeps the width it has - the outline below is the stroke's own, not the
     /// art's - and the art is placed by a second step that this type has no member to describe. That gap is real
     /// and is reported rather than patched over: a renderer that reads only the plan draws the stroke and no art.
+    ///
+    /// **A bristle brush, by contrast, *is* the outline.** Its answer is a set of strokes rather than a width, and
+    /// filling their union is exactly what the brush paints - so <see cref="BristleBrushPath"/> becomes the loops
+    /// here, and the canvas, the PDF writer and the SVG writer each draw a bristle brush with no drawing route of
+    /// their own. When the brush jitters its bristles' colours the loops carry one paint each
+    /// (<see cref="StrokeRenderPlan.Paints"/>), which is the one thing a single fill cannot say.
     /// </summary>
     public static StrokeRenderPlan Plan(PathItem path, StrokeSpec stroke, double scale = 1.0)
     {
@@ -69,7 +84,9 @@ public static class StrokeOutlineBuilder
             return StrokeRenderPlan.Stroked(width);
         }
 
-        return StrokeRenderPlan.Filled(Outline(path, stroke, scale));
+        (IReadOnlyList<IReadOnlyList<Point2D>> loops, IReadOnlyList<ColorRgb>? paints) =
+            PaintedGeometry(path, stroke, scale);
+        return StrokeRenderPlan.Filled(loops, paints);
     }
 
     /// <summary>
@@ -79,6 +96,115 @@ public static class StrokeOutlineBuilder
     /// and offsetting are the same work either way.
     /// </summary>
     public static IReadOnlyList<IReadOnlyList<Point2D>> Outline(PathItem path, StrokeSpec stroke, double scale = 1.0)
+        => PaintedGeometry(path, stroke, scale).Loops;
+
+    /// <summary>
+    /// The outlines covering a stroked path **and the colour each one is painted**, in path-local coordinates.
+    ///
+    /// The two travel together rather than as two calls because they are one answer: a bristle brush's loops are
+    /// one loop per bristle in the order the bristles are painted, and a caller that asked for the loops and then
+    /// for the colours would be reading two computations of one geometry that are only equal because the sequence
+    /// is deterministic. <see cref="Outline"/> is this answer without the colours, which is what every caller that
+    /// paints the whole stroke one colour wants.
+    /// </summary>
+    public static (IReadOnlyList<IReadOnlyList<Point2D>> Loops, IReadOnlyList<ColorRgb>? Paints) PaintedGeometry(
+        PathItem path, StrokeSpec stroke, double scale = 1.0)
+    {
+        // **A bristle brush is the one kind whose answer is a set of strokes rather than one region.** Its loops
+        // are the outline of each bristle, so filling them is filling the union the issue describes - and every
+        // renderer already fills the plan's loops, so the canvas, the PDF writer and the SVG writer each draw a
+        // bristle brush without learning a fifth drawing route.
+        if (stroke.Brush is { IsBristle: true } bristle)
+        {
+            return BristleOutline(path, stroke, bristle, scale);
+        }
+
+        return (OutlineCore(path, stroke, scale), null);
+    }
+
+    /// <summary>
+    /// The outline a bristle brush covers, one loop per bristle, with each bristle's own colour when the brush
+    /// jitters it.
+    ///
+    /// **The effects are applied to each bristle on its own**, rather than to the concatenated outline, and that is
+    /// what keeps the colours aligned: a scribble effect turns one loop into several, so applying it after the
+    /// loops were concatenated would leave a flat list whose entries no longer say which bristle they came from.
+    /// Applied per bristle, a bristle's effects produce that bristle's loops and nothing else, in the same order
+    /// the concatenated form would have had them.
+    ///
+    /// A bristle is a hair, so its own stroke is capped and joined round: the loop is what a pen of the bristle's
+    /// thickness would have painted along the bristle's centreline.
+    /// </summary>
+    private static (IReadOnlyList<IReadOnlyList<Point2D>> Loops, IReadOnlyList<ColorRgb>? Paints) BristleOutline(
+        PathItem path, StrokeSpec stroke, BrushSpec brush, double scale)
+    {
+        BristleBrushSpec spec = brush.BristleSpec ?? BristleBrushSpec.Default;
+
+        // A stored document holds no pen, which is the rule the scatter brush's pressure follows: the bristles are
+        // placed for a fully pressed, untilted pen and a caller that knows better passes the pen's own numbers to
+        // BristleBrushPath.Strokes.
+        BristleBundle bundle = BristleBrushPath.Strokes(path, brush, scale);
+        if (bundle.Bristles.Count == 0)
+        {
+            return (Array.Empty<IReadOnlyList<Point2D>>(), null);
+        }
+
+        bool jittered = spec.ColourJitter > 0.0;
+        var loops = new List<IReadOnlyList<Point2D>>(bundle.Bristles.Count);
+        List<ColorRgb>? paints = jittered ? new List<ColorRgb>(bundle.Bristles.Count) : null;
+
+        foreach (BristleStroke bristle in bundle.Bristles)
+        {
+            IReadOnlyList<IReadOnlyList<Point2D>> one = PathOffset.Outline(
+                new[] { new FlattenedOutline(bristle.Points, isClosed: false) },
+                null,
+                bristle.Thickness,
+                stroke.MiterLimit,
+                StrokeCap.Round,
+                StrokeJoin.Round);
+
+            if (stroke.HasEffects)
+            {
+                one = OutlineEffects.Apply(one, stroke.AllEffects);
+            }
+
+            ColorRgb paint = Shaded(stroke.Color, bristle.Shade);
+            foreach (IReadOnlyList<Point2D> loop in one)
+            {
+                loops.Add(loop);
+                paints?.Add(paint);
+            }
+        }
+
+        return (loops, paints);
+    }
+
+    /// <summary>
+    /// A colour moved towards black or white by a bristle's own shade, which is what a colour jitter means.
+    ///
+    /// The alpha is the stroke's, not the bristle's: a jitter is a difference in **hue and lightness** between
+    /// hairs, and a translucent stroke whose hairs were also translucent would be a different document rather than
+    /// a broader one.
+    /// </summary>
+    private static ColorRgb Shaded(ColorRgb colour, double shade)
+    {
+        if (shade == 0.0)
+        {
+            return colour;
+        }
+
+        double t = Math.Clamp(Math.Abs(shade), 0.0, 1.0);
+        double to = shade < 0.0 ? 0.0 : 1.0;
+        return new ColorRgb(
+            colour.R + ((to - colour.R) * t),
+            colour.G + ((to - colour.G) * t),
+            colour.B + ((to - colour.B) * t),
+            colour.A);
+    }
+
+    /// <summary>The outlines covering a stroked path, without asking what colour each one is painted.</summary>
+    private static IReadOnlyList<IReadOnlyList<Point2D>> OutlineCore(
+        PathItem path, StrokeSpec stroke, double scale)
     {
         WidthProfileSpec? profile = stroke.WidthProfile;
         if (profile is { IsEmpty: false } && scale != 1.0)

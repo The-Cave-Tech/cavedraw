@@ -886,7 +886,7 @@ public static class PdfDocumentExporter
                     stroke.Color,
                     ReferenceEquals(stroke, path.Strokes[0]) ? path.SourceStrokeCmyk : null,
                     stroke: false));
-                WriteOutline(ops, plan.Outlines, toDoc, stroke, strokeOpacity, alphaStates);
+                WriteOutline(ops, plan.Outlines, toDoc, stroke, strokeOpacity, alphaStates, plan.Paints);
                 WriteStrokeArt();
                 continue;
             }
@@ -1577,6 +1577,10 @@ public static class PdfDocumentExporter
     ///
     /// The outlines come from <see cref="StrokeOutlineBuilder"/> already scaled, so this only places and fills
     /// them - the geometry is not decided here, because the canvas has to decide it the same way.
+    ///
+    /// <paramref name="paints"/>, when the plan carries it, is the colour of each loop - a bristle brush's own
+    /// bristles. Each loop is then written under its own colour rather than all of them under the stroke's, which
+    /// is what stops a colour jitter being recorded in the model and dropped at the page.
     /// </summary>
     private static void WriteOutline(
         List<string> ops,
@@ -1584,7 +1588,8 @@ public static class PdfDocumentExporter
         AffineTransform toDoc,
         StrokeSpec stroke,
         double opacity,
-        PdfAlphaStates? alphaStates = null)
+        PdfAlphaStates? alphaStates = null,
+        IReadOnlyList<ColorRgb>? paints = null)
     {
         if (loops.Count == 0)
         {
@@ -1596,18 +1601,35 @@ public static class PdfDocumentExporter
             ops.Add($"{alphaStates.NameFor(stroke.Color.A * opacity)} gs");
         }
 
-        foreach (IReadOnlyList<Point2D> loop in loops)
+        for (int i = 0; i < loops.Count; i++)
         {
-            for (int i = 0; i < loop.Count; i++)
+            if (paints is not null)
             {
-                Point2D point = toDoc.Transform(loop[i]);
-                ops.Add($"{Num(point.X)} {Num(point.Y)} {(i == 0 ? "m" : "l")}");
+                ColorRgb paint = i < paints.Count ? paints[i] : stroke.Color;
+                ops.Add(ColorOperator(paint, null, stroke: false));
+            }
+
+            IReadOnlyList<Point2D> loop = loops[i];
+            for (int p = 0; p < loop.Count; p++)
+            {
+                Point2D point = toDoc.Transform(loop[p]);
+                ops.Add($"{Num(point.X)} {Num(point.Y)} {(p == 0 ? "m" : "l")}");
             }
 
             ops.Add("h");
+
+            // One fill per loop when the loops differ in colour, and one for the whole region when they do not -
+            // which is what keeps the overlapping mitred corners of an ordinary outline filling as one shape.
+            if (paints is not null)
+            {
+                ops.Add("f");
+            }
         }
 
-        ops.Add("f");
+        if (paints is null)
+        {
+            ops.Add("f");
+        }
     }
 
     /// <summary>Writes the raw geometry of several contours into the current path.</summary>

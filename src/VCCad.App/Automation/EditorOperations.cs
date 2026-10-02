@@ -3050,12 +3050,14 @@ public static class EditorOperations
                 .ToArray());
 
         Add("brush.create",
-            "Create a reusable brush in the document. Four kinds: 'calligraphic', an elliptical nib with an angle, " +
+            "Create a reusable brush in the document. Five kinds: 'calligraphic', an elliptical nib with an angle, " +
             "a roundness and a diameter; 'art', which maps a piece of the document's own artwork along the " +
             "stroke instead of stroking a line; 'pattern', which lays a tile set along it - a side tile " +
             "repeated between the turns, a corner tile at each turn, and one start and one end tile at the two " +
-            "ends; and 'scatter', which repeats one piece of artwork along it, each copy drawn with its own turn, " +
-            "size and offset from a range around the value stated. For a nib, angle is the direction the nib's long " +
+            "ends; 'scatter', which repeats one piece of artwork along it, each copy drawn with its own turn, " +
+            "size and offset from a range around the value stated; and 'bristle', which sweeps a bundle of " +
+            "bristles along it, each drawn as its own stroke, so the line looks painted rather than inked. " +
+            "For a nib, angle is the direction the nib's long " +
             "axis points, in " +
             "degrees from the +X axis towards +Y, the same sense a path direction is measured in; roundness is " +
             "the nib's short axis as a fraction of its long one, so 1 is a circular pen and a small number is a " +
@@ -3077,18 +3079,31 @@ public static class EditorOperations
             "The randomness is reproducible - the same document scatters the same way every render - and a range " +
             "of zero draws the stated value exactly. Pressure moves a copy's size and opacity only if the brush is " +
             "given tablet dynamics with brush.setDynamics. " +
+            "For a bristle brush, 'size' (or 'diameter') is how wide the bundle of bristles is drawn across the " +
+            "stroke, 'count' is how many bristles it holds - bounded at render time, and the bound is reported by " +
+            "brush.bristles rather than served short - 'length' is how far along the path one bristle runs (zero, " +
+            "the default, is the whole path), 'thickness' is how thick one bristle is, 'stiffness' is how much a " +
+            "bristle follows the path's own curve rather than running straight, 'spread' is how far the bundle " +
+            "opens across the stroke as a multiple of its size, 'randomness' is how far a bristle's own place, " +
+            "start and turn may stray, 'pressureSpread' is how much the pen's pressure opens the bundle, " +
+            "'tiltTurn' is how many degrees of turn one degree of the pen's tilt gives the bristles, and " +
+            "'colourJitter' is how far a bristle's own colour may stray towards black or white. The bristles are " +
+            "a pure function of the path and these numbers, so the same document paints the same picture every " +
+            "render. " +
             "The name has to be free: two " +
             "brushes with one name would make 'the brush called X' ambiguous, and it is the name that strokes " +
             "refer to. Creating a brush does not apply it - an asset sits in the document until something uses " +
             "it. One undo step.",
-            "name:string, kind?:calligraphic|art|pattern|scatter (default calligraphic), angle?:number, " +
+            "name:string, kind?:calligraphic|art|pattern|scatter|bristle (default calligraphic), angle?:number, " +
             "roundness?:number, " +
-            "diameter?:number, asset?:guid, size?:number (an art, pattern or scatter brush's diameter), " +
+            "diameter?:number, asset?:guid, size?:number (an art, pattern, scatter or bristle brush's diameter), " +
             "stretch?:stretchToFit|scaleProportionally|repeat, flipAcross?:bool, flipAlong?:bool, " +
             "colourisation?:none|tint|tintAndShade, shadeColour?:[r,g,b], side?:guid, start?:guid, end?:guid, " +
             "innerCorner?:guid, outerCorner?:guid, spacing?:number, cornerThreshold?:number, rotation?:number, " +
             "scale?:number, offset?:number, opacity?:number, spacingRandomness?:number, rotationRandomness?:number, " +
-            "scaleRandomness?:number, offsetRandomness?:number, opacityRandomness?:number",
+            "scaleRandomness?:number, offsetRandomness?:number, opacityRandomness?:number, count?:number, " +
+            "length?:number, stiffness?:number, thickness?:number, spread?:number, randomness?:number, " +
+            "pressureSpread?:number, tiltTurn?:number, colourJitter?:number",
             (ctx, p) =>
             {
                 string name = p.GetString("name") ?? string.Empty;
@@ -3276,7 +3291,9 @@ public static class EditorOperations
             "flips and colourisation; a pattern brush's size, spacing and corner threshold - its tiles are set one " +
             "at a time with brush.setTile, because a tile carries controls of its own and one operation taking " +
             "five slots and five sets of controls would be five operations wearing a hat; a scatter brush's asset, " +
-            "size and its five ranged controls. Only the members given change. Setting 'asset' on an art brush or a " +
+            "size and its five ranged controls. A bristle brush's count, length, stiffness, thickness, spread, " +
+            "randomness, pressure and tilt responses and colour jitter. Only the members given change. Setting " +
+            "'asset' on an art brush or a " +
             "scatter brush re-points it " +
             "at another item of the document rather than copying its artwork, which is what keeps the brush a " +
             "reference. The strokes that use the brush are re-pointed with it, because that is what makes it an " +
@@ -3285,7 +3302,9 @@ public static class EditorOperations
             "stretch?:stretchToFit|scaleProportionally|repeat, flipAcross?:bool, flipAlong?:bool, " +
             "colourisation?:none|tint|tintAndShade, shadeColour?:[r,g,b], spacing?:number, cornerThreshold?:number, " +
             "rotation?:number, scale?:number, offset?:number, opacity?:number, spacingRandomness?:number, " +
-            "rotationRandomness?:number, scaleRandomness?:number, offsetRandomness?:number, opacityRandomness?:number",
+            "rotationRandomness?:number, scaleRandomness?:number, offsetRandomness?:number, opacityRandomness?:number, " +
+            "count?:number, length?:number, stiffness?:number, thickness?:number, spread?:number, " +
+            "randomness?:number, pressureSpread?:number, tiltTurn?:number, colourJitter?:number",
             (ctx, p) =>
             {
                 string name = p.GetString("name") ?? string.Empty;
@@ -3298,6 +3317,10 @@ public static class EditorOperations
                 // every scatter control", which is a change the caller did not ask for.
                 bool scatterGiven = brush.IsScatter && ScatterParametersGiven(p);
 
+                // A bristle brush's bundle is edited the same way and for the same reason: building it
+                // unconditionally would turn "change the count" into "state every bristle control".
+                bool bristleGiven = brush.IsBristle && BristleParametersGiven(p);
+
                 var updated = brush with
                 {
                     AngleDegrees = Given(p, "angle") ? p.GetDouble("angle", brush.AngleDegrees) : brush.AngleDegrees,
@@ -3307,7 +3330,11 @@ public static class EditorOperations
                         : Given(p, "size")
                             ? Math.Max(0.0, p.GetDouble("size", brush.Diameter))
                             : brush.Diameter,
-                    ArtAsset = Given(p, "asset") && !brush.IsScatter ? ReadAsset(p, document) : brush.ArtAsset,
+                    // 'asset' belongs to the art brush and to nothing else: a scatter brush reads its own asset
+                    // through its spec, a pattern brush fills its slots with brush.setTile, and a nib or a bristle
+                    // brush maps no artwork at all - so writing the member on one of those would store a reference
+                    // that nothing draws, which is the held-and-not-honoured shape this family keeps producing.
+                    ArtAsset = Given(p, "asset") && brush.IsArt ? ReadAsset(p, document) : brush.ArtAsset,
                     Stretch = Given(p, "stretch") ? ReadStretch(p) : brush.Stretch,
                     FlipAcross = Given(p, "flipAcross") ? p.GetBool("flipAcross", brush.FlipAcross) : brush.FlipAcross,
                     FlipAlong = Given(p, "flipAlong") ? p.GetBool("flipAlong", brush.FlipAlong) : brush.FlipAlong,
@@ -3325,6 +3352,7 @@ public static class EditorOperations
                         : brush.PatternCornerThresholdDegrees,
 
                     ScatterSpec = scatterGiven ? EditedScatter(p, brush, document) : brush.ScatterSpec,
+                    BristleSpec = bristleGiven ? EditedBristle(p, brush) : brush.BristleSpec,
                 };
 
                 return ApplyBrushEdit(ctx, document, brush, name, updated, "Edit brush");
@@ -3680,6 +3708,79 @@ public static class EditorOperations
                             copy.Transform.D, copy.Transform.E, copy.Transform.F,
                         },
                     }).ToArray(),
+                }).ToArray();
+            });
+
+        Add("brush.bristles",
+            "Where a bristle brush's bristles go along a path - the read half of a bristle brush, and the only way " +
+            "to learn what the bundle paints without seeing it. Each bristle names the arc length it starts at, how " +
+            "far along the path it runs, how far it sits across the path (positive to the left of travel), its own " +
+            "thickness, the turn its own direction takes in degrees, the shade its colour strays to in -1..1, and " +
+            "the first and last points of its own centreline. The answer also carries how many bristles were asked " +
+            "for and whether the engine's bound was hit, because a bundle that silently came back short looks like " +
+            "a drawing that lost detail. **Reported rather than held**: the model has no member that says a bristle " +
+            "is drawn at a place - a stroke's render plan is widths and outlines - so the bristles are computed " +
+            "from the path every time they are asked for, which is why editing the path moves them with no brush " +
+            "re-applied. The numbers here are the picture: StrokeOutlineBuilder turns each of these bristles into " +
+            "the loop the canvas, the PDF writer and the SVG writer all fill. 'pressure' is the pen's pressure in " +
+            "0..1 and opens the bundle through the brush's own pressureSpread; 'tilt' is the pen's tilt in degrees " +
+            "and turns every bristle through its tiltTurn. A brush that is not a bristle brush is refused by name.",
+            "name:string, itemId?:guid (default: the selected paths), pressure?:number, tilt?:number",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                CadDocument document = ctx.Document;
+                BrushSpec brush = document.FindBrush(name)
+                    ?? throw new EditorOperationException($"there is no brush called '{name}'");
+
+                if (!brush.IsBristle)
+                {
+                    throw new EditorOperationException(
+                        $"'{name}' is a {brush.Kind.ToString().ToLowerInvariant()} brush, which has no bristles; " +
+                        (brush.IsPattern
+                            ? "use brush.tiles for where its tiles go"
+                            : brush.IsScatter
+                                ? "use brush.scatter for where its copies go"
+                                : brush.IsArt
+                                    ? "use brush.placements for where its artwork goes"
+                                    : "it sweeps a nib along the path"));
+                }
+
+                double pressure = p.GetDouble("pressure", 1.0);
+                double tilt = p.GetDouble("tilt", 0.0);
+
+                IEnumerable<PathItem> paths = p.TryGetGuid("itemId", out Guid id)
+                    ? new[] { RequirePath(document, id) }
+                    : ctx.Session.SelectedPaths();
+
+                return paths.Select(path =>
+                {
+                    BristleBundle bundle = BristleBrushPath.Strokes(path, brush, 1.0, pressure, tilt);
+                    return new
+                    {
+                        itemId = path.Id,
+                        name = path.Name,
+                        brush = name,
+                        pressure = Math.Round(Math.Clamp(pressure, 0.0, 1.0), 6),
+                        tilt = Math.Round(tilt, 4),
+                        requested = bundle.Requested,
+                        countBoundHit = bundle.CountBoundHit,
+                        maxBristles = BristleBrushPath.MaxBristles,
+                        bristles = bundle.Bristles.Select(bristle => new
+                        {
+                            start = Math.Round(bristle.Start, 4),
+                            length = Math.Round(bristle.Length, 4),
+                            offset = Math.Round(bristle.Offset, 4),
+                            thickness = Math.Round(bristle.Thickness, 4),
+                            turnDegrees = Math.Round(bristle.TurnDegrees, 4),
+                            shade = Math.Round(bristle.Shade, 6),
+                            points = bristle.Points.Count,
+                            x = Math.Round(bristle.Points[0].X, 4),
+                            y = Math.Round(bristle.Points[0].Y, 4),
+                            endX = Math.Round(bristle.Points[^1].X, 4),
+                            endY = Math.Round(bristle.Points[^1].Y, 4),
+                        }).ToArray(),
+                    };
                 }).ToArray();
             });
 
@@ -7687,11 +7788,58 @@ public static class EditorOperations
                     ReadScatterParameter(p, "offset", new ScatterParameter(0.0)),
                     ReadScatterParameter(p, "opacity", new ScatterParameter(1.0), clamped: true));
 
+            case "bristle":
+                return BrushSpec.Bristle(
+                    name,
+                    BrushSize(p, p.GetDouble("diameter", p.GetDouble("size", 1.0))),
+                    ReadBristle(p, BristleBrushSpec.Default));
+
             default:
                 throw new EditorOperationException(
-                    $"'{kind}' is not a brush kind this build makes; use calligraphic, art, pattern or scatter");
+                    $"'{kind}' is not a brush kind this build makes; use calligraphic, art, pattern, scatter or bristle");
         }
     }
+
+    /// <summary>
+    /// A bristle brush's bundle as the caller stated it: the controls they named, and the model's own defaults for
+    /// the ones they did not.
+    ///
+    /// Every control is clamped where a value outside the range would not mean anything: a count and a thickness
+    /// are counts and lengths, a stiffness, a randomness, a pressure response and a colour jitter are fractions,
+    /// and a turn per degree of tilt is not. The clamps are the same shape <see cref="ClampedRoundness"/> gives a
+    /// nib and for the same reason: a caller computing one can arrive a hair outside the range a dragged slider
+    /// gives, and that is not a reason to refuse their brush.
+    /// </summary>
+    private static BristleBrushSpec ReadBristle(JsonElement p, BristleBrushSpec current)
+        => new(
+            Given(p, "count") ? Math.Max(0, (int)Math.Round(p.GetDouble("count", current.Count))) : current.Count,
+            Given(p, "length") ? Math.Max(0.0, p.GetDouble("length", current.Length)) : current.Length,
+            Given(p, "stiffness")
+                ? Math.Clamp(p.GetDouble("stiffness", current.Stiffness), 0.0, 1.0)
+                : current.Stiffness,
+            Given(p, "thickness") ? Math.Max(0.0, p.GetDouble("thickness", current.Thickness)) : current.Thickness,
+            Given(p, "spread") ? Math.Max(0.0, p.GetDouble("spread", current.Spread)) : current.Spread,
+            Given(p, "randomness")
+                ? Math.Clamp(p.GetDouble("randomness", current.Randomness), 0.0, 1.0)
+                : current.Randomness,
+            Given(p, "pressureSpread")
+                ? Math.Clamp(p.GetDouble("pressureSpread", current.PressureSpread), 0.0, 1.0)
+                : current.PressureSpread,
+            Given(p, "tiltTurn") ? p.GetDouble("tiltTurn", current.TiltTurn) : current.TiltTurn,
+            Given(p, "colourJitter")
+                ? Math.Clamp(p.GetDouble("colourJitter", current.ColourJitter), 0.0, 1.0)
+                : current.ColourJitter);
+
+    /// <summary>The parameter names that belong to a bristle brush's own bundle, which is what "the caller touched one" means.</summary>
+    private static readonly string[] BristleParameterNames =
+    {
+        "count", "length", "stiffness", "thickness", "spread", "randomness",
+        "pressureSpread", "tiltTurn", "colourJitter",
+    };
+
+    /// <summary>Whether the caller named any of a bristle brush's own controls, which decides whether its bundle is rewritten.</summary>
+    private static bool BristleParametersGiven(JsonElement p)
+        => BristleParameterNames.Any(name => Given(p, name));
 
     /// <summary>
     /// One of a scatter brush's controls as the caller stated it: the value under <paramref name="name"/> and the
@@ -7735,6 +7883,16 @@ public static class EditorOperations
     /// <summary>Whether the caller named any of a scatter brush's own controls, which decides whether its spec is rewritten.</summary>
     private static bool ScatterParametersGiven(JsonElement p)
         => ScatterParameterNames.Any(name => Given(p, name));
+
+    /// <summary>
+    /// A bristle brush's bundle with the controls the caller named changed and the rest kept.
+    ///
+    /// A brush that holds no bundle yet starts from the model's own defaults rather than from nothing, for the
+    /// reason the scatter reader gives: those defaults are the model's, and several of them - a length of zero,
+    /// which runs the whole path - are real settings rather than absences.
+    /// </summary>
+    private static BristleBrushSpec EditedBristle(JsonElement p, BrushSpec brush)
+        => ReadBristle(p, brush.BristleSpec ?? BristleBrushSpec.Default);
 
     /// <summary>
     /// A scatter brush's parameters with the controls the caller named changed and the rest kept.
@@ -9073,6 +9231,33 @@ public static class EditorOperations
                         // pen only when the brush carries the two dynamics targets, and the seam applies them. With no
                         // dynamics recorded pressure is ignored, which is what a static document is drawn as.
                         pressureApplied = brush.Dynamics is { IsEmpty: false },
+                        drawn = true,
+                    }
+                    : null,
+
+                // The bristle brush's members, reported only for the bristle kind for the reason the other kinds'
+                // are: a nib carrying a bundle would be a brush this build cannot draw, and reporting the member
+                // would hide that. Every control is reported as the model holds it, together with the bound the
+                // engine draws at, so "this bundle asks for more bristles than are painted" is visible from the
+                // description alone rather than only from brush.bristles.
+                bristle = brush.IsBristle
+                    ? (object?)new
+                    {
+                        count = brush.BristleSpec?.Count ?? BristleBrushSpec.Default.Count,
+                        length = Math.Round(brush.BristleSpec?.Length ?? BristleBrushSpec.Default.Length, 4),
+                        stiffness = Math.Round(brush.BristleSpec?.Stiffness ?? BristleBrushSpec.Default.Stiffness, 6),
+                        thickness = Math.Round(brush.BristleSpec?.Thickness ?? BristleBrushSpec.Default.Thickness, 4),
+                        spread = Math.Round(brush.BristleSpec?.Spread ?? BristleBrushSpec.Default.Spread, 6),
+                        randomness = Math.Round(brush.BristleSpec?.Randomness ?? BristleBrushSpec.Default.Randomness, 6),
+                        pressureSpread = Math.Round(
+                            brush.BristleSpec?.PressureSpread ?? BristleBrushSpec.Default.PressureSpread, 6),
+                        tiltTurn = Math.Round(brush.BristleSpec?.TiltTurn ?? BristleBrushSpec.Default.TiltTurn, 6),
+                        colourJitter = Math.Round(
+                            brush.BristleSpec?.ColourJitter ?? BristleBrushSpec.Default.ColourJitter, 6),
+                        maxBristles = BristleBrushPath.MaxBristles,
+
+                        // Said out loud, for the reason the scatter brush's flag is: the bundle reaches the pixels
+                        // by becoming the outline the plan carries, so it is drawn rather than merely recorded.
                         drawn = true,
                     }
                     : null,

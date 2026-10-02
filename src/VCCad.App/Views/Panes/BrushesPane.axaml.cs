@@ -649,12 +649,35 @@ public partial class BrushesPane : UserControl
                 brush => brush.ScatterSpec?.Opacity.Randomness),
         },
 
+        BrushKind.Bristle => BristleFields,
+
         _ => new BrushField[]
         {
             new("Angle", "angle", FieldKind.Number, brush => brush.AngleDegrees),
             new("Roundness", "roundness", FieldKind.Number, brush => brush.Roundness),
             new("Diameter", "diameter", FieldKind.Number, brush => brush.Diameter),
         },
+    };
+
+    /// <summary>
+    /// The controls a bristle brush's bundle is edited through, beside the shared size.
+    ///
+    /// The size is the bundle's width across the stroke and is stated on the brush rather than in the spec, for the
+    /// reason every other kind's size is: it is the same member whichever kind the brush is. Everything else is the
+    /// bundle's own, and each one is written through the registry by parameter name like the rest.
+    /// </summary>
+    private static readonly BrushField[] BristleFields =
+    {
+        new("Size", "size", FieldKind.Number, brush => brush.Diameter),
+        new("Bristles", "count", FieldKind.Number, brush => brush.BristleSpec?.Count),
+        new("Length", "length", FieldKind.Number, brush => brush.BristleSpec?.Length),
+        new("Stiffness", "stiffness", FieldKind.Number, brush => brush.BristleSpec?.Stiffness),
+        new("Thickness", "thickness", FieldKind.Number, brush => brush.BristleSpec?.Thickness),
+        new("Spread", "spread", FieldKind.Number, brush => brush.BristleSpec?.Spread),
+        new("Randomness", "randomness", FieldKind.Number, brush => brush.BristleSpec?.Randomness),
+        new("Pressure spread", "pressureSpread", FieldKind.Number, brush => brush.BristleSpec?.PressureSpread),
+        new("Tilt turn", "tiltTurn", FieldKind.Number, brush => brush.BristleSpec?.TiltTurn),
+        new("Colour jitter", "colourJitter", FieldKind.Number, brush => brush.BristleSpec?.ColourJitter),
     };
 
     /// <summary>
@@ -666,6 +689,7 @@ public partial class BrushesPane : UserControl
         BrushKind.Art => BrushSpec.Art(DefaultBrushName, null, 12.0),
         BrushKind.Pattern => BrushSpec.Pattern(DefaultBrushName, 12.0),
         BrushKind.Scatter => BrushSpec.Scatter(DefaultBrushName, null, 12.0),
+        BrushKind.Bristle => BrushSpec.Bristle(DefaultBrushName, 24.0),
         _ => BrushSpec.Calligraphic(DefaultBrushName, 45.0, 0.25, 12.0),
     };
 
