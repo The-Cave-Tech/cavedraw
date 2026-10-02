@@ -379,6 +379,13 @@ public partial class EditorView : UserControl
         var filter = new FilterPane();
         filter.Attach(_viewModel);
 
+        // The brush editor. Brushes are assets in the document, so the editor belongs with the other asset panels
+        // rather than in the inspector: the stroke panel says *which* brush a stroke carries, and this says what that
+        // brush is. Every control in it runs an operation from the registry, which is what makes a brush built here
+        // reproducible by a driver.
+        var brushes = new BrushesPane();
+        brushes.Attach(_viewModel);
+
         var appearance = new DockPanelModel { Id = "appearance", Title = "Appearance", Side = DockSide.Right };
         appearance.Tabs.Add(new DockTab { Id = "colors", Title = "Color", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => colors, IsOpen = true });
         appearance.Tabs.Add(new DockTab { Id = "gradient", Title = "Gradient", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => gradient });
@@ -390,6 +397,7 @@ public partial class EditorView : UserControl
         // somebody works through families, which a dropdown cannot.
         appearance.Tabs.Add(new DockTab { Id = "fonts", Title = "Fonts", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => fonts });
         appearance.Tabs.Add(new DockTab { Id = "filter", Title = "Filter", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => filter });
+        appearance.Tabs.Add(new DockTab { Id = "brushes", Title = "Brushes", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => brushes });
         appearance.ActiveTabId = "colors";
 
         // The colour panel is only as tall as its contents; the Layers panel takes everything

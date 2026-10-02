@@ -1,0 +1,54 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="VCCad.App.Views.Panes.BrushesPane">
+  <ScrollViewer>
+    <StackPanel Margin="10,8" Spacing="8">
+      <TextBlock Text="BRUSHES" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- The library this editor is a view of. Brushes are assets **in the document** and a stroke refers to one by
+           name, so there is no global brush library to fall back on and the list comes from the document rather than
+           from anything listed in this file. -->
+      <Grid ColumnDefinitions="Auto,*">
+        <TextBlock Text="Brush" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <ComboBox x:Name="BrushLibraryBox" Grid.Column="1" HorizontalAlignment="Stretch"
+                  ToolTip.Tip="A brush in this document, or a new one"/>
+      </Grid>
+
+      <Grid ColumnDefinitions="Auto,*">
+        <TextBlock Text="Name" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="BrushNameBox" Grid.Column="1"/>
+      </Grid>
+
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="4">
+        <Button x:Name="NewBrushButton" Grid.Column="1" Content="New brush"
+                ToolTip.Tip="Create a brush of the kind the tabs are on, then edit it here"/>
+        <Button x:Name="RenameBrushButton" Grid.Column="2" Content="Rename"/>
+        <Button x:Name="DeleteBrushButton" Grid.Column="3" Content="Delete"/>
+      </Grid>
+
+      <!-- One engine per tab. The tabs come from the registry - the kinds this build's brush.create actually makes -
+           rather than from a list in this file, so an engine that lands in the model appears here by existing. Each
+           tab's own content is the middle section: the parameter controls that engine declares. -->
+      <TabControl x:Name="KindTabs"/>
+
+      <TextBlock Text="PREVIEW" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
+                 Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- The sample path drawn with the brush. The geometry is the canvas's own - StrokeOutlineBuilder for a nib and
+           PlacedArt.Resolve for artwork - so the preview cannot show a brush doing something the canvas would not. -->
+      <Border x:Name="PreviewHost" Height="110" CornerRadius="3"
+              Background="{DynamicResource VcPanel}" BorderBrush="{DynamicResource VcTextDim}" BorderThickness="1"
+              ToolTip.Tip="The sample path drawn with the brush, through the same geometry the canvas uses"/>
+
+      <Button x:Name="ApplyToSelectionButton" Content="Apply to selection" HorizontalAlignment="Stretch"/>
+
+      <!-- Which brush the selection is swept with, or **mixed** where it disagrees. A readout that showed one path's
+           brush as everyone's is how a person concludes the selection carries something it does not. -->
+      <TextBlock x:Name="ApplicationLabel" TextWrapping="Wrap"
+                 Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+
+      <TextBlock x:Name="StatusLabel" TextWrapping="Wrap" IsVisible="False"
+                 Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

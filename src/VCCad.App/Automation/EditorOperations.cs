@@ -7511,18 +7511,6 @@ public static class EditorOperations
     }
 
     /// <summary>
-    /// A brush built from the parameters a caller gave, holding this build's defaults for the ones they did not.
-    ///
-    /// The **kind decides which members mean anything**, and is read first: a nib has an angle, a roundness and a
-    /// diameter, and an art brush maps an asset of a stated size with a stretch, two flips and a colourisation. A
-    /// kind this build does not make is refused by name rather than falling back to a nib, because a caller that
-    /// asked for a brush this build cannot make would otherwise get a plausible line and no warning.
-    ///
-    /// Roundness is clamped into 0..1 and the diameter at zero rather than refused: they describe a shape, and a
-    /// caller computing one can arrive a hair outside the range the same way a dragged slider can. A diameter
-    /// below zero is not a nib, so it becomes the smallest one there is rather than a brush that draws inside out.
-    /// </summary>
-    /// <summary>
     /// Whether <c>brush.create</c> would accept this kind - asked by **running the reader that would decide it**,
     /// with nothing but a name to go on.
     ///
@@ -7544,6 +7532,18 @@ public static class EditorOperations
         }
     }
 
+    /// <summary>
+    /// A brush built from the parameters a caller gave, holding this build's defaults for the ones they did not.
+    ///
+    /// The **kind decides which members mean anything**, and is read first: a nib has an angle, a roundness and a
+    /// diameter, and an art brush maps an asset of a stated size with a stretch, two flips and a colourisation. A
+    /// kind this build does not make is refused by name rather than falling back to a nib, because a caller that
+    /// asked for a brush this build cannot make would otherwise get a plausible line and no warning.
+    ///
+    /// Roundness is clamped into 0..1 and the diameter at zero rather than refused: they describe a shape, and a
+    /// caller computing one can arrive a hair outside the range the same way a dragged slider can. A diameter
+    /// below zero is not a nib, so it becomes the smallest one there is rather than a brush that draws inside out.
+    /// </summary>
     private static BrushSpec ReadBrush(JsonElement p, string name, CadDocument document)
     {
         string kind = (p.GetString("kind") ?? "calligraphic").Trim().ToLowerInvariant();
