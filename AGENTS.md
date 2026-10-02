@@ -739,7 +739,42 @@ python3 tools/ai-private-data/decode-ai-private-data.py check \
 
 Format notes: [`docs/ai-private-data.md`](docs/ai-private-data.md).
 
-### 6.3 Render-diff workbench (ad-hoc, in /tmp)
+### 6.3 Issue media: a picture, and a recording for anything a person does
+
+A fix that changes what someone **sees** is argued better with a picture than with a paragraph, and a fix to
+**interaction** - editing text, dragging, selecting, hovering, a caret moving - is only really shown by a recording.
+Both are expected on the issue, not just in the commit.
+
+**Where the media lives.** Not in the tree: `scripts/capture-issue-media.sh` uploads to a release named
+`issue-media`, and a GitHub comment renders the asset by URL. The stored content type matters - an image uploads as
+`image/png` and renders - and a **GIF** is the format to embed, because markdown animates it with no player. The
+MP4 goes beside it and is linked, for anyone who wants to scrub.
+
+```bash
+# frames/NNN from a throwaway capture harness, then:
+./scripts/capture-issue-media.sh artifacts/shots/drag 128-selection 12
+#   -> ![128-selection](https://github.com/.../releases/download/issue-media/128-selection.gif)
+```
+
+**Taking the frames.** A throwaway harness in `tests/VCCad.App.Tests`: host the window headlessly
+(`EditorViewModel` + `CanvasWorkspace`), drive the interaction with `InputInjection.Press/Move/Release/Type`, and
+write one `RenderTargetBitmap` per step. **Delete it once the recording exists** - the repository wants assertions
+and a capture has none. The recipe that works, learned the hard way twice:
+
+- **`ZoomTo`, `CenterOn` and `InvalidateVisual` before `Settle`**, or the frame is captured before the canvas
+  paints, and "no ink" is indistinguishable from "the right ink in the wrong place".
+- **Find the ink by a colour nothing else in the window is.** The host renders chrome around the artboard, so
+  "not the page colour" catches the whole frame and "dark" catches the chrome: a red fixture and a red-pixel test
+  is the reliable pair.
+- **The before picture comes from the unfixed code** - a detached worktree at `HEAD` with the harness copied in -
+  taken the same way, so the two are comparable.
+
+**The pictures earn their keep.** One caught a fix that was correct in the model, the reader and the layout, with
+its geometry test passing, while the canvas still drew the text on one line: the consumer had never been changed.
+That is the defect shape this file keeps naming, and only a rendered frame could see it. Take the picture before
+believing the suite.
+
+### 6.4 Render-diff workbench (ad-hoc, in /tmp)
 
 During accuracy work a small workbench is used (not committed; rebuild as needed):
 
