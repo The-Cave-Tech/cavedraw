@@ -132,6 +132,46 @@ public class TextRunLayoutTests
             $"a quarter turn should move the pen mostly vertically, but moved ({dx}, {dy})");
     }
 
+    /// <summary>
+    /// **A vertical column's characters are separated down the page, not along a line.**
+    ///
+    /// The exporter places runs at the block's origin plus an advance along the baseline, and a one-run block goes
+    /// through `TryWriteRunsAsOneTextObject`, which emits a single text object - the horizontal reading, and the same
+    /// assumption the canvas had before #127's canvas half was fixed. A column needs a placement per character,
+    /// taken from the layout's own glyph positions, and the fast path has to be skipped for it.
+    ///
+    /// The direction is asserted by **magnitude**, as `TheAdvanceFollowsTheBlocksRotation` does, so the assertion
+    /// does not depend on which way the per-artboard y-flip runs.
+    ///
+    /// Measured when written: the exporter emits **1 placement for three characters**. Remove the skip when a
+    /// vertical block places each glyph; this assertion is the acceptance.
+    /// </summary>
+    [Fact(Skip = "the exporter emits one placement for a three-character column - the single-text-object path " +
+        "assumes a horizontal baseline; see #127")]
+    public void AVerticalBlockPlacesItsCharactersDownThePage()
+    {
+        CadDocument document = CadDocument.CreateDefault("Column");
+        var item = new TextItem
+        {
+            Name = "column",
+            Origin = new VCCad.Geometry.Point2D(100, 100),
+            WritingMode = TextWritingMode.VerticalRl,
+        };
+        item.Runs.Add(new TextRun { Text = "abc", FontFamily = "Nimbus Sans", FontSize = 20 });
+        document.Artboards[0].Layers[0].AddItem(item);
+
+        List<double[]> matrices = RunMatrices(document);
+
+        Assert.True(matrices.Count >= 3,
+            $"a column's three characters each need a placement, but the exporter emitted {matrices.Count}");
+
+        double dx = matrices[^1][4] - matrices[0][4];
+        double dy = matrices[^1][5] - matrices[0][5];
+
+        Assert.True(Math.Abs(dy) > Math.Abs(dx),
+            $"a column's last character must sit below its first, but it moved ({dx}, {dy})");
+    }
+
     [Fact]
     public void ASingleRunBlockIsUnchanged()
     {
