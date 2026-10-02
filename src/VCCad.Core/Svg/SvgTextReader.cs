@@ -497,14 +497,23 @@ public static partial class SvgReader
             //
             // A one-entry list is not a list. `PositionList` answers null for it, so it falls through to the single
             // read above and places the piece, leaving nothing per-character behind.
-            double[]? dcrossList = PositionList(element, vertical ? "dx" : "dy", vertical ? SvgAxis.X : SvgAxis.Y, style.FontSize);
-            double? dcross = dcrossList is null
+            // **The across pair is folded the same way the along pair is.** `y`/`x` states where each character's
+            // baseline sits and `dy`/`dx` moves it from where the last one left it, so the two are summed per
+            // character and the list is rebased on the piece's own cross - which is what `TextRun.PositionOffsets`
+            // means by "how far each character strays from `Cross`". Reading the delta list as bare places made the
+            // member mean something other than its own documentation, and only the third entry showed it.
+            //
+            // The single value above still places the piece. With a list the first entry is the same fact and is not
+            // added twice: for an absolute list the piece's cross *is* its first entry (the base subtracted below),
+            // and for a delta-only list the piece's cross is the baseline the file's `y` left it at.
+            double[]? crossList = AxisList(element, vertical, style.FontSize, along: false);
+            double? dcross = crossList is null
                 ? Position(element, vertical ? "dx" : "dy", vertical ? SvgAxis.X : SvgAxis.Y, style.FontSize)
                 : null;
 
-            if (dcrossList is not null)
+            if (crossList is not null)
             {
-                _pendingOffsets = dcrossList;
+                _pendingOffsets = crossList;
             }
 
             // **The along pair is read as a list too, and SVG's two forms are folded into one.** `x`/`y` states where
@@ -519,7 +528,7 @@ public static partial class SvgReader
             // a fix that looks right glyph by glyph. Settling that frame is the work; until then the first value
             // places the run, as it did before the list was kept at all, and the file is told rather than drawn
             // mirrored.
-            if (AlongOffsets(element, vertical, style.FontSize) is { Length: > 0 } along)
+            if (AxisList(element, vertical, style.FontSize, along: true) is { Length: > 0 } along)
             {
                 if (style.Direction == TextDirection.RightToLeft &&
                     style.WritingMode == TextWritingMode.HorizontalTb)
@@ -797,27 +806,37 @@ public static partial class SvgReader
         }
 
         /// <summary>
-        /// The file's per-character along-line places, as offsets from where the piece starts.
+        /// The file's per-character places on one axis, as offsets from where the piece's own position on it.
         ///
-        /// `x`/`y` states where each character is and `dx`/`dy` moves the pen from where the last one left it, so the
-        /// two are summed per character and the list is rebased on its first entry - which is the frame the model
-        /// has, because a run starts where the file put it. A delta list is therefore accumulated, which is SVG's own
-        /// rule for `dx`/`dy`: each entry is a step, not a place.
+        /// The two attributes of an axis are one statement in two forms - `x`/`y` says where each character is,
+        /// `dx`/`dy` moves the pen from where the last one left it - so they are summed per character and the list is
+        /// rebased on the piece's place on that axis. A delta list is therefore accumulated, which is SVG's own rule
+        /// for it: each entry is a step, not a place.
+        ///
+        /// The two axes rebase differently, and both are deliberate. The **along** axis is rebased on the first place
+        /// the list names, because that is where the run starts. The **across** axis is rebased on the piece's cross:
+        /// an absolute list names it as its first entry, so the baseline does not move twice, while a delta-only list
+        /// leaves the piece on the baseline the file's `y` gave it and its entries are how far each character strays
+        /// from there - which is what <c>TextRun.PositionOffsets</c> says the member is.
         /// </summary>
-        private double[]? AlongOffsets(XElement element, bool vertical, double fontSize)
+        private double[]? AxisList(XElement element, bool vertical, double fontSize, bool along)
         {
-            SvgAxis axis = vertical ? SvgAxis.Y : SvgAxis.X;
-            double[]? absolute = PositionList(element, vertical ? "y" : "x", axis, fontSize);
-            double[]? delta = PositionList(element, vertical ? "dy" : "dx", axis, fontSize);
+            SvgAxis axis = along
+                ? vertical ? SvgAxis.Y : SvgAxis.X
+                : vertical ? SvgAxis.X : SvgAxis.Y;
+            string absoluteName = along ? vertical ? "y" : "x" : vertical ? "x" : "y";
+            string deltaName = along ? vertical ? "dy" : "dx" : vertical ? "dx" : "dy";
+
+            double[]? absolute = PositionList(element, absoluteName, axis, fontSize);
+            double[]? delta = PositionList(element, deltaName, axis, fontSize);
             if (absolute is null && delta is null)
             {
                 return null;
             }
 
             int n = Math.Max(absolute?.Length ?? 0, delta?.Length ?? 0);
-            var offsets = new double[n];
+            var places = new double[n];
             double running = 0;
-            double first = 0;
             for (int i = 0; i < n; i++)
             {
                 if (delta is not null && i < delta.Length)
@@ -825,16 +844,16 @@ public static partial class SvgReader
                     running += delta[i];
                 }
 
-                double place = (absolute is not null && i < absolute.Length ? absolute[i] : 0.0) + running;
-                if (i == 0)
-                {
-                    first = place;
-                }
-
-                offsets[i] = place - first;
+                places[i] = (absolute is not null && i < absolute.Length ? absolute[i] : 0.0) + running;
             }
 
-            return offsets;
+            double basis = along ? places[0] : absolute is not null ? absolute[0] : 0.0;
+            for (int i = 0; i < n; i++)
+            {
+                places[i] -= basis;
+            }
+
+            return places;
         }
 
         /// <summary>

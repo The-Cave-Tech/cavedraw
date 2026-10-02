@@ -1454,9 +1454,21 @@ public static class SvgWriter
             if (run.PositionOffsets is { Length: > 0 } offsets && start < offsets.Length)
             {
                 int count = Math.Min(length, offsets.Length - start);
+
+                // **The list goes out as the steps the file states, not as the places the model holds.** A `dx`/`dy`
+                // list is accumulated on the way in, so what comes back has to be the difference between consecutive
+                // places - with the first entry being the first character's own distance from the piece's cross, which
+                // is where the baseline the element writes puts it. Writing the places straight out adds them up on the
+                // way back in, which moves every character after the first.
+                var steps = new double[count];
+                for (int i = 0; i < count; i++)
+                {
+                    steps[i] = offsets[start + i] - (i == 0 ? 0.0 : offsets[start + i - 1]);
+                }
+
                 element.Add(new XAttribute(
                     text.WritingMode == TextWritingMode.HorizontalTb ? "dy" : "dx",
-                    string.Join(' ', offsets.Skip(start).Take(count).Select(Number))));
+                    string.Join(' ', steps.Select(Number))));
             }
 
             ColorRgb colour = text.ColourOf(run);

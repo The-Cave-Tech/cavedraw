@@ -87,9 +87,17 @@ public class SvgPositionListTests
     });
 
     /// <summary>
-    /// **The acceptance.** Three characters with `dy="0 5 10"` sit 5 units further down the page than the one
-    /// before, in order, while their along-line positions are unchanged - because a `dy` moves a character without
-    /// moving where the next one starts.
+    /// **The acceptance.** Three characters with `dy="0 5 10"` sit progressively further down the page, while their
+    /// along-line positions are unchanged - because a `dy` moves a character without moving where the next one starts.
+    ///
+    /// **The steps accumulate, which is SVG's rule and this member's own contract.** SVG 1.1 states a `dx`/`dy` list
+    /// as offsets applied *in turn*: each entry moves the pen from where the previous one left it, so `0 5 10` puts
+    /// the characters at 0, 5 and **15** below the baseline - not 0, 5 and 10. `TextRun.PositionOffsets` says it is
+    /// "how far each character strays from `Cross`", which is exactly those places; reading the list as bare places
+    /// made the member mean something other than its own documentation, and only ever showed on the third entry.
+    ///
+    /// This assertion previously pinned the reading in the list, so it changed deliberately when the code was
+    /// corrected rather than being bent to fit it - and it failed against the old reading before the change was made.
     /// </summary>
     [Fact]
     public void ADyListLowersEachCharacterInTurnAndLeavesTheAlongLinePositionsAlone()
@@ -97,13 +105,13 @@ public class SvgPositionListTests
         TextItem item = Block("<text x=\"10\" y=\"50\" font-size=\"10\" dy=\"0 5 10\">abc</text>");
 
         Assert.NotNull(item.Runs[0].PositionOffsets);
-        Assert.Equal(new[] { 0.0, 5.0, 10.0 }, item.Runs[0].PositionOffsets!);
+        Assert.Equal(new[] { 0.0, 5.0, 15.0 }, item.Runs[0].PositionOffsets!);
 
         TextLayout layout = TextLayoutEngine.Compute(item);
         Assert.Equal(3, layout.Glyphs.Count);
 
         Assert.Equal(5.0, layout.Glyphs[1].Y - layout.Glyphs[0].Y, 9);
-        Assert.Equal(5.0, layout.Glyphs[2].Y - layout.Glyphs[1].Y, 9);
+        Assert.Equal(10.0, layout.Glyphs[2].Y - layout.Glyphs[1].Y, 9);
 
         // **The pen is where the face put it.** A `dy` is a shift, not an advance, so the along-line positions and
         // the advances are the same as the same text with no list at all - which is the assertion that catches a fix
@@ -112,6 +120,25 @@ public class SvgPositionListTests
 
         Assert.Equal(plain.Glyphs.Select(g => g.Inline), layout.Glyphs.Select(g => g.Inline));
         Assert.Equal(plain.Glyphs.Select(g => g.Advance), layout.Glyphs.Select(g => g.Advance));
+    }
+
+    /// <summary>
+    /// **An absolute list across the line is kept too.** `y="50 60 70"` is the other way SVG states one place per
+    /// character, and the reader used to take its first value and ignore the rest - so a file that positions each
+    /// glyph exactly was flattened onto one baseline. Its places are absolute, so they are rebased on where the
+    /// piece's own baseline is, exactly as the along axis rebases its own.
+    /// </summary>
+    [Fact]
+    public void AnAcrossListOnTheAbsoluteAttributeIsKept()
+    {
+        TextItem item = Block("<text x=\"10\" y=\"50 60 70\" font-size=\"10\">abc</text>");
+
+        Assert.Equal(new[] { 0.0, 10.0, 20.0 }, item.Runs[0].PositionOffsets!);
+
+        TextLayout layout = TextLayoutEngine.Compute(item);
+        Assert.Equal(3, layout.Glyphs.Count);
+        Assert.Equal(10.0, layout.Glyphs[1].Y - layout.Glyphs[0].Y, 9);
+        Assert.Equal(10.0, layout.Glyphs[2].Y - layout.Glyphs[1].Y, 9);
     }
 
     /// <summary>
@@ -153,12 +180,12 @@ public class SvgPositionListTests
             StringComparison.Ordinal);
 
         TextItem reloaded = VccadDocumentSerializer.Deserialize(json).AllItems().OfType<TextItem>().Single();
-        Assert.Equal(new[] { 0.0, 5.0, 10.0 }, reloaded.Runs[0].PositionOffsets!);
+        Assert.Equal(new[] { 0.0, 5.0, 15.0 }, reloaded.Runs[0].PositionOffsets!);
 
         TextLayout layout = TextLayoutEngine.Compute(reloaded);
         Assert.Equal(3, layout.Glyphs.Count);
         Assert.Equal(5.0, layout.Glyphs[1].Y - layout.Glyphs[0].Y, 9);
-        Assert.Equal(5.0, layout.Glyphs[2].Y - layout.Glyphs[1].Y, 9);
+        Assert.Equal(10.0, layout.Glyphs[2].Y - layout.Glyphs[1].Y, 9);
     }
 
     /// <summary>
@@ -175,7 +202,7 @@ public class SvgPositionListTests
     {
         TextItem shifted = Block("<text x=\"10\" y=\"50\" font-size=\"10\" dy=\"5 10\">ab</text>");
 
-        Assert.Equal(new[] { 5.0, 10.0 }, shifted.Runs[0].PositionOffsets!);
+        Assert.Equal(new[] { 5.0, 15.0 }, shifted.Runs[0].PositionOffsets!);
 
         // The same file with a list of zeros is where the characters sit when the list moves them by nothing, so it
         // is the baseline every offset is measured from - and it needs no knowledge of the face, because both blocks
@@ -188,7 +215,7 @@ public class SvgPositionListTests
 
         Assert.Equal(2, layout.Glyphs.Count);
         Assert.Equal(Base(0) + 5.0, shifted.Origin.Y + layout.Glyphs[0].Y, 9);
-        Assert.Equal(Base(1) + 10.0, shifted.Origin.Y + layout.Glyphs[1].Y, 9);
+        Assert.Equal(Base(1) + 15.0, shifted.Origin.Y + layout.Glyphs[1].Y, 9);
     }
 
     /// <summary>
@@ -289,6 +316,36 @@ public class SvgPositionListTests
         }
     }
 
+    /// <summary>
+    /// **An accumulated list survives the round trip, geometry and all.** The model holds places while the file
+    /// states steps, so the writer has to turn one into the other: writing the places as though they were steps adds
+    /// them up again on the way back in, and every character after the first drifts by the one before it here.
+    /// </summary>
+    [Fact]
+    public void AnAccumulatedAcrossListSurvivesTheSvgRoundTrip()
+    {
+        const string source =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"400\">" +
+            "<text x=\"10\" y=\"50\" font-size=\"10\" dy=\"5 10\">abc</text></svg>";
+
+        CadDocument document = SvgReader.Read(source).Document;
+        TextItem before = document.AllItems().OfType<TextItem>().Single();
+        TextLayout original = TextLayoutEngine.Compute(before);
+
+        Assert.Equal(new[] { 5.0, 15.0 }, before.Runs[0].PositionOffsets!);
+
+        TextItem after = SvgReader.Read(SvgWriter.Write(document)).Document
+            .AllItems().OfType<TextItem>().Single();
+        TextLayout again = TextLayoutEngine.Compute(after);
+
+        Assert.Equal(new[] { 5.0, 15.0 }, after.Runs[0].PositionOffsets!);
+        Assert.Equal(3, again.Glyphs.Count);
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.Equal(original.Glyphs[i].Y - original.Glyphs[0].Y, again.Glyphs[i].Y - again.Glyphs[0].Y, 9);
+        }
+    }
+
     /// <summary>The imported document for `abc` with whatever positioning attribute the caller adds.</summary>
     private static CadDocument Read(string attribute)
         => SvgReader.Read($"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"400\">" +
@@ -313,7 +370,7 @@ public class SvgPositionListTests
         Assert.Contains("dy=", svg, StringComparison.Ordinal);
 
         TextItem after = SvgReader.Read(svg).Document.AllItems().OfType<TextItem>().Single();
-        Assert.Equal(new[] { 5.0, 10.0 }, after.Runs[0].PositionOffsets!);
+        Assert.Equal(new[] { 5.0, 15.0 }, after.Runs[0].PositionOffsets!);
 
         TextLayout again = TextLayoutEngine.Compute(after);
         Assert.Equal(3, again.Glyphs.Count);
