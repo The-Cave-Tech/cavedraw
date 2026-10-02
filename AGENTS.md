@@ -286,12 +286,20 @@ pushed. Clear the tree first (`rm -rf` the directory, then extract), or the evid
 
 **A self-hosted runner that looks busy with no job may be starting one.** The jobs API lags the
 runner: `busy=true` with no `in_progress` job is not proof of a wedge. A session read it that way
-three times and restarted the service; twice the worker really was stuck, and the third time it
-was mid-*start* - the `systemctl restart` killed a `dotnet restore` and the job died with
-`Fatal error. Internal CLR error. (0x80131506)`, which reads exactly like a regression in the
-commit being verified. Check the worker's elapsed time first: a `Runner.Worker` at `etimes=5` is
-starting, not stuck, and one at several minutes with no child work is wedged. Restarting is the
-last resort, not the first guess.
+four times and restarted the service. Twice the worker really was stuck. The other two times it
+was mid-*start*, and the restart destroyed the run:
+
+- one killed a `dotnet restore`, and the job died with `Fatal error. Internal CLR error.
+  (0x80131506)`, which reads exactly like a regression in the commit being verified;
+- one killed `desktop-publish` four seconds in, before checkout, with
+  `The runner has received a shutdown signal` - and the same command *printed* `workers=1` in the
+  line above the restart, so the evidence that it was unsafe was on screen at the time.
+
+**So the rule is an interval, not a sample.** `workers=0` from one check means nothing: it is
+exactly what a runner looks like immediately before it picks up a job. Restart only after zero
+workers have been observed **across a sustained interval, repeatedly** - and even then, prefer to
+report the wedge and let the queue drain, because a runner that is genuinely idle costs minutes
+while a runner killed mid-job costs a cycle. Restarting is the last resort, not the first guess.
 
 **And the wedge has a cause worth knowing.** `scripts/publish-desktop.sh` serialises builds with
 `flock /tmp/vccad-build.lock`. A plain `flock` passes the lock's file descriptor to every process the
