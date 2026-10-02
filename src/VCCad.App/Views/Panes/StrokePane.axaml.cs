@@ -1,7 +1,10 @@
 using System.Globalization;
+using System.Text.Json;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
+using VCCad.App.Automation;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
 using VCCad.Pdf;
@@ -40,6 +43,9 @@ public partial class StrokePane : UserControl
 
     private const string PlainStrokeLabel = "Plain";
 
+    /// <summary>What the brush selector shows for a stroke swept with no brush - a state, not an empty control.</summary>
+    private const string NoBrushLabel = "(none)";
+
     private static readonly DynamicsPreset[] Presets =
     {
         DynamicsPreset.Linear,
@@ -73,6 +79,11 @@ public partial class StrokePane : UserControl
         // Choosing the kind of stroke is a model edit like any other, and it goes through the session for the same
         // reason the width does - see ApplyStrokeType.
         StrokeTypeBox.SelectionChanged += (_, _) => ApplyStrokeType();
+
+        // The brush goes through the operation registry rather than editing the stroke here: a brush chosen by this
+        // control and one chosen by `brush.apply` are then one act on one model state rather than two that agree
+        // until somebody changes one of them. See ApplyBrush.
+        StrokeBrushBox.SelectionChanged += (_, _) => ApplyBrush();
 
         _dynamicsRows[DynamicsTarget.Width] = (DynamicsWidthEnabled, DynamicsWidthCurve);
         _dynamicsRows[DynamicsTarget.Opacity] = (DynamicsOpacityEnabled, DynamicsOpacityCurve);
@@ -232,6 +243,124 @@ public partial class StrokePane : UserControl
         WidthProfileSpec? right = b.HasWidthProfile ? b.WidthProfile : null;
         return left is null ? right is null : left.Equals(right);
     }
+
+    // ------------------------------------------------------------------
+    // Brush: the reusable asset this stroke is swept with
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Applies the chosen brush to the inspected stroke, through the **operation registry** rather than by editing
+    /// the model here.
+    ///
+    /// This is the capability-parity rule in its plain form: a brush chosen in this combo and one applied by
+    /// <c>brush.apply</c> are the same code doing the same thing, so there is no second implementation to drift.
+    /// The inspected index travels as `strokeIndex`, which is what makes the choice land on the stroke the
+    /// appearance panel is showing rather than on every stroke of the stack, and "(none)" is <c>brush.clear</c>.
+    /// </summary>
+    private void ApplyBrush()
+    {
+        if (_vm is null || _syncing || StrokeBrushBox.SelectedItem is not string name ||
+            InspectedStrokeIndex() is not { } index)
+        {
+            return;
+        }
+
+        try
+        {
+            if (name == NoBrushLabel)
+            {
+                Invoke("brush.clear", new { strokeIndex = index });
+            }
+            else
+            {
+                Invoke("brush.apply", new { name, strokeIndex = index });
+            }
+        }
+        catch (EditorOperationException)
+        {
+            // A brush that vanished from the library between the read and the click, or nothing selected. A control
+            // that does nothing is better than an exception thrown out of a selection handler, which surfaces as a
+            // crash rather than as a refusal.
+            return;
+        }
+
+        Refresh();
+    }
+
+    /// <summary>
+    /// Runs an operation the way a driver would, on this pane's view model.
+    ///
+    /// The registry owns the edit, the undo step, the journal and the diagnostics record, which is the whole point:
+    /// a control that reached into the model itself would be a capability that exists only in the UI.
+    /// </summary>
+    private void Invoke(string operation, object parameters)
+        => EditorOperations.Invoke(
+            new AutomationContext { ViewModel = _vm },
+            operation,
+            JsonSerializer.SerializeToElement(parameters));
+
+    /// <summary>
+    /// The brush box's items: "(none)", then the document's library, then - first of all after "(none)" - the
+    /// inspected stroke's **own** brush when the document does not carry it.
+    ///
+    /// The stroke's own goes in for the same reason the type box carries the stroke's own profile: the point of the
+    /// box is to show **this stroke's** brush, and a name the document has lost would otherwise be unrepresentable -
+    /// which is exactly the state `brush.missing` reports.
+    /// </summary>
+    private void RefreshBrush(int index, StrokeSpec? stroke)
+    {
+        BrushSpec? own = stroke?.Brush;
+        bool mixed = BrushMixedAt(index);
+
+        var names = new List<string> { NoBrushLabel };
+        if (own is not null)
+        {
+            names.Add(own.Name);
+        }
+
+        if (_vm is not null)
+        {
+            foreach (BrushSpec library in _vm.ActiveSession.Document.Brushes)
+            {
+                if (!names.Contains(library.Name))
+                {
+                    names.Add(library.Name);
+                }
+            }
+        }
+
+        StrokeBrushBox.ItemsSource = names;
+        StrokeBrushBox.PlaceholderText = mixed ? MixedWord : string.Empty;
+        StrokeBrushBox.SelectedIndex = mixed ? -1 : own is null ? 0 : names.IndexOf(own.Name);
+
+        // A readout of a brush that is not there describes nothing, and neither does one over a selection that
+        // disagrees about which brush it carries.
+        BrushSummary.IsVisible = !mixed && own is not null;
+        BrushSummary.Text = own is null ? string.Empty : BrushName(own);
+    }
+
+    /// <summary>The brush's name and the nib it draws, saying so when the document does not carry the asset.</summary>
+    private string BrushName(BrushSpec brush)
+    {
+        bool known = _vm?.ActiveSession.Document.FindBrush(brush.Name) is not null;
+        string nib = $"{brush.Diameter:0.##}pt nib at {brush.AngleDegrees:0.##}°"
+            + (brush.Roundness < 1.0 ? $", roundness {brush.Roundness:0.##}" : string.Empty);
+        return known ? $"{brush.Name} — {nib}" : $"{brush.Name} — {nib} (not in the document)";
+    }
+
+    /// <summary>Whether the selection disagrees about which brush the stroke at this index carries.</summary>
+    private bool BrushMixedAt(int index)
+    {
+        IReadOnlyList<StrokeSpec> strokes = AgreeingStrokesAt(index);
+        if (strokes.Count < 2)
+        {
+            return false;
+        }
+
+        return strokes.Skip(1).Any(stroke => !SameBrush(strokes[0].Brush, stroke.Brush));
+    }
+
+    private static bool SameBrush(BrushSpec? a, BrushSpec? b) => a is null ? b is null : a.Equals(b);
 
     // ------------------------------------------------------------------
     // Dynamics: what the stroke records about the pen
@@ -666,21 +795,45 @@ public partial class StrokePane : UserControl
     public void Attach(EditorViewModel vm)
     {
         _vm = vm;
-        vm.DocumentChanged += (_, _) => Refresh();
-        vm.SelectionChanged += (_, _) => Refresh();
+        vm.DocumentChanged += (_, _) => OnUiThread(Refresh);
+        vm.SelectionChanged += (_, _) => OnUiThread(Refresh);
 
         // The appearance panel is what chooses the inspected stroke, and it does so by writing the shared state
         // rather than by telling this pane. Listening for that is what keeps the fields describing the stroke the
         // other panel is showing instead of the one that was showing when this panel last refreshed.
+        //
+        // That state is **shared**, so a change can arrive on any thread: `style.inspectStroke` is an operation like
+        // any other, and the synchronous registry runs its handler on the caller's thread rather than marshalling.
+        // Everything below is UI work - the readouts onto controls and the selection onto the document - so it is
+        // posted to the UI thread when it did not arrive there, the same discipline `54832f4` gave the colour pane.
         vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName is nameof(EditorViewModel.InspectedStroke) or nameof(EditorViewModel.InspectedStrokeLabel))
             {
-                Refresh();
+                OnUiThread(Refresh);
             }
         };
 
         Refresh();
+    }
+
+    /// <summary>
+    /// Runs UI work on the UI thread, wherever the change that asked for it happened.
+    ///
+    /// A pane observing shared state cannot assume it is told on the thread that owns its controls: the state is
+    /// written by whoever made the change. Posting rather than writing where it landed is what keeps an operation
+    /// invoked from a driver's thread from becoming "Call from invalid thread".
+    /// </summary>
+    private static void OnUiThread(Action work)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            work();
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(work);
+        }
     }
 
     /// <summary>Built-in dash presets, indexed by combo order. Lengths are in points.</summary>
@@ -780,6 +933,7 @@ public partial class StrokePane : UserControl
             MixedLabel.Text = string.Empty;
             MixedLabel.IsVisible = false;
             RefreshStrokeType(index, null);
+            RefreshBrush(index, null);
             RefreshDynamics(index, null);
             _syncing = false;
             return;
@@ -871,6 +1025,12 @@ public partial class StrokePane : UserControl
         if (ProfileMixedAt(index))
         {
             mixed.Add("profile");
+        }
+
+        RefreshBrush(index, stroke);
+        if (BrushMixedAt(index))
+        {
+            mixed.Add("brush");
         }
 
         mixed.AddRange(RefreshDynamics(index, stroke));

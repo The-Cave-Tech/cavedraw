@@ -79,6 +79,25 @@
                    Foreground="{DynamicResource VcTextDim}" FontSize="{DynamicResource VcFontSize}"/>
       </StackPanel>
 
+      <TextBlock Text="BRUSH" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
+                 Foreground="{DynamicResource VcTextDim}"/>
+
+      <!-- The reusable brush this stroke is swept with. Brushes are assets in the document and a stroke names one,
+           so this is a picker over the library rather than a number - and the items come from the document, so a
+           brush created through brush.create is offered here by existing rather than by being listed in this file.
+           Choosing one drives brush.apply and choosing "(none)" drives brush.clear, so the click and the call are
+           one act on one model state. -->
+      <Grid ColumnDefinitions="Auto,*">
+        <TextBlock Text="Brush" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <ComboBox x:Name="StrokeBrushBox" Grid.Column="1" HorizontalAlignment="Stretch"
+                  ToolTip.Tip="The reusable brush this stroke is swept with, from the document's library"/>
+      </Grid>
+
+      <!-- Only when there is one brush to describe: a readout over a stroke with no brush, or over a selection that
+           disagrees about which one it carries, would be chrome describing something that is not agreed. -->
+      <TextBlock x:Name="BrushSummary" IsVisible="False" TextWrapping="Wrap"
+                 Foreground="{DynamicResource VcText}" FontSize="{DynamicResource VcFontSize}"/>
+
       <TextBlock Text="DYNAMICS" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}"
                  Foreground="{DynamicResource VcTextDim}"/>
 
