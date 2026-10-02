@@ -243,6 +243,46 @@ understand the screen and the document without pixels:
 A driver that cannot see should still be able to work confidently: dump first,
 describe when a visual judgement is needed.
 
+### Five things that cost real time, learned the hard way
+
+Every one of these happened in a single session. They are cheap to avoid and
+expensive to discover.
+
+**A bite-check mutation belongs in a throwaway worktree, never the shared tree.**
+A mutation left in the shared tree was committed by a different agent while it was
+in place, and the defective version reached `main`. A shared tree is not a place
+to mutate, because someone else may commit while you are mid-experiment and you
+will not be the one who notices.
+
+**Write the test that catches your own mutation.** The shipped mutation above was
+found only because its author later wrote a test that failed against it — the test
+did not exist when the commit was made. A mutation you cannot catch is not a
+bite-check, it is a change.
+
+**A mutation that does not change the result is not a bite-check.** One attempt
+mutated a measure function that happened to be measured in a case where two frames
+coincided, so every test still passed. Check that the case you are mutating is the
+case the test exercises.
+
+**Stage and commit in one step.** A tree staged in one round and committed in a
+later one collects whatever other agents wrote in between, producing a commit whose
+message describes something other than its contents. Three commits in one session
+carried another issue's work under a message that mentioned neither — and reading
+one of those messages caused an issue to be closed while half of it was missing.
+
+**Check the premise before briefing and before closing.** Four issues in one
+session turned out to be closed already, stale, or substantially landed when a
+brief implied they were untouched. Read the issue's own comments and the tree, not
+the issue title. The same mistake in reverse — closing on a partial landing — put
+two issues back open, because a wrongly closed issue is worse than an open one.
+
+**And a pattern worth recognising:** data can be stored, round-tripped and
+asserted perfectly while the step that *honours* it never runs. Three issues in one
+session had exactly that shape — a `use` link never re-resolved, a live path effect
+never re-derived, placed art never rendered. A round-trip test cannot see it,
+because every round trip is correct. When an issue says something should *follow*
+another thing, assert the following, not the storing.
+
 ---
 
 ---
