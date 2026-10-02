@@ -193,11 +193,11 @@ jobs:
       # actions/setup-dotnet - which cannot write into a self-hosted runner's directory. The
       # runner service does not have it on PATH, so the job adds it for its own steps.
       - name: Put the SDK on PATH
-        shell: pwsh
+        shell: powershell
         run: Add-Content -Path $env:GITHUB_PATH -Value 'C:\dotnet'
 
       - name: Check the toolchain is .NET 10
-        shell: pwsh
+        shell: powershell
         run: |
           $version = (dotnet --version).Trim()
           Write-Output "dotnet --version: $version"
