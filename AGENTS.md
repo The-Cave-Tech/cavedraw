@@ -243,7 +243,7 @@ understand the screen and the document without pixels:
 A driver that cannot see should still be able to work confidently: dump first,
 describe when a visual judgement is needed.
 
-### Nine things that cost real time, learned the hard way
+### Ten things that cost real time, learned the hard way
 
 Most of these happened in a single session; the last two were learned the hard way in
 a later one, and cost the most. They are cheap to avoid and expensive to discover.
@@ -276,6 +276,13 @@ read the pressure, ten lines below where the list stopped. **If a result was tru
 answer is unknown, not negative.** Re-run without the cap, or open the file, before a
 missing match is allowed to decide anything - and the same goes for a match count from a
 capped search, which is how a "nothing references this" claim becomes false.
+
+**A sync that extracts over a tree never deletes.** `git archive HEAD | tar -x -C <host-tree>` brings files up to
+date but leaves behind every file a later commit *removed* - so the tree under test is not `HEAD`. A session pushed a
+commit that deleted a test, and the container failed on **that very test**: gone from the repository, still present
+on the host, still running. Which means the whole session's host runs had been testing a tree carrying stale sources
+and stale tests, and any of them could have passed or failed for a reason that no longer existed in the code being
+pushed. Clear the tree first (`rm -rf` the directory, then extract), or the evidence describes a document nobody has.
 
 **Stage and commit in one step.** A tree staged in one round and committed in a
 later one collects whatever other agents wrote in between, producing a commit whose
