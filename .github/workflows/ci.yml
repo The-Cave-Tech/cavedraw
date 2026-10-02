@@ -11,7 +11,7 @@ on:
 
 jobs:
   build-test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, runningman]
     env:
       DOTNET_NOLOGO: '1'
     steps:
@@ -113,7 +113,7 @@ jobs:
   # the Linux runner (the desktop host is not wasm, so wasm-tools is not
   # needed) and asserts each launcher is the right binary format.
   desktop-publish:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, runningman]
     env:
       DOTNET_NOLOGO: '1'
     steps:
