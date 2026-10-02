@@ -48,6 +48,42 @@ public class InstancePresentationTests
 
     private static void Refresh(CadDocument document) => new RefreshInstancesCommand(document).Do();
 
+    /// <summary>
+    /// **A marker the reader placed survives a refresh.** `SvgMarkers` turns a marker into real artwork when the
+    /// file is read - it is placed into the geometry rather than kept as a live property on the path - so the
+    /// question an instance raises is whether that artwork is still there once the instance is rebuilt from the
+    /// definition. A refresh is supposed to change nothing about the drawing; losing the arrow would change it.
+    ///
+    /// This is the residue #117 recorded but never pinned: the comment that closed its other named gaps does not
+    /// cover markers, and no marker test refreshes anything.
+    /// </summary>
+    [Fact]
+    public void AMarkerTheReaderPlacedSurvivesARefresh()
+    {
+        SvgImportResult result = Read(
+            "<defs>" +
+            "<marker id=\"arrow\" markerWidth=\"10\" markerHeight=\"10\" refX=\"5\" refY=\"5\">" +
+            "<path d=\"M0,0 L10,5 L0,10 z\" fill=\"#ff0000\"/></marker>" +
+            "<path id=\"line\" d=\"M0,0 L100,0\" stroke=\"#0000ff\" marker-end=\"url(#arrow)\"/>" +
+            "</defs>" +
+            "<use xlink:href=\"#line\"/>");
+
+        ArtGroup instance = Instances(result.Document, "line").Single();
+
+        // The marker became artwork at import, so it is a shape with the marker's own fill.
+        Assert.Contains(
+            Deep(instance.Children).OfType<PathItem>(),
+            shape => shape.Fill.Color.R == 1 && shape.Fill.Color.G == 0 && shape.Fill.Color.B == 0);
+
+        Refresh(result.Document);
+
+        ArtGroup refreshed = Instances(result.Document, "line").Single();
+
+        Assert.Contains(
+            Deep(refreshed.Children).OfType<PathItem>(),
+            shape => shape.Fill.Color.R == 1 && shape.Fill.Color.G == 0 && shape.Fill.Color.B == 0);
+    }
+
     // ------------------------------------------------------------------ the gap
 
     /// <summary>
