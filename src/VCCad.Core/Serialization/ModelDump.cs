@@ -59,8 +59,96 @@ public static class ModelDump
             .AppendLine();
         DumpItems(builder, document.Orphans.Children, 4);
 
+        // The document's own assets. A filter is document state that an item refers to by name, so a dump that
+        // omitted it could not see a filter being added, edited, removed or surviving a save - which is exactly the
+        // false green this member was missing. Absent when the document holds none, so an ordinary document dumps
+        // exactly as it did before filters were covered.
+        if (document.Filters.Count > 0)
+        {
+            builder.Append("  filters=").Append(document.Filters.Count).AppendLine();
+            for (int f = 0; f < document.Filters.Count; f++)
+            {
+                DumpFilter(builder, document.Filters[f], f);
+            }
+        }
+
         return builder.ToString();
     }
+
+    /// <summary>
+    /// A filter and its primitive chain, as one block.
+    ///
+    /// Every member that can differ is printed, because the point of the dump is that two documents comparing equal
+    /// are the same document: a filter is a graph, so a lost primitive, a changed radius, a dropped result name or a
+    /// resolution that vanished all have to move the text. The order printed is the document's own, which is the
+    /// order the primitives are evaluated in and therefore part of what the filter means.
+    /// </summary>
+    private static void DumpFilter(StringBuilder builder, FilterSpec filter, int index)
+    {
+        builder.Append("    filter ").Append(index)
+            .Append(" name=").Append(Escape(filter.Name))
+            .Append(" x=").Append(Num(filter.X))
+            .Append(" y=").Append(Num(filter.Y))
+            .Append(" w=").Append(Num(filter.Width))
+            .Append(" h=").Append(Num(filter.Height))
+            .Append(" box=").Append(filter.ObjectBoundingBox)
+            .Append(" primitiveUnitsBox=").Append(filter.PrimitiveUnitsObjectBoundingBox)
+            .Append(" res=").Append(filter.HasFilterResolution
+                ? filter.FilterResolutionX + "x" + filter.FilterResolutionY
+                : "-")
+            .Append(" output=").Append(filter.Output.Length > 0 ? Escape(filter.Output) : "-")
+            .Append(" primitives=").Append(filter.Primitives.Count)
+            .AppendLine();
+
+        for (int p = 0; p < filter.Primitives.Count; p++)
+        {
+            builder.Append("      primitive ").Append(p).Append(' ')
+                .Append(Primitive(filter.Primitives[p]))
+                .AppendLine();
+        }
+    }
+
+    /// <summary>
+    /// One primitive step, every member printed.
+    ///
+    /// The record is a superset of what any one kind reads, and which members a kind declares is the registry's
+    /// answer rather than the dump's - so the dump prints them all, and a value a kind does not read cannot make two
+    /// filters that differ elsewhere compare equal.
+    /// </summary>
+    private static string Primitive(FilterPrimitive primitive)
+        => $"kind={primitive.Kind}" +
+           $" in={Text(primitive.Input)}" +
+           $" in2={Text(primitive.Input2)}" +
+           $" result={Text(primitive.Result)}" +
+           $" radius={Num(primitive.Radius)}" +
+           $" dx={Num(primitive.Dx)}" +
+           $" dy={Num(primitive.Dy)}" +
+           $" flood={ColourOr(primitive.FloodColor)}" +
+           $" floodOpacity={Num(primitive.FloodOpacity)}" +
+           $" operator={Escape(primitive.Operator)}" +
+           $" mode={Escape(primitive.Mode)}" +
+           $" scale={Num(primitive.Scale)}" +
+           $" xChannel={Escape(primitive.XChannel)}" +
+           $" yChannel={Escape(primitive.YChannel)}" +
+           $" type={Escape(primitive.Type)}" +
+           $" baseFrequency={Num(primitive.BaseFrequency)}" +
+           $" octaves={primitive.Octaves}" +
+           $" seed={primitive.Seed}" +
+           $" matrix={Numbers(primitive.Matrix)}" +
+           $" surfaceScale={Num(primitive.SurfaceScale)}" +
+           $" specularConstant={Num(primitive.SpecularConstant)}" +
+           $" specularExponent={Num(primitive.SpecularExponent)}" +
+           $" diffuseConstant={Num(primitive.DiffuseConstant)}" +
+           $" lighting={ColourOr(primitive.LightingColor)}" +
+           $" azimuth={Num(primitive.Azimuth)}" +
+           $" elevation={Num(primitive.Elevation)}";
+
+    /// <summary>A nullable string as written, or "-" when it is unset or empty.</summary>
+    private static string Text(string? value)
+        => string.IsNullOrEmpty(value) ? "-" : Escape(value);
+
+    /// <summary>A colour as written, or "-" when the member holds none.</summary>
+    private static string ColourOr(ColorRgb? colour) => colour is { } c ? Colour(c) : "-";
 
     private static void DumpItems(StringBuilder builder, IReadOnlyList<LayerItem> items, int indent)
     {
@@ -96,7 +184,7 @@ public static class ModelDump
                     .Append(" subpaths=").Append(path.SubPaths.Count)
                     .Append(" fillCmyk=").Append(Cmyk(path.SourceFillCmyk))
                     .Append(" strokeCmyk=").Append(Cmyk(path.SourceStrokeCmyk))
-                    .Append(Clips(item)).AppendLine();
+                    .Append(Clips(item)).Append(FilterId(item)).AppendLine();
 
                 for (int s = 0; s < path.SubPaths.Count; s++)
                 {
@@ -133,7 +221,7 @@ public static class ModelDump
                     .Append(" paragraph=").Append(Num(text.ParagraphSpacing))
                     .Append(" runs=").Append(text.Runs.Count)
                     .Append(" colourCmyk=").Append(Cmyk(text.SourceCmyk))
-                    .Append(Clips(item)).AppendLine();
+                    .Append(Clips(item)).Append(FilterId(item)).AppendLine();
 
                 for (int r = 0; r < text.Runs.Count; r++)
                 {
@@ -185,7 +273,7 @@ public static class ModelDump
                     .Append(" colourKey=").Append(Numbers(image.ColourKey))
                     .Append(" filter=").Append(image.Filter ?? "-")
                     .Append(" maskFilter=").Append(image.MaskFilter ?? "-")
-                    .Append(Clips(item)).AppendLine();
+                    .Append(Clips(item)).Append(FilterId(item)).AppendLine();
                 break;
 
             case ArtGroup group:
@@ -201,7 +289,7 @@ public static class ModelDump
                     .Append(Num(group.Transform.E)).Append(',')
                     .Append(Num(group.Transform.F))
                     .Append(" children=").Append(group.Children.Count)
-                    .Append(Clips(item)).AppendLine();
+                    .Append(Clips(item)).Append(FilterId(item)).AppendLine();
 
                 DumpItems(builder, group.Children, indent + 2);
                 break;
@@ -210,6 +298,7 @@ public static class ModelDump
                 builder.Append(item.GetType().Name)
                     .Append(" id=").Append(item.Id)
                     .Append(" name=").Append(Escape(item.Name))
+                    .Append(FilterId(item))
                     .AppendLine();
                 break;
         }
@@ -349,6 +438,18 @@ public static class ModelDump
             ? string.Empty
             : " clips=" + item.Clips.Count + "(" +
               string.Join(';', item.Clips.Select(c => c.SubPaths.Count + ":" + c.Rule)) + ")";
+
+    /// <summary>
+    /// The filter an item refers to, or nothing when it refers to none.
+    ///
+    /// Part of the dump because it is part of the picture and because it is a **reference**: an item that names a
+    /// filter draws differently, and a round trip that dropped the name would draw the shape unfiltered with
+    /// nothing else in the dump to show it. Absent when unset, so an item that names no filter is written exactly
+    /// as it was before this member existed - and a reference that is present and one that is absent still compare
+    /// different, which is what lets a dump-based test witness the reference at all.
+    /// </summary>
+    private static string FilterId(LayerItem item)
+        => string.IsNullOrEmpty(item.FilterId) ? string.Empty : " filterId=" + Escape(item.FilterId);
 
     /// <summary>
     /// A stable fingerprint of a byte array. Samples can be hundreds of kilobytes, so the
