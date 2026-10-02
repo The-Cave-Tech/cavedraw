@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Threading;
 using VCCad.App.Automation;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
@@ -153,9 +154,23 @@ public partial class ColorsPane : UserControl
     /// The pane writes the shared state from its own interactions, so the guard stops a
     /// change caused by that write from re-entering this handler. Nothing here writes the
     /// state back, so the guard is belt-and-braces rather than load-bearing.
+    ///
+    /// The state is process-wide and shared, so it is written from whichever thread made the
+    /// change - not only from this pane's own clicks. The screen eyedropper is the live case:
+    /// <c>color.pickScreen</c> completes on a background continuation and calls
+    /// <see cref="EditorColorState.SetPicked"/> there. Everything below is UI work - readouts onto
+    /// controls, and the selection onto the document - so a change that arrives on another thread
+    /// is posted to the UI thread rather than written where it landed. Writing it where it landed
+    /// is what turned an API call into "Call from invalid thread".
     /// </summary>
     private void OnColorStateChanged(object? sender, EventArgs e)
     {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(() => OnColorStateChanged(sender, e));
+            return;
+        }
+
         if (_syncing || _refreshingFromState)
         {
             return;

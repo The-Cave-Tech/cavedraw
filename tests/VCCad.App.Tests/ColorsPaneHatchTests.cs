@@ -16,9 +16,11 @@ namespace VCCad.App.Tests;
 /// be able to as well, and it has to be the same code path - so the assertion is about the document, not about
 /// the button's own state.
 /// </summary>
-public class ColorsPaneHatchTests
+public class ColorsPaneHatchTests : IDisposable
 {
-    private static (ColorsPane Pane, EditorViewModel Vm, PathItem Path) Host()
+    private readonly List<ColorsPane> _panes = new();
+
+    private (ColorsPane Pane, EditorViewModel Vm, PathItem Path) Host()
     {
         var vm = new EditorViewModel();
         var path = new PathItem { Name = "panel", Fill = FillSpec.Solid(ColorRgb.White) };
@@ -32,6 +34,7 @@ public class ColorsPaneHatchTests
 
         var pane = new ColorsPane();
         pane.Attach(vm);
+        _panes.Add(pane);
         return (pane, vm, path);
     }
 
@@ -39,6 +42,20 @@ public class ColorsPaneHatchTests
     {
         Button button = pane.FindControl<Button>(name) ?? throw new Xunit.Sdk.XunitException($"no {name} button");
         button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+    }
+
+    public void Dispose()
+    {
+        // The pane subscribes to the process-wide colour state and the panel, not the test, owns its
+        // lifetime - so a test that builds one has to detach it, or it is still listening to colour
+        // changes long after the test that made it has finished.
+        foreach (ColorsPane pane in _panes)
+        {
+            pane.Detach();
+        }
+
+        _panes.Clear();
+        GC.SuppressFinalize(this);
     }
 
     [AvaloniaFact]
@@ -70,6 +87,7 @@ public class ColorsPaneHatchTests
     {
         var pane = new ColorsPane();
         pane.Attach(new EditorViewModel());
+        _panes.Add(pane);
 
         Click(pane, "Hatch45");
     }

@@ -22,7 +22,9 @@ namespace VCCad.App.Tests;
 public class ColorsPaneEyedropperTests : IDisposable
 {
     private readonly ColorRgb? _wasPicked = EditorColorState.Shared.LastPicked;
-    private static (ColorsPane Pane, EditorViewModel Vm, PathItem Path) Host()
+    private readonly List<ColorsPane> _panes = new();
+
+    private (ColorsPane Pane, EditorViewModel Vm, PathItem Path) Host()
     {
         var vm = new EditorViewModel();
         var path = new PathItem { Name = "panel", Fill = FillSpec.Solid(ColorRgb.White) };
@@ -36,6 +38,7 @@ public class ColorsPaneEyedropperTests : IDisposable
 
         var pane = new ColorsPane();
         pane.Attach(vm);
+        _panes.Add(pane);
         return (pane, vm, path);
     }
 
@@ -47,6 +50,16 @@ public class ColorsPaneEyedropperTests : IDisposable
 
     public void Dispose()
     {
+        // The pane subscribes to the process-wide colour state, so a pane left attached outlives the
+        // test and is reached by the next colour change made anywhere - which is how a plain [Fact]
+        // in another class met a control written from the wrong thread. The panel detaches its
+        // panes; a test has to detach the ones it built.
+        foreach (ColorsPane pane in _panes)
+        {
+            pane.Detach();
+        }
+
+        _panes.Clear();
         EditorColorState.Shared.RestorePicked(_wasPicked);
         ScreenColour.ResetSampler();
         GC.SuppressFinalize(this);
