@@ -18,7 +18,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # **The SDK is installed on the machine, not fetched per run.** actions/setup-dotnet cannot write
+      # The SDK is installed on the machine, not fetched per run. actions/setup-dotnet could not write
       # into this runner's directory - it failed with mkdir: Permission denied - and downloading an SDK
       # on every run is the opposite of what a dedicated runner is for. runningman has the 10.0.x SDK
       # from the distribution; the check below still fails loudly if dotnet is not the band global.json
@@ -39,8 +39,8 @@ jobs:
       # WasmBuildNative is enabled (Skia native linking).
       - name: Install wasm-tools workload
         run: |
-          # Already installed on this runner; a re-install as a user who cannot write the SDK directory
-          # would fail for a reason that has nothing to do with the code under test.
+          # Already installed on this machine; a re-install as a user who cannot write the SDK
+          # directory would fail for a reason that has nothing to do with the code under test.
           dotnet workload install wasm-tools || dotnet workload list | grep -qi wasm-tools
 
       # The text-export tests embed a URW base-35 face - "Nimbus Sans" and friends. Those faces are
@@ -50,8 +50,8 @@ jobs:
       # difference between a build that tests the exporter and one that tests the runner's font list.
       - name: Install the standard fonts the export tests embed
         run: |
-          # Idempotent: the faces are already installed on this runner, and the runner user has no
-          # passwordless sudo - so install only when they are missing. 	est -d below still fails loudly.
+          # Idempotent: the faces are installed on this runner, and the runner user has no passwordless
+          # sudo - so install only when they are missing. The check below still fails loudly if absent.
           if [ ! -d /usr/share/fonts/opentype/urw-base35 ]; then
             sudo -n apt-get update -qq
             sudo -n apt-get install -y -qq fonts-urw-base35
@@ -127,11 +127,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # **The SDK is installed on the machine, not fetched per run.** actions/setup-dotnet cannot write
-      # into this runner's directory - it failed with mkdir: Permission denied - and downloading an SDK on
-      # every run is the opposite of what a dedicated runner is for. 
-unningman has the 10.0.x SDK from
-      # the distribution; the check below still fails loudly if dotnet is not the band global.json pins.
+      # The SDK is installed on the machine, not fetched per run. actions/setup-dotnet could not write
+      # into this runner's directory - it failed with mkdir: Permission denied - and downloading an SDK
+      # on every run is the opposite of what a dedicated runner is for. runningman has the 10.0.x SDK
+      # from the distribution; the check below still fails loudly if dotnet is not the band global.json
+      # pins.
       # The text-export tests embed a URW base-35 face - "Nimbus Sans" and friends. Those faces are
       # located on the machine rather than shipped with this project, because their licence is not ours to
       # redistribute. The runner does not have them, so exporting text threw
@@ -139,8 +139,8 @@ unningman has the 10.0.x SDK from
       # difference between a build that tests the exporter and one that tests the runner's font list.
       - name: Install the standard fonts the export tests embed
         run: |
-          # Idempotent: the faces are already installed on this runner, and the runner user has no
-          # passwordless sudo - so install only when they are missing. 	est -d below still fails loudly.
+          # Idempotent: the faces are installed on this runner, and the runner user has no passwordless
+          # sudo - so install only when they are missing. The check below still fails loudly if absent.
           if [ ! -d /usr/share/fonts/opentype/urw-base35 ]; then
             sudo -n apt-get update -qq
             sudo -n apt-get install -y -qq fonts-urw-base35
