@@ -5493,6 +5493,49 @@ public sealed class CanvasWorkspace : Control
         public double TotalHeight;
     }
 
+    /// <summary>
+    /// **Where the caret and the selection are, in the block's own coordinates** - the boxes the canvas paints,
+    /// exposed as geometry so a driver can assert them and a person can see them without pixels.
+    ///
+    /// The highlight covers one character box per selected character: for a horizontal line that is the caret's x
+    /// and the line's full height. A vertical column's boxes are the other way round, which is the defect this
+    /// readout exists to make measurable - see issue #127.
+    /// </summary>
+    public Rect2D? TextSelectionBounds()
+    {
+        if (_editingText is not { } text)
+        {
+            return null;
+        }
+
+        TextMetrics metrics = MeasureText(text);
+        int first = Math.Min(_caret, _editAnchor);
+        int last = Math.Max(_caret, _editAnchor);
+        if (last <= first)
+        {
+            return null;
+        }
+
+        double minX = double.MaxValue, minY = double.MaxValue;
+        double maxX = double.MinValue, maxY = double.MinValue;
+
+        for (int i = first; i < last && i + 1 < metrics.X.Length; i++)
+        {
+            // The same box the painter fills, from the same metrics: the readout is only useful if it agrees with
+            // the paint by construction rather than by a second estimate.
+            double ink = metrics.Y[i + 1] == metrics.Y[i]
+                ? metrics.X[i + 1] - metrics.X[i]
+                : metrics.Size[i] * 0.3;
+
+            minX = Math.Min(minX, metrics.X[i]);
+            minY = Math.Min(minY, metrics.Y[i]);
+            maxX = Math.Max(maxX, metrics.X[i] + Math.Max(0.5, ink));
+            maxY = Math.Max(maxY, metrics.Y[i] + metrics.Ascent[i] + metrics.Descent[i]);
+        }
+
+        return maxX < minX ? null : new Rect2D(minX, minY, maxX - minX, maxY - minY);
+    }
+
     private static TextMetrics MeasureText(TextItem text)
     {
         TextLayout layout = TextLayoutEngine.Compute(text);
