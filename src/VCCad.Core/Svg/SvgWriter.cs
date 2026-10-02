@@ -2005,6 +2005,8 @@ public static class SvgWriter
                     element.Add(new XAttribute("stroke", "none"));
                 }
 
+                WriteCurrentColour(element, path);
+
                 if (clip is not null)
                 {
                     element.SetAttributeValue("clip-path", $"url(#{clip})");
@@ -2048,6 +2050,7 @@ public static class SvgWriter
 
                 ApplyForeign(element, path);
                 element.Add(new XAttribute("stroke", "none"));
+                WriteCurrentColour(element, path);
                 if (clip is not null)
                 {
                     element.SetAttributeValue("clip-path", $"url(#{clip})");
@@ -2100,7 +2103,12 @@ public static class SvgWriter
         /// <summary>The attributes of a stroke SVG can carry natively.</summary>
         private static void WriteNativeStrokeAttributes(XElement element, StrokeSpec stroke)
         {
-            element.Add(new XAttribute("stroke", Hex(stroke.Color)));
+            // **`currentColor` is written back as the keyword.** The model resolved it to a colour when the file
+            // was read, and writing only that colour would keep the picture and lose the fact - a document that
+            // came back would then hold a fixed colour where the file said "follow this", and the first refresh of
+            // an instance would have nothing to follow (issue #135). The colour itself travels beside it, because
+            // the keyword is worth nothing without the `color` it stands for.
+            element.Add(new XAttribute("stroke", stroke.FromCurrentColor ? "currentColor" : Hex(stroke.Color)));
 
             if (stroke.Color.A < 1.0)
             {
@@ -2274,8 +2282,9 @@ public static class SvgWriter
                 }
 
                 element.SetAttributeValue("d", outline);
-                element.SetAttributeValue("fill", Hex(stroke.Color));
+                element.SetAttributeValue("fill", stroke.FromCurrentColor ? "currentColor" : Hex(stroke.Color));
                 element.SetAttributeValue("fill-rule", "nonzero");
+                WriteCurrentColour(element, stroke);
                 if (itemClip is not null)
                 {
                     element.SetAttributeValue("clip-path", $"url(#{itemClip})");
@@ -2292,7 +2301,8 @@ public static class SvgWriter
             }
 
             element.Add(new XAttribute("d", data));
-            element.Add(new XAttribute("stroke", Hex(stroke.Color)));
+            element.Add(new XAttribute("stroke", stroke.FromCurrentColor ? "currentColor" : Hex(stroke.Color)));
+            WriteCurrentColour(element, stroke);
             if (itemClip is not null)
             {
                 element.SetAttributeValue("clip-path", $"url(#{itemClip})");
@@ -2760,7 +2770,42 @@ public static class SvgWriter
                 return $"url(#{id})";
             }
 
-            return Hex(fill.Color);
+            return fill.FromCurrentColor ? "currentColor" : Hex(fill.Color);
+        }
+
+        /// <summary>
+        /// The `color` property a `currentColor` paint in this element stands for, written beside the keyword that
+        /// refers to it.
+        ///
+        /// Only when the element really does follow the colour, so an ordinary element gains no attribute and the
+        /// bytes of a document that never names the keyword are untouched. The **alpha is one**: `currentColor` is
+        /// the `color` value itself, and the paint's own transparency travels as `fill-opacity`/`stroke-opacity`,
+        /// which this writer already states from the resolved colour. Writing the resolved alpha here as well would
+        /// apply it twice through the reader's own multiplication.
+        /// </summary>
+        private void WriteCurrentColour(XElement element, PathItem path)
+        {
+            if (path.Fill.FromCurrentColor)
+            {
+                element.Add(new XAttribute("color", Hex(path.Fill.Color with { A = 1.0 })));
+            }
+            else if (path.Strokes.Any(stroke => stroke.FromCurrentColor))
+            {
+                StrokeSpec stroke = path.Strokes.First(s => s.FromCurrentColor);
+                element.Add(new XAttribute("color", Hex(stroke.Color with { A = 1.0 })));
+            }
+        }
+
+        /// <summary>
+        /// The same attribute for an element that carries one stroke rather than a whole path - the outline an
+        /// unsupported stroke is written as, and the element a stroke of a stack is written on.
+        /// </summary>
+        private static void WriteCurrentColour(XElement element, StrokeSpec stroke)
+        {
+            if (stroke.FromCurrentColor)
+            {
+                element.Add(new XAttribute("color", Hex(stroke.Color with { A = 1.0 })));
+            }
         }
 
         /// <summary>
@@ -2782,6 +2827,15 @@ public static class SvgWriter
         {
             string? fill = FillAttribute(presentation.Fill);
             element.Add(new XAttribute("fill", fill ?? "none"));
+
+            // The `color` the use site established, which is what a `currentColor` inside the definition stands
+            // for (issue #135). Written whenever the use site stated one - even a use whose paint states nothing -
+            // because the *recording* is what a re-read has to reproduce, and a symbol whose art follows the colour
+            // is drawn in the definition's black without it.
+            if (presentation.Color is { } colour)
+            {
+                element.Add(new XAttribute("color", Hex(colour)));
+            }
 
             if (fill is not null)
             {

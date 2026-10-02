@@ -34,7 +34,12 @@ internal sealed record FillDto(
     ColorDto? Color,
     FillRule Rule,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GradientDto? Gradient = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HatchDto? Hatch = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HatchDto? Hatch = null,
+
+    // Whether the fill's colour was written as SVG's `currentColor` (issue #135). Absent for every ordinary fill,
+    // so a document that never names the keyword serialises to exactly the bytes it did before - and a fill that
+    // does name it records the fact the rebuild needs to re-resolve it against the instance's `color`.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? FromCurrentColor = null);
 
 /// <summary>
 /// One family of parallel lines in a hatch, as it travels in the sidecar.
@@ -141,7 +146,12 @@ internal sealed record StrokeDto(bool Visible, ColorDto? Color, double Width, St
     // member here and serialises to exactly the bytes it did then. This is the raw reading the brush seams resolve
     // their responses from at render time, beside the width profile the pressure produced.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    PenSampleDto[]? Pen = null);
+    PenSampleDto[]? Pen = null,
+
+    // Whether the stroke's colour was written as SVG's `currentColor` (issue #135). Absent for every ordinary
+    // stroke, for the reason the fill's member gives.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    bool? FromCurrentColor = null);
 
 /// <summary>
 /// One dynamics target on the wire: whether it is on, and the two control points of its curve.
@@ -522,12 +532,17 @@ internal sealed record GroupDto(
 
 /// <summary>
 /// A use site's presentation, as it travels in the sidecar: the fill and the stroke the `use`'s computed style
-/// handed down into the definition it drew.
+/// handed down into the definition it drew, and the `color` a `currentColor` inside that definition stands for.
 ///
-/// Both members are written whenever the enclosing member is, because the presentation is only stored when it
+/// Both paint members are written whenever the enclosing member is, because the presentation is only stored when it
 /// differs from SVG's initial values - a half-written one would come back as the other half's initial value.
+/// <see cref="Color"/> is nullable because "nobody stated one" is not the same as "somebody chose black", and the
+/// member is absent for the former.
 /// </summary>
-internal sealed record InstancePresentationDto(FillDto Fill, StrokeDto Stroke);
+internal sealed record InstancePresentationDto(
+    FillDto Fill,
+    StrokeDto Stroke,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ColorDto? Color = null);
 
 internal sealed record TextDto(
     Guid Id,
@@ -830,7 +845,10 @@ internal abstract record ItemDto
         g.InstancePresentation is { IsDefault: false } presentation ? ToPresentation(presentation) : null);
 
     private static InstancePresentationDto ToPresentation(InstancePresentation presentation)
-        => new(ToFill(presentation.Fill), ToStroke(presentation.Stroke));
+        => new(
+            ToFill(presentation.Fill),
+            ToStroke(presentation.Stroke),
+            presentation.Color is { } colour ? ToColor(colour) : null);
 
     private static FillDto ToFill(FillSpec f)
         => new(
@@ -838,7 +856,8 @@ internal abstract record ItemDto
             f.IsVisible ? ToColor(f.Color) : null,
             f.Rule,
             ToGradient(f.Gradient),
-            ToHatch(f.Hatch));
+            ToHatch(f.Hatch),
+            f.FromCurrentColor ? true : null);
 
     private static GradientDto? ToGradient(GradientSpec? g)
         => g is null
@@ -931,7 +950,10 @@ internal abstract record ItemDto
             // The pen's own record, written only when there is one. A stroke that recorded nothing writes nothing,
             // which is what keeps a mouse-drawn document - and every document written before this member existed -
             // byte-identical.
-            s.HasPen ? ToPenSamples(s.Pen!) : null);
+            s.HasPen ? ToPenSamples(s.Pen!) : null,
+
+            // SVG's `currentColor` on the stroke, written only when the file named it (issue #135).
+            s.FromCurrentColor ? true : null);
 
     /// <summary>What the pen was doing along a stroke, on the wire: one sample per reading, in position order.</summary>
     private static PenSampleDto[] ToPenSamples(PenProfile pen)
@@ -1285,7 +1307,12 @@ internal static class ItemDtoExtensions
             Opacity = g.Opacity,
             SourceId = g.SourceId,
             InstancePresentation = g.InstancePresentation is { } presentation
-                ? new InstancePresentation(presentation.Fill.ToModel(), presentation.Stroke.ToModel())
+                ? new InstancePresentation(
+                    presentation.Fill.ToModel(),
+                    presentation.Stroke.ToModel(),
+                    presentation.Color is { } colour
+                        ? new ColorRgb(colour.R, colour.G, colour.B, colour.A)
+                        : null)
                 : null,
         };
         group.RestoreIdentity(g.Id);
@@ -1315,6 +1342,7 @@ internal static class ItemDtoExtensions
     {
         GradientSpec? gradient = f.Gradient?.ToModel();
         HatchSpec? hatch = f.Hatch?.ToModel();
+        bool current = f.FromCurrentColor ?? false;
 
         // A fill is only "none" when it is invisible and there is no gradient behind it.
         // A gradient on an invisible fill is kept: switching a fill off and on again must
@@ -1324,7 +1352,7 @@ internal static class ItemDtoExtensions
             ColorRgb gradientColor = f.Color is null
                 ? ColorRgb.White
                 : new ColorRgb(f.Color.R, f.Color.G, f.Color.B, f.Color.A);
-            return new FillSpec(f.Visible, gradientColor, f.Rule, gradient, hatch);
+            return new FillSpec(f.Visible, gradientColor, f.Rule, gradient, hatch, current);
         }
 
         // A hatch on an invisible fill is kept for the same reason a gradient is: turning the fill off and on
@@ -1334,12 +1362,13 @@ internal static class ItemDtoExtensions
             ColorRgb hatchColor = f.Color is null
                 ? ColorRgb.White
                 : new ColorRgb(f.Color.R, f.Color.G, f.Color.B, f.Color.A);
-            return new FillSpec(f.Visible, hatchColor, f.Rule, null, hatch);
+            return new FillSpec(f.Visible, hatchColor, f.Rule, null, hatch, current);
         }
 
         return f.Visible && f.Color is not null
             ? FillSpec.Solid(new ColorRgb(f.Color.R, f.Color.G, f.Color.B, f.Color.A), f.Rule)
-            : FillSpec.None;
+                with { FromCurrentColor = current }
+            : FillSpec.None with { FromCurrentColor = current };
     }
 
     /// <summary>
@@ -1508,7 +1537,10 @@ internal static class ItemDtoExtensions
     /// unstroked path - which is most of them.
     /// </summary>
     private static StrokeSpec ToModel(this StrokeDto s)
-        => s.Color is null
+    {
+        bool current = s.FromCurrentColor ?? false;
+
+        return s.Color is null
             ? StrokeSpec.None with
             {
                 Width = s.Width,
@@ -1525,6 +1557,7 @@ internal static class ItemDtoExtensions
                 Opacity = ReadOpacity(s.Opacity),
                 Blend = ReadBlend(s.Blend),
                 Pen = ToPen(s.Pen),
+                FromCurrentColor = current,
             }
             : new StrokeSpec(s.Visible, new ColorRgb(s.Color.R, s.Color.G, s.Color.B, s.Color.A),
                 s.Width, s.Cap, s.Join, s.MiterLimit, s.Alignment,
@@ -1536,7 +1569,9 @@ internal static class ItemDtoExtensions
                 s.Brush?.ToModel(),
                 ReadOpacity(s.Opacity),
                 ReadBlend(s.Blend),
-                ToPen(s.Pen));
+                ToPen(s.Pen),
+                current);
+    }
 
     /// <summary>
     /// The pen's own record as the file stated it, or null when it stated none.

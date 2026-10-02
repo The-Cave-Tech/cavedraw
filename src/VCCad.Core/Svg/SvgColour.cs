@@ -48,6 +48,23 @@ internal static class SvgColour
         ["lightgrey"] = new(0.8274509803921568, 0.8274509803921568, 0.8274509803921568),
     };
 
+    /// <summary>
+    /// Whether a value is SVG's `currentColor` keyword - the one value that is not a colour at all but a reference
+    /// to the `color` property in force where it is written.
+    ///
+    /// It is answered separately from <see cref="Parse"/> because the resolved colour and the *fact that it was the
+    /// keyword* are two different things, and the model records both (issue #135).
+    /// </summary>
+    public static bool IsCurrentColor(string value)
+        => value.Trim().Equals("currentColor", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The colour, with `currentColor` standing for <paramref name="inForce"/> - the `color` property where the
+    /// value was written. Null when it is a form this reader does not know.
+    /// </summary>
+    public static ColorRgb? Parse(string value, ColorRgb inForce)
+        => IsCurrentColor(value) ? inForce : Parse(value);
+
     /// <summary>The colour, or null when it is a form this reader does not know.</summary>
     public static ColorRgb? Parse(string value)
     {

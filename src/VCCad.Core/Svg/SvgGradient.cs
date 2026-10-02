@@ -55,7 +55,9 @@ internal sealed class SvgGradients
                 // SVG 1.2's solid colour paint server, which Inkscape still writes. The element is spelled
                 // **lowercase** in the corpus file and XML is case-sensitive, so the name is matched ignoring
                 // case - reading only the camel-case spelling would miss the one file that uses it.
-                ColorRgb colour = SvgColour.Parse(CascadeValue(element, "solid-color", sheet) ?? "black")
+                ColorRgb colour = SvgColour.Parse(
+                        CascadeValue(element, "solid-color", sheet) ?? "black",
+                        PresentationStyle.ColourInForce(element, sheet))
                     ?? ColorRgb.Black;
                 double opacity = CascadeNumber(element, "solid-opacity", sheet) ?? 1.0;
                 gradients._solids[id] = (colour, Math.Clamp(opacity, 0.0, 1.0));
@@ -191,7 +193,8 @@ internal sealed class SvgGradients
             offset = SvgReader.Length(offsetText) ?? 0.0;
         }
 
-        ColorRgb colour = SvgColour.Parse(Value("stop-color") ?? "black") ?? ColorRgb.Black;
+        ColorRgb colour = SvgColour.Parse(Value("stop-color") ?? "black", PresentationStyle.ColourInForce(stop, sheet))
+            ?? ColorRgb.Black;
         double opacity = Value("stop-opacity") is { } text &&
                          double.TryParse(text, System.Globalization.NumberStyles.Float,
                              System.Globalization.CultureInfo.InvariantCulture, out double parsed)

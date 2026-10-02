@@ -2496,7 +2496,7 @@ public static partial class SvgReader
     /// </summary>
     private static InstancePresentation? PresentationOf(PresentationStyle style)
     {
-        var presentation = new InstancePresentation(style.Fill, style.Stroke);
+        var presentation = new InstancePresentation(style.Fill, style.Stroke, style.Color);
         return presentation.IsDefault ? null : presentation;
     }
 

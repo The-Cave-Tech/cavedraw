@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Xml.Linq;
 using VCCad.Core.Model;
 using VCCad.Geometry;
 
@@ -47,8 +48,19 @@ internal sealed record PresentationStyle(
     string? FillGradientId = null,
     BlendMode Blend = BlendMode.Normal,
     MarkerReferences Markers = default,
-    double StrokeWidth = 1.0)
+    double StrokeWidth = 1.0,
+
+    // SVG's `color` property, which is what `currentColor` stands for (issue #135). Nullable rather than a
+    // `ColorRgb` because SVG's initial value is black **and** a document that never states one must stay free of
+    // the member: null means "nothing stated here", and <see cref="CurrentColor"/> is the answer a `currentColor`
+    // needs. A record struct's `default` is transparent black, which is why this is not simply a `ColorRgb`.
+    ColorRgb? Color = null)
 {
+    /// <summary>
+    /// The `color` in force, as `currentColor` resolves to it: the stated value, or SVG's initial black.
+    /// </summary>
+    public ColorRgb CurrentColor => Color ?? ColorRgb.Black;
+
     /// <summary>SVG's initial values: black fill, no stroke.</summary>
     public static PresentationStyle Default { get; } = new(
         FillSpec.Solid(ColorRgb.Black),
@@ -87,6 +99,20 @@ internal sealed record PresentationStyle(
         StrokeSpec stroke = inherited.Stroke;
         string? gradientId = inherited.FillGradientId;
 
+        // `color` is an ordinary inherited property, and it is the value `currentColor` stands for wherever a paint
+        // names the keyword. Read before the paint, because the paint needs it. `color: currentColor` is the
+        // inherited colour by the specification's own definition, so it is not a circular read and it does not
+        // replace anything.
+        ColorRgb? colour = inherited.Color;
+        if (Value("color") is { } colourValue &&
+            !SvgColour.IsCurrentColor(colourValue) &&
+            SvgColour.Parse(colourValue) is { } statedColour)
+        {
+            colour = statedColour;
+        }
+
+        ColorRgb inForce = colour ?? ColorRgb.Black;
+
         // The stroke's width is read whatever the paint is, because a marker's size is stated in stroke widths
         // (`markerUnits="strokeWidth"`) and a file may draw no stroke on the path that carries an arrowhead. It
         // used to be read only when a visible stroke was named, which is right for drawing the stroke and wrong
@@ -103,7 +129,7 @@ internal sealed record PresentationStyle(
             // `url(#id)` is a paint server rather than a colour, and it cannot be resolved here: the shape's box is
             // what a gradient is normalised against, and the shape has not been built yet. The id is carried and
             // resolved once the geometry exists.
-            (FillSpec parsedFill, string? parsedId) = ParseFill(fillValue, Value("fill-opacity"));
+            (FillSpec parsedFill, string? parsedId) = ParseFill(fillValue, Value("fill-opacity"), inForce);
             fill = parsedFill;
             gradientId = parsedId;
         }
@@ -127,7 +153,7 @@ internal sealed record PresentationStyle(
         bool namedStroke = strokeValue is not null;
         if (strokeValue is not null)
         {
-            stroke = ParseStroke(strokeValue, Value("stroke-opacity"), Value("stroke-width"), viewport, warn)
+            stroke = ParseStroke(strokeValue, Value("stroke-opacity"), Value("stroke-width"), viewport, warn, inForce)
                 ?? StrokeSpec.None;
         }
 
@@ -209,7 +235,37 @@ internal sealed record PresentationStyle(
             gradientId,
             BlendModes.Parse(Value("mix-blend-mode")) ?? BlendMode.Normal,
             markers,
-            strokeWidth);
+            strokeWidth,
+            colour);
+    }
+
+    /// <summary>
+    /// The `color` property in force on an element that is **not drawn through the tree** - a gradient stop, a
+    /// filter primitive's `flood-color`, a marker's content read as an asset.
+    ///
+    /// A paint server lives in `defs`, so there is no enclosing <see cref="PresentationStyle"/> to fold into and
+    /// its `color` is its own ancestors' - never the referencing shape's, which is the answer it is easy to give by
+    /// accident. Read root-down through the same cascade every other property uses, so a nearer declaration beats a
+    /// further one and an `!important` rule beats both.
+    /// </summary>
+    public static ColorRgb ColourInForce(XElement element, SvgStylesheet? sheet)
+    {
+        ColorRgb colour = ColorRgb.Black;
+
+        foreach (XElement ancestor in element.AncestorsAndSelf().Reverse())
+        {
+            string? value = SvgProperties.Value(
+                ancestor,
+                sheet?.DeclarationsFor(ancestor, ancestor.Ancestors().ToArray()),
+                "color");
+
+            if (value is not null && !SvgColour.IsCurrentColor(value) && SvgColour.Parse(value) is { } stated)
+            {
+                colour = stated;
+            }
+        }
+
+        return colour;
     }
 
     /// <summary>
@@ -297,7 +353,7 @@ internal sealed record PresentationStyle(
     /// it paints and that shape does not exist yet. A solid colour comes back with a null id, so a caller can tell
     /// "paint this with this colour" from "paint it with whatever `#g` turns out to be".
     /// </summary>
-    private static (FillSpec Fill, string? GradientId) ParseFill(string value, string? opacity)
+    private static (FillSpec Fill, string? GradientId) ParseFill(string value, string? opacity, ColorRgb inForce)
     {
         string trimmed = value.Trim();
         if (trimmed.Equals("none", StringComparison.OrdinalIgnoreCase))
@@ -320,12 +376,16 @@ internal sealed record PresentationStyle(
             }
         }
 
-        ColorRgb colour = SvgColour.Parse(trimmed) ?? ColorRgb.Black;
-        return (FillSpec.Solid(ApplyOpacity(colour, opacity)), null);
+        // `currentColor` is the `color` in force, and the fact that the file wrote the keyword is recorded on the
+        // fill: a definition read into the library resolves it against SVG's initial black, and only the flag can
+        // tell that fill apart from one that plainly said `black` when an instance is rebuilt (issue #135).
+        bool keyword = SvgColour.IsCurrentColor(trimmed);
+        ColorRgb colour = SvgColour.Parse(trimmed, inForce) ?? ColorRgb.Black;
+        return (FillSpec.Solid(ApplyOpacity(colour, opacity)) with { FromCurrentColor = keyword }, null);
     }
 
     private static StrokeSpec? ParseStroke(
-        string value, string? opacity, string? width, SvgViewport? viewport, Action<string>? warn)
+        string value, string? opacity, string? width, SvgViewport? viewport, Action<string>? warn, ColorRgb inForce)
     {
         string trimmed = value.Trim();
         if (trimmed.Equals("none", StringComparison.OrdinalIgnoreCase))
@@ -333,14 +393,16 @@ internal sealed record PresentationStyle(
             return null;
         }
 
-        ColorRgb colour = SvgColour.Parse(trimmed) ?? ColorRgb.Black;
+        bool keyword = SvgColour.IsCurrentColor(trimmed);
+        ColorRgb colour = SvgColour.Parse(trimmed, inForce) ?? ColorRgb.Black;
         return new StrokeSpec(
             true,
             ApplyOpacity(colour, opacity),
             Length(width, viewport, warn) ?? 1.0,
             StrokeCap.Butt,
             StrokeJoin.Miter,
-            4.0);
+            4.0,
+            FromCurrentColor: keyword);
     }
 
     private static ColorRgb ApplyOpacity(ColorRgb colour, string? opacity)

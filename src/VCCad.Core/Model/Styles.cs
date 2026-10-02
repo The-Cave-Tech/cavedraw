@@ -114,7 +114,16 @@ public sealed record FillSpec(
     ColorRgb Color,
     FillRule Rule,
     GradientSpec? Gradient = null,
-    HatchSpec? Hatch = null)
+    HatchSpec? Hatch = null,
+
+    // SVG's `currentColor` (issue #135): true when this fill's colour was written as the keyword rather than as a
+    // colour, so the **resolved** value in <see cref="Color"/> is the `color` property in force where the fill was
+    // read. The picture needs nothing else - the resolved colour is what every renderer paints - but a definition
+    // read into the library resolves the keyword against SVG's initial black, and the colour a `use` site
+    // established has to be put back on the copy when <see cref="InstanceResolver"/> rebuilds it. Recording that
+    // the fill *follows* the colour is the only way to tell "said currentColor" from "said black", which is the
+    // distinction the rebuild turns on. False on every fill written before this existed, so nothing changes bytes.
+    bool FromCurrentColor = false)
 {
     /// <summary>
     /// A hatch fill. The colour is the fallback used wherever a hatch cannot be drawn - a solid swatch, a
@@ -273,7 +282,13 @@ public sealed record StrokeSpec(
     // stroke drawn by a mouse - or written before pens were recorded - carries no member and the seams draw it at a
     // fully pressed, upright pen exactly as they did before. The last member, so every document written by an
     // earlier build serialises to exactly the bytes it did then.
-    PenProfile? Pen = null)
+    PenProfile? Pen = null,
+
+    // SVG's `currentColor` on a stroke (issue #135). The same member <see cref="FillSpec.FromCurrentColor"/> is and
+    // for the same reason: the resolved colour is in <see cref="Color"/>, and this says whether the file wrote the
+    // keyword - which is what a rebuild of an instance has to re-resolve against the `use` site's `color`. False on
+    // every stroke written before this existed.
+    bool FromCurrentColor = false)
 {
     /// <summary>Convenience: no visible stroke.</summary>
     public static StrokeSpec None { get; } =

@@ -306,7 +306,9 @@ internal sealed class SvgFilters
 
             case "feFlood":
             {
-                ColorRgb colour = SvgColour.Parse(element.Attribute("flood-color")?.Value ?? "black")
+                ColorRgb colour = SvgColour.Parse(
+                        element.Attribute("flood-color")?.Value ?? "black",
+                        PresentationStyle.ColourInForce(element, null))
                     ?? ColorRgb.Black;
                 double opacity = Number(element.Attribute("flood-opacity")?.Value, 1.0);
                 return FilterPrimitive.Solid(colour, opacity, result);
@@ -469,7 +471,10 @@ internal sealed class SvgFilters
         double azimuth = Number(light.Attribute("azimuth")?.Value, 0.0);
         double elevation = Number(light.Attribute("elevation")?.Value, 0.0);
         double surfaceScale = Number(element.Attribute("surfaceScale")?.Value, 1.0);
-        ColorRgb colour = SvgColour.Parse(element.Attribute("lighting-color")?.Value ?? "white") ?? ColorRgb.White;
+        ColorRgb colour = SvgColour.Parse(
+                element.Attribute("lighting-color")?.Value ?? "white",
+                PresentationStyle.ColourInForce(element, null))
+            ?? ColorRgb.White;
 
         if (element.Name.LocalName == "feSpecularLighting")
         {

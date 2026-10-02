@@ -175,6 +175,13 @@ public static class InstanceResolver
     /// use that states a different paint over a definition that names the initial one deliberately, which is
     /// recorded here rather than papered over.
     ///
+    /// **A `currentColor` paint is the exception, and it is why the flag exists (#135).** `fill="currentColor"` is
+    /// not stored as a keyword: it is stored as the colour it resolved to, which inside the library - read under
+    /// the initial values - is black. That is indistinguishable from "said nothing" by value alone, so the fill
+    /// carries <see cref="FillSpec.FromCurrentColor"/> and is re-resolved against the colour the use site
+    /// established instead of being left at the definition's black. Without this a symbol whose art follows the
+    /// colour draws black the first time anything is refreshed.
+    ///
     /// A nested instance is **left to its own resolution**, which composes this presentation with its own - walking
     /// into it here would paint it twice and, worse, would leave its own use site's declarations unapplied.
     /// </summary>
@@ -190,12 +197,21 @@ public static class InstanceResolver
             switch (item)
             {
                 case PathItem path:
-                    if (Equals(path.Fill, InstancePresentation.Default.Fill))
+                    if (path.Fill.FromCurrentColor)
+                    {
+                        path.Fill = path.Fill with { Color = ResolveCurrent(path.Fill.Color, paint.CurrentColor) };
+                    }
+                    else if (Equals(path.Fill, InstancePresentation.Default.Fill))
                     {
                         path.Fill = paint.Fill;
                     }
 
-                    if (Equals(path.Stroke, InstancePresentation.Default.Stroke))
+                    if (path.Stroke.FromCurrentColor)
+                    {
+                        path.Stroke =
+                            path.Stroke with { Color = ResolveCurrent(path.Stroke.Color, paint.CurrentColor) };
+                    }
+                    else if (Equals(path.Stroke, InstancePresentation.Default.Stroke))
                     {
                         path.Stroke = paint.Stroke;
                     }
@@ -207,6 +223,18 @@ public static class InstanceResolver
             }
         }
     }
+
+    /// <summary>
+    /// The colour a `currentColor` paint takes: the colour the use site established, with the alpha the paint
+    /// already had.
+    ///
+    /// The keyword is the **used value of `color`**, and `color` carries an alpha of its own - `color="rgba(...)"`
+    /// is a legal declaration - so the two multiply rather than one replacing the other, exactly as
+    /// `fill-opacity` and the colour's own alpha do everywhere else in this model. The definition's resolved paint
+    /// carries that alpha already (it was applied when the definition was read), so only the channels are replaced.
+    /// </summary>
+    private static ColorRgb ResolveCurrent(ColorRgb current, ColorRgb inForce)
+        => inForce with { A = current.A * inForce.A };
 
     /// <summary>
     /// The instances inside a piece of a definition's content whose nearest instance ancestor is the instance

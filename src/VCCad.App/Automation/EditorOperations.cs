@@ -751,13 +751,15 @@ public static class EditorOperations
         Add("instance.presentation",
             "The presentation each instance's own `use` site established for the definition it draws, as the model " +
             "records it: the fill and the stroke (width, caps, joins, miter limit and dash included) that cascade " +
-            "into what the `use` draws. This is the half a refresh has to put back - the definition is read under " +
-            "SVG's initial values, so re-materialising from it alone would repaint a `use fill=\"red\"` instance " +
-            "black - and it is the readout of what the rebuild applies, not a second opinion about it. An instance " +
-            "whose use site states nothing beyond the initial values reports a null presentation, which is the " +
-            "difference between 'nobody said' and 'somebody chose black'. Present for every instance in the " +
-            "document, because an instance is a reference and a caller looking for the paint it carries has to be " +
-            "able to find it wherever it is.",
+            "into what the `use` draws, and the `color` a `currentColor` inside that definition stands for. This is " +
+            "the half a refresh has to put back - the definition is read under SVG's initial values, so " +
+            "re-materialising from it alone would repaint a `use fill=\"red\"` instance black, and would paint a " +
+            "`fill=\"currentColor\"` inside the definition black whatever colour the use site established - and it " +
+            "is the readout of what the rebuild applies, not a second opinion about it. An instance whose use site " +
+            "states nothing beyond the initial values reports a null presentation, which is the difference between " +
+            "'nobody said' and 'somebody chose black'. Present for every instance in the document, because an " +
+            "instance is a reference and a caller looking for the paint it carries has to be able to find it " +
+            "wherever it is.",
             "",
             (ctx, _) => ctx.Document.AllGroups()
                 .Where(InstanceResolver.IsInstance)
@@ -771,10 +773,72 @@ public static class EditorOperations
                         {
                             fill = DescribeFill(presentation.Fill),
                             stroke = DescribeStroke(presentation.Stroke),
+                            color = presentation.Color is { } colour
+                                ? new
+                                {
+                                    r = Math.Round(colour.R, 6),
+                                    g = Math.Round(colour.G, 6),
+                                    b = Math.Round(colour.B, 6),
+                                    hex = HexColor.Format(colour),
+                                }
+                                : null,
                         }
                         : null,
                 })
                 .ToArray());
+
+        Add("paint.currentColor",
+            "Every paint in the document whose colour came from SVG's `currentColor`, and the colour it resolved " +
+            "to. `currentColor` is not a colour: it is the `color` property in force where it is written, so the " +
+            "model resolves it at read time and records that it did - the resolved value is what every renderer " +
+            "paints, and the flag is what tells a paint that *follows* the colour apart from one that plainly " +
+            "states it. That distinction is invisible by value and is exactly what a rebuild turns on, which is why " +
+            "it is readable here: an instance's definition is read under SVG's initial values, so a `currentColor` " +
+            "inside it resolves to black there, and only the use site's recorded colour can put the right one back. " +
+            "A file that names the keyword and a driver that wants to know what it drew therefore have this and no " +
+            "other way to ask. A document that never names the keyword reports an empty list, which is what keeps " +
+            "this a readout rather than a rewrite.",
+            "",
+            (ctx, _) => ctx.Document.AllPaths()
+                .SelectMany(path => PaintsFollowingTheColour(path))
+                .ToArray());
+
+        /// <summary>
+        /// The paints on one path that follow `currentColor`, as the readout reports them: which member, the colour
+        /// it resolved to, and the item it is on.
+        ///
+        /// A path is asked rather than the document's items, because the flag lives on the **paint** - one stroke of
+        /// a stack can follow the colour while the stroke under it states its own - so "which item" alone would not
+        /// say which line is the one that moves.
+        /// </summary>
+        static IEnumerable<object> PaintsFollowingTheColour(PathItem path)
+        {
+            if (path.Fill.FromCurrentColor)
+            {
+                yield return Follows(path, "fill", 0, path.Fill.Color);
+            }
+
+            for (int i = 0; i < path.Strokes.Count; i++)
+            {
+                if (path.Strokes[i].FromCurrentColor)
+                {
+                    yield return Follows(path, "stroke", i, path.Strokes[i].Color);
+                }
+            }
+        }
+
+        static object Follows(PathItem path, string member, int index, ColorRgb colour) => new
+        {
+            itemId = path.Id,
+            name = path.Name,
+            member,
+            strokeIndex = index,
+            r = Math.Round(colour.R, 6),
+            g = Math.Round(colour.G, 6),
+            b = Math.Round(colour.B, 6),
+            a = Math.Round(colour.A, 6),
+            hex = HexColor.Format(colour),
+        };
 
         // ---- selection ---------------------------------------------------
         Add("selection.get", "Currently selected objects.", "",
@@ -9133,6 +9197,11 @@ public static class EditorOperations
         rule = fill.Rule.ToString().ToLowerInvariant(),
         gradient = fill.Gradient is not null,
         hatch = fill.Hatch is { IsEmpty: false },
+
+        // SVG's `currentColor` (issue #135): true when the colour above came from the `color` in force rather than
+        // being stated outright. It is a different fact from the colour, which has already been resolved - and it is
+        // the fact a rebuild needs, so a caller has to be able to see it.
+        fromCurrentColor = fill.FromCurrentColor,
     };
 
     /// <summary>One stroke as a caller reads it: every member that decides what it looks like.</summary>
@@ -9184,6 +9253,7 @@ public static class EditorOperations
             : null,
         dynamics = DescribeDynamics(stroke.Dynamics),
         pen = DescribePen(stroke.Pen),
+        fromCurrentColor = stroke.FromCurrentColor,
     };
 
     /// <summary>

@@ -14,8 +14,9 @@ namespace VCCad.Core.Model;
 ///
 /// **It is the inherited presentation, not the whole computed style.** These are the two properties that cascade
 /// down the shadow tree the `use` creates - `stroke-width`, the caps, the joins, the miter limit and the dash are
-/// members of <see cref="Stroke"/> and travel with it. `mix-blend-mode` is deliberately **not** here: CSS says it
-/// does not inherit, so a use site's blend is a fact about the instance group and stays on
+/// members of <see cref="Stroke"/> and travel with it - and `color`, which is what a `currentColor` paint inside the
+/// definition stands for (#135). `mix-blend-mode` is deliberately **not** here: CSS says it does not inherit, so a
+/// use site's blend is a fact about the instance group and stays on
 /// <see cref="LayerItem.BlendMode"/>. A marker reference is inherited too but is not carried, because this model
 /// turns a marker into art at read time rather than into a member a repaint could re-apply; that residue is named
 /// where it is lost.
@@ -30,9 +31,19 @@ namespace VCCad.Core.Model;
 /// The stroke in force on the content the `use` draws, width and all. <see cref="StrokeSpec.None"/> - no visible
 /// stroke - is SVG's initial value and the one an unstated use site leaves behind.
 /// </param>
-public sealed record InstancePresentation(FillSpec Fill, StrokeSpec Stroke)
+/// <param name="Color">
+/// SVG's `color` property in force on the content the `use` draws, or null when the file states none and the
+/// initial black is what `currentColor` stands for.
+///
+/// This is the member a `currentColor` paint needs (issue #135). A definition is read into the library under SVG's
+/// initial values, so a `fill="currentColor"` inside it resolves to black **there** - the keyword is not stored, the
+/// resolved colour is - and the instance's own copy, read through the use site's style, is the only thing that
+/// carries the colour the use established. Re-materialising from the definition therefore paints it black unless
+/// the colour travels here. Null is "nobody said", which is a different state from a use site that chose black.
+/// </param>
+public sealed record InstancePresentation(FillSpec Fill, StrokeSpec Stroke, ColorRgb? Color = null)
 {
-    /// <summary>SVG's initial values, and what an unstated use site establishes: black fill, no stroke.</summary>
+    /// <summary>SVG's initial values, and what an unstated use site establishes: black fill, no stroke, black colour.</summary>
     public static InstancePresentation Default { get; } = new(FillSpec.Solid(ColorRgb.Black), StrokeSpec.None);
 
     /// <summary>
@@ -40,6 +51,11 @@ public sealed record InstancePresentation(FillSpec Fill, StrokeSpec Stroke)
     /// not already have been read with.
     /// </summary>
     public bool IsDefault => Equals(this, Default);
+
+    /// <summary>
+    /// The `color` in force, as a `currentColor` paint inside the definition resolves to it.
+    /// </summary>
+    public ColorRgb CurrentColor => Color ?? ColorRgb.Black;
 
     /// <summary>
     /// The presentation a nested instance inherits from the instance around it, with **its own** stated values
@@ -61,6 +77,7 @@ public sealed record InstancePresentation(FillSpec Fill, StrokeSpec Stroke)
 
         return new InstancePresentation(
             Equals(inner.Fill, Default.Fill) ? outer.Fill : inner.Fill,
-            Equals(inner.Stroke, Default.Stroke) ? outer.Stroke : inner.Stroke);
+            Equals(inner.Stroke, Default.Stroke) ? outer.Stroke : inner.Stroke,
+            inner.Color ?? outer.Color);
     }
 }
