@@ -247,4 +247,164 @@ public class StrokeModelRoundTripTests
 
         Assert.Equal(original, again);
     }
+
+    /// <summary>
+    /// **An invisible stroke keeps its width profile.**
+    ///
+    /// The stroke that comes back without a colour is rebuilt member by member, because an absent colour is how the
+    /// format says "no stroke" and the file therefore carries no colour to read. Every other member was rebuilt
+    /// there; the profile was not. The file **had** written it - a stroke switched off with its taper still on it
+    /// is an ordinary thing to save - so this was the reader dropping a value the document carries, and a taper
+    /// came back as an invisible hairline with no taper at all.
+    ///
+    /// The bytes do not move for this case, which is why the assertion is on the model rather than on the JSON:
+    /// the write side was already correct, and only the read was lossy.
+    /// </summary>
+    [Fact]
+    public void AnInvisibleStrokeKeepsItsWidthProfile()
+    {
+        CadDocument document = CadDocument.CreateDefault();
+        PathItem path = Path("hidden", new Point2D(0, 0), new Point2D(50, 0));
+        path.Stroke = new StrokeSpec(false, ColorRgb.Black, 6, StrokeCap.Square, StrokeJoin.Round, 8)
+        {
+            WidthProfile = WidthProfileSpec.Taper(20, 2),
+        };
+        document.Artboards[0].Layers[0].AddItem(path);
+
+        // The member really is in the file, so the loss below is the reader's and not the writer's.
+        string json = Encoding.UTF8.GetString(Serialize(document));
+        Assert.Contains("\"WidthProfile\"", json, StringComparison.Ordinal);
+
+        StrokeSpec back = RoundTrip(document)
+            .Artboards[0].Layers[0].Children.OfType<PathItem>().Single().Stroke;
+
+        Assert.False(back.IsVisible);
+        Assert.True(back.HasWidthProfile);
+        WidthProfileSpec profile = back.WidthProfile!;
+        Assert.Equal("Taper", profile.Name);
+        Assert.Equal(2, profile.Points.Count);
+        Assert.Equal(0.0, profile.Points[0].Position, 6);
+        Assert.Equal(20.0, profile.Points[0].LeftWidth, 6);
+        Assert.Equal(1.0, profile.Points[1].Position, 6);
+        Assert.Equal(2.0, profile.Points[1].LeftWidth, 6);
+        Assert.Equal(WidthInterpolation.Cubic, profile.Points[1].Interpolation);
+    }
+
+    /// <summary>
+    /// **An all-off dynamics spec is a value, and it is written.**
+    ///
+    /// The model states the distinction in as many words: a null spec stores nothing, an all-off spec stores that
+    /// every response was switched off. The sidecar collapsed the second to the first, keying the member off
+    /// <see cref="StrokeSpec.HasDynamics"/> - a predicate that answers "does this stroke respond to the pen",
+    /// which an all-off spec answers no to while still being a decision somebody recorded. A person can reach the
+    /// state through the stroke pane's own checkbox (`SetDynamicsAt(..., enabled: false, ...)`), so it is not a
+    /// shape only a test can build.
+    ///
+    /// The bytes change for exactly this document and no other: one that carries no dynamics at all still writes
+    /// no member, which <see cref="AnOrdinaryDocumentGainsNoNewMembers"/> and
+    /// <see cref="ASidecarWrittenBeforeTheStrokeSubsystemRoundTripsToTheSameBytes"/> both pin.
+    /// </summary>
+    [Fact]
+    public void AnAllOffDynamicsSpecIsWrittenAndComesBack()
+    {
+        CadDocument document = CadDocument.CreateDefault();
+        PathItem path = Path("switched-off", new Point2D(0, 0), new Point2D(50, 0));
+        path.Stroke = new StrokeSpec(true, ColorRgb.Black, 4, StrokeCap.Butt, StrokeJoin.Miter, 4)
+        {
+            Dynamics = DynamicsSpec.None,
+        };
+        document.Artboards[0].Layers[0].AddItem(path);
+
+        string json = Encoding.UTF8.GetString(Serialize(document));
+        Assert.Contains("\"Dynamics\"", json, StringComparison.Ordinal);
+
+        StrokeSpec back = RoundTrip(document)
+            .Artboards[0].Layers[0].Children.OfType<PathItem>().Single().Stroke;
+
+        Assert.NotNull(back.Dynamics);
+        Assert.True(back.Dynamics!.IsEmpty);
+        Assert.Equal(DynamicsTargetSpec.Off, back.Dynamics.For(DynamicsTarget.Width));
+        Assert.Equal(path.Stroke, back);
+    }
+
+    /// <summary>
+    /// The same all-off spec on a **brush**, which travels through its own record and had the same collapsed
+    /// predicate. A nib whose every response was switched off came back as one that had never recorded any.
+    /// </summary>
+    [Fact]
+    public void ABrushsAllOffDynamicsSpecIsWrittenAndComesBack()
+    {
+        CadDocument document = CadDocument.CreateDefault();
+        PathItem path = Path("brush", new Point2D(0, 0), new Point2D(50, 0));
+        path.Stroke = new StrokeSpec(true, ColorRgb.Black, 4, StrokeCap.Butt, StrokeJoin.Miter, 4)
+        {
+            Brush = BrushSpec.Calligraphic("Chisel", 35, 0.2, 24, dynamics: DynamicsSpec.None),
+        };
+        document.Artboards[0].Layers[0].AddItem(path);
+
+        string json = Encoding.UTF8.GetString(Serialize(document));
+        Assert.Contains("\"Dynamics\"", json, StringComparison.Ordinal);
+
+        BrushSpec brush = RoundTrip(document)
+            .Artboards[0].Layers[0].Children.OfType<PathItem>().Single().Stroke.Brush!;
+
+        Assert.NotNull(brush.Dynamics);
+        Assert.True(brush.Dynamics!.IsEmpty);
+        Assert.Equal(path.Stroke.Brush, brush);
+    }
+
+    /// <summary>
+    /// **The old-bytes assertion, as a literal.**
+    ///
+    /// This is the sidecar a build without the stroke subsystem wrote for a path whose stroke is switched off:
+    /// the exact JSON, fixed ids and all, with no profile, no effect, no raster effect, no dynamics and no brush
+    /// member. Deserializing it and serializing it again must produce the identical string - not merely a document
+    /// that loads. A reader that invented a default nib, an empty profile or an all-off spec would add a member
+    /// here and fail on the bytes, which is the failure this test exists for.
+    ///
+    /// The literal is byte-for-byte what the pre-fix build wrote for this document; it was captured by serializing
+    /// the same model before the fix and is committed here so the guarantee survives without an old binary to
+    /// compare against.
+    /// </summary>
+    [Fact]
+    public void ASidecarWrittenBeforeTheStrokeSubsystemRoundTripsToTheSameBytes()
+    {
+        const string legacy =
+            "{\"Version\":1,\"Id\":\"00000000-0000-0000-0000-000000000000\",\"Name\":\"legacy\"," +
+            "\"Artboards\":[{\"Id\":\"11111111-1111-1111-1111-111111111111\",\"Name\":\"Artboard 1\"," +
+            "\"X\":0,\"Y\":0,\"Width\":841.8897637795276,\"Height\":595.2755905511812,\"Layers\":[" +
+            "{\"Id\":\"22222222-2222-2222-2222-222222222222\",\"Name\":\"Layer 1\",\"IsVisible\":true," +
+            "\"IsLocked\":false,\"Opacity\":1,\"Items\":[" +
+            "{\"$kind\":\"path\",\"Id\":\"33333333-3333-3333-3333-333333333333\",\"Name\":\"line\"," +
+            "\"IsVisible\":true,\"IsLocked\":false," +
+            "\"Fill\":{\"Visible\":false,\"Color\":null,\"Rule\":\"NonZero\"}," +
+            "\"Stroke\":{\"Visible\":false,\"Color\":null,\"Width\":6,\"Cap\":\"Square\",\"Join\":\"Round\"," +
+            "\"MiterLimit\":8,\"Alignment\":\"Center\",\"Dash\":null,\"DashOffset\":0}," +
+            "\"Opacity\":1,\"SubPaths\":[{\"Closed\":false,\"Nodes\":[" +
+            "{\"Anchor\":{\"X\":0,\"Y\":0},\"InHandle\":{\"X\":0,\"Y\":0},\"OutHandle\":{\"X\":0,\"Y\":0}}," +
+            "{\"Anchor\":{\"X\":80,\"Y\":0},\"InHandle\":{\"X\":80,\"Y\":0},\"OutHandle\":{\"X\":80,\"Y\":0}}]}]," +
+            "\"SourceFillCmyk\":null,\"SourceStrokeCmyk\":null,\"ShapeKind\":null,\"ShapeParameters\":null," +
+            "\"Clips\":null}]}]}],\"Orphans\":[]}";
+
+        // None of the members this issue is about is in the literal, so the byte comparison below is a comparison
+        // against a document that carries none of the features.
+        foreach (string member in new[]
+                 { "WidthProfile", "Effects", "RasterEffects", "Dynamics", "Brush", "Brushes", "WidthProfiles" })
+        {
+            Assert.DoesNotContain(member, legacy, StringComparison.Ordinal);
+        }
+
+        CadDocument document = VccadDocumentSerializer.Deserialize(legacy);
+        Assert.Equal(legacy, VccadDocumentSerializer.Serialize(document));
+
+        StrokeSpec stroke = document.Artboards[0].Layers[0].Children.OfType<PathItem>().Single().Stroke;
+        Assert.False(stroke.HasWidthProfile);
+        Assert.False(stroke.HasEffects);
+        Assert.False(stroke.HasRasterEffects);
+        Assert.False(stroke.HasDynamics);
+        Assert.False(stroke.HasBrush);
+        Assert.Null(stroke.Dynamics);
+        Assert.Null(stroke.Brush);
+        Assert.Null(stroke.WidthProfile);
+    }
 }
