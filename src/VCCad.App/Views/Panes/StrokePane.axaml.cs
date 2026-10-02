@@ -917,7 +917,6 @@ public partial class StrokePane : UserControl
 
         StrokeSummary summary = StrokeSummary.Of(
             _vm?.ActiveSession.SelectedPaths() ?? Enumerable.Empty<PathItem>(), index);
-        IReadOnlyList<StrokeSpec> agreeing = AgreeingStrokesAt(index);
 
         var mixed = new List<string>();
         _syncing = true;
@@ -952,16 +951,12 @@ public partial class StrokePane : UserControl
         StrokeJoin shownJoin = summary.Join ?? stroke.Join;
         StrokeAlignment shownAlign = summary.Alignment ?? stroke.Alignment;
 
-        // Dash is not one of `StrokeSummary`'s members, so its agreement is read here - over the same strokes the
-        // summary counts, so the two cannot disagree about what a gap is. Reported as a follow-up: the summary
-        // should carry it and this should stop being a second reading.
-        DashPattern shownDash = stroke.Dash;
-        bool dashMixed = false;
-        if (agreeing.Count > 0)
-        {
-            shownDash = agreeing[0].Dash;
-            dashMixed = agreeing.Any(candidate => !candidate.Dash.Equals(shownDash));
-        }
+        // Dash is a `StrokeSummary` member like the rest, so it is read from the same authority rather than worked
+        // out a second time here - a second reading is one that can drift from the one `style.commonStroke`
+        // reports. The inspected stroke's own dash is the fallback for a selection with nothing drawn at this index,
+        // which is the same fallback the geometry fields take.
+        DashPattern shownDash = summary.Dash ?? stroke.Dash;
+        bool dashMixed = summary.DashMixed;
 
         if (!StrokeWidthBox.IsFocused)
         {

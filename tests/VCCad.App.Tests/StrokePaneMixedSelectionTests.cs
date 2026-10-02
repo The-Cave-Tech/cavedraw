@@ -171,12 +171,15 @@ public class StrokePaneMixedSelectionTests
             (Stroke(4, join: StrokeJoin.Round), Stroke(4, join: StrokeJoin.Round)),
             (Stroke(4, miter: 6), Stroke(4, miter: 9)),
             (Stroke(4, alignment: StrokeAlignment.Inside), Stroke(4, alignment: StrokeAlignment.Outside)),
+            (Stroke(4, dash: new DashPattern(new double[] { 4, 3 })), Stroke(4, dash: DashPattern.None)),
+            (Stroke(4, dash: new DashPattern(new double[] { 4, 3 })),
+                Stroke(4, dash: new DashPattern(new double[] { 4, 3 }))),
             (Stroke(4, cap: StrokeCap.Round, miter: 6), Stroke(8, cap: StrokeCap.Round, miter: 9)),
         };
 
         foreach ((StrokeSpec first, StrokeSpec second) in patterns)
         {
-            (StrokePane pane, EditorViewModel viewModel, PathItem firstPath, PathItem secondPath) = Host(first, second);
+            (StrokePane pane, EditorViewModel viewModel, _, _) = Host(first, second);
             StrokeSummary summary = StrokeSummary.Of(
                 viewModel.ActiveSession.SelectedPaths(), 0);
 
@@ -208,10 +211,21 @@ public class StrokePaneMixedSelectionTests
                 summary.AlignmentMixed ? -1 : AlignIndex(summary.Alignment!.Value),
                 Combo(pane, "StrokeAlignBox").SelectedIndex);
 
-            // A member the summary has nothing to say about (dash is not one of its members) still must not be
-            // presented as everyone's when the selection disagrees on it.
-            bool dashAgrees = firstPath.Strokes[0].Dash.Equals(secondPath.Strokes[0].Dash);
-            Assert.Equal(dashAgrees ? 0 : -1, Combo(pane, "StrokeDashBox").SelectedIndex);
+            // Dash is a summary member like the rest, so the pane must agree with the summary about it in both
+            // directions: an explicit "mixed" where the summary disagrees, and a shown value where it does not.
+            if (summary.DashMixed)
+            {
+                Assert.Equal(-1, Combo(pane, "StrokeDashBox").SelectedIndex);
+                Assert.Equal("mixed", Combo(pane, "StrokeDashBox").PlaceholderText);
+            }
+            else
+            {
+                Assert.True(Combo(pane, "StrokeDashBox").SelectedIndex >= 0,
+                    $"{context}: the summary agrees on the dash but the pane shows no value");
+                Assert.True(string.IsNullOrEmpty(Combo(pane, "StrokeDashBox").PlaceholderText),
+                    $"{context}: the summary agrees on the dash but the pane says "
+                    + $"'{Combo(pane, "StrokeDashBox").PlaceholderText}'");
+            }
         }
     }
 
