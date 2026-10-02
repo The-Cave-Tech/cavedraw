@@ -243,10 +243,10 @@ understand the screen and the document without pixels:
 A driver that cannot see should still be able to work confidently: dump first,
 describe when a visual judgement is needed.
 
-### Five things that cost real time, learned the hard way
+### Seven things that cost real time, learned the hard way
 
-Every one of these happened in a single session. They are cheap to avoid and
-expensive to discover.
+Most of these happened in a single session; the last two were learned the hard way in
+a later one, and cost the most. They are cheap to avoid and expensive to discover.
 
 **A bite-check mutation belongs in a throwaway worktree, never the shared tree.**
 A mutation left in the shared tree was committed by a different agent while it was
@@ -286,6 +286,30 @@ session had exactly that shape — a `use` link never re-resolved, a live path e
 never re-derived, placed art never rendered. A round-trip test cannot see it,
 because every round trip is correct. When an issue says something should *follow*
 another thing, assert the following, not the storing.
+
+**A run list is not a verdict.** `gh run list` showing `in_progress` says a job is
+queued or running, never that it passed — and the row is stale by the time it
+prints. A session read that list three times, took the rows as "running, fine" and
+pushed on, while `build-test` had already failed twenty minutes earlier and been
+fixed by the next commit; the failure was then rediscovered through the API, long
+after the fact. Two `gh` routes answer the question while a run is still going:
+`gh api repos/<owner>/<repo>/commits/<sha>/check-runs` gives every check's status
+and conclusion, and `gh api repos/<owner>/<repo>/actions/jobs/<id>/logs` returns that
+job's log directly. `gh run view --log-failed` refuses until the *whole* run
+finishes, which one stuck job postpones indefinitely. Read a check's conclusion;
+never read the list.
+
+**Run the workflow itself, on a Docker host, before pushing.** `act` executes
+`.github/workflows/ci.yml` as written, so the gate is the real pipeline rather than an
+approximation of it: `act push -j build-test -P
+ubuntu-latest=catthehacker/ubuntu:act-latest` on any machine with Docker. The `-P` is
+not optional — with no runner image `act` prompts interactively and dies with `fatal
+msg=EOF` where there is no terminal. This is "green locally is not green" answered
+with a machine instead of a hope: the container has CI's SDK band, its fonts and its
+published layout. It also settles counts, because a local run reports *more* tests
+than the container whenever a corpus is present — `test-all.ps1` probes
+`$HOME/.cache/vccad-corpora` and exports whatever it finds — so the two totals are
+not comparable and only the workflow's is the gate.
 
 ---
 
