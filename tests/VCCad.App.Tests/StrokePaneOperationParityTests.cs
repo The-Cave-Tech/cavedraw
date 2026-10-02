@@ -22,11 +22,11 @@ namespace VCCad.App.Tests;
 /// - **Equivalence.** A field and its operation leave the same model state. This passes against the pane as it
 ///   stands, because the pane and `style.setStroke` run the same `DocumentSession` method - it is a guard against
 ///   the two drifting apart, not a pin on a defect.
-/// - **Sentinels.** Where the operation genuinely **cannot** express what the control can, the test says so rather
-///   than pretending otherwise. These are the "failing on improvement" records this repository uses for known
-///   gaps: when the operation grows the parameter, the sentinel must be turned into a positive assertion, not
-///   deleted. Both are reported on #111 as parity defects rather than papered over with a second implementation
-///   inside the pane.
+/// - **Parity.** Where the operation could not express what the control could, the test said so rather than
+///   pretending otherwise, as the "failing on improvement" records this repository uses. All three gaps it pinned
+///   (an empty dash read as "not given", `enabled:false` hard-coded away, one undo step per path for a brush) are
+///   **closed**, so each is now a positive assertion: the dash is empty, the dynamics target is off, the undo
+///   depth is one. They are kept, not deleted, because they are what catches the gap coming back.
 /// </summary>
 public class StrokePaneOperationParityTests
 {
@@ -150,17 +150,19 @@ public class StrokePaneOperationParityTests
         Assert.Equal(byAlign, path.Strokes[1]);
     }
 
-    // ---------------------------------------------------------------- sentinels
+    // ------------------------------------------------- parity (the three closed gaps)
 
     /// <summary>
-    /// **SENTINEL.** The dash combo can go back to **solid**; `style.setStroke` cannot ask for that.
+    /// **PARITY.** The dash combo can go back to **solid**, and so can `style.setStroke`.
     ///
-    /// An omitted `dash` and an empty one are read identically - the operation only builds a pattern when the array
-    /// has at least one number - so `{"dash":[]}` is "not given" rather than "no dash", and a driver has no way to
-    /// turn a dashed stroke solid on one stroke of the stack. This is a real parity gap: a person can do it and a
-    /// driver cannot, which is the defect this repository treats as a bug. Reported on #111.
+    /// This pinned a gap: an omitted `dash` and an empty one were read identically, so `{"dash":[]}` meant "not
+    /// given" and a driver could never take a dashed stroke back to Solid the way the combo can. The operation now
+    /// reads a **given** empty array as a request for no dash - the same "empty means none" reading
+    /// `style.setWidthProfile` takes of its points list - and carries it to the session as an explicit clear,
+    /// because an empty `DashPattern` is value-equal to the default one and `null` already means "leave it alone".
     ///
-    /// When the operation grows a way to say "no dash", this becomes a positive assertion that the two agree.
+    /// What it asserts now: the control's Solid and the operation's `dash:[]` reach the **same** model state, an
+    /// empty dash on the stroke.
     /// </summary>
     [AvaloniaFact]
     public void TheDashControlCanGoSolidWhereTheOperationCannotAskForIt()
@@ -178,31 +180,43 @@ public class StrokePaneOperationParityTests
         Settle();
         Assert.False(path.Strokes[0].Dash.IsEmpty);
 
-        // The driver's half asks the same thing, and the stroke stays dashed.
+        // The driver's half asks the same thing, and gets the same stroke the control left behind.
         EditorOperations.Invoke(new AutomationContext { ViewModel = viewModel }, "style.setStroke",
             Params(new { index = 0, dash = Array.Empty<double>() }));
 
-        Assert.False(path.Strokes[0].Dash.IsEmpty);
+        Assert.True(path.Strokes[0].Dash.IsEmpty);
     }
 
     /// <summary>
-    /// **SENTINEL.** The dynamics checkbox can switch **one target** off while leaving the others as they are;
-    /// `style.setDynamics` can only switch one on.
+    /// **PARITY.** The dynamics checkbox can switch **one target** off while leaving the others as they are, and so
+    /// can `style.setDynamics`.
     ///
-    /// The operation builds its request with `enabled: true` hard-coded, so a driver passing `enabled: false` is
-    /// not refused and not obeyed - the target ends up **on**, which is worse than a refusal because the caller is
-    /// told nothing. `style.clearDynamics` is not the answer either: it removes the whole response, so using it to
-    /// switch one target off would silently take the others with it. Reported on #111.
+    /// This pinned a gap: the operation built its request with `enabled: true` hard-coded, so a driver passing
+    /// `enabled: false` was neither refused nor obeyed - the target ended up **on**, which is worse than a refusal
+    /// because the caller is told nothing. `style.clearDynamics` is not a substitute: it removes the whole
+    /// response, taking every other target with it.
     ///
-    /// When the operation grows an `enabled` parameter, the last assertion flips to `Assert.False`.
+    /// What it asserts now: `enabled:false` switches the named target off **and leaves opacity dynamics on** -
+    /// switching one off must not disturb the others, which is the half a blanket clear would get wrong.
     /// </summary>
     [AvaloniaFact]
     public void TheDynamicsCheckboxCanSwitchOneTargetOffWhereTheOperationCannot()
     {
-        var responding = Stroke(4) with { Dynamics = DynamicsSpec.PressureToWidth(DynamicsPreset.Soft) };
+        // Width responds, and so does opacity: the second is what proves switching one target off does not take the
+        // others with it, which is the property `style.clearDynamics` cannot express.
+        var responding = Stroke(4) with
+        {
+            Dynamics = new DynamicsSpec(Enum.GetValues<DynamicsTarget>().Select(target => target switch
+            {
+                DynamicsTarget.Width => DynamicsTargetSpec.Preset(DynamicsPreset.Soft),
+                DynamicsTarget.Opacity => DynamicsTargetSpec.Preset(DynamicsPreset.Soft),
+                _ => DynamicsTargetSpec.Off,
+            })),
+        };
         (StrokePane pane, EditorViewModel viewModel, PathItem path) = Host(0, responding);
 
         Assert.True(path.Strokes[0].Dynamics!.For(DynamicsTarget.Width).Enabled);
+        Assert.True(path.Strokes[0].Dynamics!.For(DynamicsTarget.Opacity).Enabled);
 
         Check(pane, "DynamicsWidthEnabled").IsChecked = false;
         Settle();
@@ -215,21 +229,21 @@ public class StrokePaneOperationParityTests
         EditorOperations.Invoke(new AutomationContext { ViewModel = viewModel }, "style.setDynamics",
             Params(new { target = "width", preset = "soft", enabled = false, strokeIndex = 0 }));
 
-        Assert.True(path.Strokes[0].Dynamics!.For(DynamicsTarget.Width).Enabled);
+        Assert.False(path.Strokes[0].Dynamics!.For(DynamicsTarget.Width).Enabled);
+        Assert.True(path.Strokes[0].Dynamics!.For(DynamicsTarget.Opacity).Enabled);
     }
 
     /// <summary>
-    /// **SENTINEL.** Choosing a brush over a selection of two paths costs **two** undo steps, where issue #111 asks
-    /// for "one gesture is one undo step".
+    /// **PARITY.** Choosing a brush over a selection of two paths costs **one** undo step, which is what issue #111
+    /// asks for - "one gesture is one undo step".
     ///
-    /// `brush.apply` writes one `SetStrokesCommand` per path rather than composing them, so the operation - and the
-    /// pane control that drives it - put one entry on the stack per selected path. The consequence is visible rather
-    /// than bookkeeping: one Undo takes the brush off one path and leaves it on the other, so the gesture a person
-    /// made in one click cannot be taken back in one move. `style.setWidthProfile` and `style.setStroke` composite
-    /// their per-path edits (`ExecuteIfAny`), which is what makes this specific to the brush path.
+    /// This pinned a gap: `brush.apply` wrote one `SetStrokesCommand` per path rather than composing them, so the
+    /// operation - and the pane control that drives it - put one entry on the stack per selected path, and one
+    /// Undo took the brush off one path and left it on the other. The consequence was visible rather than
+    /// bookkeeping.
     ///
-    /// Reported on #111. When the operation composites, the depth assertion becomes `1` and the second `Undo` is
-    /// what clears the rest.
+    /// What it asserts now: the depth moves by exactly **1**, and that single Undo takes the brush off **both**
+    /// paths - the same `CompositeCommand` composition `style.setWidthProfile` and `style.setStroke` already use.
     /// </summary>
     [AvaloniaFact]
     public void ChoosingABrushOverTwoPathsCostsOneUndoStepPerPath()
@@ -258,10 +272,10 @@ public class StrokePaneOperationParityTests
         Assert.Equal("Chisel", first.Strokes[0].Brush?.Name);
         Assert.Equal("Chisel", second.Strokes[0].Brush?.Name);
 
-        // One gesture, one entry - the assertion this sentinel exists to flip.
-        Assert.Equal(2, viewModel.ActiveSession.UndoDepth - before);
+        // One gesture, one entry - the assertion this test exists to keep true.
+        Assert.Equal(1, viewModel.ActiveSession.UndoDepth - before);
 
         viewModel.Undo();
-        Assert.Equal(1, new[] { first, second }.Count(p => p.Strokes[0].Brush is not null));
+        Assert.Equal(0, new[] { first, second }.Count(p => p.Strokes[0].Brush is not null));
     }
 }

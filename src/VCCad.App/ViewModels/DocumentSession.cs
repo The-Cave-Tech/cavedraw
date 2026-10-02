@@ -2339,10 +2339,17 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// One <see cref="SetStrokesCommand"/> per path and a composite across the selection, so a gesture is one undo
     /// step; a request that changes nothing on a path adds no command at all, because an undo step that undoes to
     /// exactly where it started reads as "undo did nothing".
+    ///
+    /// <paramref name="clearDash"/> is a parameter of its own rather than an empty <paramref name="dash"/>, because
+    /// `null` already means "leave the dash as the stroke has it" and an empty <see cref="DashPattern"/> is
+    /// *value-equal* to the default one. If "no dash" were spelled as an empty pattern it would be
+    /// indistinguishable from the absence, and a driver could only ever state a dashed stroke - the exact
+    /// asymmetry issue #111 records between the Dash combo's **Solid** and the registry. The caller that knows a
+    /// member was **given** decides; this method never has to guess.
     /// </summary>
     public int ApplyStrokeFieldsAt(int index, double? width, StrokeCap? cap, StrokeJoin? join, double? miterLimit,
         StrokeAlignment? alignment, DashPattern? dash = null, ColorRgb? color = null,
-        double? opacity = null, BlendMode? blend = null)
+        double? opacity = null, BlendMode? blend = null, bool clearDash = false)
     {
         if (index < 0)
         {
@@ -2368,7 +2375,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 Join = join ?? before.Join,
                 MiterLimit = miterLimit is { } m ? Math.Max(1, m) : before.MiterLimit,
                 Alignment = alignment ?? before.Alignment,
-                Dash = dash ?? before.Dash,
+                Dash = clearDash ? DashPattern.None : dash ?? before.Dash,
                 Color = color ?? before.Color,
 
                 // Clamped rather than refused, the way a width is: an opacity outside the range is a caller

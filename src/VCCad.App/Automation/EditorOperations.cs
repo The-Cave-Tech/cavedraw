@@ -1611,10 +1611,7 @@ public static class EditorOperations
                     }
                 }
 
-                if (edits.Count > 0)
-                {
-                    ctx.Session.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Fill rule", edits));
-                }
+                ExecuteAll(ctx, edits, "Fill rule");
 
                 return Summary(ctx);
             });
@@ -1673,11 +1670,7 @@ public static class EditorOperations
                         "give one a radial ramp first.");
                 }
 
-                if (edits.Count > 0)
-                {
-                    ctx.Session.Execute(
-                        edits.Count == 1 ? edits[0] : new CompositeCommand("Gradient focal point", edits));
-                }
+                ExecuteAll(ctx, edits, "Gradient focal point");
 
                 return new
                 {
@@ -1694,7 +1687,9 @@ public static class EditorOperations
             "blend?:normal|multiply|screen|darken|lighten|overlay|color-dodge|color-burn|hard-light|soft-light|" +
             "difference|exclusion|hue|saturation|color|luminosity. index edits one stroke of the stack " +
             "and an omitted member is left as that stroke has it; without index the whole path is restroked and an " +
-            "omitted member takes the default named above. opacity and blend are per stroke and need an index: " +
+            "omitted member takes the default named above. An empty dash - dash:[] - is a request for a solid " +
+            "line, not a member that was left out, so it is how a driver takes a dashed stroke back to Solid. " +
+            "opacity and blend are per stroke and need an index: " +
             "they are what makes a path a thin line under a translucent highlight rather than one stroke.",
             (ctx, p) =>
             {
@@ -1704,6 +1699,17 @@ public static class EditorOperations
                 StrokeCap cap = ParseEnum(p.GetString("cap"), StrokeCap.Butt);
                 StrokeJoin join = ParseEnum(p.GetString("join"), StrokeJoin.Miter);
                 StrokeAlignment alignment = ParseEnum(p.GetString("alignment"), StrokeAlignment.Center);
+                // **A given-but-empty dash is a request, not an absence.** `dash:[4,3]` asks for a pattern and
+                // `dash:[]` asks for no pattern at all - the same "empty means none" reading `style.setWidthProfile`
+                // takes of its points list. Reading both as "not given" left the one dash state a driver could not
+                // state: the Dash combo can go back to Solid and a dashed stroke could never be made solid through
+                // the registry. The absent member is still "leave it as the stroke has it", which is what `Given`
+                // is for; `clearDash` carries the deliberate empty through to the session, because an empty
+                // DashPattern and an unstated one are the same value and cannot be told apart there.
+                bool clearDash = p.ValueKind == JsonValueKind.Object
+                    && p.TryGetProperty("dash", out JsonElement askedForDash)
+                    && askedForDash.ValueKind == JsonValueKind.Array
+                    && askedForDash.GetArrayLength() == 0;
                 DashPattern? dash = null;
                 if (p.TryGetProperty("dash", out JsonElement d) && d.ValueKind == JsonValueKind.Array)
                 {
@@ -1750,7 +1756,8 @@ public static class EditorOperations
                         dash,
                         color,
                         Given(p, "opacity") ? p.GetDouble("opacity") : null,
-                        blend);
+                        blend,
+                        clearDash);
                 }
                 else
                 {
@@ -2126,11 +2133,19 @@ public static class EditorOperations
             "Give the selected paths' strokes a tablet response. target is width (the default), opacity, " +
             "scatterScale, calligraphicAngle or smoothing. preset is linear, soft, hard or exponential, or pass " +
             "curve:[x1,y1,x2,y2] for a custom one - the two control points of a curve from (0,0) to (1,1), the " +
-            "same four numbers a curve editor drags. strokeIndex picks one stroke of the stack, counted from the " +
-            "bottom, and defaults to every stroke; a path whose stack is shorter is skipped. One undo step per path.",
-            "target?:string, preset?:string, curve?:[x1,y1,x2,y2], strokeIndex?:number",
+            "same four numbers a curve editor drags. enabled defaults to true, which is what switching a target " +
+            "on is; enabled:false switches that target off and **leaves every other target as it was**, which is " +
+            "what the pane's checkbox does and what style.clearDynamics cannot say - clearing removes the whole " +
+            "response rather than recording that one target is off. strokeIndex picks one stroke of the stack, " +
+            "counted from the bottom, and defaults to every stroke; a path whose stack is shorter is skipped. " +
+            "One undo step per path.",
+            "target?:string, preset?:string, curve?:[x1,y1,x2,y2], enabled?:boolean, strokeIndex?:number",
             (ctx, p) =>
             {
+                // Read rather than hard-coded: `enabled:false` was silently ignored, and a target that ends up
+                // **on** when the caller asked for off is worse than a refusal, because nothing is reported. The
+                // other targets are carried over by the session, so switching width off does not disturb opacity.
+                bool enabled = p.ValueKind == JsonValueKind.Object ? p.GetBool("enabled", true) : true;
                 string targetName = p.GetString("target") ?? "width";
                 DynamicsTarget target = targetName.ToLowerInvariant() switch
                 {
@@ -2154,7 +2169,7 @@ public static class EditorOperations
                     return new
                     {
                         target = target.ToString(),
-                        changed = ctx.Session.SetDynamicsAt(at, target, enabled: true, curve),
+                        changed = ctx.Session.SetDynamicsAt(at, target, enabled, curve),
                         strokeIndex = at,
                     };
                 }
@@ -2170,7 +2185,7 @@ public static class EditorOperations
                         StrokeSpec existingStroke = stack[i];
                         var spec = new DynamicsSpec(Enum.GetValues<DynamicsTarget>().Select(existing =>
                             existing == target
-                                ? new DynamicsTargetSpec(true, curve)
+                                ? new DynamicsTargetSpec(enabled, curve)
                                 : existingStroke.Dynamics?.For(existing) ?? DynamicsTargetSpec.Off));
 
                         stack[i] = existingStroke with { Dynamics = spec };
@@ -3006,7 +3021,9 @@ public static class EditorOperations
             "picks one stroke of the stack, counted from the bottom, and defaults to every stroke; a path whose " +
             "stack is shorter is skipped. Applying a brush replaces the width the stroke would otherwise draw " +
             "with the nib's, because the width a nib lays down depends on the direction of travel - a width " +
-            "profile alongside it is not consulted. One undo step per path.",
+            "profile alongside it is not consulted. One undo step for the whole gesture, however many paths it " +
+            "touches: choosing a brush over a two-path selection is one click, so one Undo has to take it back " +
+            "off both - the same composition `style.setStroke` and `style.setWidthProfile` already do.",
             "name:string, strokeIndex?:number",
             (ctx, p) =>
             {
@@ -3015,8 +3032,8 @@ public static class EditorOperations
                     ?? throw new EditorOperationException($"there is no brush called '{name}'");
 
                 int? at = OptionalStrokeIndex(p);
-                int paths = 0;
-                int touched = 0;
+                var edits = new List<IUndoableCommand>();
+                int strokes = 0;
 
                 foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
                 {
@@ -3031,28 +3048,31 @@ public static class EditorOperations
 
                         stack[i] = stack[i] with { Brush = brush };
                         changed = true;
-                        touched++;
+                        strokes++;
                     }
 
                     if (changed)
                     {
-                        ctx.Session.Execute(new SetStrokesCommand(path, stack, "Apply brush"));
-                        paths++;
+                        edits.Add(new SetStrokesCommand(path, stack, "Apply brush"));
                     }
                 }
 
-                return new { applied = name, paths, strokes = touched };
+                // Composite rather than one Execute per path, which is what made a two-path selection cost two
+                // undo steps. A gesture is one entry on the stack or the undo button takes half of it back.
+                ExecuteAll(ctx, edits, "Apply brush");
+                return new { applied = name, paths = edits.Count, strokes };
             });
 
         Add("brush.clear",
             "Take the brush off the selected paths' strokes, which leaves the stroke's own width and profile - " +
             "what the stroke drew before a brush was applied. strokeIndex picks one stroke of the stack, counted " +
-            "from the bottom, and defaults to every stroke. One undo step per path.",
+            "from the bottom, and defaults to every stroke. One undo step for the whole gesture, for the reason " +
+            "brush.apply is: clearing a brush over a selection is one act, not one per path it lands on.",
             "strokeIndex?:number",
             (ctx, p) =>
             {
                 int? at = OptionalStrokeIndex(p);
-                int paths = 0;
+                var edits = new List<IUndoableCommand>();
 
                 foreach (PathItem path in ctx.Session.SelectedPaths().ToList())
                 {
@@ -3071,12 +3091,12 @@ public static class EditorOperations
 
                     if (changed)
                     {
-                        ctx.Session.Execute(new SetStrokesCommand(path, stack, "Clear brush"));
-                        paths++;
+                        edits.Add(new SetStrokesCommand(path, stack, "Clear brush"));
                     }
                 }
 
-                return new { cleared = paths, strokeIndex = at };
+                ExecuteAll(ctx, edits, "Clear brush");
+                return new { cleared = edits.Count, strokeIndex = at };
             });
 
         Add("brush.rename",
@@ -7829,6 +7849,26 @@ public static class EditorOperations
     /// </summary>
     private static bool Given(JsonElement p, string name)
         => p.ValueKind == JsonValueKind.Object && p.TryGetProperty(name, out _);
+
+    /// <summary>
+    /// Runs a set of per-path edits as **one** undo step, or nothing at all when there are none.
+    ///
+    /// The composition is the point, not a convenience. A gesture that lands on a selection - choosing a brush,
+    /// switching a fill rule, dragging a gradient focus - is one act to the person who made it, so it has to be one
+    /// entry on the stack or Undo takes half of it back. `CompositeCommand` is exactly that batch, and the loop is
+    /// the same one <c>DocumentSession.ExecuteIfAny</c> builds, so a driver and a pane cannot end up with different
+    /// undo depths for the same edit. An empty list adds no command: a step that undoes to where it started reads as
+    /// "undo did nothing".
+    /// </summary>
+    private static void ExecuteAll(AutomationContext ctx, List<IUndoableCommand> edits, string label)
+    {
+        if (edits.Count == 0)
+        {
+            return;
+        }
+
+        ctx.Session.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand(label, edits));
+    }
 
     /// <summary>
     /// The live path effects an imported document carries that this build did not read, and the warning that says
