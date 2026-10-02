@@ -507,6 +507,12 @@ public static class TextLayoutEngine
             // alignment has already moved the *column* across.
             double pen = vertical ? line.Top : caretX[start];
 
+            // **Where the last character that took a place of its own was drawn.** A combining mark is drawn at
+            // that character - the base it belongs to - and not after it: the mark takes no advance, so by the
+            // time the pen reaches it the pen has already moved past the base, and drawing it there is exactly
+            // the gap the file does not have. The pen itself is left alone, which the mark's zero advance does.
+            double basePen = pen;
+
             for (int k = 0; k < order.Length; k++)
             {
                 int index = order[k];
@@ -520,6 +526,8 @@ public static class TextLayoutEngine
                 // line is this number and nothing is measured a second time. Measuring again here is the same
                 // arithmetic done twice, and it disagrees the moment the two calls see different faces.
                 double advance = widths[index];
+                bool mark = TextMeasurement.IsCombiningMark(CharAt(text, index));
+                double inline = mark ? basePen : pen;
                 bool turned = Math.Abs(rotation[index]) > 1e-9;
 
                 // **The shift moves the glyph across its baseline and never moves the pen.** `baseline-shift`
@@ -546,9 +554,11 @@ public static class TextLayoutEngine
                     // column instead, so its advance is the line box's own size - which is what makes a column of
                     // upright CJK run at a line's pitch. A column's baseline runs down the page, so a raised glyph
                     // sits to the right of its column line rather than above it: see `ShiftUp`.
-                    double step = turned ? advance : line.Height;
+                    // A mark takes no step either: in a column an *upright* glyph advances by the line's own pitch,
+                    // so a mark that kept that step would push the column down by a whole line for nothing.
+                    double step = mark ? 0.0 : turned ? advance : line.Height;
                     glyphs.Add(new GlyphBox(
-                        index, pen, line.Cross, step, line.Cross + ShiftUp(vertical: true, shift) + across, pen,
+                        index, inline, line.Cross, step, line.Cross + ShiftUp(vertical: true, shift) + across, inline,
                         rotation[index], runOf[index], PieceStart(text, index)));
                     pen += step;
                 }
@@ -557,10 +567,15 @@ public static class TextLayoutEngine
                     // A horizontal baseline runs right, so a raised glyph sits above the line: -y in this y-down
                     // frame. The pen, the advance and the line box are untouched.
                     glyphs.Add(new GlyphBox(
-                        index, pen, line.Cross + line.Ascent, advance, pen,
+                        index, inline, line.Cross + line.Ascent, advance, inline,
                         line.Cross + line.Ascent + ShiftUp(vertical: false, shift) + across, 0.0,
                         runOf[index], PieceStart(text, index)));
                     pen += advance;
+                }
+
+                if (!mark)
+                {
+                    basePen = inline;
                 }
             }
         }

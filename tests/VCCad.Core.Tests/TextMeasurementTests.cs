@@ -125,6 +125,51 @@ public class TextMeasurementTests : IDisposable
         Assert.Equal(25, block.BoundingBox().Height, 3);
     }
 
+    /// <summary>
+    /// A combining mark is drawn at the character before it, not after it.
+    ///
+    /// A mark is a code point of its own that belongs to the base it follows, so it takes no place along the
+    /// line: Unicode calls the non-spacing and enclosing marks `Mn` and `Me`, and SVG's own text model draws
+    /// both at their base. The estimate gave *every* character the same width, which is right for a letter and
+    /// wrong for a mark - so "e" plus a combining acute measured two places wide with a gap the mark never had,
+    /// and the "x" after them landed at 57.6pt on a 48pt block where the file put it at 28.8pt.
+    ///
+    /// The three inline positions are the whole claim: the mark sits at the base's place, and the letter after
+    /// it starts one place along rather than two.
+    /// </summary>
+    [Fact]
+    public void ACombiningMarkIsDrawnAtItsBaseRatherThanAfterIt()
+    {
+        TextMeasurement.Current = null;
+
+        // Two places wide at 10pt, not three: "e", the mark at "e"'s own place, then "x".
+        Assert.Equal(12, Block("e\u0301x").BoundingBox().Width, 3);
+
+        TextLayout laid = TextLayoutEngine.Compute(Block("e\u0301x"));
+        Assert.Equal(3, laid.Glyphs.Count);
+        Assert.Equal(0, laid.Glyphs[0].Inline, 3);
+        Assert.Equal(0, laid.Glyphs[1].Inline, 3);
+        Assert.Equal(6, laid.Glyphs[2].Inline, 3);
+    }
+
+    /// <summary>
+    /// Several marks on one base all sit on it, and the pen still moves one place afterwards.
+    ///
+    /// A mark that kept any width of its own would be invisible on its own and obvious in a stack: the second
+    /// mark would push the third, and the base's own letter would end up under the wrong one.
+    /// </summary>
+    [Fact]
+    public void SeveralCombiningMarksOnOneBaseDoNotDrift()
+    {
+        TextMeasurement.Current = null;
+
+        TextLayout laid = TextLayoutEngine.Compute(Block("e\u0301\u0302x"));
+        Assert.Equal(4, laid.Glyphs.Count);
+        Assert.Equal(0, laid.Glyphs[1].Inline, 3);
+        Assert.Equal(0, laid.Glyphs[2].Inline, 3);
+        Assert.Equal(6, laid.Glyphs[3].Inline, 3);
+    }
+
     [Fact]
     public void AnEmptyBlockHasFiniteBounds()
     {

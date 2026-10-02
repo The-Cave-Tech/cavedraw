@@ -1,3 +1,4 @@
+using System.Globalization;
 using VCCad.Core.Model;
 
 namespace VCCad.Core.Text;
@@ -69,8 +70,43 @@ public static class TextMeasurement
     /// size and no run — a caret, a selection highlight, a face being resolved before its
     /// text exists. Those callers used to write the constant out again, which is how this
     /// class came to claim there were three numbers while six sites held their own copy.
+    ///
+    /// A character also has one way not to be guessed at: see
+    /// <see cref="EstimateFor(TextRun, char)"/>, which a combining mark answers with no
+    /// advance at all.
     /// </summary>
     public static double Estimate(TextRun run) => run.FontSize * 0.6;
+
+    /// <summary>
+    /// Whether a character is drawn at the character before it rather than after it.
+    ///
+    /// A combining mark is a code point of its own that belongs to the base it follows: the
+    /// face places it over that base and the pen does not move. Unicode calls the
+    /// non-spacing and enclosing marks `Mn` and `Me`, and SVG's text model draws both at
+    /// their base, so one predicate answers for both.
+    ///
+    /// This is a fact about the character and not a guess, which is why it is asked even
+    /// when a shaper answered the rest: it decides where a mark the face drew *nothing* for
+    /// still has to sit.
+    /// </summary>
+    public static bool IsCombiningMark(char c)
+        => CharUnicodeInfo.GetUnicodeCategory(c)
+            is UnicodeCategory.NonSpacingMark or UnicodeCategory.EnclosingMark;
+
+    /// <summary>
+    /// The last-resort advance for one character of a run: none for a combining mark, the
+    /// estimate otherwise.
+    ///
+    /// The estimate gives every character the same width, which is right for a letter and
+    /// wrong for a mark — a mark that took a place of its own left a gap the file never had
+    /// and pushed the letter after it a whole character too far along. "e" plus a combining
+    /// acute measured two places wide at 48pt, so the "x" after them landed at 57.6pt where
+    /// the file put it at 28.8pt.
+    ///
+    /// A mark that follows no base still takes no place, which is what the file's own text
+    /// says: SVG draws such a mark at the pen, with nothing before it.
+    /// </summary>
+    public static double EstimateFor(TextRun run, char c) => IsCombiningMark(c) ? 0.0 : Estimate(run);
 
     /// <summary>The last-resort advance, in em. See <see cref="Estimate"/>.</summary>
     public const double EstimatedAdvanceEm = 0.6;
@@ -116,7 +152,7 @@ public static class TextMeasurement
         var estimate = new double[n];
         for (int i = 0; i < n; i++)
         {
-            estimate[i] = TextMeasurement.Estimate(run);
+            estimate[i] = EstimateFor(run, run.Text[i]);
         }
 
         return estimate;
