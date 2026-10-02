@@ -735,4 +735,33 @@ public class SvgTextTests
         Assert.Equal(1.5, item.LineSpacing, 9);
         Assert.Equal("a\nb", Assert.Single(item.Runs).Text);
     }
+
+    /// <summary>
+    /// **A combining mark in the file is drawn at the base it belongs to, not after it.** A mark is a code point of
+    /// its own, so the failure this is written against produces a file that reads perfectly and a page with the
+    /// acute floating beside the "e" - or sitting on the next letter.
+    ///
+    /// The assertion is the geometry and not the character: the mark's own place along the line is the base's, and
+    /// the letter after the two of them starts further along than the base rather than at it. The face is fixed here
+    /// on purpose, because placement is the model's rule and must not depend on which font happens to answer - the
+    /// face decides how far the pen moves, the file's text decides where a mark is drawn.
+    /// </summary>
+    [Fact]
+    public void ACombiningMarkInTheFileIsDrawnAtItsBase()
+    {
+        SvgImportResult result = Read("<text x=\"10\" y=\"20\" font-size=\"10\" font-family=\"Test\">e\u0301x</text>");
+        TextItem text = Block(result);
+
+        Assert.Equal("e\u0301x", Assert.Single(text.Runs).Text);
+
+        Measured(4, () =>
+        {
+            TextLayout laid = TextLayoutEngine.Compute(text);
+            Assert.Equal(3, laid.Glyphs.Count);
+            Assert.Equal(laid.Glyphs[0].Inline, laid.Glyphs[1].Inline, 3);
+            Assert.True(
+                laid.Glyphs[2].Inline > laid.Glyphs[0].Inline,
+                $"the letter after the pair starts at {laid.Glyphs[2].Inline}, which is not past the base");
+        });
+    }
 }
