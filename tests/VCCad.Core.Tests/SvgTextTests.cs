@@ -470,9 +470,10 @@ public class SvgTextTests
     /// Each is named here rather than checked as "a warning appeared", because the point of the report is that a
     /// person can act on the one that matters to them.
     ///
-    /// Six of these used to be in the list and are not any more: `letter-spacing`, `word-spacing`, `font-stretch`
+    /// Seven of these used to be in the list and are not any more: `letter-spacing`, `word-spacing`, `font-stretch`
     /// and `font-variant` have fields on the run as of #147 and are resolved onto it instead; `writing-mode` and
-    /// `direction` have fields on the block as of #127 and are laid out instead. Their half of this test lives in
+    /// `direction` have fields on the block as of #127 and are laid out instead; and `baseline-shift` has a field on
+    /// the run as of #128 and is laid out too. Their half of this test lives in
     /// `SvgTextModelExtensionTests` and `SvgWritingModeTests`, where the value that arrives on the model is
     /// asserted. The width and the variant are still *named* in a warning, as of #161, but for a different fact:
     /// the value is kept and no face is chosen by it, so the run draws in the family's own face.
@@ -499,10 +500,12 @@ public class SvgTextTests
         Assert.Equal(TextWritingMode.VerticalRl, Block(result).WritingMode);
         Assert.Equal(TextDirection.RightToLeft, Block(result).Direction);
 
+        // And the baseline shift, which the layout acts on as of #128. `super` is half an em.
+        Assert.Equal(0.5, run.BaselineShift, 9);
+
         string[] expected =
         {
             "text-decoration=\"underline\"",
-            "baseline-shift=\"super\"",
             "dominant-baseline=\"middle\"",
             "font-weight=\"600\"",
             "font-style=\"oblique\"",

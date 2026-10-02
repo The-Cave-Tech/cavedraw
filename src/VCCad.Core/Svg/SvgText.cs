@@ -249,7 +249,7 @@ internal sealed record SvgTextStyle(
         // CSS's `super` and `sub`, for which no specification gives a number. Resolved against the run's own size,
         // because that is the only length the reading has: see `ReadBaselineShift`.
         double baselineShift = inherited.BaselineShift;
-        if (ReadBaselineShift(Value("baseline-shift"), warn) is { } writtenShift)
+        if (ReadBaselineShift(Value("baseline-shift"), size, warn) is { } writtenShift)
         {
             baselineShift = writtenShift;
         }
@@ -413,17 +413,23 @@ internal sealed record SvgTextStyle(
     /// nothing, which is "keep what was inherited".
     ///
     /// **The property states a length or a percentage of the line's height, and the model keeps a fraction of the
-    /// em.** Those are the same statement about a small shift, which is what a superscript is: the reader resolves
-    /// `em`, `ex` and a bare number against the run's own size, which is the one length a reader of a text element
-    /// has in hand, and a percentage is then the same fraction. CSS 2.1 names its `super` and `sub` "the proper
-    /// position" and gives no number at all, so the value this reader gives a file that names one is the one every
-    /// layout engine gives it - half an em up or down (see <see cref="Super"/>/<see cref="Sub"/>) - and it is
-    /// written down here because it is the reader's choice and not the specification's.
+    /// em.** A bare number is a length in the file's own user units, exactly as every other bare number in an SVG
+    /// file is - and the writer emits this very property that way, so reading it as anything else loses a factor of
+    /// the font size on the way in and then again on the way out. `em` is the run's own em and `ex` half of one,
+    /// both resolved here because the run's size is the context text has and a bare length elsewhere in the file
+    /// does not; a percentage is per cent of the line's height, which is the same fraction of the em for the small
+    /// shifts a baseline is for. The layout then multiplies the fraction by the run's own size, so the shift moves
+    /// with the size it belongs to.
+    ///
+    /// CSS 2.1 names its `super` and `sub` "the proper position" and gives no number at all, so the value this
+    /// reader gives a file that names one is the one every layout engine gives it - half an em up or down (see
+    /// <see cref="Super"/>/<see cref="Sub"/>) - and it is written down here because it is the reader's choice and
+    /// not the specification's.
     ///
     /// `baseline` is the initial value and is kept as absence, so a file that says nothing about a baseline and one
     /// that says `baseline` hold the same run.
     /// </summary>
-    private static double? ReadBaselineShift(string? value, Action<string>? warn)
+    private static double? ReadBaselineShift(string? value, double fontSize, Action<string>? warn)
     {
         if (value is null || IsCssWideKeyword(value))
         {
@@ -447,11 +453,15 @@ internal sealed record SvgTextStyle(
             end--;
         }
 
+        // The scale that turns a written number into an em fraction. A bare number is a length in the file's own
+        // units, so it is divided by the size in force - the one length a text element gives a reader.
         string unit = trimmed[end..].ToLowerInvariant();
         double scale = unit switch
         {
-            "" or "px" or "em" or "%" => 1.0,
+            "" or "px" => fontSize > 0 ? 1.0 / fontSize : 0.0,
+            "em" => 1.0,
             "ex" => 0.5,
+            "%" => 0.01,
             _ => 0.0,
         };
 
@@ -459,9 +469,7 @@ internal sealed record SvgTextStyle(
             double.TryParse(trimmed[..end].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture,
                 out double parsed))
         {
-            // A percentage is per cent of the line's height and a bare number is that many ems; both are the same
-            // fraction of the em for the purpose of moving a baseline, and the layout multiplies by the run's size.
-            return unit == "%" ? parsed / 100.0 : parsed * scale;
+            return parsed * scale;
         }
 
         warn?.Invoke($"baseline-shift=\"{value}\" is not a baseline this reader can resolve");
