@@ -23,8 +23,11 @@ namespace VCCad.App.Views.Panes;
 /// </list>
 ///
 /// Face members (family, size, weight, slant) are read **at the inspected run**, because the model holds them per
-/// run. Content, colour, alignment and paragraph style are read from the block, because the model holds one of each
-/// per block. A run can carry its own colour (TextRun.Color, #161), so a colour change inside one block is expressible and the canvas and the exporter both read it; this summary reports the colour the blocks agree on.
+/// run, and so are the four the model gained for tracking and face selection - letter spacing, word spacing, font
+/// stretch and font variant (#147). Content, colour, alignment and paragraph style are read from the block, because
+/// the model holds one of each per block. A run can carry its own colour (TextRun.Color, #161), so a colour change
+/// inside one block is expressible and the canvas and the exporter both read it; this summary reports the colour the
+/// blocks agree on.
 /// </summary>
 public sealed record TextSummary(
     int Blocks,
@@ -50,7 +53,15 @@ public sealed record TextSummary(
     double? RotationDegrees,
     bool RotationMixed,
     double? FrameWidth,
-    bool FrameWidthMixed)
+    bool FrameWidthMixed,
+    double? LetterSpacing,
+    bool LetterSpacingMixed,
+    double? WordSpacing,
+    bool WordSpacingMixed,
+    string? FontStretch,
+    bool FontStretchMixed,
+    string? FontVariant,
+    bool FontVariantMixed)
 {
     /// <summary>Whether the selection has nothing to describe - no selected text block.</summary>
     public bool IsEmpty => Blocks == 0;
@@ -58,7 +69,8 @@ public sealed record TextSummary(
     /// <summary>Whether any member disagrees across the selection.</summary>
     public bool IsMixed => ContentMixed || FamilyMixed || FontSizeMixed || BoldMixed || ItalicMixed
         || ColorMixed || AlignmentMixed || LineSpacingMixed || ParagraphSpacingMixed
-        || RotationMixed || FrameWidthMixed;
+        || RotationMixed || FrameWidthMixed || LetterSpacingMixed || WordSpacingMixed
+        || FontStretchMixed || FontVariantMixed;
 
     /// <summary>
     /// Summarises the blocks at <paramref name="runIndex"/>, which names the run the face members are read from.
@@ -85,7 +97,8 @@ public sealed record TextSummary(
         if (blocks.Count == 0)
         {
             return new TextSummary(0, 0, null, false, null, false, null, false, null, false, null, false,
-                null, false, null, false, null, false, null, false, null, false, null, false);
+                null, false, null, false, null, false, null, false, null, false, null, false,
+                null, false, null, false, null, false, null, false);
         }
 
         TextItem first = blocks[0];
@@ -102,14 +115,25 @@ public sealed record TextSummary(
         bool sizeMixed = false;
         bool boldMixed = false;
         bool italicMixed = false;
+        bool letterSpacingMixed = false;
+        bool wordSpacingMixed = false;
+        bool stretchMixed = false;
+        bool variantMixed = false;
 
         if (runs.Count > 0)
         {
             TextRun firstRun = runs[0];
+
+            // Face is per run, and so are tracking, word spacing, stretch and variant: #147 put all of them on the
+            // run, so they are read at the inspected run exactly as family, size, weight and slant are.
             familyMixed = !runs.All(r => string.Equals(r.FontFamily, firstRun.FontFamily, StringComparison.Ordinal));
             sizeMixed = !runs.All(r => Math.Abs(r.FontSize - firstRun.FontSize) < 1e-9);
             boldMixed = !runs.All(r => r.Bold == firstRun.Bold);
             italicMixed = !runs.All(r => r.Italic == firstRun.Italic);
+            letterSpacingMixed = !runs.All(r => Math.Abs(r.LetterSpacing - firstRun.LetterSpacing) < 1e-9);
+            wordSpacingMixed = !runs.All(r => Math.Abs(r.WordSpacing - firstRun.WordSpacing) < 1e-9);
+            stretchMixed = !runs.All(r => string.Equals(r.FontStretch, firstRun.FontStretch, StringComparison.Ordinal));
+            variantMixed = !runs.All(r => string.Equals(r.FontVariant, firstRun.FontVariant, StringComparison.Ordinal));
         }
 
         return new TextSummary(
@@ -136,7 +160,15 @@ public sealed record TextSummary(
             rotationMixed ? null : first.RotationRadians * 180.0 / Math.PI,
             rotationMixed,
             frameWidthMixed ? null : first.FrameWidth,
-            frameWidthMixed);
+            frameWidthMixed,
+            letterSpacingMixed ? null : runs.Count > 0 ? runs[0].LetterSpacing : null,
+            letterSpacingMixed,
+            wordSpacingMixed ? null : runs.Count > 0 ? runs[0].WordSpacing : null,
+            wordSpacingMixed,
+            stretchMixed ? null : runs.Count > 0 ? runs[0].FontStretch : null,
+            stretchMixed,
+            variantMixed ? null : runs.Count > 0 ? runs[0].FontVariant : null,
+            variantMixed);
     }
 
     /// <summary>

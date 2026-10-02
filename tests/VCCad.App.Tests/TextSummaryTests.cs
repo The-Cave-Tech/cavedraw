@@ -115,4 +115,84 @@ public class TextSummaryTests
         Assert.False(summary.IsMixed);
         Assert.Equal(0, summary.Runs);
     }
+
+    /// <summary>
+    /// **Tracking, word spacing, stretch and variant are per-run members read at the inspected run** - the four #147
+    /// put on <see cref="TextRun"/>, which the panel has to describe like family and size. A block whose own runs
+    /// disagree about them is a disagreement, and a block with no run at the index has nothing to report rather than a
+    /// value that happens to be zero.
+    /// </summary>
+    [Fact]
+    public void SpacingAndFaceRequestsAreReadAtTheInspectedRun()
+    {
+        TextItem longer = Block("heading", "Nimbus Sans", extraRuns: new[] { ("caption", "Nimbus Roman") });
+        longer.Runs[0].LetterSpacing = 1.5;
+        longer.Runs[0].WordSpacing = 2.0;
+        longer.Runs[0].FontStretch = "condensed";
+        longer.Runs[0].FontVariant = "small-caps";
+        longer.Runs[1].LetterSpacing = 4.0;
+        longer.Runs[1].WordSpacing = 0.5;
+        longer.Runs[1].FontStretch = "expanded";
+
+        TextItem shorter = Block("alone", "Nimbus Sans");
+        shorter.Runs[0].LetterSpacing = 1.5;
+        shorter.Runs[0].WordSpacing = 2.0;
+        shorter.Runs[0].FontStretch = "condensed";
+        shorter.Runs[0].FontVariant = "small-caps";
+
+        // At index 0 the two blocks agree, so each is the common value and nothing is mixed.
+        TextSummary agreed = TextSummary.Of(new[] { longer, shorter }, 0);
+        Assert.False(agreed.LetterSpacingMixed);
+        Assert.Equal(1.5, agreed.LetterSpacing!.Value, 9);
+        Assert.False(agreed.WordSpacingMixed);
+        Assert.Equal(2.0, agreed.WordSpacing!.Value, 9);
+        Assert.False(agreed.FontStretchMixed);
+        Assert.Equal("condensed", agreed.FontStretch);
+        Assert.False(agreed.FontVariantMixed);
+        Assert.Equal("small-caps", agreed.FontVariant);
+
+        // Index 1 is the longer block's own run: the shorter block is a gap, not a disagreement, and the run the
+        // longer block does have is reported as its own value.
+        TextSummary second = TextSummary.Of(new[] { longer, shorter }, 1);
+        Assert.False(second.LetterSpacingMixed);
+        Assert.Equal(4.0, second.LetterSpacing!.Value, 9);
+        Assert.Equal("expanded", second.FontStretch);
+
+        // And nothing at all at an index neither block has.
+        TextSummary none = TextSummary.Of(new[] { longer, shorter }, 9);
+        Assert.Null(none.LetterSpacing);
+        Assert.False(none.LetterSpacingMixed);
+        Assert.Null(none.FontStretch);
+    }
+
+    /// <summary>
+    /// **A disagreement about tracking or a face request is reported as mixed with no value**, never as one block's
+    /// number offered to the whole selection - the defect the mixed readout exists to remove, one level down.
+    /// </summary>
+    [Fact]
+    public void DisagreeingSpacingAndFaceRequestsAreMixed()
+    {
+        TextItem first = Block("one");
+        first.Runs[0].LetterSpacing = 1.0;
+        first.Runs[0].WordSpacing = 1.0;
+        first.Runs[0].FontStretch = "condensed";
+        first.Runs[0].FontVariant = "small-caps";
+
+        TextItem second = Block("two");
+        second.Runs[0].LetterSpacing = 5.0;
+        second.Runs[0].WordSpacing = 3.0;
+        second.Runs[0].FontStretch = "expanded";
+
+        TextSummary summary = TextSummary.Of(new[] { first, second }, 0);
+
+        Assert.True(summary.IsMixed);
+        Assert.True(summary.LetterSpacingMixed);
+        Assert.Null(summary.LetterSpacing);
+        Assert.True(summary.WordSpacingMixed);
+        Assert.Null(summary.WordSpacing);
+        Assert.True(summary.FontStretchMixed);
+        Assert.Null(summary.FontStretch);
+        Assert.True(summary.FontVariantMixed);
+        Assert.Null(summary.FontVariant);
+    }
 }

@@ -2236,18 +2236,7 @@ public static class EditorOperations
                 // **on** when the caller asked for off is worse than a refusal, because nothing is reported. The
                 // other targets are carried over by the session, so switching width off does not disturb opacity.
                 bool enabled = p.ValueKind == JsonValueKind.Object ? p.GetBool("enabled", true) : true;
-                string targetName = p.GetString("target") ?? "width";
-                DynamicsTarget target = targetName.ToLowerInvariant() switch
-                {
-                    "width" => DynamicsTarget.Width,
-                    "opacity" => DynamicsTarget.Opacity,
-                    "scatterscale" or "scatter_scale" => DynamicsTarget.ScatterScale,
-                    "calligraphicangle" or "calligraphic_angle" or "angle" => DynamicsTarget.CalligraphicAngle,
-                    "smoothing" or "speed" => DynamicsTarget.Smoothing,
-                    _ => throw new EditorOperationException(
-                        $"'{targetName}' is not a dynamics target; use width, opacity, scatterScale, " +
-                        "calligraphicAngle or smoothing"),
-                };
+                DynamicsTarget target = ReadDynamicsTarget(p);
 
                 DynamicsCurve curve = ReadDynamicsCurve(p);
 
@@ -3061,11 +3050,13 @@ public static class EditorOperations
                 .ToArray());
 
         Add("brush.create",
-            "Create a reusable brush in the document. Three kinds: 'calligraphic', an elliptical nib with an angle, " +
+            "Create a reusable brush in the document. Four kinds: 'calligraphic', an elliptical nib with an angle, " +
             "a roundness and a diameter; 'art', which maps a piece of the document's own artwork along the " +
-            "stroke instead of stroking a line; and 'pattern', which lays a tile set along it - a side tile " +
+            "stroke instead of stroking a line; 'pattern', which lays a tile set along it - a side tile " +
             "repeated between the turns, a corner tile at each turn, and one start and one end tile at the two " +
-            "ends. For a nib, angle is the direction the nib's long axis points, in " +
+            "ends; and 'scatter', which repeats one piece of artwork along it, each copy drawn with its own turn, " +
+            "size and offset from a range around the value stated. For a nib, angle is the direction the nib's long " +
+            "axis points, in " +
             "degrees from the +X axis towards +Y, the same sense a path direction is measured in; roundness is " +
             "the nib's short axis as a fraction of its long one, so 1 is a circular pen and a small number is a " +
             "flat nib. For an art brush, 'asset' is the id of the document item whose artwork is mapped - a group, " +
@@ -3077,15 +3068,27 @@ public static class EditorOperations
             "drawn across the stroke, 'spacing' is the gap left between consecutive side tiles and " +
             "'cornerThreshold' is how many degrees the path has to turn at a node for that node to count as a " +
             "corner. A corner slot left empty is drawn with the side tile, which is the documented fallback. " +
+            "For a scatter brush, 'asset' is the id of the item whose artwork is repeated, 'size' (or 'diameter') " +
+            "is how wide a copy is drawn across the stroke, and each of 'spacing', 'rotation', 'scale', 'offset' " +
+            "and 'opacity' is a value a copy is drawn from with a range beside it - 'spacingRandomness', " +
+            "'rotationRandomness', 'scaleRandomness', 'offsetRandomness' and 'opacityRandomness'. Spacing is the " +
+            "pitch between copies and offset is how far a copy sits across the path, both in the stroke's own " +
+            "units; rotation is in degrees; scale is a multiple of the brush's size; opacity is in 0..1. " +
+            "The randomness is reproducible - the same document scatters the same way every render - and a range " +
+            "of zero draws the stated value exactly. Pressure moves a copy's size and opacity only if the brush is " +
+            "given tablet dynamics with brush.setDynamics. " +
             "The name has to be free: two " +
             "brushes with one name would make 'the brush called X' ambiguous, and it is the name that strokes " +
             "refer to. Creating a brush does not apply it - an asset sits in the document until something uses " +
             "it. One undo step.",
-            "name:string, kind?:calligraphic|art|pattern (default calligraphic), angle?:number, roundness?:number, " +
-            "diameter?:number, asset?:guid, size?:number (an art or pattern brush's diameter), " +
+            "name:string, kind?:calligraphic|art|pattern|scatter (default calligraphic), angle?:number, " +
+            "roundness?:number, " +
+            "diameter?:number, asset?:guid, size?:number (an art, pattern or scatter brush's diameter), " +
             "stretch?:stretchToFit|scaleProportionally|repeat, flipAcross?:bool, flipAlong?:bool, " +
             "colourisation?:none|tint|tintAndShade, shadeColour?:[r,g,b], side?:guid, start?:guid, end?:guid, " +
-            "innerCorner?:guid, outerCorner?:guid, spacing?:number, cornerThreshold?:number",
+            "innerCorner?:guid, outerCorner?:guid, spacing?:number, cornerThreshold?:number, rotation?:number, " +
+            "scale?:number, offset?:number, opacity?:number, spacingRandomness?:number, rotationRandomness?:number, " +
+            "scaleRandomness?:number, offsetRandomness?:number, opacityRandomness?:number",
             (ctx, p) =>
             {
                 string name = p.GetString("name") ?? string.Empty;
@@ -3114,6 +3117,19 @@ public static class EditorOperations
             "person reads in the brush picker and a driver reads to name one for brush.apply.",
             "",
             (ctx, _) => ctx.Document.Brushes.Select(DescribeBrush).ToArray());
+
+        Add("brush.kinds",
+            "The brush kinds this build makes, in the order the model declares them - the list brush.create accepts " +
+            "and the list a brush editor has a tab for. **Asked rather than listed**: the answer is produced by " +
+            "trying each kind against the same reader brush.create uses, so a kind that lands in the reader appears " +
+            "here without this operation being touched, and a kind the reader would refuse is never named. That is " +
+            "the difference between a picker that offers what this build can make and one that offers what some " +
+            "other build could.",
+            "",
+            (ctx, _) => Enum.GetValues<BrushKind>()
+                .Select(kind => kind.ToString().ToLowerInvariant())
+                .Where(kind => MakesBrush(kind, ctx.Document))
+                .ToArray());
 
         Add("brush.apply",
             "Apply a stored brush to the selected paths' strokes, so they are swept with its nib. strokeIndex " +
@@ -3259,20 +3275,28 @@ public static class EditorOperations
             "Change a stored brush. A nib's angle, roundness or diameter; an art brush's asset, size, stretch, " +
             "flips and colourisation; a pattern brush's size, spacing and corner threshold - its tiles are set one " +
             "at a time with brush.setTile, because a tile carries controls of its own and one operation taking " +
-            "five slots and five sets of controls would be five operations wearing a hat. Only the members given " +
-            "change. Setting 'asset' on an art brush re-points it " +
+            "five slots and five sets of controls would be five operations wearing a hat; a scatter brush's asset, " +
+            "size and its five ranged controls. Only the members given change. Setting 'asset' on an art brush or a " +
+            "scatter brush re-points it " +
             "at another item of the document rather than copying its artwork, which is what keeps the brush a " +
             "reference. The strokes that use the brush are re-pointed with it, because that is what makes it an " +
             "asset rather than a copy. One undo step.",
             "name:string, angle?:number, roundness?:number, diameter?:number, asset?:guid, size?:number, " +
             "stretch?:stretchToFit|scaleProportionally|repeat, flipAcross?:bool, flipAlong?:bool, " +
-            "colourisation?:none|tint|tintAndShade, shadeColour?:[r,g,b], spacing?:number, cornerThreshold?:number",
+            "colourisation?:none|tint|tintAndShade, shadeColour?:[r,g,b], spacing?:number, cornerThreshold?:number, " +
+            "rotation?:number, scale?:number, offset?:number, opacity?:number, spacingRandomness?:number, " +
+            "rotationRandomness?:number, scaleRandomness?:number, offsetRandomness?:number, opacityRandomness?:number",
             (ctx, p) =>
             {
                 string name = p.GetString("name") ?? string.Empty;
                 CadDocument document = ctx.Document;
                 BrushSpec brush = document.FindBrush(name)
                     ?? throw new EditorOperationException($"there is no brush called '{name}'");
+
+                // A scatter brush's own members are edited as the one spec they are, and only when the caller
+                // touched one of them: building the spec unconditionally would turn "change the size" into "state
+                // every scatter control", which is a change the caller did not ask for.
+                bool scatterGiven = brush.IsScatter && ScatterParametersGiven(p);
 
                 var updated = brush with
                 {
@@ -3283,21 +3307,59 @@ public static class EditorOperations
                         : Given(p, "size")
                             ? Math.Max(0.0, p.GetDouble("size", brush.Diameter))
                             : brush.Diameter,
-                    ArtAsset = Given(p, "asset") ? ReadAsset(p, document) : brush.ArtAsset,
+                    ArtAsset = Given(p, "asset") && !brush.IsScatter ? ReadAsset(p, document) : brush.ArtAsset,
                     Stretch = Given(p, "stretch") ? ReadStretch(p) : brush.Stretch,
                     FlipAcross = Given(p, "flipAcross") ? p.GetBool("flipAcross", brush.FlipAcross) : brush.FlipAcross,
                     FlipAlong = Given(p, "flipAlong") ? p.GetBool("flipAlong", brush.FlipAlong) : brush.FlipAlong,
                     Colourisation = Given(p, "colourisation") ? ReadColourisation(p) : brush.Colourisation,
                     ShadeColour = Given(p, "shadeColour") ? ReadShadeColour(p) : brush.ShadeColour,
-                    PatternSpacing = Given(p, "spacing")
+
+                    // 'spacing' is a word both tile-laying kinds use for their own gap: the pattern brush's between
+                    // side tiles, the scatter brush's between copies. The kind decides which member it reaches, so a
+                    // caller says 'spacing' and means the same thing whichever brush they are editing.
+                    PatternSpacing = Given(p, "spacing") && !brush.IsScatter
                         ? Math.Max(0.0, p.GetDouble("spacing", brush.PatternSpacing))
                         : brush.PatternSpacing,
                     PatternCornerThresholdDegrees = Given(p, "cornerThreshold")
                         ? Math.Clamp(p.GetDouble("cornerThreshold", brush.PatternCornerThresholdDegrees), 0.0, 180.0)
                         : brush.PatternCornerThresholdDegrees,
+
+                    ScatterSpec = scatterGiven ? EditedScatter(p, brush, document) : brush.ScatterSpec,
                 };
 
                 return ApplyBrushEdit(ctx, document, brush, name, updated, "Edit brush");
+            });
+
+        Add("brush.setDynamics",
+            "Switch one of a stored brush's tablet responses on or off, and set the curve it follows. The targets " +
+            "are the pen's own: 'scatterScale' sizes a scatter brush's copies with pressure and 'opacity' fades " +
+            "them, which is the pair a scatter brush answers to. One target is set at a time and the rest keep what " +
+            "they had, for the reason style.setDynamics gives: switching one on must not switch another off. A curve " +
+            "is either a preset or four numbers - x1, y1, x2, y2 - and 'enabled':false switches the target off while " +
+            "keeping its curve. The strokes that use the brush are re-pointed with it. One undo step.",
+            "name:string, target:width|opacity|scatterScale|calligraphicAngle|smoothing, enabled?:bool, " +
+            "preset?:linear|soft|hard|exponential, curve?:[x1,y1,x2,y2]",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                CadDocument document = ctx.Document;
+                BrushSpec brush = document.FindBrush(name)
+                    ?? throw new EditorOperationException($"there is no brush called '{name}'");
+
+                DynamicsTarget target = ReadDynamicsTarget(p);
+                bool enabled = p.ValueKind == JsonValueKind.Object ? p.GetBool("enabled", true) : true;
+                DynamicsCurve curve = ReadDynamicsCurve(p);
+
+                var updated = brush with
+                {
+                    Dynamics = new DynamicsSpec(Enum.GetValues<DynamicsTarget>().Select(existing =>
+                        existing == target
+                            ? new DynamicsTargetSpec(enabled, curve)
+                            : brush.Dynamics?.For(existing) ?? DynamicsTargetSpec.Off)),
+                };
+
+                ApplyBrushEdit(ctx, document, brush, name, updated, "Set brush dynamics");
+                return new { brush = name, target = target.ToString(), enabled };
             });
 
         Add("brush.setTile",
@@ -3397,7 +3459,11 @@ public static class EditorOperations
                 {
                     throw new EditorOperationException(
                         $"'{name}' is a {brush.Kind.ToString().ToLowerInvariant()} brush, which has no tile set; " +
-                        (brush.IsArt ? "use brush.placements for where its artwork goes" : "it sweeps a nib along the path"));
+                        (brush.IsArt
+                            ? "use brush.placements for where its artwork goes"
+                            : brush.IsScatter
+                                ? "use brush.scatter for where its copies go"
+                                : "it sweeps a nib along the path"));
                 }
 
                 // A slot whose artwork is gone is named rather than omitted: a tile that quietly vanishes is the
@@ -3470,8 +3536,10 @@ public static class EditorOperations
             "asked for, which is why editing the path moves the art with no brush re-applied. This is the readout " +
             "of what is drawn: the canvas and the exporter both resolve these same placements inside the stroke, " +
             "so the numbers here are the picture. The brush's **colourisation** is the one member held and not " +
-            "applied, and `style.strokes` says so. A nib places no art, " +
-            "and a brush whose asset the document does not have is refused by name rather than answered with an " +
+            "applied, and `style.strokes` says so. A nib places no art, a pattern brush lays tiles rather than one " +
+            "asset (use brush.tiles) and a scatter brush repeats its asset with its own turn, size and offset at " +
+            "every copy (use brush.scatter); a brush whose asset the document does not have is refused by name " +
+            "rather than answered with an " +
             "empty list.",
             "name:string, itemId?:guid (default: the selected paths)",
             (ctx, p) =>
@@ -3487,7 +3555,9 @@ public static class EditorOperations
                         $"'{name}' is a {brush.Kind.ToString().ToLowerInvariant()} brush, which " +
                         (brush.IsPattern
                             ? "lays a tile set along the path; use brush.tiles for where its tiles go"
-                            : "sweeps a nib along the path; it places no artwork"));
+                            : brush.IsScatter
+                                ? "repeats its artwork along the path; use brush.scatter for where its copies go"
+                                : "sweeps a nib along the path; it places no artwork"));
                 }
 
                 if (brush.ArtAsset is not { } assetId)
@@ -3530,9 +3600,93 @@ public static class EditorOperations
                 }).ToArray();
             });
 
+        Add("brush.scatter",
+            "Where a scatter brush's copies go along a path - the read half of a scatter brush, and the only way to " +
+            "learn where each copy lands without seeing it. Each copy names the arc length of its centre, the path " +
+            "point there, the direction of travel in degrees, how much of the path it covers, its own size as a " +
+            "multiple of the brush's size, its own turn in degrees, how far it is offset across the path, the " +
+            "opacity it is painted at, and the six numbers of the affine transform carrying the copy's own " +
+            "coordinates onto the path. **Reported rather than held**: the model has no member that says a copy is " +
+            "drawn at a place - a stroke's render plan is widths and outlines - so the copies are computed from the " +
+            "path every time they are asked for, which is why editing the path moves them with no brush re-applied. " +
+            "The numbers are a pure function of the path and the brush's parameters through a stable sequence, so " +
+            "asking twice gives the same drawings and two renders of a document agree. 'pressure' is the pen's " +
+            "pressure in 0..1 and moves the size and the opacity of every copy through the brush's own dynamics; " +
+            "with none recorded it changes nothing, which is what a static document is drawn as. This is the readout " +
+            "of what is drawn: the canvas and the exporter both resolve these same copies through PlacedArt.Resolve, " +
+            "so the numbers here are the picture - including the per-copy opacity, which both renderers multiply in. " +
+            "A brush that is not a scatter brush is refused by name, and so is a brush naming an item the document " +
+            "does not have.",
+            "name:string, itemId?:guid (default: the selected paths), pressure?:number",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                CadDocument document = ctx.Document;
+                BrushSpec brush = document.FindBrush(name)
+                    ?? throw new EditorOperationException($"there is no brush called '{name}'");
+
+                if (!brush.IsScatter)
+                {
+                    throw new EditorOperationException(
+                        $"'{name}' is a {brush.Kind.ToString().ToLowerInvariant()} brush, which scatters nothing; " +
+                        (brush.IsPattern
+                            ? "use brush.tiles for where its tiles go"
+                            : brush.IsArt
+                                ? "use brush.placements for where its artwork goes"
+                                : "it sweeps a nib along the path"));
+                }
+
+                if (brush.ScatterSpec?.Asset is not { } assetId)
+                {
+                    throw new EditorOperationException(
+                        $"the scatter brush '{name}' names no asset, so there is no artwork to repeat");
+                }
+
+                if (document.FindItem(assetId) is not { } asset)
+                {
+                    throw new EditorOperationException(
+                        $"the scatter brush '{name}' repeats the item {assetId}, and this document has no such item");
+                }
+
+                Rect2D bounds = ItemBounds.Of(asset);
+                double pressure = p.GetDouble("pressure", 1.0);
+
+                IEnumerable<PathItem> paths = p.TryGetGuid("itemId", out Guid id)
+                    ? new[] { RequirePath(document, id) }
+                    : ctx.Session.SelectedPaths();
+
+                return paths.Select(path => new
+                {
+                    itemId = path.Id,
+                    name = path.Name,
+                    brush = name,
+                    assetId,
+                    assetName = asset.Name,
+                    pressure = Math.Round(Math.Clamp(pressure, 0.0, 1.0), 6),
+                    copies = ScatterBrushPath.Placements(path, brush, _ => bounds, 1.0, pressure).Select(copy => new
+                    {
+                        position = Math.Round(copy.Position, 4),
+                        x = Math.Round(copy.Point.X, 4),
+                        y = Math.Round(copy.Point.Y, 4),
+                        tangentDegrees = Math.Round(copy.TangentRadians * 180.0 / Math.PI, 4),
+                        length = Math.Round(copy.Length, 4),
+                        scale = Math.Round(copy.Scale, 6),
+                        rotationDegrees = Math.Round(copy.RotationDegrees, 4),
+                        offset = Math.Round(copy.Offset, 4),
+                        opacity = Math.Round(copy.Opacity, 6),
+                        transform = new[]
+                        {
+                            copy.Transform.A, copy.Transform.B, copy.Transform.C,
+                            copy.Transform.D, copy.Transform.E, copy.Transform.F,
+                        },
+                    }).ToArray(),
+                }).ToArray();
+            });
+
         Add("brush.missingAssets",
-            "Every art brush in the document whose asset is not there - the item its artwork lives on was deleted, " +
-            "or a file arrived without it. An art brush names its artwork rather than copying it, so the reference " +
+            "Every art, pattern or scatter brush in the document whose asset is not there - the item its artwork " +
+            "lives on was deleted, " +
+            "or a file arrived without it. Such a brush names its artwork rather than copying it, so the reference " +
             "can come apart, and a brush that quietly maps nothing is exactly the sort of gap worth naming. " +
             "Reported with the brush's name and the id it asked for; nothing is substituted for the missing art.",
             "",
@@ -3892,13 +4046,16 @@ public static class EditorOperations
             "Update the selected text objects **member by member**. Each member is written only where it is given, " +
             "and an omitted member is left exactly as each block has it - so a mixed selection can have its size " +
             "changed without the block whose words or colour differ having them written over. One content string and " +
-            "one colour are block members; family, size, weight and slant are per run, and runIndex names the run " +
-            "they land on, with a block that has no run there skipped rather than counted as a disagreement. With no " +
-            "runIndex the face members style every run, which is the uniform edit a whole-block request means. " +
+            "one colour are block members; family, size, weight, slant, letter spacing, word spacing, font stretch " +
+            "and font variant are per run, and runIndex names the run they land on, with a block that has no run " +
+            "there skipped rather than counted as a disagreement. With no runIndex the face members style every run, " +
+            "which is the uniform edit a whole-block request means. A stretch or a variant is kept on the run and no " +
+            "face is chosen by width or variant, so it round-trips and is reported rather than changing the drawing; " +
+            "fontStretch and fontVariant are cleared with \"normal\". " +
             "Reports how many blocks changed and what the selection now reads, so a caller can tell which members " +
             "were altered and which are still mixed. One undo step.",
             "text?:string, family?:string, fontSize?:number, bold?:bool, italic?:bool, color?:[r,g,b], " +
-            "runIndex?:number",
+            "runIndex?:number, letterSpacing?:number, wordSpacing?:number, fontStretch?:string, fontVariant?:string",
             (ctx, p) =>
             {
                 // A member is written only where it is **given**: the presence of the key, not its value, is what
@@ -3913,10 +4070,24 @@ public static class EditorOperations
                 bool? italic = OptionalBool(p, "italic");
                 ColorRgb? color = p.TryGetColorArray("color", out ColorRgb wanted) ? wanted : null;
 
+                // Spacing is a length like the size, so an absent key leaves the run's tracking as it is.
+                double? letterSpacing = OptionalNumber(p, "letterSpacing");
+                double? wordSpacing = OptionalNumber(p, "wordSpacing");
+
+                // A width or a variant is a word, and **presence** is the edit: a key given as "normal" or "" clears
+                // the value the run holds, which a null return from an absent key could not express.
+                string? fontStretch = p.ValueKind == JsonValueKind.Object && p.TryGetProperty("fontStretch", out _)
+                    ? p.GetString("fontStretch")
+                    : null;
+                string? fontVariant = p.ValueKind == JsonValueKind.Object && p.TryGetProperty("fontVariant", out _)
+                    ? p.GetString("fontVariant")
+                    : null;
+
                 // Null styles every run, which is what a whole-block face edit means; an index names one.
                 int? runIndex = OptionalNumber(p, "runIndex") is { } at ? (int)at : null;
 
-                int changed = ctx.Session.ApplyTextFieldsAt(runIndex, content, family, size, bold, italic, color);
+                int changed = ctx.Session.ApplyTextFieldsAt(runIndex, content, family, size, bold, italic, color,
+                    letterSpacing, wordSpacing, fontStretch, fontVariant);
 
                 // Choosing a font is what makes it recent, so the picker's "recent" list is a
                 // record of what was actually used rather than of what was scrolled past.
@@ -3941,7 +4112,8 @@ public static class EditorOperations
             "and a driver cannot be told different things about the same selection. A panel editing a selection has " +
             "to show one value per member, and showing the first block's words, colour or size as though they were " +
             "everyone's is how a person types a number and believes it describes what they selected. runIndex names " +
-            "the run the face members (family, size, weight, slant) are read from, and a block with no run there is a " +
+            "the run the per-run members (family, size, weight, slant, letter spacing, word spacing, font stretch, " +
+            "font variant) are read from, and a block with no run there is a " +
             "gap rather than a disagreement - blocks carry different numbers of runs, and counting a shorter one as " +
             "\"different\" would make every selection of unequal blocks report every face member as mixed. Without " +
             "runIndex the shared inspected run is read, which is the run the panel's face fields describe.",
@@ -7350,6 +7522,28 @@ public static class EditorOperations
     /// caller computing one can arrive a hair outside the range the same way a dragged slider can. A diameter
     /// below zero is not a nib, so it becomes the smallest one there is rather than a brush that draws inside out.
     /// </summary>
+    /// <summary>
+    /// Whether <c>brush.create</c> would accept this kind - asked by **running the reader that would decide it**,
+    /// with nothing but a name to go on.
+    ///
+    /// A second list of kind names here would be a second answer to a question the switch already answers, and the
+    /// two would agree right up until somebody added a kind to one of them. Probing costs one small allocation per
+    /// kind and cannot drift: whatever the reader accepts is what this reports, and whatever it refuses is a kind
+    /// this build genuinely cannot make.
+    /// </summary>
+    private static bool MakesBrush(string kind, CadDocument document)
+    {
+        try
+        {
+            ReadBrush(JsonSerializer.SerializeToElement(new { kind }), "probe", document);
+            return true;
+        }
+        catch (EditorOperationException)
+        {
+            return false;
+        }
+    }
+
     private static BrushSpec ReadBrush(JsonElement p, string name, CadDocument document)
     {
         string kind = (p.GetString("kind") ?? "calligraphic").Trim().ToLowerInvariant();
@@ -7385,10 +7579,86 @@ public static class EditorOperations
                     p.GetDouble("spacing", 0.0),
                     p.GetDouble("cornerThreshold", 30.0));
 
+            case "scatter":
+                return BrushSpec.Scatter(
+                    name,
+                    Given(p, "asset") ? ReadAsset(p, document) : null,
+                    BrushSize(p, p.GetDouble("diameter", p.GetDouble("size", 1.0))),
+                    ReadScatterParameter(p, "spacing", new ScatterParameter(0.0), nonNegative: true),
+                    ReadScatterParameter(p, "rotation", new ScatterParameter(0.0)),
+                    ReadScatterParameter(p, "scale", new ScatterParameter(1.0), nonNegative: true),
+                    ReadScatterParameter(p, "offset", new ScatterParameter(0.0)),
+                    ReadScatterParameter(p, "opacity", new ScatterParameter(1.0), clamped: true));
+
             default:
                 throw new EditorOperationException(
-                    $"'{kind}' is not a brush kind this build makes; use calligraphic, art or pattern");
+                    $"'{kind}' is not a brush kind this build makes; use calligraphic, art, pattern or scatter");
         }
+    }
+
+    /// <summary>
+    /// One of a scatter brush's controls as the caller stated it: the value under <paramref name="name"/> and the
+    /// half-width of its range under <c>&lt;name&gt;Randomness</c>.
+    ///
+    /// A range is read as a **magnitude**, because a range is how far a copy may stray and a negative one would mean
+    /// the same thing while looking like it meant the opposite. A value that cannot sensibly be negative is clamped
+    /// at zero, and an opacity is clamped into the 0..1 a pixel is painted at - the same treatment
+    /// <see cref="ClampedRoundness"/> gives a nib, and for the same reason: a caller computing one can arrive a hair
+    /// outside the range a dragged slider gives, and that is not a reason to refuse their brush.
+    /// </summary>
+    private static ScatterParameter ReadScatterParameter(
+        JsonElement p, string name, ScatterParameter current, bool nonNegative = false, bool clamped = false)
+    {
+        double value = Given(p, name) ? p.GetDouble(name, current.Value) : current.Value;
+        if (nonNegative)
+        {
+            value = Math.Max(0.0, value);
+        }
+
+        if (clamped)
+        {
+            value = Math.Clamp(value, 0.0, 1.0);
+        }
+
+        string rangeName = name + "Randomness";
+        double randomness = Given(p, rangeName)
+            ? Math.Abs(p.GetDouble(rangeName, current.Randomness))
+            : current.Randomness;
+
+        return new ScatterParameter(value, randomness);
+    }
+
+    /// <summary>The parameter names that belong to a scatter brush's own set, which is what "the caller touched one" means.</summary>
+    private static readonly string[] ScatterParameterNames =
+    {
+        "asset", "spacing", "spacingRandomness", "rotation", "rotationRandomness",
+        "scale", "scaleRandomness", "offset", "offsetRandomness", "opacity", "opacityRandomness",
+    };
+
+    /// <summary>Whether the caller named any of a scatter brush's own controls, which decides whether its spec is rewritten.</summary>
+    private static bool ScatterParametersGiven(JsonElement p)
+        => ScatterParameterNames.Any(name => Given(p, name));
+
+    /// <summary>
+    /// A scatter brush's parameters with the controls the caller named changed and the rest kept.
+    ///
+    /// A brush that holds no spec yet starts from the model's own defaults rather than from nothing, for the reason
+    /// the reader gives: those defaults are the model's, and one of them - a spacing of zero - is a real setting
+    /// ("lay the copies end to end") rather than an absence.
+    /// </summary>
+    private static ScatterBrushSpec EditedScatter(JsonElement p, BrushSpec brush, CadDocument document)
+    {
+        ScatterBrushSpec current = brush.ScatterSpec ?? ScatterBrushSpec.Stating(null);
+
+        return current with
+        {
+            Asset = Given(p, "asset") ? ReadAsset(p, document) : current.Asset,
+            Spacing = ReadScatterParameter(p, "spacing", current.Spacing, nonNegative: true),
+            Rotation = ReadScatterParameter(p, "rotation", current.Rotation),
+            Scale = ReadScatterParameter(p, "scale", current.Scale, nonNegative: true),
+            Offset = ReadScatterParameter(p, "offset", current.Offset),
+            Opacity = ReadScatterParameter(p, "opacity", current.Opacity, clamped: true),
+        };
     }
 
     /// <summary>
@@ -7546,6 +7816,25 @@ public static class EditorOperations
             strokes = edits.Count,
         };
     }
+
+    /// <summary>
+    /// The dynamics target a caller named, refused by name when it is not one of the pen's own.
+    ///
+    /// One reader for the stroke's response and the brush's, because they are the same five targets: a caller who
+    /// learned to say 'scatterScale' on a stroke has said the same word on a brush, and two switches would be two
+    /// vocabularies for one enum.
+    /// </summary>
+    private static DynamicsTarget ReadDynamicsTarget(JsonElement p)
+        => (p.GetString("target") ?? "width").Trim().ToLowerInvariant() switch
+        {
+            "width" => DynamicsTarget.Width,
+            "opacity" => DynamicsTarget.Opacity,
+            "scatterscale" or "scatter_scale" => DynamicsTarget.ScatterScale,
+            "calligraphicangle" or "calligraphic_angle" or "angle" => DynamicsTarget.CalligraphicAngle,
+            "smoothing" or "speed" => DynamicsTarget.Smoothing,
+            var other => throw new EditorOperationException(
+                $"'{other}' is not a dynamics target; use width, opacity, scatterScale, calligraphicAngle or smoothing"),
+        };
 
     /// <summary>
     /// The dynamics curve a caller asked for: their own control points when they gave any, otherwise the preset.
@@ -8668,6 +8957,45 @@ public static class EditorOperations
                         // The slot is not reported here: it is the key this entry sits under.
                     }
                     : null,
+
+                // The scatter brush's members, reported only for the scatter kind for the reason the art and pattern
+                // members are: a nib carrying a ranged control would be a brush this build cannot draw, and reporting
+                // the member would hide that. Each control is reported as its value **and** its range, because the two
+                // are one setting and reading only one of them would not say how the brush scatters.
+                scatter = brush.IsScatter
+                    ? (object?)new
+                    {
+                        asset = brush.ScatterSpec?.Asset,
+                        spacing = DescribeScatterParameter(brush.ScatterSpec?.Spacing),
+                        rotation = DescribeScatterParameter(brush.ScatterSpec?.Rotation),
+                        scale = DescribeScatterParameter(brush.ScatterSpec?.Scale),
+                        offset = DescribeScatterParameter(brush.ScatterSpec?.Offset),
+                        opacity = DescribeScatterParameter(brush.ScatterSpec?.Opacity),
+
+                        // Said out loud, for the reason the art brush's flag is: a copy's size and opacity follow the
+                        // pen only when the brush carries the two dynamics targets, and the seam applies them. With no
+                        // dynamics recorded pressure is ignored, which is what a static document is drawn as.
+                        pressureApplied = brush.Dynamics is { IsEmpty: false },
+                        drawn = true,
+                    }
+                    : null,
+            };
+
+    /// <summary>
+    /// One of a scatter brush's ranged controls as a caller reads it, or null for a brush that states no parameters.
+    ///
+    /// The value and the range are reported side by side and the two ends of the range with them, so a reader does
+    /// not have to know that a range is a plus-or-minus to see what a copy can be drawn at.
+    /// </summary>
+    private static object? DescribeScatterParameter(ScatterParameter? parameter)
+        => parameter is null
+            ? null
+            : new
+            {
+                value = Math.Round(parameter.Value, 6),
+                randomness = Math.Round(Math.Abs(parameter.Randomness), 6),
+                min = Math.Round(parameter.Min, 6),
+                max = Math.Round(parameter.Max, 6),
             };
 
     /// <summary>
@@ -9151,6 +9479,8 @@ public static class EditorOperations
         // `*Mixed` flags above say *that* a member disagrees; `runs` says whether anything common came out of it.
         int commonRuns = summary.FamilyMixed || summary.FontSizeMixed || summary.BoldMixed
             || summary.ItalicMixed || summary.ColorMixed
+            || summary.LetterSpacingMixed || summary.WordSpacingMixed
+            || summary.FontStretchMixed || summary.FontVariantMixed
                 ? 0
                 : summary.Runs;
 
@@ -9172,6 +9502,14 @@ public static class EditorOperations
             boldMixed = summary.BoldMixed,
             italic = summary.Italic,
             italicMixed = summary.ItalicMixed,
+            letterSpacing = summary.LetterSpacing,
+            letterSpacingMixed = summary.LetterSpacingMixed,
+            wordSpacing = summary.WordSpacing,
+            wordSpacingMixed = summary.WordSpacingMixed,
+            fontStretch = summary.FontStretch,
+            fontStretchMixed = summary.FontStretchMixed,
+            fontVariant = summary.FontVariant,
+            fontVariantMixed = summary.FontVariantMixed,
             colour = summary.Color is { } colour ? DescribeColorValue(colour) : null,
             colourMixed = summary.ColorMixed,
             alignment = summary.Alignment?.ToString(),

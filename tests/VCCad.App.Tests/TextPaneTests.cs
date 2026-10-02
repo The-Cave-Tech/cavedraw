@@ -247,6 +247,60 @@ public class TextPaneTests
         Assert.Equal(ColorRgb.Black, block.Color);
     }
 
+    /// <summary>
+    /// **A tracking edit lands on the run the panel names, and nowhere else**, exactly as a size edit does. Letter
+    /// spacing is a per-run member the model gained with #147 and the canvas and the exporter already honour, and the
+    /// panel's field has to reach it through the same call `text.update` makes rather than keeping a copy.
+    /// </summary>
+    [AvaloniaFact]
+    public void ATrackingEditLandsOnTheInspectedRunAndNowhereElse()
+    {
+        var viewModel = new EditorViewModel();
+        TextItem block = Block(viewModel, Run("Title", size: 24), Run("caption", size: 8));
+        viewModel.SelectObject(block);
+        viewModel.IsEditingText = true;
+        viewModel.InspectedRun = 1;
+
+        var pane = new TextPane();
+        pane.Attach(viewModel);
+        var window = new Window { Width = 440, Height = 780, Content = pane };
+        window.Show();
+        Settle();
+
+        Commit(pane, "LetterSpacingBox", "3.5");
+        Commit(pane, "WordSpacingBox", "1.25");
+
+        Assert.Equal(3.5, block.Runs[1].LetterSpacing, 6);
+        Assert.Equal(1.25, block.Runs[1].WordSpacing, 6);
+        Assert.Equal(0.0, block.Runs[0].LetterSpacing, 6);
+        Assert.Equal(0.0, block.Runs[0].WordSpacing, 6);
+        Assert.Equal("Titlecaption", block.PlainText);
+    }
+
+    /// <summary>
+    /// **A width and a variant are set and put back through the panel.** The model keeps each as the file's own word
+    /// and spells absence as null, so `normal` is how a person clears one - and clearing it must not clear the name
+    /// the document asked for, because a stretch does not replace the face.
+    /// </summary>
+    [AvaloniaFact]
+    public void AStretchAndAVariantAreSetAndNormalPutsThemBack()
+    {
+        (TextPane pane, _, TextItem block) = Host(Run("words"));
+        block.Runs[0].SourceFont = "Helvetica-Bold";
+
+        Commit(pane, "FontStretchBox", "condensed");
+        Commit(pane, "FontVariantBox", "small-caps");
+
+        Assert.Equal("condensed", block.Runs[0].FontStretch);
+        Assert.Equal("small-caps", block.Runs[0].FontVariant);
+        Assert.Equal("Helvetica-Bold", block.Runs[0].SourceFont);
+
+        Commit(pane, "FontStretchBox", "normal");
+
+        Assert.Null(block.Runs[0].FontStretch);
+        Assert.Equal("small-caps", block.Runs[0].FontVariant);
+    }
+
     /// <summary>A colour typed in the panel lands on every block in the selection, not on the first one.</summary>
     [AvaloniaFact]
     public void AColourEditLandsOnEverySelectedBlock()
@@ -312,7 +366,11 @@ public class TextPaneTests
         (TextPane pane, EditorViewModel viewModel, TextItem block) = Host(Run("one"), Run("two"));
         int depth = viewModel.ActiveSession.UndoDepth;
 
-        foreach (string name in new[] { "ContentBox", "SizeBox", "ColorBox", "LeadingBox", "ParagraphBox", "RotationBox", "FrameWidthBox" })
+        foreach (string name in new[]
+                 {
+                     "ContentBox", "SizeBox", "ColorBox", "LeadingBox", "ParagraphBox", "RotationBox",
+                     "FrameWidthBox", "LetterSpacingBox", "WordSpacingBox", "FontStretchBox", "FontVariantBox",
+                 })
         {
             Box(pane, name).RaiseEvent(new RoutedEventArgs(InputElement.LostFocusEvent));
         }

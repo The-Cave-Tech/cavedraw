@@ -1015,12 +1015,19 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// the uniform style of a whole-block face edit. Content is a block member and is written wherever it is given;
     /// colour is a block member too, and <see cref="TextRun.Color"/> is the run's own and is not touched here.
     ///
+    /// <paramref name="letterSpacing"/>, <paramref name="wordSpacing"/>, <paramref name="fontStretch"/> and
+    /// <paramref name="fontVariant"/> are per-run members like the face, and land on the same runs. The two strings
+    /// are "leave it alone" when null and CSS's <c>normal</c> when given as such, because the model spells an absent
+    /// width or variant as null and a caller has to be able to put one back.
+    ///
     /// One <see cref="ReplaceTextCommand"/> per block and a composite across the selection, so a gesture is one undo
     /// step; a request that changes nothing adds no command, because an undo step that undoes to exactly where it
     /// started reads as "undo did nothing".
     /// </summary>
     public int ApplyTextFieldsAt(int? runIndex, string? content, string? family, double? fontSize,
-        bool? bold, bool? italic, ColorRgb? color)
+        bool? bold, bool? italic, ColorRgb? color,
+        double? letterSpacing = null, double? wordSpacing = null,
+        string? fontStretch = null, string? fontVariant = null)
     {
         var edits = new List<IUndoableCommand>();
         foreach (TextItem text in SelectedTextItems())
@@ -1081,6 +1088,44 @@ public sealed class DocumentSession : INotifyPropertyChanged
                     }
                 }
 
+                // Tracking, word spacing, stretch and variant are the run's own and do **not** replace the face: the
+                // model names one family per run and chooses a face by weight and slant alone, so a width or a
+                // variant is a value the file asked for that face selection ignores (which
+                // `FontUsage.UnselectedFaceRequests` reports rather than hiding). Treating either as a face change
+                // would clear `SourceFont` and the embedded programme, which belong to the family that is not being
+                // replaced.
+                if (letterSpacing is { } tracking && Math.Abs(run.LetterSpacing - tracking) > 1e-9)
+                {
+                    run.LetterSpacing = tracking;
+                    changed = true;
+                }
+
+                if (wordSpacing is { } word && Math.Abs(run.WordSpacing - word) > 1e-9)
+                {
+                    run.WordSpacing = word;
+                    changed = true;
+                }
+
+                if (fontStretch is not null)
+                {
+                    string? wantedStretch = FaceRequest(fontStretch);
+                    if (!string.Equals(run.FontStretch, wantedStretch, StringComparison.Ordinal))
+                    {
+                        run.FontStretch = wantedStretch;
+                        changed = true;
+                    }
+                }
+
+                if (fontVariant is not null)
+                {
+                    string? wantedVariant = FaceRequest(fontVariant);
+                    if (!string.Equals(run.FontVariant, wantedVariant, StringComparison.Ordinal))
+                    {
+                        run.FontVariant = wantedVariant;
+                        changed = true;
+                    }
+                }
+
                 changed |= faceChanged;
             }
 
@@ -1092,6 +1137,21 @@ public sealed class DocumentSession : INotifyPropertyChanged
 
         ExecuteIfAny(edits, "Edit text");
         return edits.Count;
+    }
+
+    /// <summary>
+    /// A width or variant as the model stores it: the file's own word, or <c>null</c> for CSS's <c>normal</c>.
+    ///
+    /// The model spells absence as null - <see cref="VCCad.App.Fonts.FontUsage.UnselectedFaceRequests"/> reports only
+    /// a value the file actually states - so a caller clears a stretch by writing <c>normal</c> (or nothing), which
+    /// is the CSS word for it, rather than by passing a value with no meaning.
+    /// </summary>
+    private static string? FaceRequest(string value)
+    {
+        string trimmed = value.Trim();
+        return trimmed.Length == 0 || string.Equals(trimmed, "normal", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : trimmed;
     }
 
     /// <summary>The runs a member-by-member edit names: the one at the index, or every run when none is named.</summary>

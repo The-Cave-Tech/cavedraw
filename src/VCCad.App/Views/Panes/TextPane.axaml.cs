@@ -27,9 +27,11 @@ namespace VCCad.App.Views.Panes;
 /// and content, colour and paragraph style describe the block.
 ///
 /// What the model cannot hold is **not** offered here, because a control that does nothing is worse than an absent
-/// one: vertical writing and right-to-left (issue #127), flowed text in a region (#126), `baseline-shift` (#128),
-/// letter and word spacing, font stretch and variant, and per-glyph positioning (#147). Face reporting is offered,
-/// because the model does carry the face actually used - see <see cref="FaceReport"/>.
+/// one: vertical writing and right-to-left (issue #127) and `baseline-shift` with per-glyph positioning (#128) have
+/// no member on <see cref="TextItem"/> or <see cref="TextRun"/>. Letter and word spacing, font stretch and variant
+/// **are** offered, because the model does hold them (#147) and the canvas, the layout, the caret and the exporter
+/// already read them - see <see cref="DocumentSession.ApplyTextFieldsAt"/>. Face reporting is offered too, because
+/// the model carries the face actually used - see <see cref="FaceReport"/>.
 /// </summary>
 public partial class TextPane : UserControl
 {
@@ -57,6 +59,10 @@ public partial class TextPane : UserControl
     private string _shownParagraph = string.Empty;
     private string _shownRotation = string.Empty;
     private string _shownFrameWidth = string.Empty;
+    private string _shownLetterSpacing = string.Empty;
+    private string _shownWordSpacing = string.Empty;
+    private string _shownFontStretch = string.Empty;
+    private string _shownFontVariant = string.Empty;
 
     public TextPane()
     {
@@ -74,6 +80,7 @@ public partial class TextPane : UserControl
         foreach (TextBox box in new[]
                  {
                      SizeBox, ColorBox, LeadingBox, ParagraphBox, RotationBox, FrameWidthBox,
+                     LetterSpacingBox, WordSpacingBox, FontStretchBox, FontVariantBox,
                  })
         {
             box.KeyDown += (_, e) =>
@@ -165,6 +172,13 @@ public partial class TextPane : UserControl
         bool? italic = ItalicBox.IsChecked == _shownItalic ? null : ItalicBox.IsChecked;
         double? size = (SizeBox.Text?.Trim() ?? string.Empty) == _shownSize ? null : Parse(SizeBox.Text);
 
+        // Tracking, word spacing, stretch and variant are per run, so they are face members too and stop describing
+        // anything when there is no run to name.
+        double? letterSpacing = faceRun is null ? null : ChangedDouble(LetterSpacingBox, _shownLetterSpacing);
+        double? wordSpacing = faceRun is null ? null : ChangedDouble(WordSpacingBox, _shownWordSpacing);
+        string? fontStretch = faceRun is null ? null : ChangedWord(FontStretchBox, _shownFontStretch);
+        string? fontVariant = faceRun is null ? null : ChangedWord(FontVariantBox, _shownFontVariant);
+
         if (faceRun is null)
         {
             // There is no run to name, so no face member can honestly be applied.
@@ -189,9 +203,11 @@ public partial class TextPane : UserControl
         double? frameWidth = ChangedDouble(FrameWidthBox, _shownFrameWidth);
 
         if (content is not null || color is not null || family is not null || size is not null
-            || bold is not null || italic is not null)
+            || bold is not null || italic is not null || letterSpacing is not null || wordSpacing is not null
+            || fontStretch is not null || fontVariant is not null)
         {
-            _vm.ActiveSession.ApplyTextFieldsAt(faceRun, content, family, size, bold, italic, color);
+            _vm.ActiveSession.ApplyTextFieldsAt(faceRun, content, family, size, bold, italic, color,
+                letterSpacing, wordSpacing, fontStretch, fontVariant);
         }
 
         if (alignment is { } align)
@@ -324,6 +340,38 @@ public partial class TextPane : UserControl
                 _shownSize = SizeBox.Text ?? string.Empty;
             }
 
+            // Tracking, word spacing, stretch and variant are read at the inspected run, the way the face is: the
+            // model holds one of each per run, so a block with two runs can disagree with itself about them.
+            if (!LetterSpacingBox.IsFocused)
+            {
+                LetterSpacingBox.Watermark = summary.LetterSpacingMixed ? MixedWord : string.Empty;
+                LetterSpacingBox.Text = Text(summary.LetterSpacing, summary.LetterSpacingMixed, "0.##");
+                _shownLetterSpacing = LetterSpacingBox.Text ?? string.Empty;
+            }
+
+            if (!WordSpacingBox.IsFocused)
+            {
+                WordSpacingBox.Watermark = summary.WordSpacingMixed ? MixedWord : string.Empty;
+                WordSpacingBox.Text = Text(summary.WordSpacing, summary.WordSpacingMixed, "0.##");
+                _shownWordSpacing = WordSpacingBox.Text ?? string.Empty;
+            }
+
+            // A width or a variant has no value for "mixed" and none for "not stated"; both read as an empty box,
+            // and the watermark is what tells the two apart - the same reading the colour and content fields take.
+            if (!FontStretchBox.IsFocused)
+            {
+                FontStretchBox.Watermark = summary.FontStretchMixed ? MixedWord : string.Empty;
+                FontStretchBox.Text = summary.FontStretchMixed ? string.Empty : summary.FontStretch ?? string.Empty;
+                _shownFontStretch = FontStretchBox.Text ?? string.Empty;
+            }
+
+            if (!FontVariantBox.IsFocused)
+            {
+                FontVariantBox.Watermark = summary.FontVariantMixed ? MixedWord : string.Empty;
+                FontVariantBox.Text = summary.FontVariantMixed ? string.Empty : summary.FontVariant ?? string.Empty;
+                _shownFontVariant = FontVariantBox.Text ?? string.Empty;
+            }
+
             BoldBox.IsChecked = summary.BoldMixed ? null : summary.Bold ?? false;
             _shownBold = BoldBox.IsChecked;
 
@@ -379,6 +427,26 @@ public partial class TextPane : UserControl
             mixed.Add("italic");
         }
 
+        if (summary.LetterSpacingMixed)
+        {
+            mixed.Add("tracking");
+        }
+
+        if (summary.WordSpacingMixed)
+        {
+            mixed.Add("word");
+        }
+
+        if (summary.FontStretchMixed)
+        {
+            mixed.Add("stretch");
+        }
+
+        if (summary.FontVariantMixed)
+        {
+            mixed.Add("variant");
+        }
+
         if (summary.LineSpacingMixed)
         {
             mixed.Add("leading");
@@ -432,6 +500,14 @@ public partial class TextPane : UserControl
         RotationBox.Watermark = string.Empty;
         FrameWidthBox.Text = string.Empty;
         FrameWidthBox.Watermark = string.Empty;
+        LetterSpacingBox.Text = string.Empty;
+        LetterSpacingBox.Watermark = string.Empty;
+        WordSpacingBox.Text = string.Empty;
+        WordSpacingBox.Watermark = string.Empty;
+        FontStretchBox.Text = string.Empty;
+        FontStretchBox.Watermark = string.Empty;
+        FontVariantBox.Text = string.Empty;
+        FontVariantBox.Watermark = string.Empty;
 
         _shownContent = string.Empty;
         _shownColor = string.Empty;
@@ -444,6 +520,10 @@ public partial class TextPane : UserControl
         _shownParagraph = string.Empty;
         _shownRotation = string.Empty;
         _shownFrameWidth = string.Empty;
+        _shownLetterSpacing = string.Empty;
+        _shownWordSpacing = string.Empty;
+        _shownFontStretch = string.Empty;
+        _shownFontVariant = string.Empty;
     }
 
     /// <summary>
@@ -495,6 +575,20 @@ public partial class TextPane : UserControl
     {
         string text = box.Text?.Trim() ?? string.Empty;
         return text == shown ? null : Parse(text);
+    }
+
+    /// <summary>
+    /// A word field's value, or null when the person did not change it.
+    ///
+    /// Unlike a number, an **empty** value is an edit here: it is how a `font-stretch` or a `font-variant` the run
+    /// carries is put back, and "nobody touched it" is already distinguishable because the value shown for an
+    /// agreeing run is exactly what the box holds. The session reads an empty word - or CSS's `normal` - as absence,
+    /// which is how the model spells one.
+    /// </summary>
+    private static string? ChangedWord(TextBox box, string shown)
+    {
+        string text = box.Text?.Trim() ?? string.Empty;
+        return text == shown ? null : text;
     }
 
     private static double? Parse(string? text)

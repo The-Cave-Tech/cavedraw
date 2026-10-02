@@ -68,7 +68,8 @@ public class TextPaneMixedSelectionTests
 
     private static TextItem Block(string words, string family = "Nimbus Sans", double size = 12,
         bool bold = false, bool italic = false, ColorRgb? colour = null, TextAlignment alignment = TextAlignment.Left,
-        double lineSpacing = 1.2, double paragraphSpacing = 0, double frameWidth = 0, double rotationDegrees = 0)
+        double lineSpacing = 1.2, double paragraphSpacing = 0, double frameWidth = 0, double rotationDegrees = 0,
+        double letterSpacing = 0, double wordSpacing = 0, string? fontStretch = null, string? fontVariant = null)
     {
         var item = new TextItem
         {
@@ -82,6 +83,10 @@ public class TextPaneMixedSelectionTests
             RotationRadians = rotationDegrees * Math.PI / 180.0,
         };
         item.Runs.Add(TextPaneTests.Run(words, family, size, bold, italic));
+        item.Runs[0].LetterSpacing = letterSpacing;
+        item.Runs[0].WordSpacing = wordSpacing;
+        item.Runs[0].FontStretch = fontStretch;
+        item.Runs[0].FontVariant = fontVariant;
         return item;
     }
 
@@ -126,12 +131,18 @@ public class TextPaneMixedSelectionTests
         (TextPane pane, _, _, _) = Host(
             Block("one", "Nimbus Sans", 12, bold: true, italic: false, colour: ColorRgb.Black,
                 alignment: TextAlignment.Left, lineSpacing: 1.2, paragraphSpacing: 0, frameWidth: 0,
-                rotationDegrees: 0),
+                rotationDegrees: 0, letterSpacing: 1.0, wordSpacing: 1.0, fontStretch: "condensed",
+                fontVariant: "small-caps"),
             Block("two", "Nimbus Roman", 20, bold: false, italic: true, colour: ColorRgb.Red,
                 alignment: TextAlignment.Right, lineSpacing: 2.0, paragraphSpacing: 6, frameWidth: 100,
-                rotationDegrees: 30));
+                rotationDegrees: 30, letterSpacing: 5.0, wordSpacing: 3.0, fontStretch: "expanded",
+                fontVariant: null));
 
-        foreach (string name in new[] { "ContentBox", "ColorBox", "SizeBox", "LeadingBox", "ParagraphBox", "RotationBox", "FrameWidthBox" })
+        foreach (string name in new[]
+                 {
+                     "ContentBox", "ColorBox", "SizeBox", "LeadingBox", "ParagraphBox", "RotationBox",
+                     "FrameWidthBox", "LetterSpacingBox", "WordSpacingBox", "FontStretchBox", "FontVariantBox",
+                 })
         {
             Assert.Equal(string.Empty, Box(pane, name).Text);
             Assert.Equal("mixed", Watermark(pane, name));
@@ -146,7 +157,11 @@ public class TextPaneMixedSelectionTests
 
         string named = Text(pane, "MixedLabel").Text ?? string.Empty;
         Assert.True(Text(pane, "MixedLabel").IsVisible);
-        foreach (string member in new[] { "content", "colour", "align", "family", "size", "bold", "italic", "leading", "space", "turn", "frame" })
+        foreach (string member in new[]
+                 {
+                     "content", "colour", "align", "family", "size", "bold", "italic", "leading", "space",
+                     "turn", "frame", "tracking", "word", "stretch", "variant",
+                 })
         {
             Assert.True(named.Contains(member, StringComparison.OrdinalIgnoreCase),
                 $"the mixed readout should name '{member}' but says '{named}'");
@@ -172,6 +187,18 @@ public class TextPaneMixedSelectionTests
             (Block("a", colour: ColorRgb.Red), Block("b", colour: ColorRgb.Blue)),
             (Block("a", bold: true), Block("b", bold: false)),
             (Block("a", alignment: TextAlignment.Center), Block("b", alignment: TextAlignment.Right)),
+
+            // The four per-run members #147 added. Each pair is an agreeing case and a disagreeing one, so neither
+            // branch of the checks below can pass without being reached - a guard that only ever saw agreeing
+            // selections would pass over a panel that showed the first block's value as everyone's.
+            (Block("a", letterSpacing: 1.0), Block("b", letterSpacing: 1.0)),
+            (Block("a", letterSpacing: 1.0), Block("b", letterSpacing: 5.0)),
+            (Block("a", wordSpacing: 2.0), Block("b", wordSpacing: 2.0)),
+            (Block("a", wordSpacing: 2.0), Block("b", wordSpacing: 4.0)),
+            (Block("a", fontStretch: "condensed"), Block("b", fontStretch: "condensed")),
+            (Block("a", fontStretch: "condensed"), Block("b", fontStretch: "expanded")),
+            (Block("a", fontVariant: "small-caps"), Block("b", fontVariant: "small-caps")),
+            (Block("a", fontVariant: "small-caps"), Block("b", fontVariant: null)),
         };
 
         foreach ((TextItem first, TextItem second) in patterns)
@@ -216,6 +243,35 @@ public class TextPaneMixedSelectionTests
             Assert.Equal(
                 summary.AlignmentMixed ? -1 : summary.Alignment == TextAlignment.Center ? 1 : summary.Alignment == TextAlignment.Right ? 2 : 0,
                 Combo(pane, "AlignBox").SelectedIndex);
+
+            // Tracking and word spacing are numbers, so a mixed one is an empty box and an agreeing one is the
+            // common value - never the first block's.
+            if (summary.LetterSpacingMixed)
+            {
+                Assert.Equal(string.Empty, Box(pane, "LetterSpacingBox").Text);
+            }
+            else
+            {
+                Assert.Equal(summary.LetterSpacing!.Value.ToString("0.##"), Box(pane, "LetterSpacingBox").Text);
+            }
+
+            if (summary.WordSpacingMixed)
+            {
+                Assert.Equal(string.Empty, Box(pane, "WordSpacingBox").Text);
+            }
+            else
+            {
+                Assert.Equal(summary.WordSpacing!.Value.ToString("0.##"), Box(pane, "WordSpacingBox").Text);
+            }
+
+            // A width or a variant is a word the model spells as absence when it is not stated, so an agreeing
+            // selection reads as the common word and a disagreeing one as nothing at all.
+            Assert.Equal(
+                summary.FontStretchMixed ? string.Empty : summary.FontStretch ?? string.Empty,
+                Box(pane, "FontStretchBox").Text);
+            Assert.Equal(
+                summary.FontVariantMixed ? string.Empty : summary.FontVariant ?? string.Empty,
+                Box(pane, "FontVariantBox").Text);
         }
     }
 

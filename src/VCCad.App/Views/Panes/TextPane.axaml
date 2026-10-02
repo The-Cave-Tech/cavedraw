@@ -60,6 +60,28 @@
         <CheckBox x:Name="ItalicBox" Grid.Column="4" Content="Italic"/>
       </Grid>
 
+      <!-- Tracking and word spacing are per run like the face, and the canvas, the caret and the exported page all
+           already honour them (#147), so they are edited here through the same operation. -->
+      <Grid ColumnDefinitions="Auto,*,10,Auto,*" ColumnSpacing="4">
+        <TextBlock Text="Tracking" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="LetterSpacingBox" Grid.Column="1"
+                 ToolTip.Tip="Extra room after every glyph, in points; 0 is the face's own advances"/>
+        <TextBlock Text="Word" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="WordSpacingBox" Grid.Column="4"
+                 ToolTip.Tip="Extra room after each space, in points; 0 is the space's own advance"/>
+      </Grid>
+
+      <!-- A width and a variant are kept on the run and no face is chosen by them, so the value round-trips and is
+           reported rather than changing the drawing. Type "normal" to put one back. -->
+      <Grid ColumnDefinitions="Auto,*,10,Auto,*" ColumnSpacing="4">
+        <TextBlock Text="Stretch" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="FontStretchBox" Grid.Column="1"
+                 ToolTip.Tip="font-stretch as CSS spells it - condensed, semi-expanded, 110%; normal clears it"/>
+        <TextBlock Text="Variant" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="FontVariantBox" Grid.Column="4"
+                 ToolTip.Tip="font-variant as CSS spells it - small-caps; normal clears it"/>
+      </Grid>
+
       <TextBlock Text="PARAGRAPH" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
       <Grid ColumnDefinitions="Auto,*,10,Auto,*" ColumnSpacing="4">
         <TextBlock Text="Leading" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>

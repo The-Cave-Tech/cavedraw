@@ -42,6 +42,7 @@ public class TextOperationParityTests
     private static TextItem Block(string words, string family = "Nimbus Sans", double size = 12,
         bool bold = false, bool italic = false, ColorRgb? colour = null, TextAlignment alignment = TextAlignment.Left,
         double lineSpacing = 1.2, double paragraphSpacing = 0, double frameWidth = 0, double rotationDegrees = 0,
+        double letterSpacing = 0, double wordSpacing = 0, string? fontStretch = null, string? fontVariant = null,
         params TextRun[] extraRuns)
     {
         var item = new TextItem
@@ -57,6 +58,10 @@ public class TextOperationParityTests
         };
 
         item.Runs.Add(Run(words, family, size, bold, italic));
+        item.Runs[0].LetterSpacing = letterSpacing;
+        item.Runs[0].WordSpacing = wordSpacing;
+        item.Runs[0].FontStretch = fontStretch;
+        item.Runs[0].FontVariant = fontVariant;
         item.Runs.AddRange(extraRuns);
         return item;
     }
@@ -265,6 +270,84 @@ public class TextOperationParityTests
         Assert.Equal(0, nothing.GetProperty("changed").GetInt32());
     }
 
+    // ---------------------------------------------------------------- the per-run members #147 added
+
+    /// <summary>
+    /// **Tracking, word spacing, stretch and variant reach the model through `text.update`.** This is the gap the
+    /// panel's own comment recorded as impossible: #147 put all four on <see cref="TextRun"/>, the canvas, the layout
+    /// and the exporter read them, and until now neither a person nor a driver could set one. They are per-run, so
+    /// they land on the named run and a block with no run at that index is skipped like any other face member.
+    /// </summary>
+    [Fact]
+    public void SpacingAndFaceRequestsReachTheNamedRunAlone()
+    {
+        TextItem first = Block("one", size: 10,
+            extraRuns: new[] { Run("tail", "Nimbus Roman", 14) });
+        (AutomationContext context, _, TextItem _, TextItem second) = With(first, Block("two", size: 10));
+
+        EditorOperations.Invoke(context, "text.update", Params(new
+        {
+            letterSpacing = 1.5,
+            wordSpacing = 2.5,
+            fontStretch = "condensed",
+            fontVariant = "small-caps",
+            runIndex = 1,
+        }));
+
+        Assert.Equal(1.5, first.Runs[1].LetterSpacing, 6);
+        Assert.Equal(2.5, first.Runs[1].WordSpacing, 6);
+        Assert.Equal("condensed", first.Runs[1].FontStretch);
+        Assert.Equal("small-caps", first.Runs[1].FontVariant);
+
+        // The run nobody named keeps its own, and the block with no run at index 1 is a gap.
+        Assert.Equal(0.0, first.Runs[0].LetterSpacing, 6);
+        Assert.Null(first.Runs[0].FontStretch);
+        Assert.Single(second.Runs);
+        Assert.Equal(0.0, second.Runs[0].LetterSpacing, 6);
+        Assert.Null(second.Runs[0].FontStretch);
+    }
+
+    /// <summary>
+    /// **Naming one of the four leaves the others exactly as they were**, which is the member-by-member judgement
+    /// `text.update` makes everywhere else: a request that wants a stretch put back must not clear the tracking or
+    /// the variant nobody mentioned.
+    /// </summary>
+    [Fact]
+    public void AFaceRequestEditLeavesTheUntouchedMembersAlone()
+    {
+        TextItem first = Block("one", size: 10,
+            letterSpacing: 4.0, wordSpacing: 3.0, fontStretch: "condensed", fontVariant: "small-caps");
+        (AutomationContext context, _, _, _) = With(first, Block("two", size: 10));
+
+        EditorOperations.Invoke(context, "text.update", Params(new { fontStretch = "normal" }));
+
+        Assert.Null(first.Runs[0].FontStretch);
+        Assert.Equal(4.0, first.Runs[0].LetterSpacing, 6);
+        Assert.Equal(3.0, first.Runs[0].WordSpacing, 6);
+        Assert.Equal("small-caps", first.Runs[0].FontVariant);
+    }
+
+    /// <summary>
+    /// **A width or a variant does not replace the face.** The model chooses a face by family, weight and slant, and
+    /// the name the document asked for and the programme it carried belong to the family that is still in force - so
+    /// setting a stretch must not clear either, the way choosing a family does.
+    /// </summary>
+    [Fact]
+    public void AFaceRequestEditDoesNotClearTheNameTheDocumentAskedFor()
+    {
+        TextItem first = Block("one", size: 10);
+        first.Runs[0].SourceFont = "Helvetica-Bold";
+        first.Runs[0].EmbeddedFont = new EmbeddedFont { BaseFont = "ABCDEF+Test", FamilyName = "VCCadTest" };
+        (AutomationContext context, _, _, _) = With(first, Block("two", size: 10));
+
+        EditorOperations.Invoke(context, "text.update",
+            Params(new { letterSpacing = 1.0, fontStretch = "condensed", fontVariant = "small-caps" }));
+
+        Assert.Equal("condensed", first.Runs[0].FontStretch);
+        Assert.Equal("Helvetica-Bold", first.Runs[0].SourceFont);
+        Assert.Equal("ABCDEF+Test", first.Runs[0].EmbeddedFont!.BaseFont);
+    }
+
     // ---------------------------------------------------------------- text.common is the mixed report
 
     /// <summary>
@@ -278,10 +361,12 @@ public class TextOperationParityTests
         (AutomationContext context, EditorViewModel viewModel, _, _) = With(
             Block("one", "Nimbus Sans", 12, bold: true, italic: false, colour: ColorRgb.Black,
                 alignment: TextAlignment.Left, lineSpacing: 1.2, paragraphSpacing: 0, frameWidth: 0,
-                rotationDegrees: 0),
+                rotationDegrees: 0, letterSpacing: 1.0, wordSpacing: 1.0, fontStretch: "condensed",
+                fontVariant: "small-caps"),
             Block("two", "Nimbus Roman", 20, bold: false, italic: true, colour: ColorRgb.Red,
                 alignment: TextAlignment.Right, lineSpacing: 2.0, paragraphSpacing: 6, frameWidth: 100,
-                rotationDegrees: 30));
+                rotationDegrees: 30, letterSpacing: 5.0, wordSpacing: 3.0, fontStretch: "expanded",
+                fontVariant: null));
 
         // The panel's own authority on agreement, so the operation and the panel cannot report different things.
         TextSummary summary = TextSummary.Of(viewModel.ActiveSession.SelectedTextItems(), 0);
@@ -301,6 +386,10 @@ public class TextOperationParityTests
                      ("sizeMixed", summary.FontSizeMixed),
                      ("boldMixed", summary.BoldMixed),
                      ("italicMixed", summary.ItalicMixed),
+                     ("letterSpacingMixed", summary.LetterSpacingMixed),
+                     ("wordSpacingMixed", summary.WordSpacingMixed),
+                     ("fontStretchMixed", summary.FontStretchMixed),
+                     ("fontVariantMixed", summary.FontVariantMixed),
                      ("lineSpacingMixed", summary.LineSpacingMixed),
                      ("paragraphSpacingMixed", summary.ParagraphSpacingMixed),
                      ("rotationMixed", summary.RotationMixed),
@@ -318,6 +407,10 @@ public class TextOperationParityTests
         Assert.Equal(JsonValueKind.Null, reported.GetProperty("alignment").ValueKind);
         Assert.Equal(JsonValueKind.Null, reported.GetProperty("bold").ValueKind);
         Assert.Equal(JsonValueKind.Null, reported.GetProperty("italic").ValueKind);
+        Assert.Equal(JsonValueKind.Null, reported.GetProperty("letterSpacing").ValueKind);
+        Assert.Equal(JsonValueKind.Null, reported.GetProperty("wordSpacing").ValueKind);
+        Assert.Equal(JsonValueKind.Null, reported.GetProperty("fontStretch").ValueKind);
+        Assert.Equal(JsonValueKind.Null, reported.GetProperty("fontVariant").ValueKind);
         Assert.Equal(JsonValueKind.Null, reported.GetProperty("leading").ValueKind);
         Assert.Equal(JsonValueKind.Null, reported.GetProperty("space").ValueKind);
         Assert.Equal(JsonValueKind.Null, reported.GetProperty("turn").ValueKind);
@@ -336,9 +429,11 @@ public class TextOperationParityTests
     {
         (AutomationContext context, _, _, _) = With(
             Block("same", "Nimbus Sans", 18, bold: true, colour: ColorRgb.Green, alignment: TextAlignment.Center,
-                lineSpacing: 1.5, paragraphSpacing: 4, frameWidth: 120, rotationDegrees: 45),
+                lineSpacing: 1.5, paragraphSpacing: 4, frameWidth: 120, rotationDegrees: 45,
+                letterSpacing: 2.0, wordSpacing: 1.0, fontStretch: "condensed", fontVariant: "small-caps"),
             Block("same", "Nimbus Sans", 18, bold: true, colour: ColorRgb.Green, alignment: TextAlignment.Center,
-                lineSpacing: 1.5, paragraphSpacing: 4, frameWidth: 120, rotationDegrees: 45));
+                lineSpacing: 1.5, paragraphSpacing: 4, frameWidth: 120, rotationDegrees: 45,
+                letterSpacing: 2.0, wordSpacing: 1.0, fontStretch: "condensed", fontVariant: "small-caps"));
 
         JsonElement reported = JsonSerializer.SerializeToElement(
             EditorOperations.Invoke(context, "text.common", Params(new { runIndex = 0 })));
@@ -349,6 +444,10 @@ public class TextOperationParityTests
         Assert.Equal(18.0, reported.GetProperty("size").GetDouble(), 6);
         Assert.True(reported.GetProperty("bold").GetBoolean());
         Assert.False(reported.GetProperty("italic").GetBoolean());
+        Assert.Equal(2.0, reported.GetProperty("letterSpacing").GetDouble(), 6);
+        Assert.Equal(1.0, reported.GetProperty("wordSpacing").GetDouble(), 6);
+        Assert.Equal("condensed", reported.GetProperty("fontStretch").GetString());
+        Assert.Equal("small-caps", reported.GetProperty("fontVariant").GetString());
         Assert.Equal(TextAlignment.Center.ToString(), reported.GetProperty("alignment").GetString());
         Assert.Equal(1.5, reported.GetProperty("leading").GetDouble(), 6);
         Assert.Equal(4.0, reported.GetProperty("space").GetDouble(), 6);
