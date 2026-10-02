@@ -466,8 +466,15 @@ public class GradientPaintTests
     /// <summary>
     /// Conical is a sweep, and it is the one kind a brush expresses exactly: a conic brush with the
     /// ramp's own stops, so the canvas paints it without falling back to the flat colour.
+    ///
+    /// **AvaloniaFact, because the assertion builds Avalonia objects.** `CreateBrush` constructs
+    /// `GradientStop`s, which are `AvaloniaObject`s, and that constructor calls the dispatcher's
+    /// `VerifyAccess`. On a plain `[Fact]` this runs on a thread-pool thread and throws
+    /// `InvalidOperationException: Call from invalid thread` - but only once the headless
+    /// dispatcher exists, so whether it threw depended on what ran before it. It failed on the
+    /// Windows runner as a lone 1-of-1309 and passed on the commit before, which is the signature.
     /// </summary>
-    [Fact]
+    [AvaloniaFact]
     public void AConicalGradientBuildsASweepBrushAndShader()
     {
         var spec = new GradientSpec
