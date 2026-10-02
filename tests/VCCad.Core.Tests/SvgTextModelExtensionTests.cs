@@ -506,13 +506,13 @@ public class SvgTextModelExtensionTests
 
         JsonNode sidecar = JsonNode.Parse(VccadDocumentSerializer.Serialize(DocumentWith(text)))!;
         JsonArray runs = (JsonArray)sidecar["Artboards"]![0]!["Layers"]![0]!["Items"]![0]!["Runs"]!;
-        foreach (JsonNode run in runs)
+        foreach (JsonNode? run in runs)
         {
-            run.AsObject().Remove("LetterSpacing");
-            run.AsObject().Remove("WordSpacing");
-            run.AsObject().Remove("Color");
-            run.AsObject().Remove("FontStretch");
-            run.AsObject().Remove("FontVariant");
+            run!.AsObject().Remove("LetterSpacing");
+            run!.AsObject().Remove("WordSpacing");
+            run!.AsObject().Remove("Color");
+            run!.AsObject().Remove("FontStretch");
+            run!.AsObject().Remove("FontVariant");
         }
 
         string older = sidecar.ToJsonString();
