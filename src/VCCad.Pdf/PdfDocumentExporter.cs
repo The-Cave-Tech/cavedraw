@@ -472,7 +472,7 @@ public static class PdfDocumentExporter
             case TextItem text:
                 // Inside the group's q/clips and the block's own, both of which are already open, and in the frame
                 // the block is placed in - the same `toDoc` the paths beside it are painted with.
-                WriteText(ops, text, embedder, alphaStates, toDoc);
+                WriteText(ops, text, embedder, alphaStates, toDoc, notes);
                 break;
 
             case ImageItem image:
@@ -1451,7 +1451,7 @@ public static class PdfDocumentExporter
     /// matrix. Used for everything the single-object path cannot describe.
     /// </summary>
     private static void WriteText(List<string> ops, TextItem text, PdfFontEmbedder embedder,
-        PdfAlphaStates alphaStates, AffineTransform toDoc)
+        PdfAlphaStates alphaStates, AffineTransform toDoc, List<string>? notes = null)
     {
         // **A vertical column cannot go through the one-text-object path.** It emits a single `Tm` for the whole
         // block, and a column's characters are not on one baseline - they are separated down the page. The per-run
@@ -1548,6 +1548,10 @@ public static class PdfDocumentExporter
                 hex.Clear();
             }
 
+            // A character with no glyph in the face that resolved is dropped below; counted here so the run can be
+            // declared rather than silently shortened.
+            int undrawn = 0;
+
             if (embeddedRun)
             {
                 // Pass-through: write the original glyph codes so the embedded
@@ -1598,6 +1602,10 @@ public static class PdfDocumentExporter
                         int gid = font!.GlyphFor(ch);
                         if (gid == 0)
                         {
+                            // **A character the face cannot draw is a loss worth declaring.** Skipping it silently
+                            // is what left a blank page for a script the resolved face does not cover: the canvas
+                            // drew it (Skia shapes, and falls back), the page drew nothing, and nothing said so.
+                            undrawn++;
                             continue;
                         }
 
@@ -1619,6 +1627,16 @@ public static class PdfDocumentExporter
                     yOffset = (li * lineHeight) + (NewlinesBefore(text, displayLines, li) * text.ParagraphSpacing);
                     Flush();
                 }
+            }
+
+            // **Declare a run the resolved face could not draw.** A person whose document is written in a script
+            // the chosen face does not cover watched their text disappear into a blank page and was told nothing.
+            if (undrawn > 0)
+            {
+                string sample = run.Text.Length <= 40 ? run.Text : run.Text[..40] + "\u2026";
+                notes?.Add(
+                    $"{undrawn} of {run.Text.Length} characters in '{sample}' have no glyph in "
+                    + $"'{run.FontFamily}' and were not drawn");
             }
 
             Flush();
