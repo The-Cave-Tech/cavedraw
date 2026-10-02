@@ -60,12 +60,19 @@ internal sealed record PresentationStyle(
     /// viewport, in which case such a percentage is reported rather than replaced by the property's default.
     /// </param>
     /// <param name="warn">Where a length the reader cannot resolve is reported.</param>
+    /// <param name="readObjectOpacity">
+    /// Whether the element's `opacity` is part of this read. It is for every element whose paint is being
+    /// established, because an object's opacity multiplies the paint's own. It is **not** when the question is what
+    /// a `use` site states, because the instance's own `opacity` is the group's opacity and is carried on the group
+    /// rather than in its presentation - reading it as paint too would apply it twice.
+    /// </param>
     public static PresentationStyle From(
         System.Xml.Linq.XElement element,
         PresentationStyle inherited,
         IReadOnlyDictionary<string, (string Value, bool Important)>? sheet = null,
         SvgViewport? viewport = null,
-        Action<string>? warn = null)
+        Action<string>? warn = null,
+        bool readObjectOpacity = true)
     {
         Dictionary<string, string> inline = ReadStyleAttribute(element);
         Dictionary<string, bool> inlineImportant = ReadStyleImportance(element);
@@ -152,7 +159,7 @@ internal sealed record PresentationStyle(
         // no outline writes an alpha into a member nothing reads - and the writer, which states only a stroke it
         // can see, cannot put that alpha back. The round trip then differed on a value with no picture behind it,
         // which is the kind of difference that gets waved away as noise until it hides a real one.
-        if (opacity is not null && double.TryParse(
+        if (readObjectOpacity && opacity is not null && double.TryParse(
                 opacity.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double alpha))
         {
             if (fill.IsVisible)

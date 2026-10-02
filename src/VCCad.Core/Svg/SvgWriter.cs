@@ -958,6 +958,13 @@ public static class SvgWriter
                         if (group.SourceId is { Length: > 0 } source)
                         {
                             element.Add(new XAttribute("data-source", source));
+
+                            // And the presentation the use site established travels beside the link, so a reopen
+                            // followed by a refresh does not revert the instance to the definition's own paint.
+                            if (group.InstancePresentation is { IsDefault: false } presentation)
+                            {
+                                WriteInstancePresentation(element, presentation);
+                            }
                         }
 
                         // A port written as a nested `svg` is already the clip; anything else is a `clip-path`,
@@ -2735,19 +2742,66 @@ public static class SvgWriter
         /// <summary>
         /// A fill: a gradient reference when there is one, a colour otherwise, or null when there is no fill.
         /// </summary>
-        private string? FillAttribute(PathItem path)
+        private string? FillAttribute(PathItem path) => FillAttribute(path.Fill);
+
+        /// <summary>
+        /// The same answer for a fill that is not on a path - an instance's use-site presentation, which is written
+        /// on the group because the model has no `use` element to state it on.
+        /// </summary>
+        private string? FillAttribute(FillSpec fill)
         {
-            if (!path.Fill.IsVisible)
+            if (!fill.IsVisible)
             {
                 return null;
             }
 
-            if (path.Fill.Gradient is not null && _gradientIds.TryGetValue(path.Fill.Gradient, out string? id))
+            if (fill.Gradient is not null && _gradientIds.TryGetValue(fill.Gradient, out string? id))
             {
                 return $"url(#{id})";
             }
 
-            return Hex(path.Fill.Color);
+            return Hex(fill.Color);
+        }
+
+        /// <summary>
+        /// The presentation a `use` site established for the instance, written on the group element beside
+        /// `data-source`.
+        ///
+        /// **Why on the group and not as a `<use>`.** The writer deliberately inlines the instance as the copy it
+        /// holds, because the copy is what is drawn - the use's paint is baked into it - and emitting a real `use`
+        /// would draw the *target* instead and change the picture on the next import. The reference therefore
+        /// travels as an attribute, and the style the reference carried has to travel beside it: without it,
+        /// reopening a saved file and refreshing an instance would repaint it from the definition and lose the
+        /// paint the file states, which is the loss the member exists to close.
+        ///
+        /// A viewer reads these attributes as inherited paint for anything inside the group that does not state its
+        /// own, which is exactly what they mean, and every item the writer emits states its own - so the exported
+        /// picture is unchanged.
+        /// </summary>
+        private void WriteInstancePresentation(XElement element, InstancePresentation presentation)
+        {
+            string? fill = FillAttribute(presentation.Fill);
+            element.Add(new XAttribute("fill", fill ?? "none"));
+
+            if (fill is not null)
+            {
+                if (presentation.Fill.Color.A < 1.0)
+                {
+                    element.Add(new XAttribute("fill-opacity", Number(presentation.Fill.Color.A)));
+                }
+
+                if (presentation.Fill.Rule == FillRule.EvenOdd)
+                {
+                    element.Add(new XAttribute("fill-rule", "evenodd"));
+                }
+            }
+
+            if (presentation.Stroke is { IsVisible: true } stroke)
+            {
+                // The recorded presentation is a `StrokeSpec` the reader parsed, so its stroke is SVG-native by
+                // construction: no brush, no width profile, no outline effects and a centred alignment.
+                WriteNativeStrokeAttributes(element, stroke);
+            }
         }
 
         /// <summary>The outline loops of a converted stroke, as one even-odd-free path.</summary>

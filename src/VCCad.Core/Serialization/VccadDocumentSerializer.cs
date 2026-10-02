@@ -511,7 +511,23 @@ internal sealed record GroupDto(
     ItemDto[] Children,
 
     // The definition an instance of this group was made from, when it is one. Absent for an ordinary group.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SourceId = null) : ItemDto;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SourceId = null,
+
+    // The presentation the `use` site that made this instance established for the definition's content (issue
+    // #117). Absent for an ordinary group, and absent for an instance whose use site states nothing beyond SVG's
+    // initial values - so a document with no instances, or with unstyled ones, serialises to the bytes it did
+    // before this member existed.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    InstancePresentationDto? InstancePresentation = null) : ItemDto;
+
+/// <summary>
+/// A use site's presentation, as it travels in the sidecar: the fill and the stroke the `use`'s computed style
+/// handed down into the definition it drew.
+///
+/// Both members are written whenever the enclosing member is, because the presentation is only stored when it
+/// differs from SVG's initial values - a half-written one would come back as the other half's initial value.
+/// </summary>
+internal sealed record InstancePresentationDto(FillDto Fill, StrokeDto Stroke);
 
 internal sealed record TextDto(
     Guid Id,
@@ -810,7 +826,11 @@ internal abstract record ItemDto
         g.Transform,
         g.Opacity,
         g.Children.Select(From).ToArray(),
-        g.SourceId);
+        g.SourceId,
+        g.InstancePresentation is { IsDefault: false } presentation ? ToPresentation(presentation) : null);
+
+    private static InstancePresentationDto ToPresentation(InstancePresentation presentation)
+        => new(ToFill(presentation.Fill), ToStroke(presentation.Stroke));
 
     private static FillDto ToFill(FillSpec f)
         => new(
@@ -1264,6 +1284,9 @@ internal static class ItemDtoExtensions
             Transform = g.Transform,
             Opacity = g.Opacity,
             SourceId = g.SourceId,
+            InstancePresentation = g.InstancePresentation is { } presentation
+                ? new InstancePresentation(presentation.Fill.ToModel(), presentation.Stroke.ToModel())
+                : null,
         };
         group.RestoreIdentity(g.Id);
         foreach (ItemDto child in VccadDocumentSerializer.RequireArray(g.Children, nameof(g.Children)))

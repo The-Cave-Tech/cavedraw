@@ -60,6 +60,23 @@ public sealed class ArtGroup : LayerItem, IItemContainer
 
     private string? _sourceId;
 
+    /// <summary>
+    /// The presentation the `use` site that made this instance established for the definition's content, or null
+    /// when it established nothing beyond SVG's initial values.
+    ///
+    /// <see cref="SourceId"/> is the link; this is the other half of what a `use` says. The importer reads the
+    /// definition under this style, so the instance holds its painted copy - and re-materialisation clones the
+    /// definition instead, which was read under the initial values. Carrying the presentation on the instance is
+    /// what lets <see cref="InstanceResolver"/> put it back, so a `use fill="red"` stays red across a refresh.
+    /// </summary>
+    public InstancePresentation? InstancePresentation
+    {
+        get => _instancePresentation;
+        set => SetField(ref _instancePresentation, value);
+    }
+
+    private InstancePresentation? _instancePresentation;
+
     /// <inheritdoc/>
     public event EventHandler? StructureChanged;
 
@@ -120,6 +137,10 @@ public sealed class ArtGroup : LayerItem, IItemContainer
             // The link to the definition, or a duplicate of an instance would stop being an instance - the same
             // way a cloned path loses the rest of its stroke stack if the clone forgets to carry it.
             SourceId = _sourceId,
+
+            // And the use site's own presentation, which is the other half of what makes the copy the picture the
+            // `use` asked for: a duplicate that dropped it would draw the definition's paint instead.
+            InstancePresentation = _instancePresentation,
         };
         copy.AddRangeCloned(_children);
         return copy;

@@ -1141,6 +1141,20 @@ public static partial class SvgReader
         AffineTransform transform = Transform(element.Attribute("transform")?.Value);
         var group = new ArtGroup { Name = element.Attribute("id")?.Value ?? string.Empty };
         group.SourceId = SourceOf(element);
+
+        // **A written instance carries its use site's presentation as attributes on this element.** The writer
+        // states them because the model has no `<use>` to state it on, and reading them back here is what keeps the
+        // paint across a save: without it, reopening a file and refreshing would revert the instance to the
+        // definition's own paint, which is the very loss this member exists to close. Read against the initial
+        // values rather than against what this element inherits, because the presentation is what the **use site**
+        // established, not what the reopened tree around it happens to say. The element's own `opacity` is the
+        // group's and is not part of it.
+        if (group.SourceId is { Length: > 0 })
+        {
+            group.InstancePresentation = PresentationOf(
+                PresentationStyle.From(element, PresentationStyle.Default, readObjectOpacity: false));
+        }
+
         group.Transform = transform;
         group.BlendMode = style.Blend;
         CaptureForeign(element, group);
@@ -1280,6 +1294,14 @@ public static partial class SvgReader
         };
         group.BlendMode = style.Blend;
         CaptureForeign(element, group);
+
+        // A written instance may be a nested viewport: its use site's presentation travels on this element exactly
+        // as it does on a plain group, and the same read puts it back.
+        if (group.SourceId is { Length: > 0 })
+        {
+            group.InstancePresentation = PresentationOf(
+                PresentationStyle.From(element, PresentationStyle.Default, readObjectOpacity: false));
+        }
 
         var inside = new Context
         {
@@ -2463,6 +2485,22 @@ public static partial class SvgReader
     }
 
     /// <summary>
+    /// The presentation a `use` site establishes, as the model records it on the instance - or null when it
+    /// establishes nothing beyond SVG's initial values, which is what keeps an unstyled ordinary document free of
+    /// the member.
+    ///
+    /// This is the **inherited** half of the style the target is read with: the fill and the stroke (width, caps,
+    /// joins, miter limit and dash included) that cascade into the definition's content. It is deliberately not the
+    /// whole computed style - <c>mix-blend-mode</c> does not inherit and travels on the group, and a marker
+    /// reference becomes art at read time rather than a member a repaint could re-apply.
+    /// </summary>
+    private static InstancePresentation? PresentationOf(PresentationStyle style)
+    {
+        var presentation = new InstancePresentation(style.Fill, style.Stroke);
+        return presentation.IsDefault ? null : presentation;
+    }
+
+    /// <summary>
     /// A `use`: an instance of whatever it refers to.
     ///
     /// **The instance is a group marked with the id it came from**, not a flattened copy. The geometry inside is the
@@ -2558,6 +2596,12 @@ public static partial class SvgReader
         };
 
         ReadUsedTarget(target, id, element, context, inside, group);
+
+        // What this `use` says about the paint of what it draws, recorded so a re-resolution can put it back: the
+        // definition is read under SVG's initial values, so re-materialising from it would otherwise drop the paint
+        // the use site established. The composed style is the value here - the use's own declarations over whatever
+        // it inherits - because that is the style the target was just read under.
+        group.InstancePresentation = PresentationOf(inside.Style);
 
         context.Resolving.Remove(id);
         yield return group;
@@ -2790,6 +2834,7 @@ public static partial class SvgReader
             };
 
             ReadUsedTarget(target, id, element, context, inside, group);
+            group.InstancePresentation = PresentationOf(inside.Style);
             yield return group;
         }
         finally

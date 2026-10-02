@@ -58,7 +58,7 @@ public static class InstanceResolver
             .Where(group => group.SourceId is { Length: > 0 } && !HasInstanceAncestor(group))
             .ToArray())
         {
-            if (Materialise(instance, document, resolving, notFollowed))
+            if (Materialise(instance, document, resolving, notFollowed, InstancePresentation.Default))
             {
                 refreshed++;
             }
@@ -90,11 +90,22 @@ public static class InstanceResolver
     }
 
     /// <summary>
-    /// Replaces one instance's children with a copy of its definition, and resolves the instances inside that
-    /// copy - a definition may itself use another definition, and the chain has to be followed the whole way down.
+    /// Replaces one instance's children with a copy of its definition, resolves the instances inside that copy -
+    /// a definition may itself use another definition, and the chain has to be followed the whole way down - and
+    /// **puts the use site's presentation back** on the content it just rebuilt.
     /// </summary>
+    /// <param name="outer">
+    /// The presentation the enclosing instance establishes. SVG's `use` draws its target with the use site's style,
+    /// so a nested use inherits the outer one's paint unless it states a value of its own - and the presentation a
+    /// nested instance recorded was composed against SVG's initial values when the *definition* was read, not
+    /// against the outer use. Composing it here is what keeps the outer paint on the inner content.
+    /// </param>
     private static bool Materialise(
-        ArtGroup instance, CadDocument document, HashSet<string> resolving, List<string> notFollowed)
+        ArtGroup instance,
+        CadDocument document,
+        HashSet<string> resolving,
+        List<string> notFollowed,
+        InstancePresentation outer)
     {
         string id = instance.SourceId!;
 
@@ -117,6 +128,10 @@ public static class InstanceResolver
 
         try
         {
+            // The style this instance's content is drawn under: its own `use` site's presentation, with anything
+            // the enclosing instance established still in force where this one states nothing.
+            InstancePresentation effective = InstancePresentation.Compose(outer, instance.InstancePresentation);
+
             foreach (LayerItem child in instance.Children.ToArray())
             {
                 instance.RemoveItem(child);
@@ -127,11 +142,16 @@ public static class InstanceResolver
                 instance.AddItem(content.Clone());
             }
 
+            // The definition's content was read under SVG's initial values, so where the use site states a paint
+            // the content has to be given it again. This is the step the issue was open for: without it the picture
+            // is the definition's, not the use's, the moment anything is re-resolved.
+            Repaint(instance.Children, effective);
+
             foreach (LayerItem child in instance.Children)
             {
                 foreach (ArtGroup nested in NearestInstances(child))
                 {
-                    Materialise(nested, document, resolving, notFollowed);
+                    Materialise(nested, document, resolving, notFollowed, effective);
                 }
             }
         }
@@ -141,6 +161,51 @@ public static class InstanceResolver
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Gives the use site's paint back to the content that was just rebuilt from a definition.
+    ///
+    /// **Only where the definition states nothing.** The definition's content was read under SVG's initial values -
+    /// a black fill and no stroke - so an item whose paint is still exactly that is one that inherited, and one
+    /// whose paint differs is one that stated its own, which no use site can override: SVG's `use` establishes the
+    /// shadow tree's inherited style, it does not paint over declarations inside the target. A path that states a
+    /// value **equal to the initial one** cannot be told apart from one that inherited, because the model stores
+    /// the resolved paint and not the declaration that produced it; the two answers agree in every case except a
+    /// use that states a different paint over a definition that names the initial one deliberately, which is
+    /// recorded here rather than papered over.
+    ///
+    /// A nested instance is **left to its own resolution**, which composes this presentation with its own - walking
+    /// into it here would paint it twice and, worse, would leave its own use site's declarations unapplied.
+    /// </summary>
+    private static void Repaint(IReadOnlyList<LayerItem> items, InstancePresentation paint)
+    {
+        if (paint.IsDefault)
+        {
+            return;
+        }
+
+        foreach (LayerItem item in items)
+        {
+            switch (item)
+            {
+                case PathItem path:
+                    if (Equals(path.Fill, InstancePresentation.Default.Fill))
+                    {
+                        path.Fill = paint.Fill;
+                    }
+
+                    if (Equals(path.Stroke, InstancePresentation.Default.Stroke))
+                    {
+                        path.Stroke = paint.Stroke;
+                    }
+
+                    break;
+                case ArtGroup group when !IsInstance(group):
+                    Repaint(group.Children, paint);
+                    break;
+            }
+        }
     }
 
     /// <summary>

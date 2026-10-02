@@ -748,6 +748,34 @@ public static class EditorOperations
                 };
             });
 
+        Add("instance.presentation",
+            "The presentation each instance's own `use` site established for the definition it draws, as the model " +
+            "records it: the fill and the stroke (width, caps, joins, miter limit and dash included) that cascade " +
+            "into what the `use` draws. This is the half a refresh has to put back - the definition is read under " +
+            "SVG's initial values, so re-materialising from it alone would repaint a `use fill=\"red\"` instance " +
+            "black - and it is the readout of what the rebuild applies, not a second opinion about it. An instance " +
+            "whose use site states nothing beyond the initial values reports a null presentation, which is the " +
+            "difference between 'nobody said' and 'somebody chose black'. Present for every instance in the " +
+            "document, because an instance is a reference and a caller looking for the paint it carries has to be " +
+            "able to find it wherever it is.",
+            "",
+            (ctx, _) => ctx.Document.AllGroups()
+                .Where(InstanceResolver.IsInstance)
+                .Select(instance => (object)new
+                {
+                    itemId = instance.Id,
+                    name = instance.Name,
+                    sourceId = instance.SourceId,
+                    presentation = instance.InstancePresentation is { IsDefault: false } presentation
+                        ? new
+                        {
+                            fill = DescribeFill(presentation.Fill),
+                            stroke = DescribeStroke(presentation.Stroke),
+                        }
+                        : null,
+                })
+                .ToArray());
+
         // ---- selection ---------------------------------------------------
         Add("selection.get", "Currently selected objects.", "",
             (ctx, _) => Describe(ctx.Session.SelectedObjects).ToArray());
@@ -9092,6 +9120,20 @@ public static class EditorOperations
     /// refusing would throw the edit away and leave the two routes disagreeing about one value.
     /// </summary>
     private static double ClampedWidth(double width) => Math.Max(0.0, width);
+
+    /// <summary>One fill as a caller reads it: the paint and the rule it is filled by.</summary>
+    private static object DescribeFill(FillSpec fill) => new
+    {
+        visible = fill.IsVisible,
+        r = Math.Round(fill.Color.R, 6),
+        g = Math.Round(fill.Color.G, 6),
+        b = Math.Round(fill.Color.B, 6),
+        a = Math.Round(fill.Color.A, 6),
+        hex = HexColor.Format(fill.Color),
+        rule = fill.Rule.ToString().ToLowerInvariant(),
+        gradient = fill.Gradient is not null,
+        hatch = fill.Hatch is { IsEmpty: false },
+    };
 
     /// <summary>One stroke as a caller reads it: every member that decides what it looks like.</summary>
     private static object DescribeStroke(StrokeSpec stroke) => new

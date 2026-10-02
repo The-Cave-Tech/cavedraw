@@ -217,4 +217,72 @@ public class InstanceRefreshOperationTests
 
         Assert.Equal(string.Empty, entry.GetProperty("parameters").GetString());
     }
+
+    /// <summary>
+    /// **The operation puts the use site's paint back, and a driver can read it.** `instance.refresh` rebuilds an
+    /// instance from its definition, and the definition was read under SVG's initial values - so without the
+    /// instance's own recorded presentation the `fill="red"` use comes back black through the registry, which is
+    /// exactly the loss #117 records. The assertions are on the **channel values**, from the model and from the
+    /// readout operation, because "a refresh happened" is not the requirement.
+    /// </summary>
+    [Fact]
+    public void TheOperationKeepsThePaintTheUseSiteStated()
+    {
+        AutomationContext context = Host();
+        CadDocument document = Import(
+            context,
+            "<defs><rect id=\"box\" width=\"10\" height=\"10\"/></defs>" +
+            "<use id=\"red\" href=\"#box\" fill=\"red\"/>" +
+            "<use id=\"plain\" href=\"#box\" x=\"50\"/>");
+
+        ArtGroup red = Assert.Single(Instances(document, "box"), group => group.Name == "red");
+        Assert.Equal(1.0, FirstShape(red).Fill.Color.R, 6);
+
+        JsonElement result = Refresh(context);
+        Assert.Equal(2, result.GetProperty("refreshed").GetInt32());
+
+        // The drawing, after the rebuild: red is still red, and the use that stated nothing is still SVG's black.
+        Assert.Equal(1.0, FirstShape(red).Fill.Color.R, 6);
+        Assert.Equal(0.0, FirstShape(red).Fill.Color.G, 6);
+        Assert.Equal(0.0, FirstShape(red).Fill.Color.B, 6);
+
+        ArtGroup plain = Assert.Single(Instances(document, "box"), group => group.Name == "plain");
+        Assert.Equal(0.0, FirstShape(plain).Fill.Color.R, 6);
+
+        // And the readout says the same thing a driver would have to reconstruct by hand otherwise.
+        JsonElement readout = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "instance.presentation", default));
+
+        JsonElement reported = Assert.Single(
+            readout.EnumerateArray(),
+            entry => entry.GetProperty("sourceId").GetString() == "box" &&
+                     entry.GetProperty("name").GetString() == "red");
+
+        Assert.Equal(1.0, reported.GetProperty("presentation").GetProperty("fill").GetProperty("r").GetDouble(), 6);
+        Assert.Equal(0.0, reported.GetProperty("presentation").GetProperty("fill").GetProperty("g").GetDouble(), 6);
+        Assert.Equal(0.0, reported.GetProperty("presentation").GetProperty("fill").GetProperty("b").GetDouble(), 6);
+
+        JsonElement unstyled = Assert.Single(
+            readout.EnumerateArray(),
+            entry => entry.GetProperty("name").GetString() == "plain");
+        Assert.Equal(JsonValueKind.Null, unstyled.GetProperty("presentation").ValueKind);
+    }
+
+    /// <summary>
+    /// **The readout is in the catalog**, so a person finds it in the Operations tab and a driver discovers it -
+    /// the same parity the refresh operation itself had to be given.
+    /// </summary>
+    [Fact]
+    public void TheCatalogNamesThePresentationReadout()
+    {
+        AutomationContext context = Host();
+        JsonElement catalog = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "app.operations", default));
+
+        JsonElement entry = Assert.Single(
+            catalog.EnumerateArray(),
+            operation => operation.GetProperty("op").GetString() == "instance.presentation");
+
+        Assert.Equal(string.Empty, entry.GetProperty("parameters").GetString());
+    }
 }
