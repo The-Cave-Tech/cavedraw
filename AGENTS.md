@@ -295,6 +295,16 @@ was mid-*start*, and the restart destroyed the run:
   `The runner has received a shutdown signal` - and the same command *printed* `workers=1` in the
   line above the restart, so the evidence that it was unsafe was on screen at the time.
 
+**That signature is not proof a runner was disturbed.** It has since been seen on `runningman` with
+nobody touching anything: `build-test` restored every project, ran `dotnet build VCCad.sln -c Release
+--no-restore`, and died **one second later** with the same `Fatal error. Internal CLR error.
+(0x80131506)` and `Aborted (core dumped)`, exit 134 - while `desktop-publish` ran to success on the
+same machine minutes apart, and the next commit, whose tree contains that one's change unchanged,
+passed the same job. So the honest reading of a CLR crash at the start of a build is *unknown
+environment*, not *somebody restarted something*, and the first question is whether the next revision
+passes rather than who killed it. Recording it as a runner fault is right; concluding the commit was
+broken, or that a restart happened, is not.
+
 **So the rule is an interval, not a sample.** `workers=0` from one check means nothing: it is
 exactly what a runner looks like immediately before it picks up a job. Restart only after zero
 workers have been observed **across a sustained interval, repeatedly** - and even then, prefer to
