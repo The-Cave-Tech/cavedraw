@@ -283,6 +283,58 @@ public class ArrangeFrameTests
         }
     }
 
+    /// <summary>
+    /// A group **inside another group** is measured where it is drawn, not in the frame its own numbers are
+    /// written in.
+    ///
+    /// This is the case that tells the two candidate measurements apart, and it is the reason the fix is a
+    /// frame rather than a `DeltaInItem` in the caller. `ItemBounds.Of` composes only an item's **own**
+    /// transform, so a nested group answers with its children's local numbers - 500 here - while the object
+    /// it is aligned against answers in the artboard frame. The two are in different spaces and no amount of
+    /// converting the resulting delta can repair a comparison that was already made between them.
+    ///
+    /// The outer group is `translate(100,100) scale(2)` and the inner group adds `translate(200,50)`, so the
+    /// square written at 10,10 is drawn with its left edge at 520. A loose object at 0..40 is the selection's
+    /// left edge, and aligning to it has to bring the square to 0 - which needs the inner group's delta to be
+    /// measured from 520, not from the 500 its own frame reports.
+    /// </summary>
+    [Fact]
+    public void ANestedGroupIsMeasuredWhereItIsDrawn()
+    {
+        var document = CadDocument.CreateDefault("Page 1");
+        Layer layer = document.Artboards[0].Layers[0];
+
+        var outer = new ArtGroup
+        {
+            Name = "outer",
+            Transform = AffineTransform.CreateTranslation(100, 100).Compose(AffineTransform.CreateScale(2, 2)),
+        };
+        var inner = new ArtGroup
+        {
+            Name = "inner",
+            Transform = AffineTransform.CreateTranslation(200, 50),
+        };
+
+        PathItem square = Box("square", 10, 10, 20, 20);
+        PathItem loose = Box("loose", 0, 0, 40, 40);
+        inner.AddItem(square);
+        outer.AddItem(inner);
+        layer.AddItem(outer);
+        layer.AddItem(loose);
+
+        // The inner group's own frame reports 10,10 carried only by its own translate - 210 - while the page
+        // draws it at 520 because the outer group scales everything by two as well.
+        AssertSame(210.0, ItemBounds.Of(inner).Left, "the nested group in its own frame");
+        AssertSame(520.0, InWorld(square).Left, "the square where it is drawn");
+
+        // The nested group itself is in the selection: its own frame and the page disagree, which is the
+        // comparison the frame is for.
+        Apply(Arrange.Align(new LayerItem[] { inner, loose }, ArrangeAxis.Horizontal, ArrangeEdge.Start));
+
+        AssertSame(0, InWorld(loose).Left, "the loose object after aligning");
+        AssertSame(0, InWorld(square).Left, "the nested square after aligning");
+    }
+
     /// <summary>A group `translate(200,300) scale(2)` with a square in it, and a loose square outside.</summary>
     private static (ArtGroup Group, PathItem Inside, PathItem Outside, Layer Layer) TwoFrames()
     {

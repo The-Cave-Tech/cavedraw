@@ -1130,6 +1130,14 @@ public static class EditorOperations
                         "Nothing to move: pass itemIds, or select something first.");
                 }
 
+                // Where the art is **drawn** does not change: the command converts the geometry into the
+                // destination layer's frame, so filing an object onto a page that sits elsewhere in the
+                // sheet - or into a transformed group - leaves it where the driver put it (#174). A frame
+                // change that cannot be made honestly is refused and reported rather than stored wrong.
+                // Where the art is **drawn** does not change: the command converts the geometry into the
+                // destination layer's frame, so filing an object onto a page that sits elsewhere in the
+                // sheet - or into a transformed group - leaves it where the driver put it (#174). A frame
+                // change that cannot be made honestly is refused and reported rather than stored wrong.
                 ctx.ViewModel.MoveItems(items, target, target.Children.Count);
                 return new
                 {

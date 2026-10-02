@@ -656,9 +656,17 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// <summary>
     /// Applies a set of arranged deltas as one undo step.
     ///
+    /// The deltas come from <see cref="Arrange"/>, which measures every object in the **artboard frame** -
+    /// the frame the document stores its coordinates in - so each one has to be carried into the frame the
+    /// item's own geometry is written in before it is applied, by the composition
+    /// <see cref="SelectionEngine.DeltaInItem"/> states once. The delta is the artboard's, so it gains the
+    /// artboard origin to become a world displacement, and `DeltaInItem` then takes it through every
+    /// enclosing group. Added raw, a delta meant for the page is applied to numbers written inside a group,
+    /// which moves the art by the group transform applied twice (#174).
+    ///
     /// Paths have their geometry translated and text has its origin moved, which is how each kind says
-    /// where it is. Other kinds - a group, a placed image - are **counted and reported** rather than
-    /// silently left behind: arranging half a selection and saying nothing is worse than saying so.
+    /// where it is. Other kinds - a placed image - are **counted and reported** rather than silently left
+    /// behind: arranging half a selection and saying nothing is worse than saying so.
     /// </summary>
     private int MoveByDeltas(IReadOnlyList<(LayerItem Item, Vector2D Delta)> moves, string description)
     {
@@ -681,17 +689,19 @@ public sealed class DocumentSession : INotifyPropertyChanged
                     continue;
                 }
 
+                Vector2D carried = SelectionEngine.DeltaInItem(inside, delta + inside.ArtboardOffset());
+
                 switch (inside)
                 {
                     case PathItem path:
                         PathItem before = path.GeometrySnapshot();
-                        path.TranslateGeometryBy(delta);
+                        path.TranslateGeometryBy(carried);
                         edits.Add(new GeometryReplaceCommand(path, before, path.GeometrySnapshot(), description));
                         break;
 
                     case TextItem text:
                         Point2D origin = text.Origin;
-                        edits.Add(new SetTextOriginCommand(text, origin, origin + delta));
+                        edits.Add(new SetTextOriginCommand(text, origin, origin + carried));
                         break;
 
                     default:
