@@ -116,13 +116,15 @@ public class SvgExportOperationTests
     /// **The driver sees the loss the person would**, on the surface `document.exportSvg` exposes.
     ///
     /// The result used to be a character count, which cannot tell an export that wrote the document from one that
-    /// left the words out of it; the items that did not reach the file are named instead. This test used to pin a
-    /// text block and a raster as two losses. The writer now emits the text (#132), so the converted expectation is
-    /// the one loss that is left - and the assertion that the words are in the file is the half that says the text
-    /// half of the writer is finished rather than merely unreported.
+    /// left the words out of it; the items that did not reach the file are named instead. This test has been
+    /// converted twice and never deleted: it first pinned a text block and a raster as two losses, then the text
+    /// half of #132 landed and it pinned the raster as the one loss left, and now the raster is written too - so
+    /// what is pinned is that both halves are in the file and that a document the writer wrote completely reports
+    /// nothing at all. The report's own contract - it names what could not be written - is pinned by
+    /// `SvgWriterLossTests` against a raster the writer genuinely cannot state.
     /// </summary>
     [Fact]
-    public void ExportSvgWritesTheTextAndReportsTheImageItCouldNotWrite()
+    public void ExportSvgWritesTheTextAndTheImageAndReportsNothing()
     {
         AutomationContext context = Host(out _);
 
@@ -145,14 +147,14 @@ public class SvgExportOperationTests
         string[] missing = result.GetProperty("missing").EnumerateArray()
             .Select(entry => entry.GetString()!).ToArray();
 
-        Assert.Contains(missing, entry => entry.Contains("image 'logo'", StringComparison.Ordinal));
-        Assert.DoesNotContain(missing, entry => entry.Contains("text 'Title'", StringComparison.Ordinal));
+        Assert.Empty(missing);
 
-        // And the words really are in the file, which is the difference the report is now about.
+        // And both really are in the file, which is the difference the report is now about.
         string svg = Decode(result);
         Assert.Contains("<text", svg, StringComparison.Ordinal);
         Assert.Contains("Hello", svg, StringComparison.Ordinal);
-        Assert.DoesNotContain("<image", svg, StringComparison.Ordinal);
+        Assert.Contains("<image", svg, StringComparison.Ordinal);
+        Assert.Contains("data:image/png;base64,", svg, StringComparison.Ordinal);
     }
 
     /// <summary>The other half: an export that lost nothing reports nothing, so the list stays worth reading.</summary>

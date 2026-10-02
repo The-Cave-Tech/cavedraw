@@ -975,6 +975,20 @@ public static partial class SvgReader
                     image.FilterId = imageFilter;
                 }
 
+                // **The crop, in the same frame the placement ended up in.** `ReadImage` carried the element's own
+                // transform into the placement rectangle, so the outline is carried by it too - the shape branch
+                // below states the same rule for the same reason. A `clip-path` on an image used to be resolved and
+                // then dropped on the floor here, because this branch returned before the shape reader got to it.
+                if (clip is { } imageClipPath)
+                {
+                    if (imageClipPath.Spec is { } imageClip)
+                    {
+                        image.Clips.Add(ApplyTransform(imageClip, own));
+                    }
+
+                    context.Warnings.UnionWith(imageClipPath.Warnings);
+                }
+
                 CaptureForeign(element, image);
                 context.Add(image);
                 context.Counts["image"] = context.Counts.GetValueOrDefault("image") + 1;

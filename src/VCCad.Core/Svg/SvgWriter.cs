@@ -38,15 +38,17 @@ public sealed record SvgWriteResult(
 /// the paint and the structure survive exactly, and the element it came from does not. That is a deliberate
 /// conversion rather than a loss, and it is what lets one writer handle every shape the reader accepts.
 ///
-/// **What cannot be written is reported, not dropped.** A text block is written now - one `text` per baseline,
-/// a `tspan` per run - so the things that reach <see cref="SvgWriteResult.Missing"/> are the ones still without an
-/// element here: an embedded **raster**, whose samples are decoded and which SVG states encoded; a **hatch fill**,
-/// which SVG states as a `pattern` this writer has no output for; and each individual value a `text` element
-/// cannot carry, such as an embedded programme or a wrap width. Every one is left out of the file and **named**,
-/// with its kind and the reason. The rule this repository runs on is that a gap is said rather than silently
-/// skipped, and an exporter is the one place where being quiet costs somebody a document: a person opens the file
-/// and the words are simply not there. The list is empty for a document the writer wrote completely, so "nothing
-/// was lost" is a fact the caller can rely on rather than a default it has to trust.
+/// **What cannot be written is reported, not dropped.** Text and rasters are both written now - one `text` per
+/// baseline with a `tspan` per run, and an `image` at its placement carrying its bytes as a data URI - so the things
+/// that reach <see cref="SvgWriteResult.Missing"/> are the ones still without an element here: a **hatch fill**,
+/// which SVG states as a `pattern` this writer has no output for; a raster whose samples cannot be stated as a
+/// picture at all (a CMYK scan, a mask that is still compressed); each individual value a `text` element cannot
+/// carry, such as an embedded programme or a wrap width; and each value beside a raster that no image format states,
+/// such as a colour key or a decode array. Every one is left out of the file and **named**, with its kind and the
+/// reason. The rule this repository runs on is that a gap is said rather than silently skipped, and an exporter is
+/// the one place where being quiet costs somebody a document: a person opens the file and the words are simply not
+/// there. The list is empty for a document the writer wrote completely, so "nothing was lost" is a fact the caller
+/// can rely on rather than a default it has to trust.
 /// </summary>
 public static class SvgWriter
 {
@@ -967,15 +969,11 @@ public static class SvgWriter
                         WriteText(text, parent);
                         break;
 
-                    // An embedded raster still has no element this writer emits. The model holds **decoded
-                    // samples** in whichever colour space the file used, plus a soft mask, a colour key and a
-                    // decode array; SVG states a picture as an encoded resource - a data URI naming PNG or JPEG -
-                    // and this build reads PNG and cannot write it. Raw samples under an `image` element would be
-                    // a file no viewer can read, which is the plausible-instead-of-honest answer the rule forbids,
-                    // so the raster is left out and **named**. The text half of #132 landed; this is the half that
-                    // has not, and the round-trip suite asserts the naming rather than assuming it.
+                    // An embedded raster is written as an `image` at its placement, carrying its own bytes as a
+                    // data URI - the file's bytes for a JPEG, a PNG built from the samples otherwise. A raster
+                    // whose samples cannot be stated (CMYK, a mask that is still compressed) is named instead.
                     case ImageItem image:
-                        Report(image, "the writer has no SVG image output, so the raster is not in the file");
+                        WriteImage(image, parent);
                         break;
 
                     // Anything the model grows later lands here rather than falling out of the switch: the one
@@ -986,6 +984,186 @@ public static class SvgWriter
                 }
             }
         }
+
+        /// <summary>
+        /// One raster, as an SVG `image` at its placement, carrying its own bytes.
+        ///
+        /// **The placement is the element's box, and `preserveAspectRatio="none"` is what makes it one.** The model
+        /// records where a picture sits as a rectangle - the transform that placed it in the source file is folded
+        /// into that rectangle - so `x`, `y`, `width` and `height` are the rectangle. SVG's *default* fits the
+        /// picture inside the box, preserving its proportions and centring it, so a 2x2 raster placed in a 40x30 box
+        /// would come back 30x30 at an offset: a rectangle the document never drew. `none` is the file stating the
+        /// box the model holds. The coordinates are written **bare**, like a text run's, because the root states its
+        /// size in `pt` and its `viewBox` in the model's own numbers, so the reader's view-box fit is the identity
+        /// and one bare number is one model unit.
+        ///
+        /// **The picture travels inside the document, never as a reference to a file.** A `href` naming a file
+        /// beside the SVG is a reference that resolves only if that file is still there, and the model holds no path
+        /// to write - it holds the bytes. So they are encoded into the document: the file's own bytes when the
+        /// raster is still a JPEG (re-encoding somebody else's photograph would be a lossy rewrite of it), and a PNG
+        /// built from the samples otherwise - see <see cref="PngEncoder"/>. A raster whose samples cannot be stated
+        /// that way is **named**, which is what the report is for.
+        ///
+        /// **A written raster and a named facet of it are different answers.** A picture whose pixels can be stated
+        /// goes into the file even when a *value* beside them cannot travel - a colour key, a decode array, a hidden
+        /// flag - and that value is named instead. Losing a whole photograph over one value would help nobody; this
+        /// is the decision the text writer already takes for a run whose embedded programme cannot be written.
+        ///
+        /// **A flip is carried by the element's own transform.** The reader reads whether a picture is mirrored out
+        /// of the determinant of that transform, so a mirrored raster is written with the placement folded into a
+        /// `matrix` and the flip's sign in it - the samples are never resampled. Two flips are the one case that
+        /// cannot travel: their determinant is positive, which is the same sign as no flip at all, so a raster
+        /// flipped on both axes is drawn unflipped and said so.
+        /// </summary>
+        private void WriteImage(ImageItem image, XElement parent)
+        {
+            string? href = ImageHref(image, out string? reason);
+            if (href is null)
+            {
+                Report(image, reason!);
+                return;
+            }
+
+            // What the file cannot state beside a picture that IS in it. Named, and the raster is still written.
+            if (image.Decode is { Length: > 0 })
+            {
+                Report(image, "the file's decode array is not in the image: no image format states a per-component " +
+                    "remap, so the file holds the stored samples rather than the values the array maps them to");
+            }
+
+            if (image.ColourKey is { Length: > 0 })
+            {
+                Report(image, "the file's colour key is not in the image: the writer states no transparency " +
+                    "beyond the soft mask, so the colour the key made paint nothing is written opaque");
+            }
+
+            if (image.MirrorX && image.MirrorY)
+            {
+                Report(image, "the raster is flipped on both axes, and the reader reads a flip from the sign of a " +
+                    "transform's determinant - two flips have a positive determinant, which is the same sign as " +
+                    "none, so the picture is written unflipped");
+            }
+
+            // SVG's `display="none"` is not a hidden element to this reader - it is an element it never reads - so
+            // writing the raster hidden would delete it outright. Losing the flag is the smaller loss, and it is
+            // named, exactly as it is for a text block.
+            if (!image.IsVisible)
+            {
+                Report(image, "the raster is hidden and the file holds no hidden image the reader keeps: an element " +
+                    "it does not draw is one it does not read");
+            }
+
+            // **A flip is the element's own transform**, and the placement moves into it: the box is written at the
+            // origin and the matrix both places it and turns it over. The reader puts the box's two corners through
+            // that matrix and reads the flip out of its determinant, so the placement comes back whole.
+            AffineTransform own = AffineTransform.Identity;
+            if (image.MirrorX || image.MirrorY)
+            {
+                double scaleX = image.MirrorX ? -1.0 : 1.0;
+                double scaleY = image.MirrorY ? -1.0 : 1.0;
+                double translateX = image.MirrorX ? image.Placement.X + image.Placement.Width : image.Placement.X;
+                double translateY = image.MirrorY ? image.Placement.Y + image.Placement.Height : image.Placement.Y;
+                own = AffineTransform.CreateTranslation(translateX, translateY)
+                    .Compose(AffineTransform.CreateScale(scaleX, scaleY));
+            }
+
+            // The clip is carried by that same transform, for the reason the shape half states: a `clip-path` is
+            // applied in the user space the element's own transform establishes, so an outline the model recorded in
+            // the parent's space needs the inverse to be stated there.
+            string? clip = WriteClips(image, own);
+
+            var element = new XElement(Svg + "image");
+            ApplyForeign(element, image);
+
+            if (!string.IsNullOrEmpty(image.Name))
+            {
+                element.Add(new XAttribute("id", image.Name));
+            }
+
+            if (!string.IsNullOrEmpty(image.FilterId))
+            {
+                element.Add(new XAttribute("filter", $"url(#{image.FilterId})"));
+            }
+
+            bool flipped = image.MirrorX || image.MirrorY;
+            element.Add(new XAttribute("x", Number(flipped ? 0.0 : image.Placement.X)));
+            element.Add(new XAttribute("y", Number(flipped ? 0.0 : image.Placement.Y)));
+            element.Add(new XAttribute("width", Number(image.Placement.Width)));
+            element.Add(new XAttribute("height", Number(image.Placement.Height)));
+            element.Add(new XAttribute("preserveAspectRatio", "none"));
+
+            string transform = TransformAttribute(own);
+            if (transform.Length > 0)
+            {
+                element.Add(new XAttribute("transform", transform));
+            }
+
+            if (clip is not null)
+            {
+                element.SetAttributeValue("clip-path", $"url(#{clip})");
+            }
+
+            element.Add(HrefAttribute(href));
+            parent.Add(element);
+            Wrote("image");
+        }
+
+        /// <summary>
+        /// The bytes of a raster as a `data:` URI, or null with the reason they cannot be stated as a picture.
+        ///
+        /// A raster that is still compressed is the one case where the document **is** holding the encoded resource
+        /// an `image` wants, and a JPEG is therefore carried through byte for byte: it is not decoded here, so
+        /// encoding it would mean decoding it first and losing part of it on the way back. Anything else under a
+        /// filter - a fax, a JBIG2, a Flate stream this reader kept - is a compressor that is not a picture format,
+        /// and it is named.
+        /// </summary>
+        private static string? ImageHref(ImageItem image, out string? problem)
+        {
+            problem = null;
+
+            if (image.Filter is { Length: > 0 } filter)
+            {
+                if (!filter.Equals("DCTDecode", StringComparison.OrdinalIgnoreCase) ||
+                    image.Samples.Length < 3 ||
+                    image.Samples[0] != 0xFF ||
+                    image.Samples[1] != 0xD8)
+                {
+                    problem = $"the raster's samples are still in {filter}, which is a compressor rather than a " +
+                              "picture format an image element can carry";
+                    return null;
+                }
+
+                if (image.Mask.Length > 0 || image.MaskFilter is { Length: > 0 })
+                {
+                    problem = "the raster is a JPEG with a soft mask, and a JPEG data URI has nowhere to state one";
+                    return null;
+                }
+
+                return DataUri("image/jpeg", image.Samples);
+            }
+
+            byte[]? png = PngEncoder.Encode(image, out problem);
+            return png is null ? null : DataUri("image/png", png);
+        }
+
+        /// <summary>
+        /// The `href` an image is referred to by.
+        ///
+        /// Written as `xlink:href` when the document declared the `xlink` prefix - which is how every SVG 1.1 file
+        /// spells it and how the file this picture came from spelled it - and as the SVG 2 `href` otherwise, so a
+        /// document with no `xlink` declaration never refers to a prefix nothing declares.
+        /// </summary>
+        private XAttribute HrefAttribute(string href)
+        {
+            _namespaces.TryGetValue("xlink", out string? xlink);
+            return xlink is null
+                ? new XAttribute("href", href)
+                : new XAttribute(XName.Get("href", xlink), href);
+        }
+
+        /// <summary>A `data:` URI carrying an encoded picture, which is how the bytes travel inside the file.</summary>
+        private static string DataUri(string mediaType, byte[] bytes)
+            => $"data:{mediaType};base64,{Convert.ToBase64String(bytes)}";
 
         /// <summary>
         /// One text block, as an SVG `text` element with a `tspan` per run.

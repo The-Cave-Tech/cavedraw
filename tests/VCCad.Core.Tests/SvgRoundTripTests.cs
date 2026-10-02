@@ -22,10 +22,12 @@ namespace VCCad.Core.Tests;
 /// loss; every other number is dumped at full precision and compared with a tolerance only for the error that
 /// composing a transform introduces.
 ///
-/// **What is excused, and how.** An <see cref="ImageItem"/> is excluded from the dump and, instead, asserted to be
-/// **named** in <see cref="SvgWriteResult.Missing"/>: the model holds decoded samples and this build has no SVG
-/// image output, and a reported gap is the acceptable half of the rule. Nothing else is excused - a difference is
-/// a failure, not a tolerance to widen.
+/// **What is excused, and how.** A raster round-trips now - the writer emits an `image` at its placement with the
+/// bytes as a data URI - so it is part of the dump like everything else: an <see cref="ImageItem"/> is compared on
+/// its grid, its colour space, its samples, its mask and its palette, which is the issue's own acceptance rule
+/// ("the re-imported model, not that bytes were written"). What a raster cannot carry is asserted on the report
+/// instead: an image the writer could not encode must be **named**, and the corpus theory checks that no raster is
+/// left out of the file in silence. Nothing else is excused - a difference is a failure, not a tolerance to widen.
 /// </summary>
 public class SvgRoundTripTests
 {
@@ -342,10 +344,11 @@ public class SvgRoundTripTests
     /// drawings made by a real editor, each imported, exported and imported again, with the two models compared
     /// line for line. Hand-written fixtures test the cases someone thought of; the corpus tests the rest.
     ///
-    /// The two things that are excused are the two the repository has decided on. A raster is **named** in the
-    /// report rather than written, and that naming is asserted here rather than assumed - a document that dropped
-    /// an image without saying so fails this test even though the image is not in the file. Everything else must
-    /// match, with a tolerance only for the last bits of a double recomposed through a transform.
+    /// The two things that are excused are the two the repository has decided on. A raster is written and its
+    /// bytes are part of the comparison; a raster the writer could **not** state - a CMYK scan, a mask that is still
+    /// compressed - is named, and that naming is asserted here rather than assumed: a document that dropped an image
+    /// without saying so fails this test even though the image is not in the file. Everything else must match, with
+    /// a tolerance only for the last bits of a double recomposed through a transform.
     ///
     /// **Before:** ten of the twenty-eight were the identity. The rest lost coordinates to five-decimal rounding,
     /// every `sodipodi:nodetypes` on a single-stroke path, a `fill-rule` on an unfilled shape, or a non-breaking
@@ -377,10 +380,52 @@ public class SvgRoundTripTests
 
         AssertSameDump(Dump(first.Document), Dump(again.Document), Path.GetFileName(path));
 
-        // The images left out of the file are the images the report names - no more, and no fewer.
-        int images = first.Document.AllItems().OfType<ImageItem>().Count();
+        // **No raster is lost in silence.** A picture the writer could state is in the file - and the dump above
+        // compares its bytes - so what is left for the report is the raster it could not state. Every image in the
+        // document either reached an `image` element or is named, and a writer that dropped one without saying so
+        // fails here even though the file looks fine. This used to assert that the count of images EQUALLED the
+        // count of reports, which was true only while every raster was unwritable.
+        int images = CountImages(first.Document);
+        int written = result.ByElement.GetValueOrDefault("image");
         int named = result.Missing.Count(entry => entry.StartsWith("image ", StringComparison.Ordinal));
-        Assert.Equal(images, named);
+
+        Assert.True(named >= images - written,
+            $"{Path.GetFileName(path)}: {images} raster(s) in the document, {written} in the file, {named} named - " +
+            "an image the writer leaves out has to be named rather than dropped");
+    }
+
+    /// <summary>
+    /// Every raster in the document, **definitions included**.
+    ///
+    /// <see cref="CadDocument.AllItems"/> walks the artboards and the pasteboard, and a raster can also live in
+    /// `defs` - where the writer puts it so an instance's link still names something after a save - so counting only
+    /// the artwork would make a definition that the writer left out invisible to this assertion.
+    /// </summary>
+    private static int CountImages(CadDocument document)
+    {
+        // `AllItems` is already the flattened artwork, so it is counted once - recursing into it as well would
+        // count every image inside a group once per ancestor it sits under.
+        int count = document.AllItems().OfType<ImageItem>().Count();
+        foreach (LayerItem entry in document.Definitions.Children)
+        {
+            count += CountImagesIn(entry);
+        }
+
+        return count;
+    }
+
+    private static int CountImagesIn(LayerItem item)
+    {
+        int count = item is ImageItem ? 1 : 0;
+        if (item is ArtGroup group)
+        {
+            foreach (LayerItem child in group.Children)
+            {
+                count += CountImagesIn(child);
+            }
+        }
+
+        return count;
     }
 
     /// <summary>The corpus, wherever it was fetched to; one empty case when it is absent.</summary>
@@ -419,8 +464,9 @@ public class SvgRoundTripTests
     /// A canonical dump of the model the SVG reader and writer speak, as lines a person can diff.
     ///
     /// Colours go through the same 8-bit quantisation the file states them with, because that is the writer's
-    /// documented conversion and a dump that ignored it would report every colour as a loss. Rasters are left out:
-    /// they are the one thing the writer does not write, and the test above asserts that each is named instead.
+    /// documented conversion and a dump that ignored it would report every colour as a loss. A raster is dumped by
+    /// its grid and its bytes, because the picture *is* the samples and a colour read from one corner would pass on
+    /// a raster whose components had been read out of place.
     /// </summary>
     private static List<string> Dump(CadDocument document)
     {
@@ -447,11 +493,6 @@ public class SvgRoundTripTests
     {
         foreach (LayerItem item in items)
         {
-            if (item is ImageItem)
-            {
-                continue;
-            }
-
             string common =
                 $"{indent}{item.GetType().Name} '{item.Name}' visible={item.IsVisible} locked={item.IsLocked} " +
                 $"blend={item.BlendMode} filter={item.FilterId ?? "-"} clips={item.Clips.Count} " +
@@ -477,12 +518,33 @@ public class SvgRoundTripTests
                         $"runs={Runs(text)}");
                     break;
 
+                // **A raster is dumped by its bytes.** The picture is the sample grid, and a comparison that read
+                // one colour would pass on a raster whose components had been read out of place - which for a
+                // sub-byte sample is not a rounding, it is the wrong pixel. The samples, the mask and the palette
+                // are therefore compared as hex, and the packing, the bit depth and the colour space beside them.
+                case ImageItem image:
+                    lines.Add($"{common} placement={Rect(image.Placement)} " +
+                        $"pixels={image.PixelWidth}x{image.PixelHeight} bits={image.BitsPerComponent} " +
+                        $"space={image.ColorSpace} base={image.PaletteBase} codec={image.Filter ?? "-"} " +
+                        $"maskCodec={image.MaskFilter ?? "-"} mirror={image.MirrorX}/{image.MirrorY} " +
+                        $"samples={Hex(image.Samples)} mask={Hex(image.Mask)} palette={Hex(image.Palette)} " +
+                        $"decode={Numbers(image.Decode)} key={Numbers(image.ColourKey)}");
+                    break;
+
                 default:
                     lines.Add(common);
                     break;
             }
         }
     }
+
+    private static string Rect(Rect2D rect)
+        => $"({N(rect.X)},{N(rect.Y)},{N(rect.Width)},{N(rect.Height)})";
+
+    private static string Hex(byte[] bytes) => Convert.ToHexString(bytes);
+
+    private static string Numbers(double[]? values)
+        => values is null ? "-" : string.Join(",", values.Select(N));
 
     private static string Foreign(LayerItem item)
     {

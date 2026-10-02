@@ -8,14 +8,16 @@ namespace VCCad.Core.Tests;
 /// <summary>
 /// What the SVG writer leaves out, and whether it says so.
 ///
-/// A document can hold text (#125's import) and rasters, and the writer now emits the text. The rule this suite
+/// A document can hold text (#125's import) and rasters, and the writer now emits **both** - text as a `text`
+/// element with a `tspan` per run, a raster as an `image` carrying its bytes as a data URI. The rule this suite
 /// pins is that the **file may be incomplete but the report may not be**: every item that did not reach the file is
 /// named with its kind and the reason, and a document the writer wrote completely reports nothing at all - a loss
 /// list that fires on everything tells a driver nothing.
 ///
-/// The text half of this suite is **converted rather than deleted**, as the rules require. It used to pin the
-/// writer's largest silent omission; it now pins the output, and the reports that stood in for the words are
-/// asserted to be gone. The raster is still left out, and still named.
+/// Both halves of this suite are **converted rather than deleted**, as the rules require. It used to pin the
+/// writer's largest silent omission - text and rasters both dropped - and each conversion moves the pin onto what
+/// is still true: the words and the picture reach the file, and the item the report is about is now one the writer
+/// genuinely cannot state, a CMYK raster, which is what keeps the identity-and-reason assertion alive.
 /// </summary>
 public class SvgWriterLossTests
 {
@@ -40,6 +42,17 @@ public class SvgWriterLossTests
         return document;
     }
 
+    /// <summary>
+    /// Makes the raster one the writer **cannot** state as a picture: CMYK, which PNG has no colour type for and
+    /// which this writer refuses to convert, because a converted raster is a picture the document did not draw.
+    /// </summary>
+    private static void MakeUnwritable(CadDocument document)
+    {
+        ImageItem image = document.Artboards[0].Layers[0].Children.OfType<ImageItem>().Single();
+        image.ColorSpace = ImageColorSpace.Cmyk;
+        image.Samples = new byte[image.PixelWidth * image.PixelHeight * 4];
+    }
+
     private static CadDocument PathsOnlyDocument()
     {
         CadDocument document = CadDocument.CreateDefault();
@@ -53,39 +66,48 @@ public class SvgWriterLossTests
     }
 
     /// <summary>
-    /// The raster is still dropped from the file, and the text is not.
+    /// **Both the words and the picture are in the file now.**
     ///
     /// This is the converted half of the test that established the gap: it used to assert that a document holding a
-    /// text block and a raster exported neither. The text now reaches the file - the words, the `tspan` that places
-    /// them - and the raster does not, which is the state #132 is half done in.
+    /// text block and a raster exported neither, then that the text reached the file and the raster did not. The
+    /// raster reaches it now - an `image` at its placement, carrying the encoded samples - so what is pinned is that
+    /// neither is lost and that a document the writer wrote completely reports nothing.
     /// </summary>
     [Fact]
-    public void TheTextIsWrittenAndTheImageIsNot()
+    public void TheTextAndTheImageAreBothWritten()
     {
         CadDocument document = DocumentWithTextAndImage();
         Assert.Equal(2, document.Artboards[0].Layers[0].Children.Count);
 
-        string svg = SvgWriter.Write(document);
+        SvgWriteResult result = SvgWriter.WriteResult(document);
 
-        Assert.Contains("<svg", svg, StringComparison.Ordinal);
-        Assert.Contains("<text", svg, StringComparison.Ordinal);
-        Assert.Contains("<tspan", svg, StringComparison.Ordinal);
-        Assert.Contains("Hello", svg, StringComparison.Ordinal);
-        Assert.DoesNotContain("<image", svg, StringComparison.Ordinal);
+        Assert.Contains("<text", result.Svg, StringComparison.Ordinal);
+        Assert.Contains("<tspan", result.Svg, StringComparison.Ordinal);
+        Assert.Contains("Hello", result.Svg, StringComparison.Ordinal);
+
+        Assert.Contains("<image", result.Svg, StringComparison.Ordinal);
+        Assert.Contains("data:image/png;base64,", result.Svg, StringComparison.Ordinal);
+        Assert.Contains("preserveAspectRatio=\"none\"", result.Svg, StringComparison.Ordinal);
+
+        Assert.Empty(result.Missing);
     }
 
     /// <summary>
     /// **And the loss list names exactly what is still missing.**
     ///
-    /// One entry, for the raster, naming the item, its placement and the reason - the same three things a person
-    /// needs to find it and a driver needs to decide what to do about it. The text block it used to name is gone
-    /// from the list because it is in the file, which is the half that keeps the list worth reading: a report that
-    /// fires on a document the writer wrote completely is noise.
+    /// One entry, naming the item, its placement and the reason - the same three things a person needs to find it
+    /// and a driver needs to decide what to do about it. The raster this used to be about is written now, so the
+    /// item the report is about is one the writer genuinely cannot state: a CMYK raster, for which PNG has no
+    /// colour type and which the writer will not convert. The text block is in the file and so is not on the list,
+    /// which is the half that keeps the list worth reading.
     /// </summary>
     [Fact]
-    public void TheLossListNamesTheImageAndNoLongerTheText()
+    public void TheLossListNamesTheImageItCouldNotWriteAndTheReason()
     {
-        SvgWriteResult result = SvgWriter.WriteResult(DocumentWithTextAndImage());
+        CadDocument document = DocumentWithTextAndImage();
+        MakeUnwritable(document);
+
+        SvgWriteResult result = SvgWriter.WriteResult(document);
 
         string image = Assert.Single(result.Missing);
         Assert.StartsWith("image ", image, StringComparison.Ordinal);
@@ -95,20 +117,25 @@ public class SvgWriterLossTests
 
         // The reason is on the entry rather than only in the record's documentation: a driver reading one line of
         // JSON has to be able to tell a deliberate omission from a bug without going to the source.
-        Assert.Contains("not in the file", image, StringComparison.Ordinal);
+        Assert.Contains("CMYK", image, StringComparison.Ordinal);
+
+        // A raster that could not travel did not take the words with it.
+        Assert.Contains("Hello", result.Svg, StringComparison.Ordinal);
     }
 
     /// <summary>
     /// An item with no name is still identified, by where it sits - a report a person cannot act on is noise.
     ///
-    /// This used to be asserted of a text block, which is now written and reported by nothing at all. The raster is
-    /// the item the report is still about, so the check moves to it rather than being dropped with the gap.
+    /// This used to be asserted of a text block, then of a raster the writer could not write. The raster is written
+    /// now, so the check stays on the report by moving to the raster the writer still cannot write rather than being
+    /// dropped along with the gap.
     /// </summary>
     [Fact]
     public void AnUnnamedImageIsIdentifiedByItsPlace()
     {
         CadDocument document = DocumentWithTextAndImage();
         document.Artboards[0].Layers[0].Children.OfType<ImageItem>().Single().Name = string.Empty;
+        MakeUnwritable(document);
 
         string entry = Assert.Single(SvgWriter.WriteResult(document).Missing);
 

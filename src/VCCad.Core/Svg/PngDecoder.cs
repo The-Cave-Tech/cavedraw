@@ -176,16 +176,21 @@ internal static class PngDecoder
             BitsPerComponent = bitDepth,
         };
 
-        if (!Separate(samples, colorType, bitDepth, width, height, transparency, image, out problem))
-        {
-            return null;
-        }
-
+        // **The colour space is set before the coverage is, for an indexed PNG.** A palette entry's opacity is
+        // looked up through the palette *index*, and `RawSampleAt` measures that index by stepping `Components`
+        // samples a pixel - which is three while the item is still the default RGB. Every index past the first
+        // therefore read a byte that is not the index, and an indexed PNG with a `tRNS` imported with the wrong
+        // coverage: no crash, no report, and a picture with the transparency in the wrong places.
         if (colorType == 3)
         {
             image.ColorSpace = ImageColorSpace.Indexed;
             image.PaletteBase = ImageColorSpace.Rgb;
             image.Palette = palette!;
+        }
+
+        if (!Separate(samples, colorType, bitDepth, width, height, transparency, image, out problem))
+        {
+            return null;
         }
 
         return image;
