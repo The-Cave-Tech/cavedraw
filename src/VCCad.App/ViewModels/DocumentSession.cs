@@ -22,6 +22,18 @@ public enum ArtboardDeletionChoice
 /// <summary>Prompt payload: an artboard with children is being deleted.</summary>
 public sealed record ArtboardDeletionRequest(Artboard Artboard, int ChildCount);
 
+/// <summary>
+/// A per-run colour edit: **whether the request names one at all**, and the colour the run should hold - <c>null</c>
+/// meaning the run states none of its own and is drawn in the block's.
+///
+/// A plain <c>ColorRgb?</c> could not say both things, because <c>null</c> is itself a value here: the model spells
+/// "this run has no colour of its own" as a null <see cref="TextRun.Color"/>, which is what every importer writes
+/// for a run that does not differ from its block, and a caller has to be able to put that back. So the wrapper is
+/// the presence and its field is the value - the division `text.update` already makes for a stretch or a variant,
+/// where an absent key leaves the run alone and CSS's <c>normal</c> clears it.
+/// </summary>
+public readonly record struct RunColorEdit(ColorRgb? Color);
+
 /// <summary>The active editing tool.</summary>
 public enum EditorTool
 {
@@ -1163,7 +1175,9 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// **skipped** for those members rather than having them clamped onto a run nobody named - the same gap
     /// `TextSummary` reports, and the reason it is a gap rather than a disagreement. Null styles every run, which is
     /// the uniform style of a whole-block face edit. Content is a block member and is written wherever it is given;
-    /// colour is a block member too, and <see cref="TextRun.Color"/> is the run's own and is not touched here.
+    /// <paramref name="color"/> is a block member too, and <see cref="TextRun.Color"/> is the run's own - which is
+    /// what <paramref name="runColor"/> names, so the block's colour is never written by a request that only gives
+    /// a run one.
     ///
     /// <paramref name="letterSpacing"/>, <paramref name="wordSpacing"/>, <paramref name="fontStretch"/> and
     /// <paramref name="fontVariant"/> are per-run members like the face, and land on the same runs. The two strings
@@ -1175,6 +1189,11 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// <see cref="ChoseFace"/>: setting a run upright in a column does not replace the programme that draws its
     /// glyphs.
     ///
+    /// <paramref name="runColor"/> is the run's **own** colour, one level below <paramref name="color"/> - which is
+    /// the block's and is what a run without one of its own is drawn in. It is a value the run holds and not a
+    /// choice of face, so it is not routed through <see cref="ChoseFace"/> either: a colour edit leaves the family,
+    /// the name the document asked for and the embedded programme exactly as they were.
+    ///
     /// One <see cref="ReplaceTextCommand"/> per block and a composite across the selection, so a gesture is one undo
     /// step; a request that changes nothing adds no command, because an undo step that undoes to exactly where it
     /// started reads as "undo did nothing".
@@ -1183,7 +1202,8 @@ public sealed class DocumentSession : INotifyPropertyChanged
         bool? bold, bool? italic, ColorRgb? color,
         double? letterSpacing = null, double? wordSpacing = null,
         string? fontStretch = null, string? fontVariant = null,
-        GlyphOrientation? orientation = null)
+        GlyphOrientation? orientation = null,
+        RunColorEdit? runColor = null)
     {
         var edits = new List<IUndoableCommand>();
         foreach (TextItem text in SelectedTextItems())
@@ -1287,6 +1307,24 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 {
                     run.FontOrientation = turn;
                     changed = true;
+                }
+
+                // The run's own colour joins the same list, and for the same reason: it is a value the run holds
+                // rather than a choice of face, so writing one must not clear `SourceFont` or the embedded
+                // programme that belong to the family nobody replaced.
+                //
+                // A colour equal to the block's is stored as **no** colour of its own. That is the same paint -
+                // `ColourOf` answers the block's either way - and it is the one spelling the importers write, so
+                // the writer and the exporter, which leave the file's bytes alone when the two agree, stay
+                // byte-identical for a request that named the colour already in force.
+                if (runColor is { } own)
+                {
+                    ColorRgb? colour = own.Color is { } stated && !SameColor(text.Color, stated) ? stated : null;
+                    if (!SameColorOrNone(run.Color, colour))
+                    {
+                        run.Color = colour;
+                        changed = true;
+                    }
                 }
 
                 changed |= faceChanged;
@@ -1408,6 +1446,23 @@ public sealed class DocumentSession : INotifyPropertyChanged
            && (byte)Math.Round(a.G * 255) == (byte)Math.Round(b.G * 255)
            && (byte)Math.Round(a.B * 255) == (byte)Math.Round(b.B * 255)
            && (byte)Math.Round(a.A * 255) == (byte)Math.Round(b.A * 255);
+
+    /// <summary>
+    /// Whether two optional run colours are the same statement: both absent, or both a colour that renders the same.
+    ///
+    /// Absent is not "black" here - it is "this run has no colour of its own" - so it has to compare equal to itself
+    /// and unequal to any stated colour, or setting a run's own colour to the block's would add an undo step that
+    /// changes nothing anybody can see.
+    /// </summary>
+    private static bool SameColorOrNone(ColorRgb? a, ColorRgb? b)
+    {
+        if (a is null || b is null)
+        {
+            return a is null && b is null;
+        }
+
+        return SameColor(a.Value, b.Value);
+    }
 
     /// <summary>Sets the horizontal alignment of the selected text object(s).</summary>
     public void SetTextAlignment(TextAlignment alignment)

@@ -368,8 +368,9 @@ public class TextPaneTests
 
         foreach (string name in new[]
                  {
-                     "ContentBox", "SizeBox", "ColorBox", "LeadingBox", "ParagraphBox", "RotationBox",
-                     "FrameWidthBox", "LetterSpacingBox", "WordSpacingBox", "FontStretchBox", "FontVariantBox",
+                     "ContentBox", "SizeBox", "ColorBox", "RunColorBox", "LeadingBox", "ParagraphBox",
+                     "RotationBox", "FrameWidthBox", "LetterSpacingBox", "WordSpacingBox", "FontStretchBox",
+                     "FontVariantBox",
                  })
         {
             Box(pane, name).RaiseEvent(new RoutedEventArgs(InputElement.LostFocusEvent));
@@ -586,5 +587,83 @@ public class TextPaneTests
 
         // The face they agree on is still shown, so one disagreeing member does not blank the others.
         Assert.Equal("Nimbus Sans", Combo(pane, "FamilyBox").SelectedItem);
+    }
+
+    // ---------------------------------------------------------------- the run's own colour (#190)
+
+    /// <summary>
+    /// **The run colour field writes the run the panel names, through the call `text.update` makes.** The member has
+    /// been on the model and honoured by the canvas since #161 while no control and no operation reached it, so this
+    /// is the person's half of the parity rule: the field commits through
+    /// <see cref="DocumentSession.ApplyTextFieldsAt"/> exactly as the block colour does, and it is per run, so the
+    /// run the panel is not describing keeps its own colour - and the block's colour, which paints every run that
+    /// states none, is not touched at all.
+    /// </summary>
+    [AvaloniaFact]
+    public void TheRunColourFieldSetsTheInspectedRunAndNowhereElse()
+    {
+        var viewModel = new EditorViewModel();
+        TextItem block = Block(viewModel, Run("Title", size: 24), Run("caption", size: 8));
+        viewModel.SelectObject(block);
+        viewModel.IsEditingText = true;
+        viewModel.InspectedRun = 1;
+
+        var pane = new TextPane();
+        pane.Attach(viewModel);
+        var window = new Window { Width = 440, Height = 780, Content = pane };
+        window.Show();
+        Settle();
+
+        // The run states no colour of its own, so the field is empty and says what it falls back to.
+        Assert.Equal(string.Empty, Box(pane, "RunColorBox").Text);
+        Assert.Equal("block", Watermark(pane, "RunColorBox"));
+
+        Commit(pane, "RunColorBox", "0,0,255,255");
+
+        Assert.Equal(ColorRgb.FromBytes(0, 0, 255, 255), block.Runs[1].Color);
+        Assert.Null(block.Runs[0].Color);
+        Assert.Equal(ColorRgb.Black, block.Color);
+
+        // Emptying the field is how a run gives its colour back to the block, and it is an edit rather than
+        // "nobody touched it" - which is the whole reason the model spells absence as null.
+        Commit(pane, "RunColorBox", string.Empty);
+
+        Assert.Null(block.Runs[1].Color);
+        Assert.Equal(ColorRgb.Black, block.Color);
+
+        // One gesture is one undo step, and it restores the run that changed.
+        viewModel.Undo();
+        Assert.Equal(ColorRgb.FromBytes(0, 0, 255, 255), block.Runs[1].Color);
+    }
+
+    /// <summary>
+    /// **The panel says mixed when the selection disagrees about a run's own colour**, rather than showing one run's
+    /// paint as though every run held it - and the block colour they agree on is still shown, so one disagreeing
+    /// member does not blank the others.
+    /// </summary>
+    [AvaloniaFact]
+    public void ThePanelShowsAMixedRunColourAsMixed()
+    {
+        var first = new TextItem { Name = "a", Origin = new Point2D(0, 0) };
+        first.Runs.Add(Run("one"));
+        first.Runs.Add(Run("tail"));
+        first.Runs[1].Color = ColorRgb.Green;
+
+        var second = new TextItem { Name = "b", Origin = new Point2D(0, 40) };
+        second.Runs.Add(Run("two"));
+        second.Runs.Add(Run("tail"));
+
+        (TextPane pane, EditorViewModel viewModel, _, _) = HostTwo(first, second);
+
+        // Both blocks are described at the same inspected run, which is the run that differs.
+        viewModel.InspectedRun = 1;
+        Settle();
+
+        Assert.Equal(string.Empty, Box(pane, "RunColorBox").Text);
+        Assert.Equal("mixed", Watermark(pane, "RunColorBox"));
+        Assert.Contains("run colour", Text(pane, "MixedLabel").Text ?? string.Empty, StringComparison.Ordinal);
+
+        // And the colour the blocks do agree on is still shown.
+        Assert.Equal("0,0,0,255", Box(pane, "ColorBox").Text);
     }
 }

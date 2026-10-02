@@ -24,12 +24,14 @@ namespace VCCad.App.Views.Panes;
 ///
 /// Face members (family, size, weight, slant) are read **at the inspected run**, because the model holds them per
 /// run, and so are the four the model gained for tracking and face selection - letter spacing, word spacing, font
-/// stretch and font variant (#147) - and the glyph orientation (#127), which is likewise the run's own. Content,
+/// stretch and font variant (#147) - and the glyph orientation (#127), which is likewise the run's own, and the
+/// run's own colour (#190) alongside them. Content,
 /// colour, alignment and paragraph style are read from the block, because the model holds one of each per block -
 /// and so are the writing mode and the base direction (#127), which are how
 /// the block's axes are set rather than what it says. A run can carry its own colour (TextRun.Color, #161), so a
 /// colour change inside one block is expressible and the canvas and the exporter both read it; this summary reports
-/// the colour the blocks agree on.
+/// the colour the blocks agree on **and**, at the inspected run, the colour that run states for itself - absent
+/// meaning it is drawn in the block's.
 /// </summary>
 public sealed record TextSummary(
     int Blocks,
@@ -46,6 +48,8 @@ public sealed record TextSummary(
     bool ItalicMixed,
     ColorRgb? Color,
     bool ColorMixed,
+    ColorRgb? RunColor,
+    bool RunColorMixed,
     TextAlignment? Alignment,
     bool AlignmentMixed,
     double? LineSpacing,
@@ -76,7 +80,7 @@ public sealed record TextSummary(
 
     /// <summary>Whether any member disagrees across the selection.</summary>
     public bool IsMixed => ContentMixed || FamilyMixed || FontSizeMixed || BoldMixed || ItalicMixed
-        || ColorMixed || AlignmentMixed || LineSpacingMixed || ParagraphSpacingMixed
+        || ColorMixed || RunColorMixed || AlignmentMixed || LineSpacingMixed || ParagraphSpacingMixed
         || RotationMixed || FrameWidthMixed || LetterSpacingMixed || WordSpacingMixed
         || FontStretchMixed || FontVariantMixed || OrientationMixed || WritingModeMixed || DirectionMixed;
 
@@ -107,7 +111,7 @@ public sealed record TextSummary(
             return new TextSummary(0, 0, null, false, null, false, null, false, null, false, null, false,
                 null, false, null, false, null, false, null, false, null, false, null, false,
                 null, false, null, false, null, false, null, false, null, false, null, false,
-                null, false);
+                null, false, null, false);
         }
 
         TextItem first = blocks[0];
@@ -135,6 +139,7 @@ public sealed record TextSummary(
         bool stretchMixed = false;
         bool variantMixed = false;
         bool orientationMixed = false;
+        bool runColorMixed = false;
 
         if (runs.Count > 0)
         {
@@ -152,6 +157,11 @@ public sealed record TextSummary(
             stretchMixed = !runs.All(r => string.Equals(r.FontStretch, firstRun.FontStretch, StringComparison.Ordinal));
             variantMixed = !runs.All(r => string.Equals(r.FontVariant, firstRun.FontVariant, StringComparison.Ordinal));
             orientationMixed = !runs.All(r => r.FontOrientation == firstRun.FontOrientation);
+
+            // A run's **own** colour, one level below the block's: absent is the model's way of saying "drawn in the
+            // block's", so an absent run colour and a stated one are a disagreement rather than two spellings of the
+            // same paint. Two stated colours that render the same are not, for the reason `SameColor` gives.
+            runColorMixed = !runs.All(r => SameColorOrNone(r.Color, firstRun.Color));
         }
 
         return new TextSummary(
@@ -169,6 +179,8 @@ public sealed record TextSummary(
             italicMixed,
             colorMixed ? null : first.Color,
             colorMixed,
+            runColorMixed ? null : runs.Count > 0 ? runs[0].Color : null,
+            runColorMixed,
             alignmentMixed ? null : first.Alignment,
             alignmentMixed,
             lineSpacingMixed ? null : first.LineSpacing,
@@ -207,4 +219,19 @@ public sealed record TextSummary(
            && Channel(a.B) == Channel(b.B) && Channel(a.A) == Channel(b.A);
 
     private static int Channel(double value) => (int)Math.Round(Math.Clamp(value, 0, 1) * 255);
+
+    /// <summary>
+    /// Whether two run colours are the same statement, where an absent one is a statement of its own: "this run is
+    /// drawn in the block's". So absent matches absent and nothing else, or a block whose second run states the
+    /// colour the block already paints would report a colour mix nobody can see.
+    /// </summary>
+    private static bool SameColorOrNone(ColorRgb? a, ColorRgb? b)
+    {
+        if (a is null || b is null)
+        {
+            return a is null && b is null;
+        }
+
+        return SameColor(a.Value, b.Value);
+    }
 }

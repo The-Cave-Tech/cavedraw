@@ -4265,7 +4265,8 @@ public static class EditorOperations
             "and an omitted member is left exactly as each block has it - so a mixed selection can have its size " +
             "changed without the block whose words or colour differ having them written over. One content string and " +
             "one colour are block members; family, size, weight, slant, letter spacing, word spacing, font stretch, " +
-            "font variant and the glyph orientation are per run, and runIndex names the run they land on, with a " +
+            "font variant, the glyph orientation and the run's own colour are per run, and runIndex names the run " +
+            "they land on, with a " +
             "block that has no run there skipped rather than counted as a disagreement. With no runIndex the face " +
             "members style every run, " +
             "which is the uniform edit a whole-block request means. A stretch or a variant is kept on the run and no " +
@@ -4275,12 +4276,16 @@ public static class EditorOperations
             "changes what is drawn: a Latin run set `upright` in a `vertical-rl` column draws upright instead of " +
             "turned, and the SVG export writes the property back. Its own words are `mixed` (the initial value), " +
             "`upright` and `sideways`; SVG 1.1's `auto`, `0` and `90` are read as the same three, because that is " +
-            "what an SVG file holds and a caller should not have to translate. " +
+            "what an SVG file holds and a caller should not have to translate. `runColor` is the run's **own** " +
+            "colour, one level below `color` (the block's), and it is what the canvas paints, the SVG writer writes " +
+            "and the PDF exporter emits for that run; give it as [r,g,b] in 0..255 and null to take the block's " +
+            "colour back. A colour equal to the block's is the same paint and is stored as no colour of its own, " +
+            "which leaves the file's bytes alone - as does naming the value a run already holds. " +
             "Reports how many blocks changed and what the selection now reads, so a caller can tell which members " +
             "were altered and which are still mixed. One undo step.",
             "text?:string, family?:string, fontSize?:number, bold?:bool, italic?:bool, color?:[r,g,b], " +
             "runIndex?:number, letterSpacing?:number, wordSpacing?:number, fontStretch?:string, fontVariant?:string, " +
-            "orientation?:mixed|upright|sideways (SVG: auto|0|90)",
+            "orientation?:mixed|upright|sideways (SVG: auto|0|90), runColor?:[r,g,b]|null",
             (ctx, p) =>
             {
                 // A member is written only where it is **given**: the presence of the key, not its value, is what
@@ -4312,11 +4317,15 @@ public static class EditorOperations
                 // is refused by name: a driver that asked for an upright column and got a turned one cannot tell.
                 GlyphOrientation? orientation = ParseOrientation(p);
 
+                // The run's own colour, one level below the block's `color`. Presence is the edit, and a stated
+                // value that is not a colour is refused by name rather than read as "no colour of its own".
+                RunColorEdit? runColor = ParseRunColor(p);
+
                 // Null styles every run, which is what a whole-block face edit means; an index names one.
                 int? runIndex = OptionalNumber(p, "runIndex") is { } at ? (int)at : null;
 
                 int changed = ctx.Session.ApplyTextFieldsAt(runIndex, content, family, size, bold, italic, color,
-                    letterSpacing, wordSpacing, fontStretch, fontVariant, orientation);
+                    letterSpacing, wordSpacing, fontStretch, fontVariant, orientation, runColor);
 
                 // Choosing a font is what makes it recent, so the picker's "recent" list is a
                 // record of what was actually used rather than of what was scrolled past.
@@ -4342,7 +4351,7 @@ public static class EditorOperations
             "to show one value per member, and showing the first block's words, colour or size as though they were " +
             "everyone's is how a person types a number and believes it describes what they selected. runIndex names " +
             "the run the per-run members (family, size, weight, slant, letter spacing, word spacing, font stretch, " +
-            "font variant, glyph orientation) are read from, and a block with no run there is a " +
+            "font variant, glyph orientation, the run's own colour) are read from, and a block with no run there is a " +
             "gap rather than a disagreement - blocks carry different numbers of runs, and counting a shorter one as " +
             "\"different\" would make every selection of unequal blocks report every face member as mixed. Without " +
             "runIndex the shared inspected run is read, which is the run the panel's face fields describe.",
@@ -9990,6 +9999,39 @@ public static class EditorOperations
     }
 
     /// <summary>
+    /// A `runColor` member, or null when it was not given - which is "leave each run's own colour alone".
+    ///
+    /// The member exists because the model has held <see cref="TextRun.Color"/> since #161 and the canvas, the SVG
+    /// writer and the PDF exporter all read it through <see cref="TextItem.ColourOf"/>, while no operation could set
+    /// one: `color` is the **block's** colour, and a run's own is the level below it. The wrapper is what lets the
+    /// request say both things - a colour to give the run, or `null` to take the block's back - because the value
+    /// itself is nullable in the model.
+    ///
+    /// A stated value that is not a colour is **refused by name** rather than read as "no colour of its own": a
+    /// driver that asked for blue and was given the block's red has no way to notice.
+    /// </summary>
+    private static RunColorEdit? ParseRunColor(JsonElement p)
+    {
+        if (p.ValueKind != JsonValueKind.Object || !p.TryGetProperty("runColor", out JsonElement value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return new RunColorEdit(null);
+        }
+
+        if (!p.TryGetColorArray("runColor", out ColorRgb wanted))
+        {
+            throw new EditorOperationException(
+                "runColor must be [r,g,b] in 0..255, or null to take the block's colour");
+        }
+
+        return new RunColorEdit(wanted);
+    }
+
+    /// <summary>
     /// What the selection's text blocks agree on, and what they do not - the report `text.common` returns and
     /// `text.update` answers with, built from the same <see cref="TextSummary"/> the Text panel reads.
     ///
@@ -10010,7 +10052,7 @@ public static class EditorOperations
         // disagreement reports zero and a run the selection agrees on reports one per agreeing block. The
         // `*Mixed` flags above say *that* a member disagrees; `runs` says whether anything common came out of it.
         int commonRuns = summary.FamilyMixed || summary.FontSizeMixed || summary.BoldMixed
-            || summary.ItalicMixed || summary.ColorMixed
+            || summary.ItalicMixed || summary.ColorMixed || summary.RunColorMixed
             || summary.LetterSpacingMixed || summary.WordSpacingMixed
             || summary.FontStretchMixed || summary.FontVariantMixed || summary.OrientationMixed
                 ? 0
@@ -10056,6 +10098,12 @@ public static class EditorOperations
             orientationMixed = summary.OrientationMixed,
             colour = summary.Color is { } colour ? DescribeColorValue(colour) : null,
             colourMixed = summary.ColorMixed,
+
+            // The run's **own** colour, one level below the block's `colour` above: absent means the run states none
+            // and is drawn in the block's, which is a value a driver can write back as `runColor: null`. It is
+            // reported at the inspected run, like the rest of the run's members, and mixed when the runs disagree.
+            runColour = summary.RunColor is { } runColour ? DescribeColorValue(runColour) : null,
+            runColourMixed = summary.RunColorMixed,
             alignment = summary.Alignment?.ToString(),
             alignmentMixed = summary.AlignmentMixed,
             leading = summary.LineSpacing,

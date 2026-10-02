@@ -24,7 +24,11 @@ namespace VCCad.App.Views.Panes;
 ///
 /// **Face is per run and the model holds at most one colour per block**, so the pane is split along that line: the
 /// FACE fields describe one run - named in the label, the run the caret is in while a block is open for editing -
-/// and content, colour and paragraph style describe the block.
+/// and content, colour and paragraph style describe the block. The **run's own colour** (TextRun.Color) is a
+/// per-run value and is offered beside the block's: the model holds one per run, an imported line may carry several,
+/// and the canvas and the exporter both paint it - so the pane commits it through
+/// <see cref="DocumentSession.ApplyTextFieldsAt"/> (`text.update`) exactly as the face fields are, one level below
+/// the block colour that paints every run stating none of its own.
 ///
 /// **The block's writing mode and base direction are offered too**, because the model holds both (#127) and the
 /// layout, the caret, the bounds and the SVG export all act on them: they go through
@@ -55,6 +59,7 @@ public partial class TextPane : UserControl
     // invent one - which is the defect the mixed readout exists to remove, one level down.
     private string _shownContent = string.Empty;
     private string _shownColor = string.Empty;
+    private string _shownRunColor = string.Empty;
     private int _shownAlign = -1;
     private string _shownFamily = string.Empty;
     private string _shownSize = string.Empty;
@@ -90,7 +95,7 @@ public partial class TextPane : UserControl
 
         foreach (TextBox box in new[]
                  {
-                     SizeBox, ColorBox, LeadingBox, ParagraphBox, RotationBox, FrameWidthBox,
+                     SizeBox, ColorBox, RunColorBox, LeadingBox, ParagraphBox, RotationBox, FrameWidthBox,
                      LetterSpacingBox, WordSpacingBox, FontStretchBox, FontVariantBox,
                  })
         {
@@ -203,6 +208,30 @@ public partial class TextPane : UserControl
                     _ => GlyphOrientation.Auto,
                 };
 
+        // The run's own colour is per run as well, and **it is not the block's**: the field is committed through the
+        // same `ApplyTextFieldsAt` the `text.update` operation calls, one level below the Block field above. An
+        // emptied field is an edit here - it is how a run gives its colour back to the block - so the value carries
+        // the presence and the wrapper carries the colour.
+        string typedRunColor = RunColorBox.Text?.Trim() ?? string.Empty;
+        RunColorEdit? runColor = null;
+        if (faceRun is not null && typedRunColor != _shownRunColor)
+        {
+            if (typedRunColor.Length == 0)
+            {
+                runColor = new RunColorEdit(null);
+            }
+            else if (ParseColor(typedRunColor) is { } own)
+            {
+                runColor = new RunColorEdit(own);
+            }
+            else
+            {
+                // A colour nobody can read is not an edit, and saying so is better than leaving the person to
+                // wonder whether the panel took it.
+                _vm.ReportStatus($"Run colour: expected r,g,b,a in 0..255, not \"{typedRunColor}\"");
+            }
+        }
+
         if (faceRun is null)
         {
             // There is no run to name, so no face member can honestly be applied.
@@ -249,10 +278,11 @@ public partial class TextPane : UserControl
 
         if (content is not null || color is not null || family is not null || size is not null
             || bold is not null || italic is not null || letterSpacing is not null || wordSpacing is not null
-            || fontStretch is not null || fontVariant is not null || orientation is not null)
+            || fontStretch is not null || fontVariant is not null || orientation is not null
+            || runColor is not null)
         {
             _vm.ActiveSession.ApplyTextFieldsAt(faceRun, content, family, size, bold, italic, color,
-                letterSpacing, wordSpacing, fontStretch, fontVariant, orientation);
+                letterSpacing, wordSpacing, fontStretch, fontVariant, orientation, runColor);
         }
 
         if (alignment is { } align)
@@ -325,6 +355,18 @@ public partial class TextPane : UserControl
                     ? string.Empty
                     : Describe(colour);
                 _shownColor = ColorBox.Text ?? string.Empty;
+            }
+
+            // The run's own colour, read at the inspected run like the rest of the run's members. Empty means the run
+            // states none and is drawn in the block's - which is what the watermark says - and a selection whose runs
+            // disagree is shown as mixed rather than as one run's paint.
+            RunColorBox.Watermark = summary.RunColorMixed ? MixedWord : "block";
+            if (!RunColorBox.IsFocused)
+            {
+                RunColorBox.Text = summary.RunColorMixed || summary.RunColor is not { } runColour
+                    ? string.Empty
+                    : Describe(runColour);
+                _shownRunColor = RunColorBox.Text ?? string.Empty;
             }
 
             AlignBox.PlaceholderText = summary.AlignmentMixed ? MixedWord : string.Empty;
@@ -472,6 +514,11 @@ public partial class TextPane : UserControl
             mixed.Add("colour");
         }
 
+        if (summary.RunColorMixed)
+        {
+            mixed.Add("run colour");
+        }
+
         if (summary.AlignmentMixed)
         {
             mixed.Add("align");
@@ -568,6 +615,8 @@ public partial class TextPane : UserControl
         ContentBox.Watermark = string.Empty;
         ColorBox.Text = string.Empty;
         ColorBox.Watermark = string.Empty;
+        RunColorBox.Text = string.Empty;
+        RunColorBox.Watermark = string.Empty;
         AlignBox.PlaceholderText = string.Empty;
         AlignBox.SelectedIndex = -1;
         WritingModeBox.PlaceholderText = string.Empty;
@@ -602,6 +651,7 @@ public partial class TextPane : UserControl
 
         _shownContent = string.Empty;
         _shownColor = string.Empty;
+        _shownRunColor = string.Empty;
         _shownAlign = -1;
         _shownFamily = string.Empty;
         _shownSize = string.Empty;

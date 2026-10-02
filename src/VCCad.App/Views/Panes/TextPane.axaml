@@ -21,12 +21,17 @@
 
       <TextBlock Text="COLOUR" FontWeight="SemiBold" FontSize="{DynamicResource VcFontSize}" Foreground="{DynamicResource VcTextDim}"/>
 
-      <!-- The model holds one colour per block, so this is a block colour and not a run's. One field rather than four
-           channels because a colour the selection disagrees about has no value to put in a channel: spelled out,
-           "mixed" is a state a person can read and answer. -->
-      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+      <!-- The model holds one colour per block **and one of the run's own** (TextRun.Color, #161/#190). One field
+           rather than four channels because a colour the selection disagrees about has no value to put in a channel:
+           spelled out, "mixed" is a state a person can read and answer. The block colour paints every run that
+           states none of its own; the run colour paints the inspected run and goes through `text.update`, the same
+           operation `runColor` names, so a person and a driver set it the same way. -->
+      <Grid ColumnDefinitions="Auto,*,10,Auto,*" ColumnSpacing="4">
         <TextBlock Text="Block" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
-        <TextBox x:Name="ColorBox" Grid.Column="1" ToolTip.Tip="r,g,b,a in 0..255"/>
+        <TextBox x:Name="ColorBox" Grid.Column="1" ToolTip.Tip="The block's colour, r,g,b,a in 0..255"/>
+        <TextBlock Text="Run" Grid.Column="3" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>
+        <TextBox x:Name="RunColorBox" Grid.Column="4"
+                 ToolTip.Tip="The inspected run's own colour, r,g,b,a in 0..255; empty draws it in the block's"/>
       </Grid>
       <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
         <TextBlock Text="Align" VerticalAlignment="Center" Foreground="{DynamicResource VcTextDim}"/>

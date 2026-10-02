@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
@@ -6,6 +7,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using VCCad.App.Automation;
 using VCCad.App.Controls;
 using VCCad.App.Fonts;
 using VCCad.App.ViewModels;
@@ -74,6 +76,78 @@ public class TextColourPaintTests
         });
     }
 
+    /// <summary>
+    /// **The colour `text.update` gives a run reaches the canvas.** <see cref="TextRun.Color"/> has been on the
+    /// model and honoured by the painter since #161, while no operation could set one - so a person could import a
+    /// multi-coloured line and never make one. The assertion is on the pixels, because that is the only place the
+    /// gap ever showed: the member already round-tripped, so a model or round-trip assertion would have passed
+    /// before the operation existed.
+    ///
+    /// Both runs start on the block's red, so the second run's blue is the whole change. The differential half is
+    /// kept: the two runs are painted with different ink afterwards, which a painter that took the block's brush
+    /// once cannot produce.
+    /// </summary>
+    [AvaloniaFact]
+    public void TheRunColourTheOperationSetsReachesTheCanvas()
+    {
+        WithRealMetrics(() =>
+        {
+            var viewModel = new EditorViewModel();
+            var workspace = new CanvasWorkspace();
+            workspace.AttachEditor(viewModel);
+
+            var window = new Window { Width = 900, Height = 700, Content = workspace };
+            window.Show();
+            Settle();
+
+            workspace.ZoomTo(Zoom);
+
+            var text = new TextItem { Name = "run-colour", Origin = new Point2D(120, 250), Color = Red };
+            text.Runs.Add(new TextRun { Text = Glyphs, FontSize = FontSize });
+            text.Runs.Add(new TextRun { Text = Glyphs, FontSize = FontSize });
+            viewModel.Document.Artboards[0].Layers[0].AddItem(text);
+            viewModel.SelectObject(text);
+
+            Rect2D bounds = text.LocalBounds();
+            workspace.CenterOn(new Point2D(bounds.X + (bounds.Width / 2), bounds.Y + (bounds.Height / 2)));
+            workspace.InvalidateVisual();
+            Settle();
+
+            try
+            {
+                WriteableBitmap plain = Frame(window);
+                Assert.True(SampleRun(text, workspace, plain, 0).IsRed,
+                    "the first run should draw in the block's red before the edit.");
+                Assert.True(SampleRun(text, workspace, plain, 1).IsRed,
+                    "the second run should draw in the block's red before the edit.");
+
+                var context = new AutomationContext { ViewModel = viewModel };
+                EditorOperations.Invoke(
+                    context, "text.update",
+                    JsonSerializer.SerializeToElement(new { runColor = new[] { 0, 0, 255 }, runIndex = 1 }));
+
+                workspace.InvalidateVisual();
+                Settle();
+
+                WriteableBitmap painted = Frame(window);
+                Sampled first = SampleRun(text, workspace, painted, 0);
+                Sampled second = SampleRun(text, workspace, painted, 1);
+
+                Assert.True(first.IsRed, $"the first run keeps the block's red.\n  sampled {first.Summary()}");
+                Assert.True(second.IsBlue, $"the second run draws in its own blue.\n  sampled {second.Summary()}");
+
+                // The differential half: the two runs are painted with different ink.
+                Assert.True(first.R != second.R || first.G != second.G || first.B != second.B,
+                    $"the two runs are painted with the same colour.\n  first  {first.Summary()}\n" +
+                    $"  second {second.Summary()}");
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
     // ------------------------------------------------------------------
     // Rendering and sampling
     // ------------------------------------------------------------------
@@ -88,6 +162,40 @@ public class TextColourPaintTests
         public bool IsBlue => B - Math.Max(R, G) >= 60;
 
         public string Summary() => $"({R},{G},{B}) at ({X},{Y})";
+    }
+
+    /// <summary>The frame the window has rendered, which the headless platform can be asked for directly.</summary>
+    private static WriteableBitmap Frame(Window window)
+    {
+        WriteableBitmap? frame = window.CaptureRenderedFrame();
+        Assert.NotNull(frame);
+        return frame!;
+    }
+
+    /// <summary>
+    /// The darkest pixel inside one run's own box in an already-rendered frame.
+    ///
+    /// The scan is the run's box from the layout, so the samples cannot be taken from the same run by accident,
+    /// and it stays well inside the white page — the pasteboard behind it is dark, and a scan that reached it
+    /// would read as ink.
+    /// </summary>
+    private static Sampled SampleRun(TextItem text, CanvasWorkspace workspace, WriteableBitmap frame, int runIndex)
+    {
+        TextLayout layout = TextLayoutEngine.Compute(text);
+        Point origin = workspace.ModelToWindow(text.Origin + text.ArtboardOffset());
+        TextRunBox box = layout.Runs.Single(b => b.Run == runIndex);
+        TextLine line = layout.Lines[box.Line];
+
+        // Inset by a few pixels at each edge so a neighbour's antialiasing cannot be picked up as this run's
+        // ink. The vertical band is the line box, which is where the glyphs are.
+        var region = new PixelRect(
+            (int)Math.Ceiling(origin.X + (box.X * Zoom)) + 3,
+            (int)Math.Ceiling(origin.Y + (line.Top * Zoom)) + 2,
+            (int)Math.Floor(box.Width * Zoom) - 6,
+            (int)Math.Floor(line.Height * Zoom) - 4);
+
+        return Darkest(Pixels(frame), frame.PixelSize.Width * 4, frame.PixelSize, region,
+            frame.Format == PixelFormat.Bgra8888);
     }
 
     /// <summary>
@@ -123,33 +231,10 @@ public class TextColourPaintTests
 
         try
         {
-            WriteableBitmap? frame = window.CaptureRenderedFrame();
-            Assert.NotNull(frame);
+            WriteableBitmap frame = Frame(window);
 
-            byte[] pixels = Pixels(frame!);
-            int stride = frame!.PixelSize.Width * 4;
-            bool bgra = frame.Format == PixelFormat.Bgra8888;
-            TextLayout layout = TextLayoutEngine.Compute(text);
-            Point origin = workspace.ModelToWindow(text.Origin + text.ArtboardOffset());
-
-            Sampled Sample(int runIndex)
-            {
-                TextRunBox box = layout.Runs.Single(b => b.Run == runIndex);
-                TextLine line = layout.Lines[box.Line];
-
-                // Inset by a few pixels at each edge so a neighbour's antialiasing cannot be picked up as
-                // this run's ink. The vertical band is the line box, which is where the glyphs are.
-                var region = new PixelRect(
-                    (int)Math.Ceiling(origin.X + (box.X * Zoom)) + 3,
-                    (int)Math.Ceiling(origin.Y + (line.Top * Zoom)) + 2,
-                    (int)Math.Floor(box.Width * Zoom) - 6,
-                    (int)Math.Floor(line.Height * Zoom) - 4);
-
-                return Darkest(pixels, stride, frame.PixelSize, region, bgra);
-            }
-
-            Sampled first = Sample(0);
-            Sampled second = Sample(1);
+            Sampled first = SampleRun(text, workspace, frame, 0);
+            Sampled second = SampleRun(text, workspace, frame, 1);
 
             string summary =
                 $"block {Glyphs}{Glyphs} at {FontSize}pt, zoom {Zoom:F1}: " +

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using VCCad.App.Automation;
 using VCCad.App.ViewModels;
 using VCCad.Core.Model;
@@ -866,5 +867,169 @@ public class TextOperationParityTests
 
         Assert.Equal(GlyphOrientation.Auto, first.Runs[0].FontOrientation);
         Assert.Equal(depth, viewModel.ActiveSession.UndoDepth);
+    }
+
+    // ---------------------------------------------------------------- the run's own colour (#190)
+
+    /// <summary>
+    /// **The run colour reaches the bytes the writer writes.** <see cref="TextRun.Color"/> has been on the model and
+    /// honoured by the canvas, the SVG writer and the PDF exporter since #161, and written only by the importers -
+    /// no operation could set one, so a run a person coloured had no way to reach a file. The SVG writer writes a
+    /// `fill` on a run's `tspan` only when the run's colour differs from the block's, so the second run's own blue
+    /// has to appear there, and the block's own fill has to be untouched.
+    /// </summary>
+    [Fact]
+    public void TheRunColourReachesTheSvgTheWriterWrites()
+    {
+        TextItem first = Block("one", extraRuns: new[] { Run("tail") });
+        (AutomationContext context, EditorViewModel viewModel, TextItem _, TextItem _) = With(
+            first, Block("two", extraRuns: new[] { Run("tail") }));
+
+        string plain = SvgWriter.Write(viewModel.Document);
+
+        // Nothing states a fill of its own yet, so nothing is written for a run.
+        Assert.DoesNotContain("fill=\"#0000ff\"", plain, StringComparison.Ordinal);
+
+        EditorOperations.Invoke(context, "text.update", Params(new { runColor = new[] { 0, 0, 255 }, runIndex = 1 }));
+
+        string edited = SvgWriter.Write(viewModel.Document);
+        Assert.Contains("fill=\"#0000ff\"", edited, StringComparison.Ordinal);
+
+        // The run the request **named**, in both selected blocks - each has a run at index 1 - and never run 0,
+        // whose piece is the same `one` it always was: the pieces that state the fill are the two `tail`s.
+        string[] painted = Regex.Matches(edited, "fill=\"#0000ff\"[^>]*>([^<]*)<")
+            .Select(match => match.Groups[1].Value)
+            .ToArray();
+
+        Assert.Equal(new[] { "tail", "tail" }, painted);
+        Assert.Contains($"fill=\"{Hex(first.Color)}\"", edited, StringComparison.Ordinal);
+
+        // Clearing it is not an edit that leaves a colour behind: the run states none again and the bytes are
+        // exactly what they were. This is the absent-at-default rule, through the operation.
+        EditorOperations.Invoke(context, "text.update", Params(new { runColor = (int[]?)null, runIndex = 1 }));
+        Assert.Equal(plain, SvgWriter.Write(viewModel.Document));
+
+        // Naming the colour the block is already painted in is the same statement as no colour of its own, so it
+        // stores none and the file is unchanged - the model has one spelling for one paint.
+        EditorOperations.Invoke(context, "text.update", Params(new { runColor = new[] { 0, 0, 0 }, runIndex = 1 }));
+        Assert.Equal(plain, SvgWriter.Write(viewModel.Document));
+    }
+
+    /// <summary>
+    /// **The run colour is set at the inspected run and read back in the words the operation takes.** A driver reads
+    /// what it can write: the report names the colour the inspected run holds, and a selection whose runs disagree
+    /// says mixed rather than showing one run's paint as though every run were drawn in it.
+    /// </summary>
+    [Fact]
+    public void TheRunColourIsSettableAndReportedInThePropertiesOwnWords()
+    {
+        TextItem first = Block("one", extraRuns: new[] { Run("tail") });
+        (AutomationContext context, _, TextItem _, TextItem _) = With(
+            first, Block("two", extraRuns: new[] { Run("tail") }));
+
+        EditorOperations.Invoke(context, "text.update", Params(new { runColor = new[] { 0, 0, 255 }, runIndex = 1 }));
+
+        JsonElement atOne = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "text.common", Params(new { runIndex = 1 })));
+
+        Assert.Equal("0,0,255,255", atOne.GetProperty("runColour").GetString());
+        Assert.False(atOne.GetProperty("runColourMixed").GetBoolean());
+
+        // Run 0 was not named, so it still states no colour of its own and is drawn in the block's.
+        JsonElement atZero = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "text.common", Params(new { runIndex = 0 })));
+
+        Assert.Equal(JsonValueKind.Null, atZero.GetProperty("runColour").ValueKind);
+        Assert.False(atZero.GetProperty("runColourMixed").GetBoolean());
+
+        // The block's own colour is a different member and was not touched.
+        Assert.Equal(ColorRgb.Black, first.Color);
+        Assert.Equal("0,0,0,255", atOne.GetProperty("colour").GetString());
+
+        // A colour equal to the block's is the same paint, so the run holds none of its own: the report says so
+        // rather than claiming a colour the block already gives it, and the bytes stay what they were.
+        EditorOperations.Invoke(context, "text.update", Params(new { runColor = new[] { 0, 0, 0 }, runIndex = 1 }));
+
+        JsonElement inherited = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "text.common", Params(new { runIndex = 1 })));
+
+        Assert.Equal(JsonValueKind.Null, inherited.GetProperty("runColour").ValueKind);
+        Assert.False(inherited.GetProperty("runColourMixed").GetBoolean());
+    }
+
+    /// <summary>
+    /// **A selection that disagrees about a run's own colour says so**, rather than reporting the first run's paint,
+    /// and says that no run agrees on a value - the same judgement every other per-run member makes.
+    /// </summary>
+    [Fact]
+    public void AMixedRunColourIsReportedAsMixed()
+    {
+        TextItem first = Block("one", extraRuns: new[] { Run("tail", colour: ColorRgb.Green) });
+        (AutomationContext context, _, TextItem _, TextItem _) = With(
+            first, Block("two", extraRuns: new[] { Run("tail") }));
+
+        JsonElement common = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "text.common", Params(new { runIndex = 1 })));
+
+        Assert.True(common.GetProperty("runColourMixed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, common.GetProperty("runColour").ValueKind);
+        Assert.Equal(0, common.GetProperty("runs").GetInt32());
+    }
+
+    /// <summary>
+    /// **Giving a run a colour does not disturb the block's colour, the run's face or the name the document asked
+    /// for.** A colour is a value the run holds rather than a choice of face, so it is deliberately not routed
+    /// through the face path: `SourceFont` and the embedded programme belong to the family that is not being
+    /// replaced, and the block's own colour still paints every run that states none.
+    /// </summary>
+    [Fact]
+    public void ARunColourEditLeavesTheBlockColourAndTheFaceAlone()
+    {
+        TextItem first = Block("one", "Nimbus Roman", 18, colour: ColorRgb.Red,
+            extraRuns: new[] { Run("tail", "Nimbus Roman", 18) });
+        first.Runs[1].SourceFont = "Helvetica-Bold";
+        first.Runs[1].LetterSpacing = 4.0;
+        (AutomationContext context, _, TextItem _, TextItem _) = With(
+            first, Block("two", "Nimbus Roman", 18, colour: ColorRgb.Red));
+
+        EditorOperations.Invoke(context, "text.update", Params(new { runColor = new[] { 0, 0, 255 }, runIndex = 1 }));
+
+        Assert.Equal(ColorRgb.Red, first.Color);
+        Assert.Equal("Nimbus Roman", first.Runs[1].FontFamily);
+        Assert.Equal(18.0, first.Runs[1].FontSize, 6);
+        Assert.Equal("Helvetica-Bold", first.Runs[1].SourceFont);
+        Assert.Equal(4.0, first.Runs[1].LetterSpacing, 6);
+
+        // The run the request named is the one that changed, and it is drawn in the colour it now holds.
+        Assert.Equal(ColorRgb.Blue, first.ColourOf(first.Runs[1]));
+        Assert.Equal(ColorRgb.Red, first.ColourOf(first.Runs[0]));
+    }
+
+    /// <summary>
+    /// **A value that is not a colour is refused by name**, not read as "no colour of its own": a driver that asked
+    /// for blue and got the block's red has no way to notice. And a refused request leaves no undo step behind.
+    /// </summary>
+    [Fact]
+    public void AnUnknownRunColourIsRefused()
+    {
+        (AutomationContext context, EditorViewModel viewModel, TextItem first, TextItem _) = With(
+            Block("one"), Block("two"));
+        int depth = viewModel.ActiveSession.UndoDepth;
+
+        Assert.ThrowsAny<Exception>(() => EditorOperations.Invoke(
+            context, "text.update", Params(new { runColor = "blue", runIndex = 0 })));
+        Assert.ThrowsAny<Exception>(() => EditorOperations.Invoke(
+            context, "text.update", Params(new { runColor = new[] { 1, 2 }, runIndex = 0 })));
+
+        Assert.All(first.Runs, run => Assert.Null(run.Color));
+        Assert.Equal(depth, viewModel.ActiveSession.UndoDepth);
+    }
+
+    /// <summary>A colour as the SVG writer spells it, so the byte assertion names the file's own word.</summary>
+    private static string Hex(ColorRgb colour)
+    {
+        static int Channel(double value) => (int)Math.Round(Math.Clamp(value, 0, 1) * 255);
+
+        return $"#{Channel(colour.R):x2}{Channel(colour.G):x2}{Channel(colour.B):x2}";
     }
 }
