@@ -1453,7 +1453,11 @@ public static class PdfDocumentExporter
     private static void WriteText(List<string> ops, TextItem text, PdfFontEmbedder embedder,
         PdfAlphaStates alphaStates, AffineTransform toDoc)
     {
-        if (TryWriteRunsAsOneTextObject(ops, text, embedder, alphaStates, toDoc))
+        // **A vertical column cannot go through the one-text-object path.** It emits a single `Tm` for the whole
+        // block, and a column's characters are not on one baseline - they are separated down the page. The per-run
+        // loop below places each one from the layout's own glyph positions instead.
+        bool column = text.WritingMode != TextWritingMode.HorizontalTb;
+        if (!column && TryWriteRunsAsOneTextObject(ops, text, embedder, alphaStates, toDoc))
         {
             return;
         }
@@ -1498,7 +1502,7 @@ public static class PdfDocumentExporter
             double lineAdvance = 0;
             double yOffset = y - text.Origin.Y; // model units down the block
 
-            void Flush()
+            void Flush(double? originX = null, double? originY = null)
             {
                 if (hex.Length == 0)
                 {
@@ -1518,8 +1522,12 @@ public static class PdfDocumentExporter
                 // the mirror the block's, rather than a second rule about this path (issue #171).
                 double depth = (yOffset + (ascent * run.FontSize)) * text.YSign;
                 double penX = pen * text.XSign;
-                double ox = text.Origin.X - (sin * depth) + (cos * penX);
-                double oy = text.Origin.Y + (cos * depth) + (sin * penX);
+
+                // **A column supplies its own origin.** Every other block's placement is the block's origin
+                // advanced along its own axes by the run and the pen; a column's is where the layout says that
+                // character goes, because its characters are separated down the page rather than along a line.
+                double ox = originX ?? (text.Origin.X - (sin * depth) + (cos * penX));
+                double oy = originY ?? (text.Origin.Y + (cos * depth) + (sin * penX));
 
                 // The run's own colour, through the one member that answers it. A block may hold several
                 // colours, and setting the block's for every run is what painted a two-coloured line in one.
@@ -1561,6 +1569,11 @@ public static class PdfDocumentExporter
                 int charBase = FlattenedOffsetOf(text, run);
                 double lineHeight = run.FontSize * text.LineSpacing;
 
+                // A column's characters are placed one by one where the layout puts them. Computed once per run.
+                VCCad.Core.Text.TextLayout columnLayout = column
+                    ? VCCad.Core.Text.TextLayoutEngine.Compute(text)
+                    : VCCad.Core.Text.TextLayout.Empty;
+
                 for (int li = 0; li < displayLines.Count; li++)
                 {
                     TextWrapping.LineRange line = displayLines[li];
@@ -1590,6 +1603,15 @@ public static class PdfDocumentExporter
 
                         hex.Append(gid.ToString("X4", CultureInfo.InvariantCulture));
                         lineAdvance += font.Advance1000(gid) * run.FontSize / 1000.0;
+
+                        // **One show operation per character for a column.** The line-level flush below stays for
+                        // every other block; here each character is placed where the layout says, which is the same
+                        // source the canvas draws from - `GlyphBox.X` across, `GlyphBox.Y` down the column.
+                        if (column && i < columnLayout.Glyphs.Count)
+                        {
+                            VCCad.Core.Text.GlyphBox glyph = columnLayout.Glyphs[i];
+                            Flush(text.Origin.X + glyph.X, text.Origin.Y + glyph.Y);
+                        }
                     }
 
                     // The display line's own top, including the paragraph leading that

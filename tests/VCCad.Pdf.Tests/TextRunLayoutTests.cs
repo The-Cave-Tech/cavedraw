@@ -146,8 +146,7 @@ public class TextRunLayoutTests
     /// Measured when written: the exporter emits **1 placement for three characters**. Remove the skip when a
     /// vertical block places each glyph; this assertion is the acceptance.
     /// </summary>
-    [Fact(Skip = "the exporter emits one placement for a three-character column - the single-text-object path " +
-        "assumes a horizontal baseline; see #127")]
+    [Fact]
     public void AVerticalBlockPlacesItsCharactersDownThePage()
     {
         CadDocument document = CadDocument.CreateDefault("Column");
