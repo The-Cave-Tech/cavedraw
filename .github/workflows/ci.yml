@@ -213,9 +213,22 @@ jobs:
         run: dotnet build VCCad.sln -c Release --no-restore
 
       - name: Unit + integration tests
+        shell: powershell
         run: |
+          # **The runner sets ErrorActionPreference to Stop**, so in Windows PowerShell 5.1 any
+          # native command that writes to stderr throws NativeCommandError and ends the step -
+          # and dotnet test does that routinely. The job died after Geometry and Core with Pdf
+          # never starting. Continuing turns a benign stderr write back into a warning, so the
+          # exit code is checked explicitly after each suite; without that check a failing suite
+          # would be ignored, which is the opposite mistake.
+          $ErrorActionPreference = 'Continue'
           dotnet test tests/VCCad.Geometry.Tests -c Release --no-build --no-restore
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet test tests/VCCad.Core.Tests -c Release --no-build --no-restore
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet test tests/VCCad.Pdf.Tests -c Release --no-build --no-restore
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet test tests/VCCad.Api.Integration.Tests -c Release --no-build --no-restore
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet test tests/VCCad.App.Tests -c Release --no-build --no-restore
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
