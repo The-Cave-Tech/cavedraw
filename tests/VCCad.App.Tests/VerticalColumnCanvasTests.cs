@@ -126,8 +126,7 @@ public class VerticalColumnCanvasTests
     /// This is a deliberate sentinel rather than a deleted test: when that work lands, remove the skip and the
     /// assertion above is the acceptance.
     /// </summary>
-    [AvaloniaFact(Skip = "the canvas draws each run as one FormattedText, which is horizontal by construction; " +
-        "a vertical column needs the per-glyph draw at CanvasWorkspace.cs:5182 - see #127")]
+    [AvaloniaFact]
     public void AVerticalBlockDrawsAsAColumnAndAHorizontalOneDrawsAsALine()
     {
         (int verticalWidth, int verticalHeight) = Ink(TextWritingMode.VerticalRl);

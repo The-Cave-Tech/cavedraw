@@ -5102,6 +5102,44 @@ public sealed class CanvasWorkspace : Control
             Point2D origin = text.Origin + offset
                 + new Vector2D(box.X, TextLayoutEngine.RunTop(run, line));
 
+            // **A vertical column places each character itself.** Everything in here is already in the block's own
+            // upright space - the block rotation is on the context above - so this is a position in that space. The
+            // run-level `(box.X, RunTop(...))` above pairs an along-line x with a line-top y, which describes a
+            // horizontal line; a column's characters are separated *down* the page, and the layout already states
+            // where each one goes: `GlyphBox.X` is the across position and `GlyphBox.Y` the pen running down it.
+            // Drawing from those is also what the caret and the highlight have to read, so the three stop
+            // disagreeing by construction rather than by two estimates that happen to match.
+            if (text.WritingMode is TextWritingMode.VerticalRl or TextWritingMode.VerticalLr)
+            {
+                IReadOnlyList<double> advances = run.Advances();
+                double modelled = 0;
+                foreach (double advance in advances)
+                {
+                    modelled += advance;
+                }
+
+                double glyphScale = run.AdvanceWidth is > 0 && modelled > 0
+                    ? run.AdvanceWidth.Value / modelled
+                    : 1.0;
+
+                EmbeddedFont? program = ResolveProgramme(
+                    run, pieceStart, box.Length, out IGlyphTypeface? typeface, out ushort[]? ids);
+
+                foreach (GlyphBox glyph in metrics.Layout.Glyphs)
+                {
+                    if (glyph.Run != box.Run || glyph.Index < pieceStart || glyph.Index >= pieceStart + box.Length)
+                    {
+                        continue;
+                    }
+
+                    Point2D at = text.Origin + offset + new Vector2D(glyph.X, glyph.Y);
+                    DrawOneGlyph(context, brush, run, glyph.Index, new Point(at.X, at.Y),
+                        glyphScale, program, typeface, ids);
+                }
+
+                continue;
+            }
+
             // **Tracking is advance, never scale.** A run that asks for letter or word spacing keeps
             // the face's own letterforms and moves the pen further between glyphs, so it is drawn one
             // glyph at a time - the only way a run-level draw can put room *between* characters, since
