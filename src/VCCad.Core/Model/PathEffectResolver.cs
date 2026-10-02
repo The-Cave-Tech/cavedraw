@@ -49,10 +49,12 @@ public static class PathEffectResolver
         int refreshed = 0;
         var notRefreshed = new List<string>();
 
-        // The walk is over a snapshot: the loops below replace stroke stacks, and a path whose effect is inside a
-        // definition is not walked at all - AllPaths covers the artboards and the pasteboard, which is where an
-        // imported effect lands.
-        foreach (PathItem path in document.AllPaths().ToArray())
+        // The walk is over a snapshot: the loops below replace stroke stacks. It covers the artboards, the
+        // pasteboard **and the definitions**, because a symbol's content is not part of AllPaths - an instance
+        // copies it - so an effect on a shape inside a definition used to be re-derived nowhere at all. The
+        // definitions are walked here rather than by widening AllItems(), which would have made the instance
+        // resolver treat a symbol's own artwork as an instance and broke its tests.
+        foreach (PathItem path in document.AllPaths().Concat(DefinitionPaths(document)).ToArray())
         {
             if (path.PathEffect is not { } effect)
             {
@@ -101,5 +103,35 @@ public static class PathEffectResolver
 
         refusal = null;
         return derived.ToArray();
+    }
+
+    /// <summary>
+    /// Every path inside the document's definitions, walked recursively.
+    ///
+    /// A definition holds artwork a viewer draws only where an instance refers to it, so it is deliberately not
+    /// part of <see cref="CadDocument.AllItems"/> - the instance resolver would treat a symbol's own content as an
+    /// instance. Re-deriving an effect still has to reach it: a path inside a symbol is as real as any other, and
+    /// its stored conversion goes stale in exactly the same way when the path behind it is edited.
+    /// </summary>
+    private static IEnumerable<PathItem> DefinitionPaths(CadDocument document)
+        => DefinitionPaths(document.Definitions.Children);
+
+    /// <summary>The paths in a subtree, at any depth.</summary>
+    private static IEnumerable<PathItem> DefinitionPaths(IEnumerable<LayerItem> items)
+    {
+        foreach (LayerItem item in items)
+        {
+            if (item is PathItem path)
+            {
+                yield return path;
+            }
+            else if (item is ArtGroup group)
+            {
+                foreach (PathItem nested in DefinitionPaths(group.Children))
+                {
+                    yield return nested;
+                }
+            }
+        }
     }
 }

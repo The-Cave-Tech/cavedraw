@@ -125,6 +125,34 @@ public class PathEffectLivenessTests
     /// Before this class existed the last assertion read <c>Expected: 0.25, Actual: 0.5</c>, and it is the number
     /// the issue records.
     /// </summary>
+    /// <summary>
+    /// **A path inside a definition is re-derived too.** AllPaths covers the artboards and the pasteboard, and a
+    /// definition is neither: a symbol's content is drawn only where an instance refers to it, so it is
+    /// deliberately outside that walk and the instance resolver does not mistake it for an instance. An effect on
+    /// a path inside one therefore went stale in exactly the same way, and the refresh step could not reach it at
+    /// all - the walk stopped at the pasteboard.
+    /// </summary>
+    [Fact]
+    public void APathInsideADefinitionIsReDerivedToo()
+    {
+        PathItem path = Imported(TwoSegments);
+        CadDocument document = path.Document!;
+
+        // Out of the artboard and into the definitions, which AllPaths deliberately does not walk.
+        document.Artboards[0].Layers[0].RemoveItem(path);
+        document.Definitions.AddItem(path);
+
+        Assert.Equal(0.5, Knot(path), 9);
+
+        Extend(path);
+
+        var command = new RefreshPathEffectsCommand(document);
+        command.Do();
+
+        Assert.Equal(1, command.LastResolution!.Refreshed);
+        Assert.Equal(0.25, Knot(path), 9);
+    }
+
     [Fact]
     public void TheStoredProfileFollowsTheSegmentCountWhenTheEffectIsRecomputed()
     {
