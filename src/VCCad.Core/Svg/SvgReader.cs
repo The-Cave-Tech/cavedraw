@@ -31,8 +31,10 @@ public sealed record SvgImportResult(
 ///
 /// What this reads today: the basic shapes, paths, groups, `use` and symbols, filters, gradients, `image`, `text`
 /// with its runs, the view box, CSS and the presentation attributes that decide how they are painted, with every
-/// length resolved through its unit, and a `svg` viewport's clip on what it holds. The paint servers other than
-/// gradients are their own issue.
+/// length resolved through its unit, and a `svg` viewport's clip on what it holds. A `marker` is read and **placed
+/// as art** at each vertex, because the model has no marker member on a stroke (<see cref="SvgMarkers"/>); a
+/// `pattern` is named rather than painted, because the model has no pattern paint server
+/// (<see cref="SvgPatterns"/>). The paint servers other than gradients are their own issue.
 ///
 /// The text half lives in <c>SvgTextReader.cs</c>, which is a part of this class because a text element is walked
 /// with the same context - the same stylesheets, the same viewport, the same list of things that could not be read -
@@ -40,7 +42,7 @@ public sealed record SvgImportResult(
 /// </summary>
 public static partial class SvgReader
 {
-    private static readonly XNamespace Svg = "http://www.w3.org/2000/svg";
+    internal static readonly XNamespace Svg = "http://www.w3.org/2000/svg";
 
     /// <summary>
     /// The size a standalone SVG has when it declares neither a width nor a height, in user units.
@@ -125,6 +127,16 @@ public static partial class SvgReader
 
         SvgGradients gradients = SvgGradients.Collect(root, sheet);
 
+        // The patterns, so that a `url(#p)` naming one can be **named as a pattern**. Without this the reference
+        // falls past the gradient lookup and is reported as a paint server the document does not have - the right
+        // finding with the wrong name, which sends the reader looking in the wrong place (issue #175's lesson, and
+        // this reader's own `ClipPathFor` refusal for a value it cannot honour).
+        SvgPatterns patterns = SvgPatterns.Collect(root);
+
+        // The markers - Inkscape's arrowheads. A marker is a document asset the way a gradient is, and placing one
+        // needs the path's own tangent, so the definitions are collected here and used where a path is read.
+        SvgMarkers markers = SvgMarkers.Collect(root);
+
         // The live path effects the file defines. Collected up front rather than where `defs` is met, because the
         // reference and the definition can be in either order and a path read before its `defs` would find nothing.
         IReadOnlyDictionary<string, PathEffectDefinition> pathEffects = CollectPathEffects(root);
@@ -165,6 +177,8 @@ public static partial class SvgReader
             UsedPathEffects = new HashSet<string>(StringComparer.Ordinal),
             Sheet = sheet,
             Gradients = gradients,
+            Patterns = patterns,
+            Markers = markers,
             PathEffects = pathEffects,
             Warnings = warnings,
             Viewport = viewport,
@@ -623,7 +637,7 @@ public static partial class SvgReader
     /// come to disagree. The default is `xMidYMid meet`, which is what a viewer assumes when the attribute is
     /// absent: fit everything, centred.
     /// </summary>
-    private static (double ScaleX, double ScaleY, double OffsetX, double OffsetY) Fit(
+    internal static (double ScaleX, double ScaleY, double OffsetX, double OffsetY) Fit(
         double viewWidth, double viewHeight, double contentWidth, double contentHeight, string? aspect)
     {
         string alignment = string.IsNullOrWhiteSpace(aspect) ? "xMidYMid meet" : aspect.Trim();
@@ -674,6 +688,25 @@ public static partial class SvgReader
 
         /// <summary>The document's paint servers, by id.</summary>
         public required SvgGradients Gradients { get; init; }
+
+        /// <summary>
+        /// The document's patterns, by id.
+        ///
+        /// Collected once and carried on every context, like the paint servers, because a pattern is a **document
+        /// asset**: the shape that paints with one refers to it by id and the definition is not beside the shape.
+        /// They are read so that a `url(#p)` naming a pattern can be **named as a pattern** rather than misnamed as
+        /// a paint server that does not exist - see <see cref="SvgPatterns"/>.
+        /// </summary>
+        public required SvgPatterns Patterns { get; init; }
+
+        /// <summary>
+        /// The document's markers, by id.
+        ///
+        /// Collected once and carried on every context, because a marker is a **document asset** in exactly the way
+        /// a gradient is: the path that uses one refers to it by id, and the definition is in `defs` rather than
+        /// beside the path. See <see cref="SvgMarkers"/>.
+        /// </summary>
+        public required SvgMarkers Markers { get; init; }
 
         /// <summary>
         /// The document's live path effects, by the id a path refers to them by.
@@ -917,6 +950,10 @@ public static partial class SvgReader
             item.BlendMode = style.Blend;
             CaptureForeign(element, item);
 
+            // The arrowheads this element's marker properties place. They are added **after** the shape they belong
+            // to, because SVG draws markers after the object is filled and stroked.
+            List<ArtGroup>? arrowheads = null;
+
             if (item is PathItem shape)
             {
                 // A gradient is normalised against the shape's own box, in the space the shape is **written** in -
@@ -935,6 +972,14 @@ public static partial class SvgReader
                     {
                         shape.Fill = shape.Fill with { IsVisible = true, Gradient = resolved };
                     }
+                    else if (context.Patterns.Facts(gradientId) is { } pattern)
+                    {
+                        // **A pattern is not a colour, and the model has nowhere to put a tile.** Reading the
+                        // reference as a missing paint server would name the wrong thing - the pattern is in the
+                        // document - so it is named as what it is, together with what its tile draws. See
+                        // SvgPatterns, and #175 for the same finding on the PDF side.
+                        context.Warnings.Add(PatternReport(element, "fill", PatternValue(element, declarations, "fill", gradientId), pattern));
+                    }
                     else
                     {
                         // A reference to a paint server the document does not contain. The shape stays drawable,
@@ -942,6 +987,25 @@ public static partial class SvgReader
                         context.Warnings.Add($"no paint server called '{gradientId}' for this fill");
                     }
                 }
+
+                // A paint server reaches the stroke half of the paint too. Gradients on a stroke are a separate
+                // gap, but a *pattern* named as a stroke is the same tile the fill case above cannot honour, and
+                // saying so costs nothing - silently painting it black would be the substitution this file refuses
+                // to make.
+                if (SvgProperties.Value(element, declarations, "stroke") is { } strokeValue &&
+                    LocalReference(strokeValue) is { } strokeId &&
+                    context.Patterns.Facts(strokeId) is { } strokePattern)
+                {
+                    context.Warnings.Add(PatternReport(element, "stroke", strokeValue, strokePattern));
+                }
+
+                // Markers are placed **before** the element's own transform is baked into the points, because SVG
+                // places them in the user space that transform establishes: the tangent, the vertex and the stroke
+                // width are all that space's own, and the placement below carries `own` itself. Computing them from
+                // the transformed points instead would turn a skew or a non-uniform scale into a marker aimed the
+                // wrong way.
+                List<ArtGroup>? placed = PlaceMarkers(element, context, style, shape, own);
+                arrowheads = placed;
 
                 if (!IsIdentity(own))
                 {
@@ -973,6 +1037,16 @@ public static partial class SvgReader
 
             context.Add(item);
             context.Counts[name] = context.Counts.GetValueOrDefault(name) + 1;
+
+            // Drawn after the object, which is what SVG says: markers are painted once the fill and the stroke are
+            // down, so they cover the end of the line rather than being covered by it.
+            if (arrowheads is not null)
+            {
+                foreach (ArtGroup arrowhead in arrowheads)
+                {
+                    context.Add(arrowhead);
+                }
+            }
         }
     }
 
@@ -1029,6 +1103,8 @@ public static partial class SvgReader
             UsedPathEffects = context.UsedPathEffects,
             Sheet = context.Sheet,
             Gradients = context.Gradients,
+            Patterns = context.Patterns,
+            Markers = context.Markers,
             PathEffects = context.PathEffects,
             Warnings = context.Warnings,
             Viewport = context.Viewport,
@@ -1142,6 +1218,8 @@ public static partial class SvgReader
             UsedPathEffects = context.UsedPathEffects,
             Sheet = context.Sheet,
             Gradients = context.Gradients,
+            Patterns = context.Patterns,
+            Markers = context.Markers,
             PathEffects = context.PathEffects,
             Warnings = context.Warnings,
             Viewport = viewport,
@@ -1356,6 +1434,353 @@ public static partial class SvgReader
 
         string inner = value[4..^1].Trim().Trim('"', '\'');
         return inner.Length > 1 && inner[0] == '#' ? inner[1..] : null;
+    }
+
+    /// <summary>
+    /// The message a paint server naming a `&lt;pattern&gt;` produces: what was painted, the pattern it names, what
+    /// the tile draws, and why the model cannot paint with it.
+    ///
+    /// **It reaches the tile on purpose.** A report that only noticed the reference would say "a pattern was seen"
+    /// and stop, which is not something a person can act on; naming the shapes the tile holds is the difference
+    /// between a message and a finding. The refusal for `objectBoundingBox` comes along in the same message, because
+    /// it is the same pattern at the same moment - see <see cref="SvgPatterns.PatternFacts"/>.
+    /// </summary>
+    private static string PatternReport(
+        XElement element, string property, string value, SvgPatterns.PatternFacts pattern)
+    {
+        string subject = element.Attribute("id")?.Value is { Length: > 0 } id
+            ? $"the element '{id}'"
+            : "an element";
+
+        string tile = pattern.TileShapes.Count == 0
+            ? "its tile holds no shape this reader draws"
+            : $"its tile draws {NameList(pattern.TileShapes)}";
+
+        string units = pattern.UnitRefusals.Count == 0
+            ? string.Empty
+            : " " + string.Join(" ", pattern.UnitRefusals.Select(r => char.ToUpperInvariant(r[0]) + r[1..] + "."));
+
+        return $"{subject} is painted with {property}=\"{value}\", which names a <pattern>: {tile}.{units} " +
+               "A pattern is artwork used as a paint, and this model has no pattern paint server, so the " +
+               $"{property} is left unpainted rather than substituted with a colour or a tile the file did not write";
+    }
+
+    /// <summary>The value an element writes for a paint property, or the reference itself when it was inherited.</summary>
+    private static string PatternValue(
+        XElement element,
+        IReadOnlyDictionary<string, (string Value, bool Important)> declarations,
+        string property,
+        string id)
+        => SvgProperties.Value(element, declarations, property) ?? $"url(#{id})";
+
+    /// <summary>A list of element names as prose: `&lt;rect&gt; and &lt;ellipse&gt;`, `a`, `b` and `c`.</summary>
+    private static string NameList(IReadOnlyList<string> names)
+    {
+        if (names.Count == 1)
+        {
+            return $"<{names[0]}>";
+        }
+
+        return string.Join(", ", names.Take(names.Count - 1).Select(n => $"<{n}>")) +
+               $" and <{names[^1]}>";
+    }
+
+    // ------------------------------------------------------------------ `marker-start` / `-mid` / `-end`
+
+    /// <summary>Which of the three marker properties places an arrowhead at a vertex.</summary>
+    private enum MarkerSlot
+    {
+        Start,
+        Mid,
+        End,
+    }
+
+    /// <summary>
+    /// The arrowheads a path's marker properties place, as groups in the space the element is **written** in - the
+    /// caller has not yet baked <paramref name="own"/> into the points, so the tangent, the vertex and the stroke
+    /// width are all that space's own, and the placement carries the transform itself.
+    ///
+    /// **Placed as art, and said out loud.** SVG makes a marker a stroke property: it belongs to the path and moves
+    /// with it. The model's <see cref="StrokeSpec"/> has no member for one - adding it means editing
+    /// `src/VCCad.Core/Model/**`, which is not this change's to make - so the arrowhead's content becomes an object
+    /// of its own beside the path. That is a real loss of editability, so every marker that is placed is reported,
+    /// naming the marker: the picture is right and the difference is stated rather than hidden.
+    ///
+    /// A reference this reader cannot honour - a dangling id, an id that names something else - is reported too, and
+    /// no geometry is invented for it.
+    /// </summary>
+    private static List<ArtGroup>? PlaceMarkers(
+        XElement element, Context context, PresentationStyle style, PathItem shape, AffineTransform own)
+    {
+        if (style.Markers.IsEmpty ||
+            element.Name.LocalName is not ("path" or "line" or "polyline" or "polygon"))
+        {
+            return null;
+        }
+
+        var placed = new List<ArtGroup>();
+
+        foreach ((string property, string? id, MarkerSlot slot) in new[]
+                 {
+                     ("marker-start", style.Markers.Start, MarkerSlot.Start),
+                     ("marker-mid", style.Markers.Mid, MarkerSlot.Mid),
+                     ("marker-end", style.Markers.End, MarkerSlot.End),
+                 })
+        {
+            if (id is null)
+            {
+                continue;
+            }
+
+            if (context.Markers.Definition(id) is not { } marker)
+            {
+                context.Warnings.Add(context.Markers.Defines(id)
+                    ? $"{Subject(element)} states {property}=\"url(#{id})\", and '#{id}' is not a <marker>, so no " +
+                      "arrowhead is drawn"
+                    : $"{Subject(element)} states {property}=\"url(#{id})\", and the document defines no <marker> " +
+                      $"called '{id}', so no arrowhead is drawn");
+                continue;
+            }
+
+            foreach (string problem in marker.Problems)
+            {
+                context.Warnings.Add(problem);
+            }
+
+            bool placedOne = false;
+            foreach (SubPath sub in shape.SubPaths)
+            {
+                foreach (int vertex in VerticesFor(sub, slot))
+                {
+                    if (Heading(sub, vertex, slot) is not { } heading)
+                    {
+                        continue;
+                    }
+
+                    double rotation = marker.Orient switch
+                    {
+                        SvgMarkers.MarkerOrient.Angle => marker.AngleDegrees * Math.PI / 180.0,
+                        SvgMarkers.MarkerOrient.AutoStartReverse when slot == MarkerSlot.Start => heading + Math.PI,
+                        _ => heading,
+                    };
+
+                    placed.Add(ReadMarkerInstance(
+                        marker, sub.Nodes[vertex].Anchor, rotation, style.StrokeWidth, own, context));
+                    placedOne = true;
+                }
+            }
+
+            if (placedOne)
+            {
+                context.Warnings.Add(
+                    $"{Subject(element)} is decorated with {property}=\"url(#{id})\"; this model has no marker " +
+                    "member on a stroke, so the arrowhead's content is placed as art at the vertex and will not " +
+                    "follow the path if the path is edited");
+            }
+        }
+
+        return placed.Count == 0 ? null : placed;
+    }
+
+    /// <summary>An element named the way a report names it: by its id where it has one.</summary>
+    private static string Subject(XElement element)
+        => element.Attribute("id")?.Value is { Length: > 0 } id ? $"the element '{id}'" : "an element";
+
+    /// <summary>
+    /// The vertices of a subpath a marker property decorates: the first for a start, the last for an end, and every
+    /// vertex in between for a mid.
+    ///
+    /// A closed subpath's last vertex is its first, which is why `marker-end` on a closed path can draw a second
+    /// marker on the initial point - the specification says so rather than leaving it to the reader.
+    /// </summary>
+    private static IEnumerable<int> VerticesFor(SubPath sub, MarkerSlot slot)
+    {
+        if (sub.Nodes.Count == 0)
+        {
+            yield break;
+        }
+
+        switch (slot)
+        {
+            case MarkerSlot.Start:
+                yield return 0;
+                break;
+
+            case MarkerSlot.End:
+                yield return sub.Nodes.Count - 1;
+                break;
+
+            default:
+                for (int i = 1; i < sub.Nodes.Count - 1; i++)
+                {
+                    yield return i;
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>
+    /// The direction of travel at a vertex, in radians, or null when the file gives no tangent there.
+    ///
+    /// A start marker uses the segment leaving the vertex and an end marker the segment arriving at it; a mid marker
+    /// uses the bisector of the two, which is the specification's own rule for a corner. At a corner where the two
+    /// tangents cancel - the path doubles back on itself - the bisector is undefined, and the specification says to
+    /// assume a slope of zero; that is what the zero here means.
+    /// </summary>
+    private static double? Heading(SubPath sub, int vertex, MarkerSlot slot)
+    {
+        (double X, double Y)? incoming = slot == MarkerSlot.Start && !sub.IsClosed
+            ? null
+            : Tangent(sub, vertex, outbound: false);
+
+        (double X, double Y)? outgoing = slot == MarkerSlot.End && !sub.IsClosed
+            ? null
+            : Tangent(sub, vertex, outbound: true);
+
+        if (incoming is { } a && outgoing is { } b)
+        {
+            (double ax, double ay) = Normalize(a);
+            (double bx, double by) = Normalize(b);
+            (double dx, double dy) = Normalize((ax + bx, ay + by));
+            return dx == 0.0 && dy == 0.0 ? 0.0 : Math.Atan2(dy, dx);
+        }
+
+        if ((incoming ?? outgoing) is not { } only)
+        {
+            return null;
+        }
+
+        (double x, double y) = Normalize(only);
+        return x == 0.0 && y == 0.0 ? null : Math.Atan2(y, x);
+    }
+
+    /// <summary>
+    /// The tangent at a vertex, outbound or inbound.
+    ///
+    /// The control handle is what decides it for a curve - a straight segment's handles sit on its own anchors, so
+    /// the fallback to the neighbouring anchor is what a line uses and is the same answer for a curve written
+    /// without handles.
+    /// </summary>
+    private static (double X, double Y)? Tangent(SubPath sub, int vertex, bool outbound)
+    {
+        PathNode node = sub.Nodes[vertex];
+
+        int other = outbound
+            ? (vertex + 1 < sub.Nodes.Count ? vertex + 1 : sub.IsClosed ? 0 : -1)
+            : (vertex - 1 >= 0 ? vertex - 1 : sub.IsClosed ? sub.Nodes.Count - 1 : -1);
+
+        if (other < 0)
+        {
+            return null;
+        }
+
+        Point2D handle = outbound ? node.OutHandle : node.InHandle;
+        double dx = outbound ? handle.X - node.Anchor.X : node.Anchor.X - handle.X;
+        double dy = outbound ? handle.Y - node.Anchor.Y : node.Anchor.Y - handle.Y;
+
+        if (dx == 0.0 && dy == 0.0)
+        {
+            Point2D to = sub.Nodes[other].Anchor;
+            dx = outbound ? to.X - node.Anchor.X : node.Anchor.X - to.X;
+            dy = outbound ? to.Y - node.Anchor.Y : node.Anchor.Y - to.Y;
+        }
+
+        return (dx, dy);
+    }
+
+    /// <summary>A vector scaled to unit length, or the zero vector left alone.</summary>
+    private static (double X, double Y) Normalize((double X, double Y) vector)
+    {
+        double length = Math.Sqrt((vector.X * vector.X) + (vector.Y * vector.Y));
+        return length == 0.0 ? (0.0, 0.0) : (vector.X / length, vector.Y / length);
+    }
+
+    /// <summary>
+    /// One placed arrowhead: the marker's own content read into a group carrying the placement.
+    ///
+    /// The content is read with the marker's **own** inherited style, not the referencing element's - SVG says
+    /// properties inherit into a marker from its ancestors and explicitly not from the element that references it,
+    /// so a red path's arrowhead is not red unless the file says so.
+    /// </summary>
+    private static ArtGroup ReadMarkerInstance(
+        SvgMarkers.MarkerDefinition marker,
+        Point2D vertex,
+        double rotation,
+        double strokeWidth,
+        AffineTransform own,
+        Context context)
+    {
+        var group = new ArtGroup
+        {
+            Name = marker.Id,
+            Transform = own.Compose(marker.Placement(vertex, rotation, strokeWidth)),
+        };
+
+        if (marker.ViewportClip(vertex, rotation, strokeWidth) is { } viewportClip)
+        {
+            group.Clips.Add(ApplyTransform(viewportClip, own));
+        }
+
+        // A marker whose content names the marker again would recurse until the stack ran out; the id is claimed
+        // while the content is read, exactly as a `use` claims its target.
+        string key = "marker:" + marker.Id;
+        if (!context.Resolving.Add(key))
+        {
+            context.Warnings.Add($"the <marker> '{marker.Id}' refers to itself, so its content is not expanded");
+            return group;
+        }
+
+        PresentationStyle markerStyle = MarkerStyle(marker.Element, context);
+        var inside = new Context
+        {
+            Layer = context.Layer,
+            Group = group,
+            Style = markerStyle,
+            Counts = context.Counts,
+            Ids = context.Ids,
+            Resolving = context.Resolving,
+            Missing = context.Missing,
+            UsedPathEffects = context.UsedPathEffects,
+            Sheet = context.Sheet,
+            Gradients = context.Gradients,
+            Patterns = context.Patterns,
+            Markers = context.Markers,
+            PathEffects = context.PathEffects,
+            Warnings = context.Warnings,
+            Viewport = context.Viewport,
+            BaseDirectory = context.BaseDirectory,
+            Text = context.Text,
+        };
+
+        foreach (XElement child in marker.Element.Elements())
+        {
+            ReadElement(child, inside);
+        }
+
+        context.Resolving.Remove(key);
+        return group;
+    }
+
+    /// <summary>
+    /// The style in force inside a marker: its own ancestors' paint folded from the root down, which is where SVG
+    /// says a marker's properties inherit from.
+    /// </summary>
+    private static PresentationStyle MarkerStyle(XElement marker, Context context)
+    {
+        PresentationStyle style = PresentationStyle.Default;
+
+        foreach (XElement ancestor in marker.AncestorsAndSelf().Reverse())
+        {
+            style = PresentationStyle.From(
+                ancestor,
+                style,
+                context.Sheet.DeclarationsFor(ancestor, ancestor.Ancestors().ToArray()),
+                context.Viewport,
+                context.Warn);
+        }
+
+        return style;
     }
 
     private static bool IsClipPath(XElement element)
@@ -1875,6 +2300,8 @@ public static partial class SvgReader
             UsedPathEffects = context.UsedPathEffects,
             Sheet = context.Sheet,
             Gradients = context.Gradients,
+            Patterns = context.Patterns,
+            Markers = context.Markers,
             PathEffects = context.PathEffects,
             Warnings = context.Warnings,
             Viewport = context.Viewport,

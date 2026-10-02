@@ -1337,6 +1337,7 @@ public static class SvgWriter
                 if (fill is not null)
                 {
                     element.Add(new XAttribute("fill-rule", fillRule));
+                    WriteFillOpacity(element, path);
                 }
 
                 if (path.Opacity < 1.0)
@@ -1384,6 +1385,7 @@ public static class SvgWriter
                 if (fill is not null)
                 {
                     element.Add(new XAttribute("fill-rule", fillRule));
+                    WriteFillOpacity(element, path);
                 }
 
                 ApplyForeign(element, path);
@@ -1400,6 +1402,26 @@ public static class SvgWriter
             foreach (StrokeSpec stroke in strokes)
             {
                 WriteStroke(path, stroke, data, parent, clip);
+            }
+        }
+
+        /// <summary>
+        /// The paint's own opacity, when it is not the default.
+        ///
+        /// A fill's alpha is part of the paint and not decoration: without it, a shape whose fill is transparent
+        /// comes back fully opaque, which is a drawing that changed colour across a save. That matters here for a
+        /// specific reason as well - a paint server this reader could not resolve is stored as a **visible but fully
+        /// transparent** fill rather than as a colour the file did not name (see <c>SvgPatterns</c>), so dropping the
+        /// alpha would turn "we could not paint this" into "this is black" on the way out.
+        ///
+        /// Written only when there is a fill to make transparent, and only when it is not 1, matching the stroke
+        /// half below and the text writer above.
+        /// </summary>
+        private static void WriteFillOpacity(XElement element, PathItem path)
+        {
+            if (path.Fill.Color.A < 1.0)
+            {
+                element.Add(new XAttribute("fill-opacity", Number(path.Fill.Color.A)));
             }
         }
 

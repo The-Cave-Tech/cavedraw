@@ -19,6 +19,19 @@ public sealed class SvgImportException : Exception
 }
 
 /// <summary>
+/// The three marker properties in force on an element, as the ids they name - null meaning `none`, or "nothing
+/// stated" when nothing in the cascade named one.
+///
+/// They travel together because SVG's `marker` is a shorthand for exactly this triple and because they inherit
+/// together, so one record carries the cascade rather than three loose parameters.
+/// </summary>
+internal readonly record struct MarkerReferences(string? Start, string? Mid, string? End)
+{
+    /// <summary>True when no vertex of a path carrying these references draws an arrowhead.</summary>
+    public bool IsEmpty => Start is null && Mid is null && End is null;
+}
+
+/// <summary>
 /// How a shape is painted, inherited down the tree.
 ///
 /// **Inherited, because that is what SVG says.** A `g` carrying `stroke="#f00"` paints every child that does not
@@ -32,7 +45,9 @@ internal sealed record PresentationStyle(
     FillSpec Fill,
     StrokeSpec Stroke,
     string? FillGradientId = null,
-    BlendMode Blend = BlendMode.Normal)
+    BlendMode Blend = BlendMode.Normal,
+    MarkerReferences Markers = default,
+    double StrokeWidth = 1.0)
 {
     /// <summary>SVG's initial values: black fill, no stroke.</summary>
     public static PresentationStyle Default { get; } = new(
@@ -64,6 +79,16 @@ internal sealed record PresentationStyle(
         FillSpec fill = inherited.Fill;
         StrokeSpec stroke = inherited.Stroke;
         string? gradientId = inherited.FillGradientId;
+
+        // The stroke's width is read whatever the paint is, because a marker's size is stated in stroke widths
+        // (`markerUnits="strokeWidth"`) and a file may draw no stroke on the path that carries an arrowhead. It
+        // used to be read only when a visible stroke was named, which is right for drawing the stroke and wrong
+        // for measuring a marker - so it is one value, read once, and applied where each of them needs it.
+        double strokeWidth = inherited.StrokeWidth;
+        if (Value("stroke-width") is { } statedWidth && Length(statedWidth, viewport, warn) is { } resolvedWidth)
+        {
+            strokeWidth = resolvedWidth;
+        }
 
         string? fillValue = Value("fill");
         if (fillValue is not null)
@@ -103,7 +128,7 @@ internal sealed record PresentationStyle(
         {
             stroke = stroke with
             {
-                Width = Length(Value("stroke-width"), viewport, warn) ?? stroke.Width,
+                Width = strokeWidth,
                 Cap = ParseCap(Value("stroke-linecap")) ?? stroke.Cap,
                 Join = ParseJoin(Value("stroke-linejoin")) ?? stroke.Join,
                 MiterLimit = Number(Value("stroke-miterlimit")) ?? stroke.MiterLimit,
@@ -130,6 +155,31 @@ internal sealed record PresentationStyle(
             _ = alpha;
         }
 
+        // `marker` is the shorthand for all three, and the three longhands refine whichever marker is in force -
+        // the same shape the fill and stroke properties take above. They inherit, because SVG says so: a `g` that
+        // carries `marker-end` puts that arrowhead on every path under it.
+        MarkerReferences markers = inherited.Markers;
+        if (Value("marker") is { } shorthand)
+        {
+            string? only = MarkerId(shorthand, warn);
+            markers = new MarkerReferences(only, only, only);
+        }
+
+        if (Value("marker-start") is { } markerStart)
+        {
+            markers = markers with { Start = MarkerId(markerStart, warn) };
+        }
+
+        if (Value("marker-mid") is { } markerMid)
+        {
+            markers = markers with { Mid = MarkerId(markerMid, warn) };
+        }
+
+        if (Value("marker-end") is { } markerEnd)
+        {
+            markers = markers with { End = MarkerId(markerEnd, warn) };
+        }
+
         // Read from **this** element only, never from `inherited`: CSS's `mix-blend-mode` does not inherit, and a
         // group's blend leaking onto its children would composite each of them against a backdrop the file never
         // asked for.
@@ -137,7 +187,43 @@ internal sealed record PresentationStyle(
             fill,
             stroke,
             gradientId,
-            BlendModes.Parse(Value("mix-blend-mode")) ?? BlendMode.Normal);
+            BlendModes.Parse(Value("mix-blend-mode")) ?? BlendMode.Normal,
+            markers,
+            strokeWidth);
+    }
+
+    /// <summary>
+    /// The marker id a `marker`/`marker-start`/`marker-mid`/`marker-end` value names, or null for `none` and for a
+    /// value this reader cannot honour - which is reported rather than read as an arrowhead that is not there.
+    ///
+    /// A dangling id is **not** reported here: whether the document defines the marker is a question about the
+    /// document, answered where the path is read, and this method only reads the property.
+    /// </summary>
+    private static string? MarkerId(string value, Action<string>? warn)
+    {
+        string trimmed = value.Trim();
+        if (trimmed.Length == 0 || trimmed.Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (trimmed.StartsWith("url(", StringComparison.OrdinalIgnoreCase))
+        {
+            int open = trimmed.IndexOf('(');
+            int close = trimmed.IndexOf(')');
+            if (close > open)
+            {
+                string reference = trimmed[(open + 1)..close].Trim().Trim('"', '\'');
+                if (reference.Length > 1 && reference[0] == '#')
+                {
+                    return reference[1..];
+                }
+            }
+        }
+
+        warn?.Invoke(
+            $"a marker property states \"{value}\", which is neither 'none' nor a reference to a <marker>");
+        return null;
     }
 
     /// <summary>The declarations inside a `style` attribute, which is a small inline stylesheet.</summary>
