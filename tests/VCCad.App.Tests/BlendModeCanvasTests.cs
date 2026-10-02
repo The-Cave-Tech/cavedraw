@@ -275,6 +275,49 @@ public class BlendModeCanvasTests
     }
 
     /// <summary>
+    /// **A text block and a placed image carry a blend mode too.** It is on the base class, so the compositor's
+    /// region has to be derived for every kind of item - and a text block answers with its layout box, an image
+    /// with its placement. An arm of that switch that answers nothing paints the item normally and says nothing,
+    /// which is issue #193.
+    ///
+    /// The measurement is a **count** rather than one probe: a glyph does not fill its box, so a point picked in
+    /// the overlap can fall in a gap between letters. What cannot be a coincidence is that no black pixel exists
+    /// anywhere before the blend and hundreds do after it.
+    /// </summary>
+    [AvaloniaFact]
+    public void ATextBlocksBlendModeIsCompositedToo()
+    {
+        (Window window, _, EditorViewModel viewModel) = Host();
+        Artboard board = viewModel.Document.Artboards[0];
+
+        Rect(viewModel, "back", new Rect2D(board.X + 60, board.Y + 60, 260, 200), new ColorRgb(0, 0, 255));
+
+        var text = new TextItem
+        {
+            Name = "words",
+            Color = new ColorRgb(255, 0, 0),
+            Origin = new Point2D(board.X + 70, board.Y + 150),
+        };
+        text.Runs.Add(new TextRun { Text = "MMMMMMMM", FontSize = 64 });
+        board.Layers[0].AddItem(text);
+        Settle();
+
+        var normal = new Frame(window, Width, Height);
+        _output.WriteLine($"normal: black {normal.CountOf(0, 0, 0)}, red {normal.CountOf(255, 0, 0)}");
+        Assert.Equal(0, normal.CountOf(0, 0, 0));
+        Assert.True(normal.CountOf(255, 0, 0) > 100, "the text must have drawn in red");
+
+        text.BlendMode = BlendMode.Multiply;
+        Settle();
+
+        var blended = new Frame(window, Width, Height);
+        _output.WriteLine($"multiply: black {blended.CountOf(0, 0, 0)}");
+        Assert.True(
+            blended.CountOf(0, 0, 0) > 100,
+            $"red text multiplied over blue is black: {blended.CountOf(0, 0, 0)} black pixels");
+    }
+
+    /// <summary>
     /// **Absent at default.** A document that states no blend mode draws exactly what it drew before: the upper
     /// shape's own opaque red over the blue, with no black anywhere.
     /// </summary>

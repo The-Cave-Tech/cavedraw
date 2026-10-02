@@ -4282,19 +4282,28 @@ public sealed class CanvasWorkspace : Control
     /// it is placed in - exactly what an unblended item is drawn through. The box is then opened up by the widest
     /// stroke plus a pixel, because a stroke straddles the outline and the outline is what the geometry box
     /// measures; a blend region that stopped at the fill would clip the very edge the blend is most visible on.
+    ///
+    /// **Every kind of item has a box.** `LayerItem.BlendMode` is on the base class, so a text block and a placed
+    /// image can be blended too, and both answer for themselves the same way a path and a group do. An arm that
+    /// answered nothing for them did not mean "cannot be blended" - it meant the painter's switch had not learned
+    /// about them yet, and the compositor read the empty box as "nothing to draw" and painted the item **normally**
+    /// while saying nothing (#193).
     /// </summary>
     private static Rect ItemFrameBounds(LayerItem item, AffineTransform toWorld)
-    {
-        Geometry.Rect2D local = item switch
+        => item switch
         {
-            PathItem path => path.BoundingBox(),
-            ArtGroup group => group.BoundingBox(),
-            _ => Geometry.Rect2D.Empty,
-        };
+            PathItem path => FrameBoundsOf(path.BoundingBox(), (WidestStroke(path) / 2) + 1, toWorld),
+            ArtGroup group => FrameBoundsOf(group.BoundingBox(), 1, toWorld),
 
-        double pad = item is PathItem pathItem ? (WidestStroke(pathItem) / 2) + 1 : 1;
-        return FrameBoundsOf(local, pad, toWorld);
-    }
+            // A text block carries no stroke of its own, but its box is the layout's - and a block can sit at its
+            // origin with an empty string, so the pixel of slack keeps a one-line block a real region.
+            TextItem text => FrameBoundsOf(text.BoundingBox(), 1, toWorld),
+
+            // A placement, which needs no slack: it is exactly the rectangle the image covers.
+            ImageItem image => FrameBoundsOf(image.BoundingBox(), 0, toWorld),
+
+            _ => default,
+        };
 
     /// <summary>
     /// One geometry box, opened up by <paramref name="pad"/> and carried into the frame the painter is drawing in.
