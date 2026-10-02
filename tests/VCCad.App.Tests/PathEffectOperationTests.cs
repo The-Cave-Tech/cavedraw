@@ -267,6 +267,141 @@ public class PathEffectOperationTests
     }
 
     /// <summary>
+    /// **A description can be installed, so an effect is live without having been imported.**
+    ///
+    /// `pathEffect.apply` converts an element handed to it but leaves the path without a description, and
+    /// `pathEffect.refresh` only touches paths that carry one - so before `pathEffect.set` existed, the only way
+    /// to get a live effect was to import a file, and an effect converted through the registry was frozen. This is
+    /// the parity half issue #180 names: `set` takes exactly what `get` reports (the effect's name, its id, its
+    /// version and its parameters) and makes it state on the path, which `refresh` then re-derives.
+    ///
+    /// The value before the set is asserted (no description, nothing derived), and afterwards the model, the
+    /// derived profile and the drawn outline: a knot at segment index 1 of a two-segment path sits at **0.5**, and
+    /// the same knot on the path extended to four segments sits at **0.25** - the number the issue records. Setting
+    /// is not converting, so the profile is still absent between the two calls and only `refresh` produces it.
+    /// </summary>
+    [Fact]
+    public void SettingALiveEffectMakesTheRefreshStepReDeriveFromIt()
+    {
+        (AutomationContext context, PathItem path) = Host(segments: 2);
+        SubPath sub = path.SubPaths[0];
+
+        // Before: nothing on the path to be live, and nothing derived from it.
+        Assert.Null(path.PathEffect);
+        Assert.Null(path.Stroke.WidthProfile);
+
+        JsonElement before = Assert.Single(JsonSerializer
+            .SerializeToElement(EditorOperations.Invoke(context, "pathEffect.get", default))
+            .GetProperty("items")
+            .EnumerateArray());
+        Assert.Equal(JsonValueKind.Null, before.GetProperty("effect").ValueKind);
+        Assert.Equal(JsonValueKind.Null, before.GetProperty("profile").ValueKind);
+
+        JsonElement stored = JsonSerializer.SerializeToElement(EditorOperations.Invoke(
+            context,
+            "pathEffect.set",
+            Params(new
+            {
+                effect = "powerstroke",
+                id = "path-effect1",
+                version = "1.4",
+                parameters = new Dictionary<string, string>
+                {
+                    ["offset_points"] = "0,1 | 1,5",
+                    ["interpolator_type"] = "Linear",
+                    ["linejoin_type"] = "extrp_arc",
+                    ["start_linecap_type"] = "zerowidth",
+                    ["end_linecap_type"] = "zerowidth",
+                    ["miter_limit"] = "4",
+                    ["scale_width"] = "1",
+                },
+            })));
+
+        // The description is state on the path, exactly as it was handed over - and still not a conversion.
+        Assert.Equal(1, stored.GetProperty("changed").GetInt32());
+        Assert.Equal("path-effect1", stored.GetProperty("effect").GetProperty("id").GetString());
+        Assert.NotNull(path.PathEffect);
+        Assert.Equal("powerstroke", path.PathEffect!.Effect);
+        Assert.Equal("path-effect1", path.PathEffect.Id);
+        Assert.Equal("1.4", path.PathEffect.Version);
+        Assert.Equal("0,1 | 1,5", path.PathEffect.Parameter("offset_points"));
+        Assert.Equal(7, path.PathEffect.Parameters.Count);
+        Assert.Null(path.Stroke.WidthProfile);
+
+        // And get reads back the description it accepted, so the pair is a round trip rather than two shapes.
+        JsonElement after = Assert.Single(JsonSerializer
+            .SerializeToElement(EditorOperations.Invoke(context, "pathEffect.get", default))
+            .GetProperty("items")
+            .EnumerateArray());
+        Assert.Equal("powerstroke", after.GetProperty("effect").GetProperty("effect").GetString());
+        Assert.Equal("path-effect1", after.GetProperty("effect").GetProperty("id").GetString());
+        Assert.Equal(
+            "0,1 | 1,5",
+            after.GetProperty("effect").GetProperty("parameters").GetProperty("offset_points").GetString());
+
+        // The step that honours it derives against the path as it stands: two segments, knot at 1/2.
+        EditorOperations.Invoke(context, "pathEffect.refresh", default);
+        Assert.Equal(2, path.Stroke.WidthProfile!.Points.Count);
+        Assert.Equal(0.0, path.Stroke.WidthProfile.Points[0].Position, 9);
+        Assert.Equal(2.0, path.Stroke.WidthProfile.Points[0].LeftWidth, 9);
+        Assert.Equal(0.5, path.Stroke.WidthProfile.Points[^1].Position, 9);
+        Assert.Equal(10.0, path.Stroke.WidthProfile.Points[^1].LeftWidth, 9);
+        Assert.Contains(Edge(path, 10.0), y => Math.Abs(y - 5.0) < 1e-9);
+
+        // The edit: the same path, extended from two segments to four.
+        sub.Nodes.Add(new PathNode(new Point2D(30, 0)));
+        sub.Nodes.Add(new PathNode(new Point2D(40, 0)));
+        path.GeometryChanged();
+
+        // Until the step runs, the conversion is frozen at the count it was made against - the knot's old
+        // position at x=20 leaves the interpolated half-width at x=10 (3, not the 5 the effect asks for there).
+        Assert.Contains(Edge(path, 10.0), y => Math.Abs(y - 3.0) < 1e-9);
+
+        EditorOperations.Invoke(context, "pathEffect.refresh", default);
+        Assert.Equal(0.25, path.Stroke.WidthProfile!.Points[^1].Position, 9);
+        Assert.Contains(Edge(path, 10.0), y => Math.Abs(y - 5.0) < 1e-9);
+        Assert.Contains(Edge(path, 10.0), y => Math.Abs(y + 5.0) < 1e-9);
+
+        // One undo step per call: undo restores the conversion that was replaced, then the conversion itself,
+        // then the description - so setting the effect is undoable on its own.
+        context.ViewModel.ActiveSession.Undo();
+        Assert.Equal(0.5, path.Stroke.WidthProfile!.Points[^1].Position, 9);
+
+        context.ViewModel.ActiveSession.Undo();
+        Assert.Null(path.Stroke.WidthProfile);
+
+        context.ViewModel.ActiveSession.Undo();
+        Assert.Null(path.PathEffect);
+    }
+
+    /// <summary>
+    /// **A request that names no effect is refused, and changes nothing.** The description is the thing being
+    /// installed, so an absent name is a request with nothing in it rather than an empty effect - the same refusal
+    /// `pathEffect.translate` and `pathEffect.apply` make, by the same reader, so the three cannot drift.
+    /// </summary>
+    [Fact]
+    public void SettingAnEffectWithNoNameIsRefused()
+    {
+        (AutomationContext context, PathItem path) = Host();
+
+        EditorOperationException error = Assert.Throws<EditorOperationException>(() => EditorOperations.Invoke(
+            context,
+            "pathEffect.set",
+            Params(new { parameters = new Dictionary<string, string> { ["offset_points"] = "0,2" } })));
+
+        Assert.Contains("name", error.Message, StringComparison.Ordinal);
+        Assert.Null(path.PathEffect);
+        Assert.Null(path.Stroke.WidthProfile);
+    }
+
+    /// <summary>The outline's y at a given path-local x, which is the half-width there for a horizontal path.</summary>
+    private static double[] Edge(PathItem path, double x)
+    {
+        IReadOnlyList<Point2D> outline = Assert.Single(StrokeOutlineBuilder.Plan(path, path.Stroke).Outlines);
+        return outline.Where(p => Math.Abs(p.X - x) < 1e-9).Select(p => p.Y).ToArray();
+    }
+
+    /// <summary>
     /// **The live effect itself is legible to a driver, not only its conversion.** `pathEffect.list` names the
     /// reference by id; `pathEffect.get` reports the description stored on the path - the effect's name and every
     /// parameter the file wrote - and what that description derives to against the path as it stands now, which is

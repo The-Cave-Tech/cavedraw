@@ -2150,6 +2150,45 @@ public static class EditorOperations
                 }).ToArray(),
             });
 
+        Add("pathEffect.set",
+            "Install a live path effect on the selected paths, spelled the way pathEffect.get reports it: the " +
+            "effect's own name, the id the file referred to it by, its lpeversion and every other attribute the " +
+            "element carried, keyed as the file spells them. The description becomes state on the path, which is " +
+            "what pathEffect.refresh re-derives the converted width profile from - so an effect described here is " +
+            "as live as one the reader imported, and an effect converted through pathEffect.apply can be made live " +
+            "rather than frozen. Setting does not convert: the description and the drawing derived from it are two " +
+            "steps, and refresh is the second. An effect this build does not implement is still installed, and " +
+            "refresh reports it by name rather than drawing without it. One undo step.",
+            "effect:string, id?:string, version?:string, parameters?:{string:string}",
+            (ctx, p) =>
+            {
+                // The same reader as translate and apply, so a description that gets installed is exactly one
+                // these operations would accept - an effect with no name of its own is refused by name.
+                PathEffectSpec effect = ReadPathEffect(p);
+                List<PathItem> paths = ctx.Session.SelectedPaths().ToList();
+                if (paths.Count == 0)
+                {
+                    throw new EditorOperationException("pathEffect.set needs at least one path selected");
+                }
+
+                List<IUndoableCommand> edits = paths
+                    .Select(path => (IUndoableCommand)new SetPathEffectCommand(path, effect))
+                    .ToList();
+                ctx.Session.Execute(edits.Count == 1 ? edits[0] : new CompositeCommand("Set live path effect", edits));
+
+                return new
+                {
+                    changed = edits.Count,
+                    effect = new
+                    {
+                        effect = effect.Effect,
+                        id = effect.Id,
+                        version = effect.Version,
+                        parameters = effect.Parameters.ToDictionary(e => e.Key, e => e.Value),
+                    },
+                };
+            });
+
         Add("pathEffect.refresh",
             "Re-derive every path's converted stroke from the live path effect it carries, as one undo step. An " +
             "imported Inkscape effect is converted once, at import, into a width profile - and a powerstroke " +
