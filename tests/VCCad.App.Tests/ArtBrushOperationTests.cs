@@ -251,6 +251,41 @@ public class ArtBrushOperationTests
         Assert.False(path.Stroke.Brush.FlipAlong);
     }
 
+    /// <summary>
+    /// **A raster asset is an item too**, so an art brush can map an embedded image: nothing here is vector-only.
+    /// The asset's box is the image's placement, which is what the brush measures and scales against - the picture
+    /// itself is never copied into the brush.
+    ///
+    /// What the model cannot state is the **turn**: an <see cref="ImageItem"/> holds an axis-aligned placement
+    /// plus two mirrors and no rotation, so the placement readout is what carries the tangent. That is the one
+    /// part of an art brush a raster asset cannot be held as, and it is named rather than papered over.
+    /// </summary>
+    [Fact]
+    public void AnEmbeddedImageCanBeTheArtABrushMaps()
+    {
+        (AutomationContext context, _, _) = Host();
+        var image = new ImageItem
+        {
+            Name = "scan",
+            Placement = new Rect2D(0, 0, 20, 40),
+            PixelWidth = 2,
+            PixelHeight = 2,
+        };
+        context.ViewModel.Document.Orphans.AddItem(image);
+
+        EditorOperations.Invoke(context, "brush.create",
+            Params(new { name = "Scan", kind = "art", asset = image.Id, size = 15, stretch = "repeat" }));
+
+        JsonElement[] read = Placements(context, "Scan");
+        Assert.Equal(20.0, read[0].GetProperty("assetWidth").GetDouble(), 6);
+        Assert.Equal(40.0, read[0].GetProperty("assetHeight").GetDouble(), 6);
+
+        // 15 across a 20-wide image scales it 0.75, so a 40-tall image is 30 long and a 60pt line holds two.
+        JsonElement pieces = read[0].GetProperty("placements");
+        Assert.Equal(2, pieces.GetArrayLength());
+        Assert.Equal(30.0, pieces[0].GetProperty("length").GetDouble(), 6);
+    }
+
     /// <summary>An art brush is a document asset like any other, so it survives a save and a reload.</summary>
     [Fact]
     public void TheArtBrushSurvivesSaveAndReload()

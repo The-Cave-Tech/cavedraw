@@ -289,9 +289,9 @@ public class ArrangeFrameTests
     ///
     /// This is the case that tells the two candidate measurements apart, and it is the reason the fix is a
     /// frame rather than a `DeltaInItem` in the caller. `ItemBounds.Of` composes only an item's **own**
-    /// transform, so a nested group answers with its children's local numbers - 500 here - while the object
-    /// it is aligned against answers in the artboard frame. The two are in different spaces and no amount of
-    /// converting the resulting delta can repair a comparison that was already made between them.
+    /// transform, so a nested group answers with its children's local numbers carried by that transform -
+    /// 210 here - while the page draws the same group at 520. The two are in different spaces and no amount
+    /// of converting the resulting delta can repair a comparison that was already made between them.
     ///
     /// The outer group is `translate(100,100) scale(2)` and the inner group adds `translate(200,50)`, so the
     /// square written at 10,10 is drawn with its left edge at 520. A loose object at 0..40 is the selection's
