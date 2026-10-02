@@ -139,7 +139,8 @@ public static class InputInjection
     /// `Move` and `Release` reuse the active pointer, so a stroke pressed as a pen stays a pen throughout.
     /// </summary>
     public static string Press(Visual root, double x, double y, bool shift, bool right = false,
-        PointerType pointerType = PointerType.Mouse)
+        PointerType pointerType = PointerType.Mouse,
+        float? pressure = null, float? xTilt = null, float? yTilt = null)
     {
         Visual target = HitTest(root, x, y)
             ?? throw new EditorOperationException($"Nothing is at ({x},{y}).");
@@ -149,20 +150,39 @@ public static class InputInjection
 
         (target as InputElement)?.RaiseEvent(new PointerPressedEventArgs(
             target, pointer, target, position, 0,
-            new PointerPointProperties(
+            Props(
                 right ? RawInputModifiers.RightMouseButton : RawInputModifiers.LeftMouseButton,
-                right ? PointerUpdateKind.RightButtonPressed : PointerUpdateKind.LeftButtonPressed),
+                right ? PointerUpdateKind.RightButtonPressed : PointerUpdateKind.LeftButtonPressed,
+                pressure, xTilt, yTilt),
             shift ? KeyModifiers.Shift : KeyModifiers.None, 1));
 
         return $"pressed at ({x:F0},{y:F0})";
     }
 
     /// <summary>
+    /// The pointer's properties, carrying a pen's own reading when one is stated.
+    ///
+    /// `PointerPointProperties` has a constructor that takes them - `(modifiers, kind, twist, pressure, xTilt,
+    /// yTilt)` - which is what makes the pressure dynamics reachable by a driver at all: `CanvasWorkspace.PenSample`
+    /// reads `properties.Pressure` and `XTilt`/`YTilt` for a pointer whose type is `Pen`, so a synthetic pen can now
+    /// carry a pressure that **varies along the stroke** rather than one constant default.
+    ///
+    /// With nothing stated the two-argument constructor is used, so everything that does not ask for a pen keeps
+    /// exactly the properties it had.
+    /// </summary>
+    private static PointerPointProperties Props(RawInputModifiers modifiers, PointerUpdateKind kind,
+        float? pressure, float? xTilt, float? yTilt)
+        => pressure is null && xTilt is null && yTilt is null
+            ? new PointerPointProperties(modifiers, kind)
+            : new PointerPointProperties(modifiers, kind, 0f, pressure ?? 0.5f, xTilt ?? 0f, yTilt ?? 0f);
+
+    /// <summary>
     /// Moves the pointer at a window point. A selection is extended by *moving* with the
     /// button held, not by releasing: a drag that only presses and releases selects
     /// nothing, which is exactly how a click-drag selection gets reported as broken.
     /// </summary>
-    public static string Move(Visual root, double x, double y, bool leftDown)
+    public static string Move(Visual root, double x, double y, bool leftDown,
+        float? pressure = null, float? xTilt = null, float? yTilt = null)
     {
         // While a button is down the captured element gets the moves, exactly as a real
         // pointer behaves - otherwise the capture made on press is meaningless.
@@ -178,7 +198,7 @@ public static class InputInjection
 
         (target as InputElement)?.RaiseEvent(new PointerEventArgs(
             InputElement.PointerMovedEvent, target, pointer, target, position, 0,
-            new PointerPointProperties(modifiers, PointerUpdateKind.Other),
+            Props(modifiers, PointerUpdateKind.Other, pressure, xTilt, yTilt),
             KeyModifiers.None));
 
         return $"moved to ({x:F0},{y:F0})";
