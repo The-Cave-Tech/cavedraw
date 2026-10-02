@@ -6549,7 +6549,7 @@ public static class EditorOperations
             });
 
         Add("tool.set", "Select the active tool, as clicking it in the toolbar would.",
-            "tool:string (select|node|pen|rectangle|ellipse|artboard|text)",
+            "tool:string (select|node|pen|pencil|rectangle|ellipse|artboard|text)",
             (ctx, p) =>
             {
                 string name = p.GetString("tool")
