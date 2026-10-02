@@ -130,12 +130,20 @@ public static class InputInjection
     /// raised on the window bubbles up from the window and never reaches the canvas that
     /// is waiting for it, so typing would silently do nothing.
     /// </summary>
-    /// <summary>Presses the left button at a window point without releasing.</summary>
-    public static string Press(Visual root, double x, double y, bool shift, bool right = false)
+    /// <summary>
+    /// Presses the left button at a window point without releasing.
+    ///
+    /// `pointerType` exists because the pen path is gated on it: `CanvasWorkspace.PenSample` reads pressure and tilt
+    /// only from a pointer whose `Type` is `PointerType.Pen`, so a driver that can only raise a mouse can never
+    /// reach the pen's dynamics - a person with a tablet can, which makes it a parity defect rather than a gap.
+    /// `Move` and `Release` reuse the active pointer, so a stroke pressed as a pen stays a pen throughout.
+    /// </summary>
+    public static string Press(Visual root, double x, double y, bool shift, bool right = false,
+        PointerType pointerType = PointerType.Mouse)
     {
         Visual target = HitTest(root, x, y)
             ?? throw new EditorOperationException($"Nothing is at ({x},{y}).");
-        var pointer = new Pointer(++_pointerId, PointerType.Mouse, true);
+        var pointer = new Pointer(++_pointerId, pointerType, true);
         _activePointer = pointer;
         Point position = root.TranslatePoint(new Point(x, y), target) ?? new Point(x, y);
 
