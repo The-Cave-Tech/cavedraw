@@ -18,11 +18,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
+      # **The SDK is installed on the machine, not fetched per run.** actions/setup-dotnet cannot write
+      # into this runner's directory - it failed with mkdir: Permission denied - and downloading an SDK
+      # on every run is the opposite of what a dedicated runner is for. runningman has the 10.0.x SDK
+      # from the distribution; the check below still fails loudly if dotnet is not the band global.json
+      # pins.
       # The runner image also ships other SDKs and may point DOTNET_ROOT at one. If `dotnet` is not the
       # pinned band the workload installs into the wrong one, and restoring the browser project then fails
       # with NETSDK1147 asking for the workload by band name - a confusing way to learn which SDK was used.
@@ -38,7 +38,10 @@ jobs:
       # wasm-tools is needed even to restore the browser project once
       # WasmBuildNative is enabled (Skia native linking).
       - name: Install wasm-tools workload
-        run: dotnet workload install wasm-tools
+        run: |
+          # Already installed on this runner; a re-install as a user who cannot write the SDK directory
+          # would fail for a reason that has nothing to do with the code under test.
+          dotnet workload install wasm-tools || dotnet workload list | grep -qi wasm-tools
 
       # The text-export tests embed a URW base-35 face - "Nimbus Sans" and friends. Those faces are
       # located on the machine rather than shipped with this project, because their licence is not ours to
@@ -47,8 +50,12 @@ jobs:
       # difference between a build that tests the exporter and one that tests the runner's font list.
       - name: Install the standard fonts the export tests embed
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq fonts-urw-base35
+          # Idempotent: the faces are already installed on this runner, and the runner user has no
+          # passwordless sudo - so install only when they are missing. 	est -d below still fails loudly.
+          if [ ! -d /usr/share/fonts/opentype/urw-base35 ]; then
+            sudo -n apt-get update -qq
+            sudo -n apt-get install -y -qq fonts-urw-base35
+          fi
           test -d /usr/share/fonts/opentype/urw-base35
           echo "VCCAD_URW_FONTS=/usr/share/fonts/opentype/urw-base35" >> "$GITHUB_ENV"
       - name: Cache NuGet
@@ -120,11 +127,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
+      # **The SDK is installed on the machine, not fetched per run.** actions/setup-dotnet cannot write
+      # into this runner's directory - it failed with mkdir: Permission denied - and downloading an SDK on
+      # every run is the opposite of what a dedicated runner is for. 
+unningman has the 10.0.x SDK from
+      # the distribution; the check below still fails loudly if dotnet is not the band global.json pins.
       # The text-export tests embed a URW base-35 face - "Nimbus Sans" and friends. Those faces are
       # located on the machine rather than shipped with this project, because their licence is not ours to
       # redistribute. The runner does not have them, so exporting text threw
@@ -132,8 +139,12 @@ jobs:
       # difference between a build that tests the exporter and one that tests the runner's font list.
       - name: Install the standard fonts the export tests embed
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq fonts-urw-base35
+          # Idempotent: the faces are already installed on this runner, and the runner user has no
+          # passwordless sudo - so install only when they are missing. 	est -d below still fails loudly.
+          if [ ! -d /usr/share/fonts/opentype/urw-base35 ]; then
+            sudo -n apt-get update -qq
+            sudo -n apt-get install -y -qq fonts-urw-base35
+          fi
           test -d /usr/share/fonts/opentype/urw-base35
           echo "VCCAD_URW_FONTS=/usr/share/fonts/opentype/urw-base35" >> "$GITHUB_ENV"
       - name: Cache NuGet
