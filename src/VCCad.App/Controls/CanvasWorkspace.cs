@@ -4199,7 +4199,32 @@ public sealed class CanvasWorkspace : Control
 
     private void PaintItemCore(DrawingContext context, LayerItem item, double opacity, AffineTransform toWorld)
     {
+        // **An item that states a blend mode is composited with what is beneath it, not laid over it.** The value
+        // travelled through the model, the sidecar, `ModelDump` and the SVG export and reached no compositing step
+        // here at all, which is why a person could set one and see nothing change (#188). The whole item is drawn
+        // offscreen and the finished picture is blended once, which is what "combine with the backdrop" means and
+        // what keeps a translucent item from blending with itself.
+        //
+        // The offscreen pass draws the item **directly**, through the method below, and not through this one: the
+        // picture being rasterised is the item's own, so it must not try to composite itself again.
+        if (item.BlendMode != BlendMode.Normal &&
+            BlendCompositor.TryComposite(
+                context,
+                ItemFrameBounds(item, toWorld),
+                FrameScale(toWorld),
+                item.BlendMode,
+                offscreen => PaintItemDirect(offscreen, item, opacity, toWorld)))
+        {
+            return;
+        }
 
+        PaintItemDirect(context, item, opacity, toWorld);
+    }
+
+    /// <summary>The item itself, drawn in the frame it is placed in - without its blend mode, which is the
+    /// compositing step around it rather than anything it draws.</summary>
+    private void PaintItemDirect(DrawingContext context, LayerItem item, double opacity, AffineTransform toWorld)
+    {
         switch (item)
         {
             case PathItem path when path.IsVisible:
@@ -4247,6 +4272,77 @@ public sealed class CanvasWorkspace : Control
 
                 break;
         }
+    }
+
+    /// <summary>
+    /// The box a blended item occupies **in the frame the painter is drawing in**, which is the region its
+    /// offscreen picture has to cover.
+    ///
+    /// The item's own geometry box is stated in the frame it is authored in, so it is carried out through the frame
+    /// it is placed in - exactly what an unblended item is drawn through. The box is then opened up by the widest
+    /// stroke plus a pixel, because a stroke straddles the outline and the outline is what the geometry box
+    /// measures; a blend region that stopped at the fill would clip the very edge the blend is most visible on.
+    /// </summary>
+    private static Rect ItemFrameBounds(LayerItem item, AffineTransform toWorld)
+    {
+        Geometry.Rect2D local = item switch
+        {
+            PathItem path => path.BoundingBox(),
+            ArtGroup group => group.BoundingBox(),
+            _ => Geometry.Rect2D.Empty,
+        };
+
+        double pad = item is PathItem pathItem ? (WidestStroke(pathItem) / 2) + 1 : 1;
+        return FrameBoundsOf(local, pad, toWorld);
+    }
+
+    /// <summary>
+    /// One geometry box, opened up by <paramref name="pad"/> and carried into the frame the painter is drawing in.
+    ///
+    /// **The padding is applied before the emptiness test, not after.** A straight line has a box of zero height,
+    /// and `Rect2D.IsEmpty` is true of it - deliberately, because a zero-extent box is not a picture. But a line
+    /// with a 24pt stroke across it is very much a picture, and the region it needs is the padding around that
+    /// zero-height box. Testing first made every blended stroke on an open path paint unblended, which is the
+    /// defect this method exists to fix, one level down.
+    /// </summary>
+    private static Rect FrameBoundsOf(Geometry.Rect2D local, double pad, AffineTransform toWorld)
+    {
+        if (!toWorld.IsInvertible)
+        {
+            return default;
+        }
+
+        Geometry.Rect2D padded = new(
+            local.X - pad, local.Y - pad, local.Width + (2 * pad), local.Height + (2 * pad));
+
+        if (padded.Width <= 0 || padded.Height <= 0 ||
+            !double.IsFinite(padded.Width) || !double.IsFinite(padded.Height))
+        {
+            return default;
+        }
+
+        Geometry.Rect2D frame = toWorld.Transform(padded);
+        return new Rect(frame.X, frame.Y, frame.Width, frame.Height);
+    }
+
+    /// <summary>
+    /// How much one frame unit is worth in device pixels where this item is being drawn: the canvas transform's
+    /// scale composed with every group transform above the item.
+    ///
+    /// It is the determinant's square root rather than either matrix's own scale, because the two multiply as they
+    /// nest - the same measurement `PaintFilteredPath` makes for the same reason, so a blended item is rasterised
+    /// at the resolution it is finally drawn at and is neither soft nor wasteful.
+    /// </summary>
+    private double FrameScale(AffineTransform toWorld)
+    {
+        if (_paintWorld is not { } world)
+        {
+            return 1.0;
+        }
+
+        double canvas = Math.Sqrt(Math.Abs((world.M11 * world.M22) - (world.M12 * world.M21)));
+        double frame = Math.Sqrt(Math.Abs(toWorld.Determinant));
+        return canvas * frame;
     }
 
     /// <summary>
@@ -4519,23 +4615,39 @@ public sealed class CanvasWorkspace : Control
         // **Every stroke, bottom to top.** Each one states its own width, colour, cap, join, miter limit and
         // dash, because a pen is built per stroke - so the canvas and the exported file agree about a stack
         // rather than each picking the stroke it happened to read.
+        //
+        // The stack is also where a stroke's own blend mode belongs: the mode combines *that stroke* with the
+        // picture already on the page, which at this point includes the fill and every stroke below it. So each
+        // stroke is drawn through a step that either paints it straight or composites it offscreen.
         for (int strokeIndex = 0; strokeIndex < path.Strokes.Count; strokeIndex++)
         {
-            StrokeSpec stroke = StrokeToPaint(path, strokeIndex, path.Strokes[strokeIndex]);
+            int index = strokeIndex;
+            StrokeSpec stroke = StrokeToPaint(path, index, path.Strokes[index]);
             if (!stroke.HasVisibleOutline)
             {
                 continue;
             }
 
-            // A pen has one width, so a stroke that varies along its length cannot be drawn with one. It is
-            // drawn as the region it covers - the same outline the exporter fills, which is what keeps the
-            // canvas and the file agreeing about what a profile looks like.
-            //
-            // The question is asked of the **plan** rather than of `HasWidthProfile`, because a stroke with an
-            // outline effect and no profile is an outline too - that is what the effect means. Asking the narrower
-            // question made the canvas draw an ordinary pen stroke while the exporter and the SVG writer filled the
-            // effected outline: the same document, two different pictures, and the effect invisible on screen,
-            // which is how it went unnoticed until a test compared the two renderers.
+            // A nullable member, and null is **not** `Normal`: null means the stroke states no blend of its own
+            // and is drawn as part of its item, where an explicit `normal` is a blend that composites normally.
+            // Both are SrcOver here, but only the stated one gets its own layer - so a stack of ordinary strokes
+            // is drawn exactly as it was before this existed.
+            if (stroke.Blend is { } blended && blended != BlendMode.Normal &&
+                BlendCompositor.TryComposite(
+                    context,
+                    StrokeFrameBounds(path, stroke, toWorld),
+                    FrameScale(toWorld),
+                    blended,
+                    offscreen => DrawStroke(offscreen, path, index, stroke)))
+            {
+                continue;
+            }
+
+            DrawStroke(context, path, index, stroke);
+        }
+
+        void DrawStroke(DrawingContext context, PathItem path, int strokeIndex, StrokeSpec stroke)
+        {
             StrokeRenderPlan plan = StrokeOutlineBuilder.Plan(path, stroke);
             if (plan.IsOutline)
             {
@@ -4570,6 +4682,22 @@ public sealed class CanvasWorkspace : Control
             // the two cannot disagree about where the art goes.
             PaintStrokeArt(context, path, stroke, opacity * stroke.EffectiveOpacity, toWorld);
         }
+    }
+
+    /// <summary>
+    /// The box one stroke of a path occupies in the frame the painter is drawing in - the region its own
+    /// offscreen picture has to cover.
+    ///
+    /// The geometry's box opened up by the stroke's own width, because a stroke straddles the outline and the
+    /// outline is what the geometry box measures: a region that stopped at it would cut the blended stroke in
+    /// half, along the very edge the blend is most visible on. Half the width either side is the exact bound,
+    /// and a further pixel covers the antialiasing and any profile that reaches past the nominal width.
+    /// </summary>
+    private Rect StrokeFrameBounds(PathItem path, StrokeSpec stroke, AffineTransform toWorld)
+    {
+        Geometry.Rect2D local = path.BoundingBox();
+        double pad = (stroke.Width / 2) + 1;
+        return FrameBoundsOf(local, pad, toWorld);
     }
 
     /// <summary>
