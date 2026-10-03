@@ -245,6 +245,46 @@ public class SvgPatternTests
     }
 
     /// <summary>
+    /// **The corpus file survives a round trip.** The fixture above is written to match the reader; this is the real
+    /// file - `drawing-pattern-test.svg`, whose tile holds a `rect` and an `ellipse` under
+    /// `patternTransform="scale(30,30)"` - and it is the one that says whether the paint server works on a file
+    /// nobody adjusted for it.
+    ///
+    /// It skips when the corpus is absent rather than failing, which is this repository's rule for an optional data
+    /// source.
+    /// </summary>
+    [Fact]
+    public void TheCorpusPatternFileSurvivesARoundTrip()
+    {
+        string? path = CorpusFile("drawing-pattern-test.svg");
+        if (path is null)
+        {
+            return;
+        }
+
+        CadDocument first = SvgReader.ReadFile(path).Document;
+        PathItem? patterned = first.AllPaths().FirstOrDefault(p => p.Fill.Pattern is not null);
+        Assert.NotNull(patterned);
+
+        PatternSpec spec = patterned!.Fill.Pattern!;
+        Assert.Equal("pattern1", spec.Definition);
+        Assert.Equal("scale(30,30)", spec.Transform);
+        Assert.NotEmpty(first.FindDefinition("pattern1")!.Children);
+
+        string exported = SvgWriter.Write(first);
+        Assert.Contains("fill=\"url(#pattern1)\"", exported, StringComparison.Ordinal);
+        Assert.Contains("patternTransform=\"scale(30,30)\"", exported, StringComparison.Ordinal);
+
+        // And it comes back the same, which is the only test of an export that matters.
+        CadDocument again = SvgReader.Read(exported).Document;
+        PatternSpec? reloaded = again.AllPaths().FirstOrDefault(p => p.Fill.Pattern is not null)?.Fill.Pattern;
+        Assert.NotNull(reloaded);
+        Assert.Equal("pattern1", reloaded!.Definition);
+        Assert.Equal("scale(30,30)", reloaded.Transform);
+        Assert.NotEmpty(again.FindDefinition("pattern1")!.Children);
+    }
+
+    /// <summary>
     /// The Inkscape corpus, wherever it was fetched to - the same search <see cref="SvgCorpusTests"/> uses, kept
     /// local so this file does not depend on another test class's private helpers.
     /// </summary>
