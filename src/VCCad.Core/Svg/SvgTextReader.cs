@@ -144,12 +144,51 @@ public static partial class SvgReader
         }
 
         AffineTransform own = Transform(element.Attribute("transform")?.Value);
-        if (blocks.Count == 1 && IsIdentity(own))
+
+        // **A face the file supplies is drawn with rather than substituted.** When the document carries the font
+        // through `@font-face` and that programme holds the glyph drawings - SVG-in-OpenType - the picture the file
+        // means is those drawings, so the block is placed as artwork by the model's own layout. The words stop being
+        // text in the model, which is said out loud below rather than left to be discovered.
+        List<LayerItem> items = new();
+        if (context.FontFaces is { Any: true } faces)
         {
-            // One block and no transform: the text element needs no container of its own, and inventing one would
+            var artwork = new List<ArtGroup>();
+            bool whole = true;
+            foreach (TextBlock block in blocks)
+            {
+                if (SvgGlyphText.Build(block.Item, faces, warning => context.Warnings.Add(warning)) is { } drawn)
+                {
+                    artwork.Add(drawn);
+                }
+                else
+                {
+                    // Part of the block is not in a supplied face, so the block is left as text: half outlines and
+                    // half substituted words is a picture neither the file nor the model describes.
+                    whole = false;
+                    break;
+                }
+            }
+
+            if (whole && artwork.Count > 0)
+            {
+                items.AddRange(artwork);
+                context.Warnings.Add(
+                    "the file supplies its own font, and its glyph definitions are used: the text is drawn as "
+                    + "outlines, so it is no longer text in the model");
+            }
+        }
+
+        if (items.Count == 0)
+        {
+            items.AddRange(blocks.Select(block => block.Item));
+        }
+
+        if (items.Count == 1 && IsIdentity(own))
+        {
+            // One item and no transform: the text element needs no container of its own, and inventing one would
             // be a group the file has not got.
-            CaptureForeign(element, blocks[0].Item);
-            context.Add(blocks[0].Item);
+            CaptureForeign(element, items[0]);
+            context.Add(items[0]);
         }
         else
         {
@@ -163,9 +202,9 @@ public static partial class SvgReader
                 Transform = own,
             };
 
-            foreach (TextBlock block in blocks)
+            foreach (LayerItem item in items)
             {
-                group.AddItem(block.Item);
+                group.AddItem(item);
             }
 
             CaptureForeign(element, group);
@@ -625,7 +664,7 @@ public static partial class SvgReader
 
             PresentationStyle childPaint = PresentationStyle.From(
                 child, paint, declarations, _context.Viewport, _context.Warn);
-            SvgTextStyle childStyle = SvgTextStyle.From(child, style, declarations, _context.Warn);
+            SvgTextStyle childStyle = SvgTextStyle.From(child, style, declarations, _context.Warn, _context.FontFaces);
 
             WalkElement(child, childPaint, childStyle);
             Flush();

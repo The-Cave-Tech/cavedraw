@@ -66,11 +66,20 @@ internal sealed record SvgTextStyle(
         TextWritingMode.HorizontalTb, TextDirection.LeftToRight, GlyphOrientation.Auto, BaselineShift: 0.0);
 
     /// <summary>Resolves the element's own text properties over the ones it inherits.</summary>
+    /// <param name="faces">
+    /// The faces the document supplies for itself, when they have been loaded. A face the file *carries* for a family
+    /// it lists wins over `-inkscape-font-specification`: the specification names the face Inkscape chose for its own
+    /// rendering, while an `@font-face` is the resource this file is handing the renderer for that family. Without
+    /// that, a document's own font loses to a specification naming a generic word, which is exactly how
+    /// `text-svg-glyph-custom.svg` reads (`font-family: 'SVGinOTF testfont1'` beside
+    /// `-inkscape-font-specification:Serif`) and its supplied glyphs would never be used.
+    /// </param>
     public static SvgTextStyle From(
         XElement element,
         SvgTextStyle inherited,
         IReadOnlyDictionary<string, (string Value, bool Important)>? sheet,
-        Action<string>? warn)
+        Action<string>? warn,
+        SvgFontFaces? faces = null)
     {
         Dictionary<string, string> inline = PresentationStyle.ReadStyleAttribute(element);
         Dictionary<string, bool> inlineImportant = PresentationStyle.ReadStyleImportance(element);
@@ -94,7 +103,11 @@ internal sealed record SvgTextStyle(
             family = ListedFamily;
         }
 
-        if (SpecificationFamily is { Length: > 0 })
+        // A face the document carries is the one resource in this decision that is *in the file*, so it is taken
+        // over the specification rather than under it.
+        bool supplied = faces?.Find(ListedFamily ?? string.Empty) is not null;
+
+        if (SpecificationFamily is { Length: > 0 } && !supplied)
         {
             family = SpecificationFamily;
         }

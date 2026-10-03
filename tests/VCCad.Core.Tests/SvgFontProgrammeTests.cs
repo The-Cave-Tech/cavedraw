@@ -18,7 +18,7 @@ namespace VCCad.Core.Tests;
 /// </summary>
 public class SvgFontProgrammeTests
 {
-    private static byte[]? Programme()
+    private static string? RenderingTests()
     {
         string cache = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cache", "vccad-corpora");
@@ -36,7 +36,7 @@ public class SvgFontProgrammeTests
                     .FirstOrDefault();
                 if (font is not null)
                 {
-                    return File.ReadAllBytes(font);
+                    return Path.GetDirectoryName(font)!;
                 }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -46,6 +46,47 @@ public class SvgFontProgrammeTests
         }
 
         return null;
+    }
+
+    private static byte[]? Programme()
+    {
+        string? directory = RenderingTests();
+        string path = Path.Combine(directory ?? string.Empty, "svginotf_testfont1.otf");
+        return directory is not null && File.Exists(path) ? File.ReadAllBytes(path) : null;
+    }
+
+    /// <summary>
+    /// **The face a document supplies is loaded from its own stylesheet.** `text-svg-glyph-custom.svg` names its
+    /// font in an `@font-face` rule with a path relative to itself, which is how a file carries a webfont - so the
+    /// reader has to read the at-rule, resolve the path against the document's own directory, and load what is
+    /// there. The assertion is the loaded programme's own numbers, and the two ways it must fail quietly: a `src`
+    /// naming a file that is not there, and one naming a file that is not a font at all.
+    /// </summary>
+    [Fact]
+    public void TheDocumentsOwnFaceIsLoadedFromItsStylesheet()
+    {
+        string? directory = RenderingTests();
+        if (directory is null)
+        {
+            return;
+        }
+
+        const string css = "@font-face { font-family: \"SVGinOTF testfont1\"; src: url(\"./svginotf_testfont1.otf\"); }";
+        SvgFontFaces faces = SvgFontFaces.Load(css, directory);
+
+        Assert.True(faces.Any);
+        SvgFontProgramme? face = faces.Find("SVGinOTF testfont1");
+        Assert.NotNull(face);
+        Assert.Equal(1000, face!.UnitsPerEm);
+        Assert.NotEqual(0, face.GlyphFor('a'));
+
+        // The family is matched as the stylesheet writes it, which may be quoted and is not case-sensitive.
+        Assert.NotNull(faces.Find("svginotf TESTFONT1"));
+
+        // A `src` that is not there, and one that is there but is not a font, both load nothing - and neither
+        // throws, because an unloadable face is a thing to report rather than a reason to fail an import.
+        Assert.False(SvgFontFaces.Load("@font-face { font-family: X; src: url(\"missing.otf\"); }", directory).Any);
+        Assert.False(SvgFontFaces.Load("@font-face { font-family: X; src: url(\"build.py\"); }", directory).Any);
     }
 
     [Fact]

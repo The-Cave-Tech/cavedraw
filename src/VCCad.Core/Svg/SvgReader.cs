@@ -117,10 +117,21 @@ public static partial class SvgReader
         string css = CollectStyles(root);
         SvgStylesheet sheet = SvgStylesheet.Parse(css, baseDirectory);
 
-        // A webfont the file carries is a face this reader does not load: the stylesheet's `@font-face` rules are
-        // at-rules and the sheet reader deliberately does not read them as rules, so a file that supplies its own
-        // face is drawn with whatever this machine has instead. Said out loud, because the difference is the design.
-        if (css.Contains("@font-face", StringComparison.OrdinalIgnoreCase))
+        // A webfont the file carries is a face this reader loads when it can: the stylesheet's `@font-face` rules
+        // name a programme beside the document, and when that programme holds the glyph drawings the text can be
+        // drawn with the file's own glyphs rather than with whatever this machine has. The stylesheet reader
+        // deliberately does not read at-rules as rules, so they are read here instead.
+        SvgFontFaces fontFaces = SvgFontFaces.Load(css, baseDirectory);
+
+        // What could not be loaded is said out loud, because the difference is the design: a file that supplies its
+        // own face and is drawn with a substitute has a picture nobody asked for.
+        if (fontFaces.Any)
+        {
+            warnings.Add(
+                $"the stylesheet declares @font-face and this reader loaded {string.Join(", ", fontFaces.Families)} "
+                + "from the document's own directory");
+        }
+        else if (css.Contains("@font-face", StringComparison.OrdinalIgnoreCase))
         {
             warnings.Add("the stylesheet declares @font-face, and this reader does not load fonts from the document");
         }
@@ -190,6 +201,11 @@ public static partial class SvgReader
             Kept = kept,
             Viewport = viewport,
             BaseDirectory = baseDirectory,
+
+            // The faces the document supplies for itself, loaded from its own `@font-face` rules. The sheet reader
+            // does not read at-rules as rules - right for `@media`, wrong for this one, which is a resource rather
+            // than a style - so they are read here and the glyph definitions travel with the import.
+            FontFaces = fontFaces,
 
             // The root's own font properties, which a text element inherits like anything else. `xml:space` is
             // declared on the root in Inkscape's own files, so a reader that only read it on the elements it walked
@@ -882,6 +898,9 @@ public static partial class SvgReader
         /// <summary>The directory a file reference in the document is resolved against, when it came from disk.</summary>
         public required string? BaseDirectory { get; init; }
 
+        /// <summary>The faces the document supplies for itself, or null when it supplies none this reader can use.</summary>
+        public SvgFontFaces? FontFaces { get; init; }
+
         /// <summary>
         /// A length on a known axis, with a percentage resolved against the viewport.
         ///
@@ -947,7 +966,7 @@ public static partial class SvgReader
         PresentationStyle style = PresentationStyle.From(
             element, context.Style, declarations, context.Viewport, context.Warn);
 
-        SvgTextStyle text = SvgTextStyle.From(element, context.Text, declarations, context.Warn);
+        SvgTextStyle text = SvgTextStyle.From(element, context.Text, declarations, context.Warn, context.FontFaces);
 
         // `clip-path` is read once here and handed to whichever reader below builds the item, because it is a
         // property of every element that can be drawn rather than of one kind of element. Reading it per element
@@ -1250,6 +1269,7 @@ public static partial class SvgReader
             Kept = context.Kept,
             Viewport = context.Viewport,
             BaseDirectory = context.BaseDirectory,
+            FontFaces = context.FontFaces,
             Text = text,
         };
 
@@ -1381,6 +1401,7 @@ public static partial class SvgReader
             Kept = context.Kept,
             Viewport = viewport,
             BaseDirectory = context.BaseDirectory,
+            FontFaces = context.FontFaces,
             Text = text,
         };
 
@@ -1908,6 +1929,7 @@ public static partial class SvgReader
             Kept = context.Kept,
             Viewport = context.Viewport,
             BaseDirectory = context.BaseDirectory,
+            FontFaces = context.FontFaces,
             Text = context.Text,
         };
 
@@ -2526,6 +2548,7 @@ public static partial class SvgReader
                 Kept = context.Kept,
                 Viewport = context.Viewport,
                 BaseDirectory = context.BaseDirectory,
+                FontFaces = context.FontFaces,
                 Text = context.Text,
             };
 
@@ -2647,6 +2670,7 @@ public static partial class SvgReader
             Kept = context.Kept,
             Viewport = context.Viewport,
             BaseDirectory = context.BaseDirectory,
+            FontFaces = context.FontFaces,
             Text = SvgTextStyle.From(
                 element,
                 context.Text,
@@ -2885,11 +2909,13 @@ public static partial class SvgReader
                 Kept = context.Kept,
                 Viewport = context.Viewport,
                 BaseDirectory = external.BaseDirectory,
+                FontFaces = context.FontFaces,
                 Text = SvgTextStyle.From(
                     external.Root,
                     useText,
                     external.Sheet.DeclarationsFor(external.Root, Array.Empty<XElement>()),
-                    context.Warn),
+                    context.Warn,
+                    context.FontFaces),
             };
 
             ReadUsedTarget(target, id, element, context, inside, group);
