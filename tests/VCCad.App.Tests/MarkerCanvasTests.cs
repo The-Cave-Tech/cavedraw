@@ -198,6 +198,54 @@ public class MarkerCanvasTests
         }
     }
 
+    [AvaloniaFact]
+    public void EachSlotIsDrawnAtItsOwnVertices()
+    {
+        // A path with a start vertex, one interior vertex and an end vertex, so all three slots have somewhere to
+        // go. #135 asks for a marker to be assignable to **each of the three slots** and the canvas to show it at
+        // the corresponding vertices; this is that, slot by slot, through the operation a person's control uses.
+        var document = CadDocument.CreateDefault("Markers");
+        Marker(document, "box", 10);
+
+        var path = new PathItem { Name = "bend", Stroke = StrokeSpec.Hairline(ColorRgb.Black) };
+        SubPath sub = path.AddSubPath(closed: false);
+        sub.Nodes.Add(new PathNode(new Point2D(20, 50)));
+        sub.Nodes.Add(new PathNode(new Point2D(70, 50)));
+        sub.Nodes.Add(new PathNode(new Point2D(70, 100)));
+        document.Artboards[0].Layers[0].AddItem(path);
+
+        (Window window, CanvasWorkspace workspace, EditorViewModel viewModel) = Host(document);
+        try
+        {
+            var context = new AutomationContext { ViewModel = viewModel };
+            (_, int none) = Ink(document, workspace);
+
+            // The end slot: at (70, 100), the last vertex.
+            EditorOperations.Invoke(context, "marker.set",
+                JsonSerializer.SerializeToElement(new { slot = "end", name = "box", itemIds = new[] { path.Id } }));
+            (Rect2D end, int withEnd) = Ink(document, workspace);
+            Assert.True(withEnd > none, "the end marker was not drawn");
+            Assert.True(end.Bottom > 100, $"the end marker should be at the last vertex, and the ink ends at {end.Bottom}");
+
+            // The start slot: at (20, 50), which is what pulls the ink's left edge back.
+            EditorOperations.Invoke(context, "marker.set",
+                JsonSerializer.SerializeToElement(new { slot = "start", name = "box", itemIds = new[] { path.Id } }));
+            (Rect2D both, int withStart) = Ink(document, workspace);
+            Assert.True(withStart > withEnd, "the start marker was not drawn as well");
+            Assert.True(both.Left < 22, $"the start marker should be at the first vertex, and the ink starts at {both.Left}");
+
+            // The mid slot: at (70, 50), the interior vertex - and only there, because two segments have one.
+            EditorOperations.Invoke(context, "marker.set",
+                JsonSerializer.SerializeToElement(new { slot = "mid", name = "box", itemIds = new[] { path.Id } }));
+            (_, int withMid) = Ink(document, workspace);
+            Assert.True(withMid > withStart, "the mid marker was not drawn");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     /// <summary>The tag the reader leaves on materialised artwork, from <see cref="VCCad.Core.Svg.SvgWriter"/>.</summary>
     private const string SvgWriterTag = VCCad.Core.Svg.SvgWriter.MarkerArtTag;
 }
