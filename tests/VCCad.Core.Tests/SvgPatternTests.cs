@@ -186,10 +186,13 @@ public class SvgPatternTests
         Assert.Equal("userSpaceOnUse", tiled.Fill.Pattern.Units);
         Assert.Equal("scale(30,30)", tiled.Fill.Pattern.Transform);
 
-        // **What is not asserted here: the tile's own survival through the sidecar.** Whether the library round-trips
-        // is a separate question - and the same one a marker's definition already faces - so this pins what the
-        // pattern paint server is responsible for: the paint survives, naming the same definition, with what the
-        // file said about the tile box, the units and the transform.
+        // **The tile survives too** (issue #204). This assertion was left out when the library was not written to the
+        // sidecar at all - the paint travelled and the definition did not, so a reloaded document named a tile that
+        // was nowhere - and it is here now that the library round-trips. A paint that names a missing definition is
+        // not a paint, which is why the two assertions belong together.
+        var tile = Assert.IsType<ArtGroup>(reloaded.FindDefinition("p"));
+        Assert.NotEmpty(tile.Children);
+        Assert.Equal("p", reloaded.AllPaths().Single(p => p.Name == "tiled").Fill.Pattern!.Definition);
     }
 
     /// <summary>

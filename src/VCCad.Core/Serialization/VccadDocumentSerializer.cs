@@ -1904,7 +1904,14 @@ internal sealed record DocumentDto(
 
     // The brushes, when the document has any. The last member, so a document that has none - which is every
     // document written before brushes existed - serialises to exactly the bytes it did then.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] BrushDto[]? Brushes = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] BrushDto[]? Brushes = null,
+
+    // The document's **library** (issue #204): the definitions a symbol is placed from, a marker is drawn from and a
+    // pattern is tiled from. It was never written, so a saved document kept every *reference* to its assets and none
+    // of the assets - `PathItem.MarkerEnd` naming a marker that was nowhere, `FillSpec.Pattern` naming a tile that
+    // had gone. Absent rather than an empty array, so a document with no library is written exactly as it was before
+    // this existed.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ItemDto[]? Definitions = null);
 
 /// <summary>
 /// Lossless, deterministic serializer for <see cref="CadDocument"/>.
@@ -2030,7 +2037,15 @@ public static class VccadDocumentSerializer
             // exactly as it was before brushes existed.
             d.Brushes.Count == 0
                 ? null
-                : d.Brushes.Select(ItemDto.ToBrushDto).ToArray());
+                : d.Brushes.Select(ItemDto.ToBrushDto).ToArray(),
+
+            // **The library, which nothing used to write** (issue #204). The definitions are ordinary items, so they
+            // travel as such - a group holding a marker's artwork, a pattern's tile, a symbol's content - and their
+            // attributes (a marker's placement, a pattern's tile box, its units and its transform) are on the items
+            // already. Absent when the library is empty, so a document without one serialises to the same bytes.
+            d.Definitions.Children.Count == 0
+                ? null
+                : d.Definitions.Children.Select(ItemDto.From).ToArray());
     }
 
     private static WidthProfileDto ToDto(WidthProfileSpec profile)
@@ -2256,6 +2271,16 @@ public static class VccadDocumentSerializer
         foreach (ItemDto orphan in orphans)
         {
             document.Orphans.AddItem(orphan.ToModel());
+        }
+
+        // **The library comes back** (issue #204). It is restored as the library rather than as artwork, because that
+        // is what a definition is: a `use` or a marker reference resolves against it by name, and an item copied into
+        // an instance stays where it is - the instance holds its own content, so restoring the definition cannot
+        // duplicate it. A sidecar written before this member existed has none, and a document with no library is
+        // exactly as it was.
+        foreach (ItemDto definition in dto.Definitions ?? Array.Empty<ItemDto>())
+        {
+            document.Definitions.AddItem(definition.ToModel());
         }
 
         // A sidecar written before the payload existed has no member here; a

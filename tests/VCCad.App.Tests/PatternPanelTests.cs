@@ -6,6 +6,7 @@ using VCCad.App.Automation;
 using VCCad.App.ViewModels;
 using VCCad.App.Views.Panes;
 using VCCad.Core.Model;
+using VCCad.Core.Serialization;
 using VCCad.Core.Svg;
 using VCCad.Geometry;
 using Xunit;
@@ -87,6 +88,45 @@ public class PatternPanelTests
         pane.Refresh();
         Assert.Contains("dots", pane.PatternNames);
         Assert.Equal("dots", pane.PreviewedPattern);
+    }
+
+    /// <summary>
+    /// Issue #204: **the library after a save and a reload.** The same panel as the fixture above, but showing a
+    /// document that has been through `Serialize` and `Deserialize` - the definition, its tile and the pattern's
+    /// place in the list all survive, which is what was missing.
+    ///
+    /// Runs only when <c>VCCAD_CAPTURE</c> names a directory.
+    /// </summary>
+    [AvaloniaFact]
+    public void CaptureTheLibraryAfterAReload()
+    {
+        string? directory = Environment.GetEnvironmentVariable("VCCAD_CAPTURE");
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return;
+        }
+
+        (_, EditorViewModel first, CadDocument document) = Host();
+        CadDocument reloaded = VccadDocumentSerializer.Deserialize(
+            VccadDocumentSerializer.Serialize(document));
+
+        var viewModel = new EditorViewModel();
+        viewModel.ImportDocument(reloaded);
+        var pane = new SymbolsPane();
+        var window = new Window { Width = 320, Height = 700, Content = pane };
+        window.Show();
+        pane.Attach(viewModel);
+        pane.Refresh();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        window.Measure(new Avalonia.Size(320, 700));
+        window.Arrange(new Avalonia.Rect(0, 0, 320, 700));
+
+        using var bitmap = new RenderTargetBitmap(new Avalonia.PixelSize(320, 700), new Avalonia.Vector(96, 96));
+        bitmap.Render(window);
+
+        Directory.CreateDirectory(directory);
+        bitmap.Save(Path.Combine(directory, "frame-000.png"));
     }
 
     /// <summary>
