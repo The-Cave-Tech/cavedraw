@@ -14,7 +14,7 @@ namespace VCCad.Core.Svg;
 /// </summary>
 public sealed class SvgFontFaces
 {
-    private readonly Dictionary<string, SvgFontProgramme> _faces = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ISvgGlyphFont> _faces = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>True once at least one face was loaded.</summary>
     public bool Any => _faces.Count > 0;
@@ -26,9 +26,21 @@ public sealed class SvgFontFaces
     /// Reads every `@font-face` rule in <paramref name="css"/> whose `src` names a file that exists beside the
     /// document and carries glyph definitions.
     /// </summary>
-    public static SvgFontFaces Load(string css, string? baseDirectory)
+    public static SvgFontFaces Load(string css, string? baseDirectory, System.Xml.Linq.XElement? root = null)
     {
         var faces = new SvgFontFaces();
+
+        // **The other container: an SVG font declared in the document itself.** A `<font>` holds its own glyph
+        // drawings, so it needs no directory and no file - and a document may use either, or both, which is why both
+        // are loaded into the same registry and looked up by family.
+        if (root is not null)
+        {
+            foreach (SvgFontElements inline in SvgFontElements.Read(root, _ => { }))
+            {
+                faces._faces[inline.FamilyName] = inline;
+            }
+        }
+
         if (string.IsNullOrWhiteSpace(css) || string.IsNullOrWhiteSpace(baseDirectory))
         {
             return faces;
@@ -69,8 +81,8 @@ public sealed class SvgFontFaces
     }
 
     /// <summary>The programme a run's family names, or null when the document supplies no such face.</summary>
-    public SvgFontProgramme? Find(string family)
-        => family.Length > 0 && _faces.TryGetValue(family, out SvgFontProgramme? programme) ? programme : null;
+    public ISvgGlyphFont? Find(string family)
+        => family.Length > 0 && _faces.TryGetValue(family, out ISvgGlyphFont? font) ? font : null;
 
     /// <summary>Each `@font-face` rule's body, with nested braces balanced.</summary>
     private static IEnumerable<string> AtRules(string css, string keyword)

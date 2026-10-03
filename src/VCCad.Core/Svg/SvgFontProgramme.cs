@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
+using System.Xml.Linq;
+using VCCad.Core.Model;
 
 namespace VCCad.Core.Svg;
 
@@ -19,7 +21,7 @@ namespace VCCad.Core.Svg;
 /// The glyph documents are frequently gzipped **as records** (the table's own spec allows either), independently of
 /// the file being gzipped, so each record is inflated on its own.
 /// </summary>
-public sealed class SvgFontProgramme
+public sealed class SvgFontProgramme : ISvgGlyphFont
 {
     private const uint GzipMagic = 0x1F8B;
 
@@ -158,6 +160,57 @@ public sealed class SvgFontProgramme
 
     /// <summary>The SVG document that draws the glyph, or null when the programme has none for it.</summary>
     public string? DocumentFor(int glyphId) => _documents.TryGetValue(glyphId, out string? document) ? document : null;
+
+    /// <summary>
+    /// The shapes the glyph's document draws, in font units.
+    ///
+    /// A shape kind this reader does not draw is **reported** rather than skipped in silence: a glyph drawn with a
+    /// rect or a circle is a picture this reader cannot make, and saying so is the difference between a gap and a
+    /// guess. That is the same rule the SVG reader applies to a whole element it cannot draw.
+    /// </summary>
+    IReadOnlyList<GlyphShape> ISvgGlyphFont.Glyphs(int glyphId, Action<string> warn)
+    {
+        if (DocumentFor(glyphId) is not { Length: > 0 } document)
+        {
+            return Array.Empty<GlyphShape>();
+        }
+
+        XDocument xml;
+        try
+        {
+            xml = XDocument.Parse(document);
+        }
+        catch (System.Xml.XmlException exception)
+        {
+            warn($"a glyph drawing is not well-formed XML and was not drawn: {exception.Message}");
+            return Array.Empty<GlyphShape>();
+        }
+
+        var shapes = new List<GlyphShape>();
+        foreach (XElement element in xml.Descendants())
+        {
+            if (element.Name.LocalName != "path")
+            {
+                if (element.Name.LocalName is "rect" or "circle" or "ellipse" or "polygon" or "polyline" or "use")
+                {
+                    warn($"a glyph drawing uses a <{element.Name.LocalName}>, which this reader does not draw as a glyph");
+                }
+
+                continue;
+            }
+
+            string data = element.Attribute("d")?.Value ?? string.Empty;
+            if (data.Length == 0)
+            {
+                continue;
+            }
+
+            (FillSpec fill, StrokeSpec stroke) = SvgGlyphPaint.Read(element, warn);
+            shapes.Add(new GlyphShape(data, fill, stroke));
+        }
+
+        return shapes;
+    }
 
     /// <summary>The glyph id a code point maps to, or 0 for "no glyph" as the cmap means it.</summary>
     public int GlyphFor(int codePoint) => _cmap.TryGetValue(codePoint, out int gid) ? gid : 0;

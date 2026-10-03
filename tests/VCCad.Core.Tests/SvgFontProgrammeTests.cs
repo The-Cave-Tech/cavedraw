@@ -75,7 +75,7 @@ public class SvgFontProgrammeTests
         SvgFontFaces faces = SvgFontFaces.Load(css, directory);
 
         Assert.True(faces.Any);
-        SvgFontProgramme? face = faces.Find("SVGinOTF testfont1");
+        ISvgGlyphFont? face = faces.Find("SVGinOTF testfont1");
         Assert.NotNull(face);
         Assert.Equal(1000, face!.UnitsPerEm);
         Assert.NotEqual(0, face.GlyphFor('a'));

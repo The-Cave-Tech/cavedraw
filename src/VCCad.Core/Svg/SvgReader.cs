@@ -121,7 +121,7 @@ public static partial class SvgReader
         // name a programme beside the document, and when that programme holds the glyph drawings the text can be
         // drawn with the file's own glyphs rather than with whatever this machine has. The stylesheet reader
         // deliberately does not read at-rules as rules, so they are read here instead.
-        SvgFontFaces fontFaces = SvgFontFaces.Load(css, baseDirectory);
+        SvgFontFaces fontFaces = SvgFontFaces.Load(css, baseDirectory, root);
 
         // What could not be loaded is said out loud, because the difference is the design: a file that supplies its
         // own face and is drawn with a substitute has a picture nobody asked for.
