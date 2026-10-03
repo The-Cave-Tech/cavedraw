@@ -84,6 +84,15 @@ public class SvgFontProgrammeTests
 
         // Glyph ids the programme carries.
         Assert.Equal(4, programme.GlyphIds.Count);
+
+        // The em square and the advances, which is what a caller needs to place the glyphs rather than merely find
+        // them: `build.py` beside the font sets 1000 units per em and a width of 500 for every glyph except `b`,
+        // which is 502 - so the numbers are the font's own recipe, not this parser's assumption.
+        Assert.Equal(1000, programme.UnitsPerEm);
+        Assert.Equal(500, programme.AdvanceFor(a));
+        Assert.Equal(502, programme.AdvanceFor(b));
+        Assert.Equal(500, programme.AdvanceFor(c));
+        Assert.Equal(500, programme.AdvanceFor(d));
     }
 
     /// <summary>Something that is not a font at all is not a font: the ordinary case every caller must survive.</summary>

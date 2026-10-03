@@ -25,6 +25,7 @@ public sealed class SvgFontProgramme
 
     private readonly Dictionary<int, string> _documents = new();
     private readonly Dictionary<int, int> _cmap = new();
+    private int[] _advances = Array.Empty<int>();
 
     private SvgFontProgramme()
     {
@@ -32,6 +33,26 @@ public sealed class SvgFontProgramme
 
     /// <summary>The family the programme names, when its `name` table can be read: how a `@font-face` is matched.</summary>
     public string FamilyName { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// The em square the glyph coordinates are in - a glyph's numbers are font units and divide by this to become
+    /// ems. 1000 for most faces, including the corpus's test font; 2048 for the TrueType ones.
+    /// </summary>
+    public int UnitsPerEm { get; private set; }
+
+    /// <summary>
+    /// How far the pen moves after a glyph, in the same font units. Zero when the programme states none, which is
+    /// the caller's cue to fall back to something it can measure rather than to place everything on one spot.
+    /// </summary>
+    public int AdvanceFor(int glyphId)
+    {
+        if (_advances.Length == 0 || glyphId < 0)
+        {
+            return 0;
+        }
+
+        return glyphId < _advances.Length ? _advances[glyphId] : _advances[^1];
+    }
 
     /// <summary>Glyph ids the programme carries an SVG document for.</summary>
     public IReadOnlyCollection<int> GlyphIds => _documents.Keys;
@@ -82,9 +103,57 @@ public sealed class SvgFontProgramme
 
         var programme = new SvgFontProgramme();
         programme.ReadFamily(bytes, tables);
+        programme.ReadUnitsPerEm(bytes, tables);
+        programme.ReadAdvances(bytes, tables);
         programme.ReadCmap(bytes, tables);
         programme.ReadGlyphDocuments(bytes, svg.svgOffset, svg.svgLength);
         return programme._documents.Count > 0 ? programme : null;
+    }
+
+    /// <summary>The em square, from the `head` table. 1000 when it is absent, which is the common value.</summary>
+    private void ReadUnitsPerEm(byte[] bytes, Dictionary<string, (int Offset, int Length)> tables)
+    {
+        UnitsPerEm = tables.TryGetValue("head", out (int Offset, int Length) head) && head.Length >= 20
+            ? BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(head.Offset + 18))
+            : 1000;
+
+        if (UnitsPerEm <= 0)
+        {
+            UnitsPerEm = 1000;
+        }
+    }
+
+    /// <summary>
+    /// The advances, from `hhea` and `hmtx`: how many long metrics there are, then one advance and one
+    /// left-side-bearing each. A glyph past the last long metric repeats the last advance, which is what the format
+    /// means by the short form.
+    /// </summary>
+    private void ReadAdvances(byte[] bytes, Dictionary<string, (int Offset, int Length)> tables)
+    {
+        if (!tables.TryGetValue("hhea", out (int Offset, int Length) hhea) || hhea.Length < 36 ||
+            !tables.TryGetValue("hmtx", out (int Offset, int Length) hmtx))
+        {
+            return;
+        }
+
+        int count = BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(hhea.Offset + 34));
+        if (count <= 0 || hmtx.Length < count * 4)
+        {
+            return;
+        }
+
+        int glyphCount = tables.TryGetValue("maxp", out (int Offset, int Length) maxp) && maxp.Length >= 6
+            ? BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(maxp.Offset + 4))
+            : count;
+
+        var advances = new int[Math.Max(glyphCount, count)];
+        for (int i = 0; i < advances.Length; i++)
+        {
+            int at = hmtx.Offset + (Math.Min(i, count - 1) * 4);
+            advances[i] = BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(at));
+        }
+
+        _advances = advances;
     }
 
     /// <summary>The SVG document that draws the glyph, or null when the programme has none for it.</summary>
