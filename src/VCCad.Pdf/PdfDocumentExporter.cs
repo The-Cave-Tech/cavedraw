@@ -522,6 +522,28 @@ public static class PdfDocumentExporter
         }
     }
 
+    /// <summary>
+    /// Whether a run's text is in a script whose letters **join**, which this exporter cannot shape (issue #197).
+    ///
+    /// A range check rather than a table: the joining scripts are contiguous blocks in Unicode - Arabic and its
+    /// supplements, Syriac, Thaana, N'Ko, Mandaic and the Arabic presentation forms, Hebrew (whose letters do not join
+    /// but whose order runs right to left, so it is wrong the same way), and the Indic blocks that reorder. The check
+    /// decides only whether to **declare** the difference; nothing is drawn differently because of it.
+    /// </summary>
+    private static bool NotesShaping(string text)
+        => text.Any(c => c switch
+        {
+            >= '\u0590' and <= '\u05FF' => true,   // Hebrew
+            >= '\u0600' and <= '\u06FF' => true,   // Arabic
+            >= '\u0700' and <= '\u074F' => true,   // Syriac
+            >= '\u0750' and <= '\u077F' => true,   // Arabic Supplement
+            >= '\u0780' and <= '\u07BF' => true,   // Thaana, N'Ko
+            >= '\u07C0' and <= '\u07FF' => true,   // N'Ko, Samaritan, Mandaic
+            >= '\uFB50' and <= '\uFDFF' => true,   // Arabic Presentation Forms-A
+            >= '\uFE70' and <= '\uFEFF' => true,   // Arabic Presentation Forms-B
+            _ => false,
+        });
+
     private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfBlendStates blendStates, PdfFontEmbedder embedder, PdfImageObjects? images = null, PdfShadingObjects? shadings = null, CadDocument? document = null, List<string>? notes = null, int artDepth = 0, PdfFormObjects? forms = null, IReadOnlySet<string>? markersDrawn = null)
     {
         if (!item.IsEffectivelyVisible())
@@ -1550,6 +1572,7 @@ public static class PdfDocumentExporter
 
         foreach (TextRun run in text.Runs)
         {
+
             // A run may carry its own colour, and this path deliberately writes the whole block as ONE text
             // object - so the change has to be written *inside* it, between the runs. Splitting here instead
             // would undo the reason the path exists: one object is what makes an extractor read a
@@ -1649,6 +1672,20 @@ public static class PdfDocumentExporter
     private static void WriteText(List<string> ops, TextItem text, PdfFontEmbedder embedder,
         PdfAlphaStates alphaStates, AffineTransform toDoc, List<string>? notes = null)
     {
+        // **A script that needs joining is declared, because nothing here shapes it** (issue #197). The run's
+        // characters reach the file, but they are drawn one glyph per character in logical order - so Arabic and
+        // Hebrew come out isolated, and left to right where the script runs joined and right to left. Saying so is
+        // the rule the missing-glyph loss already follows: a page that is legible and wrong is a difference a person
+        // has to be told about.
+        foreach (TextRun run in text.Runs)
+        {
+            if (NotesShaping(run.Text))
+            {
+                notes?.Add(
+                    $"the run '{run.Text}' is in a script that needs joined forms, and this export draws its " +
+                    "characters one by one in logical order, so they appear isolated and unjoined");
+            }
+        }
         // **A vertical column cannot go through the one-text-object path.** It emits a single `Tm` for the whole
         // block, and a column's characters are not on one baseline - they are separated down the page. The per-run
         // loop below places each one from the layout's own glyph positions instead.

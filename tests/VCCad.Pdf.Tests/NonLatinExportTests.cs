@@ -49,7 +49,18 @@ public class NonLatinExportTests
         if (Environment.GetEnvironmentVariable("VCCAD_CAPTURE") is { Length: > 0 } directory)
         {
             Directory.CreateDirectory(directory);
-            File.WriteAllBytes(Path.Combine(directory, $"{text.GetHashCode():X}.pdf"), pdf);
+            string name = string.Join("-", text.Select(c => ((int)c).ToString("X4")));
+            File.WriteAllBytes(Path.Combine(directory, name + ".pdf"), pdf);
+        }
+
+        // **A script that joins is declared**, because this export cannot shape it (issue #197): the characters are
+        // drawn, and nothing says they are wrong. That is the difference a person has to be told about.
+        bool joins = text.Length > 0 && (text[0] >= '\u0590' && text[0] <= '\u07FF' ||
+            text[0] >= '\uFB50' && text[0] <= '\uFEFF');
+
+        if (joins)
+        {
+            Assert.Contains(notes, note => note.Contains("joined forms", StringComparison.Ordinal));
         }
 
         // And the export does not claim to have lost the run it just drew.
