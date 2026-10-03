@@ -123,7 +123,14 @@ public sealed record FillSpec(
     // established has to be put back on the copy when <see cref="InstanceResolver"/> rebuilds it. Recording that
     // the fill *follows* the colour is the only way to tell "said currentColor" from "said black", which is the
     // distinction the rebuild turns on. False on every fill written before this existed, so nothing changes bytes.
-    bool FromCurrentColor = false)
+    bool FromCurrentColor = false,
+
+    // A pattern paint server (issue #203): artwork tiled across the shape, whose tile is a definition in the
+    // document's library. A third paint server beside the gradient and the hatch - the fill's colour is the fallback
+    // wherever a pattern cannot be drawn, which is what lets a swatch or a format with no way to express one still
+    // show the right colour. **Appended rather than inserted** so every existing positional construction of a
+    // FillSpec keeps its meaning; absent on every fill written before this existed, so nothing changes bytes.
+    PatternSpec? Pattern = null)
 {
     /// <summary>
     /// A hatch fill. The colour is the fallback used wherever a hatch cannot be drawn - a solid swatch, a
@@ -288,7 +295,14 @@ public sealed record StrokeSpec(
     // for the same reason: the resolved colour is in <see cref="Color"/>, and this says whether the file wrote the
     // keyword - which is what a rebuild of an instance has to re-resolve against the `use` site's `color`. False on
     // every stroke written before this existed.
-    bool FromCurrentColor = false)
+    bool FromCurrentColor = false,
+
+    // A pattern paint server (issue #203): artwork tiled across the shape, whose tile is a definition in the
+    // document's library. A third paint server beside the gradient and the hatch - the fill's colour is the fallback
+    // wherever a pattern cannot be drawn, which is what lets a swatch or a format with no way to express one still
+    // show the right colour. **Appended rather than inserted** so every existing positional construction of a
+    // FillSpec keeps its meaning; absent on every fill written before this existed, so nothing changes bytes.
+    PatternSpec? Pattern = null)
 {
     /// <summary>Convenience: no visible stroke.</summary>
     public static StrokeSpec None { get; } =

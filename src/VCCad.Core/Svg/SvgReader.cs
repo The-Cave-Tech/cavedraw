@@ -226,6 +226,10 @@ public static partial class SvgReader
         // marker is the ordinary case in a file where `defs` comes last.
         ReadMarkerDefinitions(root, context);
 
+        // The patterns, for the same reason: a fill referring to `url(#dots)` is read before the `defs` that holds
+        // the tile whenever `defs` comes last, which is the ordinary arrangement.
+        ReadPatternDefinitions(root, context);
+
         foreach (XElement child in root.Elements())
         {
             ReadElement(child, context);
@@ -1138,10 +1142,16 @@ public static partial class SvgReader
                     }
                     else if (context.Patterns.Facts(gradientId) is { } pattern)
                     {
-                        // **A pattern is not a colour, and the model has nowhere to put a tile.** Reading the
-                        // reference as a missing paint server would name the wrong thing - the pattern is in the
-                        // document - so it is named as what it is, together with what its tile draws. See
-                        // SvgPatterns, and #175 for the same finding on the PDF side.
+                        // **The tile is in the library now** (issue #203): the paint names the definition, and the
+                        // definition holds the tile as artwork with the attributes that say how it repeats. What is
+                        // still missing is the painting - the canvas and the PDF exporter do not tile a pattern yet -
+                        // so that half is reported rather than left to be discovered, because a fill that comes in
+                        // unpainted looks like a fill the file never had.
+                        if (PatternFor(context, gradientId) is { } spec)
+                        {
+                            shape.Fill = shape.Fill with { IsVisible = true, Pattern = spec };
+                        }
+
                         context.Warnings.Add(PatternReport(element, "fill", PatternValue(element, declarations, "fill", gradientId), pattern));
                     }
                     else
@@ -1659,9 +1669,19 @@ public static partial class SvgReader
             : " " + string.Join(" ", pattern.UnitRefusals.Select(r => char.ToUpperInvariant(r[0]) + r[1..] + "."));
 
         return $"{subject} is painted with {property}=\"{value}\", which names a <pattern>: {tile}.{units} " +
-               "A pattern is artwork used as a paint, and this model has no pattern paint server, so the " +
+               "A pattern is artwork used as a paint: the model now holds it, with its tile in the library, and the " + "canvas and the PDF exporter do not paint one yet, so the " +
                $"{property} is left unpainted rather than substituted with a colour or a tile the file did not write";
     }
+
+    /// <summary>
+    /// The pattern paint a library definition stands for, or null when the document holds no such definition - the
+    /// `&lt;pattern&gt;` was read into a definition of its own name (issue #203), and this turns that definition's
+    /// attributes back into the paint the fill carries.
+    /// </summary>
+    private static PatternSpec? PatternFor(Context context, string id)
+        => context.Layer.Document?.FindDefinition(id) is { } definition
+            ? PatternSpec.From(id, definition.ForeignAttributes)
+            : null;
 
     /// <summary>The value an element writes for a paint property, or the reference itself when it was inherited.</summary>
     private static string PatternValue(
@@ -1724,6 +1744,111 @@ public static partial class SvgReader
     /// The arrowheads are **still materialised** at each vertex by <see cref="PlaceMarkers"/> as well, so the
     /// picture is unchanged; stopping that is what a renderer drawing from this definition makes possible.
     /// </summary>
+    /// <summary>
+    /// The `&lt;pattern&gt;` elements as definitions in the document's library (issue #203), before the elements are
+    /// walked, because a fill referring to `url(#dots)` is read before the `defs` that holds the tile whenever
+    /// `defs` comes last.
+    ///
+    /// **The tile is ordinary artwork that happens to live in the library.** Reading it into an <see cref="ArtGroup"/>
+    /// is what lets one tile serve every paint that names it, and lets a person reach it as artwork; the attributes
+    /// that say how it repeats - the tile box, the units, the `patternTransform` - are kept on the definition
+    /// verbatim, so what the file said survives a save even where this reader does not yet paint it.
+    /// </summary>
+    private static void ReadPatternDefinitions(XElement root, Context context, string? source = null)
+    {
+        if (context.Layer.Document is not { } document)
+        {
+            return;
+        }
+
+        foreach (XElement pattern in root.DescendantsAndSelf())
+        {
+            if (pattern.Name.LocalName != "pattern")
+            {
+                continue;
+            }
+
+            string id = pattern.Attribute("id")?.Value ?? string.Empty;
+            if (id.Length == 0)
+            {
+                continue;
+            }
+
+            if (document.FindDefinition(id) is not null)
+            {
+                if (source is not null)
+                {
+                    context.Warnings.Add(
+                        $"'{source}' defines a pattern called '{id}', and the document already has a definition by " +
+                        "that name, so the one already in the library is kept");
+                }
+
+                continue;
+            }
+
+            var definition = new ArtGroup { Name = id };
+            CaptureForeign(pattern, definition);
+
+            foreach (string attribute in new[]
+                     {
+                         "width", "height", "x", "y", "patternUnits", "patternContentUnits", "patternTransform",
+                         "viewBox", "preserveAspectRatio",
+                     })
+            {
+                if (pattern.Attribute(attribute) is { } value)
+                {
+                    definition.ForeignAttributes[attribute] = value.Value;
+                }
+            }
+
+            // A tile that states `objectBoundingBox` is refused where a clip path's units are: under those units the
+            // numbers are fractions of the painted shape's box rather than user space, and painting one as if it were
+            // user space would put a plausible tile in the wrong place - the substitution this reader declines to
+            // make. The definition is still read, so what the file said is not lost.
+            foreach (string attribute in new[] { "patternUnits", "patternContentUnits" })
+            {
+                if (pattern.Attribute(attribute)?.Value?.Trim() is { Length: > 0 } units &&
+                    units.Equals("objectBoundingBox", StringComparison.OrdinalIgnoreCase))
+                {
+                    context.Warnings.Add(
+                        $"the <pattern> '{id}' states {attribute}=\"{units}\", a coordinate system this reader does " +
+                        "not convert, so its tile's numbers are fractions of the painted shape's box and the pattern " +
+                        "is held rather than painted");
+                }
+            }
+
+            var inside = new Context
+            {
+                Layer = context.Layer,
+                Group = definition,
+                Style = context.Style,
+                Counts = context.Counts,
+                Ids = context.Ids,
+                Resolving = context.Resolving,
+                Missing = context.Missing,
+                UsedPathEffects = context.UsedPathEffects,
+                Sheet = context.Sheet,
+                Gradients = context.Gradients,
+                Patterns = context.Patterns,
+                Markers = context.Markers,
+                PathEffects = context.PathEffects,
+                Warnings = context.Warnings,
+                Kept = context.Kept,
+                Viewport = context.Viewport,
+                BaseDirectory = context.BaseDirectory,
+                FontFaces = context.FontFaces,
+                Text = context.Text,
+            };
+
+            foreach (XElement child in pattern.Elements())
+            {
+                ReadElement(child, inside);
+            }
+
+            document.Definitions.AddItem(definition);
+        }
+    }
+
     private static void ReadMarkerDefinitions(XElement root, Context context, string? source = null)
     {
         if (context.Layer.Document is not { } document)

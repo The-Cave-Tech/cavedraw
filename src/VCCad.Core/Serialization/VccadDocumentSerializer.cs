@@ -39,7 +39,23 @@ internal sealed record FillDto(
     // Whether the fill's colour was written as SVG's `currentColor` (issue #135). Absent for every ordinary fill,
     // so a document that never names the keyword serialises to exactly the bytes it did before - and a fill that
     // does name it records the fact the rebuild needs to re-resolve it against the instance's `color`.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? FromCurrentColor = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? FromCurrentColor = null,
+
+    // A pattern paint server (issue #203): which library definition holds the tile, the tile box, and the units and
+    // transform **as the file wrote them**. Absent for every fill that has no pattern, so a document that never used
+    // one serialises to exactly the bytes it did before.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PatternDto? Pattern = null);
+
+/// <summary>One pattern paint server as it travels in the sidecar (issue #203).</summary>
+internal sealed record PatternDto(
+    string Definition,
+    double Width,
+    double Height,
+    double X,
+    double Y,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Units = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ContentUnits = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Transform = null);
 
 /// <summary>
 /// One family of parallel lines in a hatch, as it travels in the sidecar.
@@ -887,7 +903,10 @@ internal abstract record ItemDto
             f.Rule,
             ToGradient(f.Gradient),
             ToHatch(f.Hatch),
-            f.FromCurrentColor ? true : null);
+            f.FromCurrentColor ? true : null,
+            f.Pattern is { } p
+                ? new PatternDto(p.Definition, p.Width, p.Height, p.X, p.Y, p.Units, p.ContentUnits, p.Transform)
+                : null);
 
     private static GradientDto? ToGradient(GradientSpec? g)
         => g is null
@@ -1383,6 +1402,9 @@ internal static class ItemDtoExtensions
         GradientSpec? gradient = f.Gradient?.ToModel();
         HatchSpec? hatch = f.Hatch?.ToModel();
         bool current = f.FromCurrentColor ?? false;
+        PatternSpec? pattern = f.Pattern is { } p
+            ? new PatternSpec(p.Definition, p.Width, p.Height, p.X, p.Y, p.Units, p.ContentUnits, p.Transform)
+            : null;
 
         // A fill is only "none" when it is invisible and there is no gradient behind it.
         // A gradient on an invisible fill is kept: switching a fill off and on again must
@@ -1392,7 +1414,7 @@ internal static class ItemDtoExtensions
             ColorRgb gradientColor = f.Color is null
                 ? ColorRgb.White
                 : new ColorRgb(f.Color.R, f.Color.G, f.Color.B, f.Color.A);
-            return new FillSpec(f.Visible, gradientColor, f.Rule, gradient, hatch, current);
+            return new FillSpec(f.Visible, gradientColor, f.Rule, gradient, hatch, current, pattern);
         }
 
         // A hatch on an invisible fill is kept for the same reason a gradient is: turning the fill off and on
@@ -1402,13 +1424,13 @@ internal static class ItemDtoExtensions
             ColorRgb hatchColor = f.Color is null
                 ? ColorRgb.White
                 : new ColorRgb(f.Color.R, f.Color.G, f.Color.B, f.Color.A);
-            return new FillSpec(f.Visible, hatchColor, f.Rule, null, hatch, current);
+            return new FillSpec(f.Visible, hatchColor, f.Rule, null, hatch, current, pattern);
         }
 
         return f.Visible && f.Color is not null
             ? FillSpec.Solid(new ColorRgb(f.Color.R, f.Color.G, f.Color.B, f.Color.A), f.Rule)
-                with { FromCurrentColor = current }
-            : FillSpec.None with { FromCurrentColor = current };
+                with { FromCurrentColor = current, Pattern = pattern }
+            : FillSpec.None with { FromCurrentColor = current, Pattern = pattern };
     }
 
     /// <summary>
