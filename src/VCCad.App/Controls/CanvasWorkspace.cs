@@ -5016,6 +5016,17 @@ public sealed class CanvasWorkspace : Control
     private void PaintFill(DrawingContext context, PathItem path, StreamGeometry geometry, double opacity)
     {
         FillSpec fill = path.Fill;
+
+        // **A pattern is a paint server, and the tile is drawn repeated** (issue #203). It is clipped to the shape
+        // and tiled in the shape's own user space - the coordinate system the file stated for it. The fallback colour
+        // is not used: a solid where a pattern was named is a different picture, not a stand-in for one.
+        if (fill.Pattern is { UserSpaceUnits: true } pattern &&
+            _document?.FindDefinition(pattern.Definition) is ArtGroup tile)
+        {
+            PaintPattern(context, geometry, pattern, tile, opacity);
+            return;
+        }
+
         if (fill.Gradient is { } gradient)
         {
             if (gradient.Kind == GradientKind.Freeform)
@@ -5042,6 +5053,75 @@ public sealed class CanvasWorkspace : Control
         }
 
         context.DrawGeometry(ToBrush(fill.Color, opacity), null, geometry);
+    }
+
+    /// <summary>The most tiles one shape may be painted with before the pattern is reported instead of drawn.</summary>
+    private const int PatternTileBudget = 4096;
+
+    /// <summary>
+    /// Paints a pattern: the tile's own artwork, repeated across the shape and clipped to it (issue #203).
+    ///
+    /// The grid is anchored at the pattern's `x`/`y` in the shape's user space and stepped by its tile box, with the
+    /// tile's content turned by `patternTransform` - read through the reader's own parser, so a `rotate(45)` here and
+    /// in the importer cannot mean two different things.
+    ///
+    /// **Tiled in world space, and that is a limit worth naming.** The geometry the canvas holds has the enclosing
+    /// groups' transforms baked in, so a pattern on a path inside a transformed group is tiled in the space the
+    /// picture ends in rather than in the space the file wrote it in. For a path that is where it was drawn - every
+    /// ordinary case - the two are the same; where they are not, the tiles are evenly spread and correctly sized but
+    /// their phase differs from a viewer's.
+    ///
+    /// **Bounded.** A one-unit tile across a hundred-unit shape is ten thousand drawings, which is a freeze rather
+    /// than a picture, so past the budget the shape is left unpainted and the reason is **reported**: a slow correct
+    /// answer beats a fast wrong one, and an unreported blank is the worst of the three.
+    /// </summary>
+    private void PaintPattern(
+        DrawingContext context, StreamGeometry geometry, PatternSpec pattern, ArtGroup tile, double opacity)
+    {
+        double width = pattern.Width;
+        double height = pattern.Height;
+        Avalonia.Rect box = geometry.Bounds;
+
+        if (width <= 0 || height <= 0 || box.Width <= 0 || box.Height <= 0)
+        {
+            return; // no tile box, so there is no repetition to draw
+        }
+
+        int firstColumn = (int)Math.Floor((box.X - pattern.X) / width);
+        int lastColumn = (int)Math.Ceiling((box.Right - pattern.X) / width);
+        int firstRow = (int)Math.Floor((box.Y - pattern.Y) / height);
+        int lastRow = (int)Math.Ceiling((box.Bottom - pattern.Y) / height);
+
+        long count = ((long)lastColumn - firstColumn + 1) * ((long)lastRow - firstRow + 1);
+        if (count > PatternTileBudget)
+        {
+            _vm?.ReportStatus(
+                $"the pattern '{pattern.Definition}' would need {count} tiles here, which is more than this canvas " +
+                "will draw, so the fill is left unpainted");
+            return;
+        }
+
+        AffineTransform content = SvgReader.Transform(pattern.Transform);
+        var tileMatrix = new Avalonia.Matrix(content.A, content.B, content.C, content.D, content.E, content.F);
+
+        using (context.PushGeometryClip(geometry))
+        {
+            for (int row = firstRow; row <= lastRow; row++)
+            {
+                for (int column = firstColumn; column <= lastColumn; column++)
+                {
+                    var placed = Avalonia.Matrix.CreateTranslation(pattern.X + (column * width), pattern.Y + (row * height));
+
+                    using (context.PushTransform(placed * tileMatrix))
+                    {
+                        foreach (LayerItem child in tile.Children)
+                        {
+                            PaintItemDirect(context, child, opacity * tile.Opacity, AffineTransform.Identity);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// <summary>Cached world-space geometry for a path (rebuilt when its revision changes).</summary>

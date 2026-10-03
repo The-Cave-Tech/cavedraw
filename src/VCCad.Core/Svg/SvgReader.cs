@@ -1147,7 +1147,11 @@ public static partial class SvgReader
                         // still missing is the painting - the canvas and the PDF exporter do not tile a pattern yet -
                         // so that half is reported rather than left to be discovered, because a fill that comes in
                         // unpainted looks like a fill the file never had.
-                        if (PatternFor(context, gradientId) is { } spec)
+                        // Only a tile in the shape's own user space is offered as a paint: a tile in
+                        // `objectBoundingBox` units means something this reader does not convert, and a paint set in
+                        // the wrong space is a plausible-looking tile in the wrong place - the substitution this
+                        // reader declines to make. The report below says so either way.
+                        if (PatternFor(context, gradientId) is { UserSpaceUnits: true } spec)
                         {
                             shape.Fill = shape.Fill with { IsVisible = true, Pattern = spec };
                         }
@@ -3512,7 +3516,13 @@ public static partial class SvgReader
     /// `Compose` applies its argument first, so composing left to right here is what produces that order; folding
     /// the other way gives x=20 and is the classic symptom of getting this backwards.
     /// </summary>
-    internal static AffineTransform Transform(string? text)
+    /// <summary>
+    /// An SVG `transform` list as an affine transform - **the reader's own parser, shared** (issue #203). A pattern's
+    /// `patternTransform` is held as the text the file wrote, so whoever draws the tile has to convert it; a second
+    /// parser in the renderers is a second answer to what `rotate(45)` means, which is how a tile ends up turned the
+    /// other way. Null or unreadable text is the identity, which is what a `transform` attribute that is absent means.
+    /// </summary>
+    public static AffineTransform Transform(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
