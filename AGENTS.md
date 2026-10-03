@@ -72,7 +72,7 @@ that legitimately go through WSL (see 4.0):
 
 ```bash
 wsl -e bash -lc "cd /mnt/c/Development/vccad/main && gh issue create \
-    --repo darrenstarr/cavedraw --title '<the symptom, in the person's terms>' \
+    --repo The-Cave-Tech/cavedraw --title '<the symptom, in the person's terms>' \
     --body-file artifacts/issue-<slug>.md"
 ```
 

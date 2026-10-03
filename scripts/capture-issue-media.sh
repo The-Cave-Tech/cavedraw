@@ -16,7 +16,7 @@ frames="${1:?frames directory holding frame-NNN.png}"
 name="${2:?asset base name, e.g. 128-selection}"
 fps="${3:-12}"
 
-repo="${VCCAD_REPO:-darrenstarr/cavedraw}"
+repo="${VCCAD_REPO:-The-Cave-Tech/cavedraw}"
 release="${VCCAD_MEDIA_RELEASE:-issue-media}"
 out="$(mktemp -d)"
 
