@@ -1789,6 +1789,12 @@ public static partial class SvgReader
             var definition = new ArtGroup { Name = id };
             CaptureForeign(pattern, definition);
 
+            // **Tagged as what read it.** A pattern is recognised for writing by this tag and not by a heuristic on
+            // `width`: a `<symbol>` read into the library can carry a width of its own, and writing that back as a
+            // `<pattern>` would turn a symbol into a paint. The tag is the same shape as a marker's, for the same
+            // reason - the reader knows what it read, and nothing downstream has to guess.
+            definition.ForeignAttributes[SvgWriter.PatternDefinitionTag] = id;
+
             foreach (string attribute in new[]
                      {
                          "width", "height", "x", "y", "patternUnits", "patternContentUnits", "patternTransform",

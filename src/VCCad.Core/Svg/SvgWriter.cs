@@ -60,6 +60,13 @@ public static class SvgWriter
     /// </summary>
     public const string MarkerArtTag = "data-vccad-marker";
 
+        /// <summary>
+        /// The foreign attribute that says a library definition was read from a `&lt;pattern&gt;` (issue #203). The
+        /// reader knows what it read, so nothing downstream has to guess: a `<symbol>` read into the library can
+        /// carry a `width` of its own, and writing that back as a `<pattern>` would turn a symbol into a paint.
+        /// </summary>
+        public const string PatternDefinitionTag = "data-vccad-pattern";
+
     private static readonly XNamespace Svg = "http://www.w3.org/2000/svg";
     private static readonly XNamespace Xlink = "http://www.w3.org/1999/xlink";
 
@@ -165,6 +172,11 @@ public static class SvgWriter
         // written here, from the document's own library - which is where the reader put it. Last rather than with
         // the gradients because the names are only known once the content has been walked.
         writer.WriteMarkerDefinitions(document);
+        // **The pattern definitions, after the content that names them** (issue #203): a fill is written as
+        // `url(#id)` when it names a pattern, and the tile it points at is written here from the document's library,
+        // which is where the reader put it. Last for the same reason the markers are: the names are only known once
+        // the content has been walked.
+        writer.WritePatternDefinitions(document);
 
         var xml = new XDocument(new XDeclaration("1.0", "UTF-8", null), root);
         return new SvgWriteResult(xml.ToString(), writer.ByElement, writer.Missing);
@@ -396,6 +408,71 @@ public static class SvgWriter
         /// foreign data because the model has no member for them - writing anything else would be inventing the
         /// placement of a marker whose placement the file already stated.
         /// </summary>
+        /// <summary>
+        /// The `<pattern>` definitions the document's library holds (issue #203), so a fill written as
+        /// `url(#id)` resolves to the tile that was read.
+        ///
+        /// Every tagged pattern definition is written, not only the ones a fill in this document names: a pattern
+        /// the file defined and nothing used is part of what the file said, and dropping it would make a round trip
+        /// lose an asset rather than a paint. The reader's tag decides what is written, so a symbol that happens to
+        /// carry a `width` is never turned into a paint.
+        ///
+        /// **The definition is written as a pattern, not as a group as well**, for the same reason a marker is: the
+        /// definitions pass has already written the library entry as `<g id="dots">`, and a `<g>` by that id would
+        /// make `fill="url(#dots)"` resolve to something that is not a pattern. Whatever already holds the id gives
+        /// way.
+        /// </summary>
+        public void WritePatternDefinitions(CadDocument document)
+        {
+            ArtGroup[] patterns = document.Definitions.Children.OfType<ArtGroup>()
+                .Where(definition => definition.ForeignAttributes.ContainsKey(PatternDefinitionTag))
+                .OrderBy(definition => definition.Name, StringComparer.Ordinal)
+                .ToArray();
+
+            if (patterns.Length == 0)
+            {
+                return;
+            }
+
+            XElement? defs = _root.Element(Svg + "defs");
+            bool created = defs is null;
+            defs ??= new XElement(Svg + "defs");
+
+            foreach (ArtGroup definition in patterns)
+            {
+                var pattern = new XElement(Svg + "pattern", new XAttribute("id", definition.Name));
+
+                foreach (string attribute in new[]
+                         {
+                             "width", "height", "x", "y", "patternUnits", "patternContentUnits", "patternTransform",
+                             "viewBox", "preserveAspectRatio",
+                         })
+                {
+                    if (definition.ForeignAttributes.TryGetValue(attribute, out string? value))
+                    {
+                        pattern.SetAttributeValue(attribute, value);
+                    }
+                }
+
+                WriteItems(definition.Children, pattern);
+
+                foreach (XElement previous in defs.Elements()
+                    .Where(element => (string?)element.Attribute("id") == definition.Name)
+                    .ToArray())
+                {
+                    previous.Remove();
+                }
+
+                defs.Add(pattern);
+                Wrote("pattern");
+            }
+
+            if (created && defs.HasElements)
+            {
+                _root.Add(defs);
+            }
+        }
+
         private static void CopyMarkerPlacement(ArtGroup definition, XElement marker)
         {
             string[] known =
@@ -3049,6 +3126,14 @@ public static class SvgWriter
             if (!fill.IsVisible)
             {
                 return null;
+            }
+
+            // **A pattern is a reference, not a colour** (issue #203). The tile lives in the library and is written
+            // as a `<pattern>` by the definitions pass; writing the fallback colour here would invent a paint the
+            // file never had.
+            if (fill.Pattern is not null)
+            {
+                return $"url(#{fill.Pattern.Definition})";
             }
 
             if (fill.Gradient is not null && _gradientIds.TryGetValue(fill.Gradient, out string? id))
