@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using VCCad.Core.Model;
+using VCCad.Core.Svg;
 using VCCad.Core.Selection;
 using VCCad.Core.Text;
 using VCCad.Core.Serialization;
@@ -369,7 +370,7 @@ public static class PdfDocumentExporter
                 foreach (LayerItem item in layer.Children)
                 {
                     PaintItem(ops, item, AffineTransform.Identity, 1.0, alphaStates, blendStates, embedder, images,
-                        shadings, document, notes, 0, forms);
+                        shadings, document, notes, 0, forms, MarkersDrawnFrom(document));
                 }
             }
         }
@@ -438,9 +439,103 @@ public static class PdfDocumentExporter
     /// an ancestor's clip is the half that giving it a frame could not reach: a second loop that re-derives the
     /// frame is a second place for it to disagree, so the walk is the only one left.
     /// </summary>
-    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfBlendStates blendStates, PdfFontEmbedder embedder, PdfImageObjects? images = null, PdfShadingObjects? shadings = null, CadDocument? document = null, List<string>? notes = null, int artDepth = 0, PdfFormObjects? forms = null)
+    /// <summary>
+    /// The `<c>slot marker</c>` keys a document can draw from its own library (issue #202) - the references whose
+    /// materialised artwork is replaced rather than written beside them.
+    /// </summary>
+    private static HashSet<string> MarkersDrawnFrom(CadDocument? document)
+    {
+        var drawn = new HashSet<string>(StringComparer.Ordinal);
+        if (document is null)
+        {
+            return drawn;
+        }
+
+        foreach (PathItem path in document.AllPaths())
+        {
+            foreach ((MarkerSlot slot, string? name) in new[]
+                     {
+                         (MarkerSlot.Start, path.MarkerStart),
+                         (MarkerSlot.Mid, path.MarkerMid),
+                         (MarkerSlot.End, path.MarkerEnd),
+                     })
+            {
+                if (name is not null && document.FindDefinition(name) is not null)
+                {
+                    drawn.Add($"{slot} {name}");
+                }
+            }
+        }
+
+        return drawn;
+    }
+
+    /// <summary>
+    /// Writes the markers a path names, from the document's library (issue #202).
+    ///
+    /// A marker is a property of the path, so the page places it where the path says: the anchors come from
+    /// <see cref="MarkerAnchors"/> and the placement from <see cref="MarkerSpec"/> - the two pieces the importer and
+    /// the canvas use, so the screen, the page and the SVG export cannot disagree about where an arrowhead goes.
+    ///
+    /// A reference the library does not hold writes nothing here and its materialised artwork is still written, which
+    /// is the same rule the canvas and the SVG writer follow: losing the arrowhead is worse than leaving it as art.
+    /// </summary>
+    private static void PaintPathMarkers(
+        List<string> ops, PathItem path, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates,
+        PdfBlendStates blendStates, PdfFontEmbedder embedder, PdfImageObjects? images, PdfShadingObjects? shadings,
+        CadDocument? document, List<string>? notes, int artDepth, PdfFormObjects? forms,
+        IReadOnlySet<string>? markersDrawn)
+    {
+        if (document is null || artDepth > 4)
+        {
+            // The depth guard is for a definition whose own content names a marker: an arrowhead made of arrowheads
+            // is a file nobody wrote, and recursing into it would not terminate.
+            return;
+        }
+
+        double strokeWidth = path.Strokes.FirstOrDefault(stroke => stroke.HasVisibleOutline)?.Width
+            ?? path.Stroke.Width;
+
+        foreach ((MarkerSlot slot, string? name) in new[]
+                 {
+                     (MarkerSlot.Start, path.MarkerStart),
+                     (MarkerSlot.Mid, path.MarkerMid),
+                     (MarkerSlot.End, path.MarkerEnd),
+                 })
+        {
+            if (name is null || document.FindDefinition(name) is not ArtGroup definition)
+            {
+                continue;
+            }
+
+            MarkerSpec spec = MarkerSpec.From(
+                definition.ForeignAttributes, message => notes?.Add(message));
+
+            foreach (MarkerAnchor anchor in MarkerAnchors.For(path, slot))
+            {
+                PaintItem(
+                    ops, definition,
+                    toDoc.Compose(spec.Placement(anchor.Vertex, anchor.HeadingRadians, strokeWidth)),
+                    opacity, alphaStates, blendStates, embedder, images, shadings, document, notes,
+                    artDepth + 1, forms, markersDrawn);
+            }
+        }
+    }
+
+    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfBlendStates blendStates, PdfFontEmbedder embedder, PdfImageObjects? images = null, PdfShadingObjects? shadings = null, CadDocument? document = null, List<string>? notes = null, int artDepth = 0, PdfFormObjects? forms = null, IReadOnlySet<string>? markersDrawn = null)
     {
         if (!item.IsEffectivelyVisible())
+        {
+            return;
+        }
+
+        // **The artwork a marker reference stands for is not written** (issue #202). The reader materialises each
+        // arrowhead beside its path and tags it with the slot and the marker it stands for; a path whose reference
+        // the document can resolve is written from that definition below, so the materialised copy would be a second
+        // arrowhead. The same rule the canvas and the SVG writer follow, on the same tag.
+        if (item is ArtGroup tagged &&
+            tagged.ForeignAttributes.TryGetValue(SvgWriter.MarkerArtTag, out string? markerArt) &&
+            markersDrawn is not null && markersDrawn.Contains(markerArt))
         {
             return;
         }
@@ -491,6 +586,8 @@ public static class PdfDocumentExporter
             case PathItem path:
                 PaintPath(ops, path, toDoc, opacity, alphaStates, blendStates, embedder, shadings, images, document,
                     notes, artDepth);
+                PaintPathMarkers(ops, path, toDoc, opacity, alphaStates, blendStates, embedder, images, shadings,
+                    document, notes, artDepth, forms, markersDrawn);
                 break;
 
             case TextItem text:
@@ -518,7 +615,7 @@ public static class PdfDocumentExporter
                     foreach (LayerItem child in group.Children)
                     {
                         PaintItem(content, child, childToDoc, opacity * group.Opacity, alphaStates, blendStates,
-                            embedder, images, shadings, document, notes, artDepth, forms);
+                            embedder, images, shadings, document, notes, artDepth, forms, markersDrawn);
                     }
 
                     ops.Add($"/{forms.Add(content)} Do");
