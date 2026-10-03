@@ -38,6 +38,15 @@ public interface ISvgGlyphFont
     int GlyphForSequence(string sequence);
 
     /// <summary>
+    /// How far a **pair** of characters moves the pen, in font units, over and above the first glyph's advance - a
+    /// file's own `&lt;hkern&gt;`. Zero when the source states none for the pair.
+    ///
+    /// A kerning pair is not a drawing: it is the *pen* between two characters, which is why it is asked for by the
+    /// pair rather than looked up as a glyph, and why the placement adds it where the pen is.
+    /// </summary>
+    int KerningFor(int first, int second);
+
+    /// <summary>
     /// The shapes that draw a glyph, in font units. Anything the source cannot draw is reported through
     /// <paramref name="warn"/> rather than dropped.
     /// </summary>

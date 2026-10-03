@@ -26,7 +26,8 @@ public sealed class SvgFontFaces
     /// Reads every `@font-face` rule in <paramref name="css"/> whose `src` names a file that exists beside the
     /// document and carries glyph definitions.
     /// </summary>
-    public static SvgFontFaces Load(string css, string? baseDirectory, System.Xml.Linq.XElement? root = null)
+    public static SvgFontFaces Load(
+        string css, string? baseDirectory, System.Xml.Linq.XElement? root = null, Action<string>? warn = null)
     {
         var faces = new SvgFontFaces();
 
@@ -35,7 +36,10 @@ public sealed class SvgFontFaces
         // are loaded into the same registry and looked up by family.
         if (root is not null)
         {
-            foreach (SvgFontElements inline in SvgFontElements.Read(root, _ => { }))
+            // **The caller's own warning sink, not a discard.** A font whose advances, missing glyph or `<hkern>`
+            // this reader cannot honour has to be able to say so, and swallowing it here made every one of those
+            // reports vanish - which a test about a pair named by glyph found.
+            foreach (SvgFontElements inline in SvgFontElements.Read(root, warn ?? (_ => { })))
             {
                 faces._faces[inline.FamilyName] = inline;
             }

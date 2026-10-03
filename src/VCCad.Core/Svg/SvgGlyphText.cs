@@ -55,6 +55,9 @@ internal static class SvgGlyphText
 
         int coveredUntil = -1;
 
+        // The flattened index of the character last placed, so a pair can be seen to be adjacent.
+        int previousIndex = -2;
+
         foreach (GlyphBox glyph in layout.Glyphs)
         {
             TextRun run = text.Runs[glyph.Run];
@@ -100,7 +103,19 @@ internal static class SvgGlyphText
 
             coveredUntil = glyph.Index + span;
 
-            double penX = text.Origin.X + glyph.X;
+            // **A kerning pair moves the pen, not the glyph.** SVG's `k` is the amount the advance is *reduced* by,
+            // so a positive value pulls the pair closer; the adjustment is asked for by the two characters, in font
+            // units, and converted with everything else. It applies only where the two are adjacent **in one run**:
+            // a pair split across runs, or across a ligature, is not a pair the file stated.
+            double kerning = 0;
+            if (previousIndex == glyph.Index - 1 && glyph.Index > runStart[glyph.Run])
+            {
+                kerning = -font.KerningFor(flat[glyph.Index - 1], flat[glyph.Index]) * scale;
+            }
+
+            previousIndex = glyph.Index + span - 1;
+
+            double penX = text.Origin.X + glyph.X + kerning;
 
             // **The baseline is the one the file stated, not the line box's.** A block's origin was placed one
             // ascent above its baseline, and the ascent it was placed with is recorded per run

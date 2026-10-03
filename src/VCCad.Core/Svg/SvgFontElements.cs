@@ -26,6 +26,9 @@ internal sealed class SvgFontElements : ISvgGlyphFont
     /// <summary>A glyph named by a **sequence** of characters - a ligature, `unicode="fi"`.</summary>
     private readonly Dictionary<string, int> _bySequence = new(StringComparer.Ordinal);
 
+    /// <summary>The pen adjustment a pair of characters states, in font units - a file's own `&lt;hkern&gt;`.</summary>
+    private readonly Dictionary<(char First, char Second), int> _kerning = new();
+
     /// <summary>The glyph a font declares for characters it does not name, or 0 when it declares none.</summary>
     private int _missingGlyph;
 
@@ -94,6 +97,9 @@ internal sealed class SvgFontElements : ISvgGlyphFont
     /// </summary>
     public int GlyphForSequence(string sequence)
         => sequence.Length > 1 && _bySequence.TryGetValue(sequence, out int id) ? id : 0;
+
+    public int KerningFor(int first, int second)
+        => _kerning.TryGetValue(((char)first, (char)second), out int adjustment) ? adjustment : 0;
 
     public int AdvanceFor(int glyphId)
         => glyphId > 0 && glyphId <= _advances.Count ? _advances[glyphId - 1] : 0;
@@ -166,6 +172,68 @@ internal sealed class SvgFontElements : ISvgGlyphFont
             _warn(
                 $"the SVG font '{FamilyName}' states no advance for some of its glyphs, and those characters are "
                 + "placed where the file's own text puts them");
+        }
+
+        ReadKerning(font);
+    }
+
+    /// <summary>
+    /// The `&lt;hkern&gt;` elements a font declares: how far a pair of characters moves the pen.
+    ///
+    /// SVG states a pair three ways - `u1`/`u2` name **characters**, `g1`/`g2` name **glyph names**, and each may
+    /// list several. Only the character form is read here, because that is the form the model can act on: this
+    /// reader places artwork per character and has no glyph-name table to resolve `g1`/`g2` against, so those are
+    /// **reported** rather than silently ignored. A `k` that is not a number is reported too.
+    ///
+    /// Each side of a pair may list characters (`u1="o,O"`), and every combination of the two lists is a pair -
+    /// which is what the attribute means, and reading it as one pair would kern two of the four combinations.
+    /// </summary>
+    private void ReadKerning(XElement font)
+    {
+        int namedByGlyph = 0;
+
+        foreach (XElement hkern in font.Descendants())
+        {
+            if (hkern.Name.LocalName != "hkern")
+            {
+                continue;
+            }
+
+            string? first = hkern.Attribute("u1")?.Value;
+            string? second = hkern.Attribute("u2")?.Value;
+            if (first is null || second is null)
+            {
+                if (hkern.Attribute("g1") is not null || hkern.Attribute("g2") is not null)
+                {
+                    namedByGlyph++;
+                }
+
+                continue;
+            }
+
+            if (Int(hkern.Attribute("k")?.Value) is not { } adjustment)
+            {
+                _warn(
+                    $"the SVG font '{FamilyName}' states an <hkern> whose k is not a number, so that pair is not " +
+                    "kerned");
+                continue;
+            }
+
+            foreach (char left in first)
+            {
+                foreach (char right in second)
+                {
+                    // A pair stated twice: the file's own last word wins, as it does for any repeated attribute.
+                    _kerning[(left, right)] = adjustment;
+                }
+            }
+        }
+
+        if (namedByGlyph > 0)
+        {
+            _warn(
+                $"the SVG font '{FamilyName}' states {namedByGlyph} <hkern> element(s) by glyph name (g1/g2), which "
+                + "this reader has no glyph-name table to resolve, so those pairs are not kerned");
         }
     }
 

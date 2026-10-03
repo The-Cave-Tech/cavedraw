@@ -222,6 +222,12 @@ public sealed class SvgFontProgramme : ISvgGlyphFont
     public int GlyphForSequence(string sequence) => 0;
 
     /// <summary>
+    /// An OpenType programme's pair kerning lives in its GPOS table, which this reader does not parse - so it
+    /// answers 0 for every pair, which is the honest answer rather than the first glyph's advance.
+    /// </summary>
+    public int KerningFor(int first, int second) => 0;
+
+    /// <summary>
     /// The `SVG ` table: a header, then one record per glyph range naming an offset and length into the same table.
     /// A record's document may be gzipped on its own, which is why the inflation is per record rather than per file.
     /// </summary>
