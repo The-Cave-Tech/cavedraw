@@ -53,6 +53,7 @@ public class NonLatinExportTests
             File.WriteAllBytes(Path.Combine(directory, name + ".pdf"), pdf);
         }
 
+
         // **A script that joins is declared**, because this export cannot shape it (issue #197): the characters are
         // drawn, and nothing says they are wrong. That is the difference a person has to be told about.
         bool joins = text.Length > 0 && (text[0] >= '\u0590' && text[0] <= '\u07FF' ||
