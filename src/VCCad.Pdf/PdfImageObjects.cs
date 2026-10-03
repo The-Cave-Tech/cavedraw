@@ -187,21 +187,28 @@ internal sealed class PdfImageObjects
         return coverage;
     }
 
-    /// <summary>The <c>/XObject</c> entry for the page resource dictionary.</summary>
-    public string Dict()
+    /// <summary>
+    /// The <c>/XObject</c> entries, without the dictionary around them.
+    ///
+    /// A page's resource dictionary carries **one** <c>/XObject</c> key, and form XObjects are entries of the same
+    /// kind, so the caller merges the two lists into one dictionary rather than each writing its own - a second key
+    /// under the same name is a duplicate the reader resolves however it likes, losing the other's entries.
+    /// </summary>
+    public string Entries()
     {
-        if (_entries.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        var builder = new StringBuilder(" /XObject << ");
+        var builder = new StringBuilder();
         foreach ((string name, int number) in _entries)
         {
             builder.Append('/').Append(name).Append(' ').Append(number).Append(" 0 R ");
         }
 
-        return builder.Append(">>").ToString();
+        return builder.ToString();
+    }
+
+    /// <summary>The <c>/XObject</c> entry for the page resource dictionary.</summary>
+    public string Dict()
+    {
+        return _entries.Count == 0 ? string.Empty : $" /XObject << {Entries()}>>";
     }
 
     public bool TryName(ImageItem image, out string name) => _names.TryGetValue(image, out name!);

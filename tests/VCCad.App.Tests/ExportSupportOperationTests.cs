@@ -31,8 +31,14 @@ public class ExportSupportOperationTests
     /// <summary>The honest case: a **group's** blend is still not carried, because PDF composites it with an
     /// isolated transparency group this exporter cannot emit. An outline effect, a filter, a stroke's raster effect
     /// and a leaf item's or a stroke's blend are all written now.</summary>
+    /// <summary>
+    /// **Nothing is declared unwritten any more, and the operation says so.** The last entry was a group's blend,
+    /// which needed an isolated transparency group; the exporter writes one now, so the list a person reads is empty.
+    /// The assertions are the individual features rather than only the count, so a feature that quietly stops being
+    /// written shows up here as itself instead of as a list that grew by one.
+    /// </summary>
     [Fact]
-    public void TheLossyListNamesTheEffectsThatAreNotWritten()
+    public void TheLossyListIsEmptyBecauseEveryDeclaredFeatureIsWritten()
     {
         var context = new AutomationContext { ViewModel = new EditorViewModel() };
 
@@ -42,12 +48,14 @@ public class ExportSupportOperationTests
         string[] lossy = reported.GetProperty("lossy").EnumerateArray()
             .Select(e => e.GetString()!).ToArray();
 
+        Assert.Empty(lossy);
         Assert.DoesNotContain("blendMode", lossy);
-        Assert.Contains("blendModeGroup", lossy);
-        // The PDF writes a filter now, as an image XObject, so it is no longer in the lossy list...
+        Assert.DoesNotContain("blendModeGroup", lossy);
         Assert.DoesNotContain("filter", lossy);
-        // ...and a stroke's raster effect is rasterised and placed the same way.
         Assert.DoesNotContain("rasterEffect", lossy);
         Assert.DoesNotContain("outlineEffect", lossy);
+
+        // And the declaration behind the list agrees with it, so the two cannot drift apart.
+        Assert.Empty(PdfExportSupport.Lossy);
     }
 }

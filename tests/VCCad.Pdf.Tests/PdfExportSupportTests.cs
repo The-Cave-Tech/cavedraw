@@ -150,13 +150,13 @@ public class PdfExportSupportTests
     }
 
     /// <summary>
-    /// **A group's blend is not written**, and this is the derived half of that declaration. CSS composites a group
-    /// as a unit, which PDF needs an isolated transparency group for - and that is a form XObject this exporter does
-    /// not emit. Blending each child separately would be a different picture, so the file is unchanged and the
-    /// declaration says so.
+    /// **A group's blend is written now, and this is the derived half of that declaration.** CSS composites a group
+    /// as a unit, which PDF expresses with an isolated transparency group; the exporter writes the group's content
+    /// into a form XObject carrying `/Group << /S /Transparency /I true /K false >>` and switches to the group's
+    /// blend state before drawing it with `Do`, so the file changes when the mode does.
     /// </summary>
     [Fact]
-    public void AGroupBlendModeDoesNotChangeTheFile()
+    public void AGroupBlendModeChangesTheFile()
     {
         Assert.Equal(PdfExportSupport.Find("blendModeGroup")!.Written, Changes(document =>
         {
@@ -191,8 +191,8 @@ public class PdfExportSupportTests
         // A leaf item's blend and a stroke's are composited now, as an ExtGState the paint switches to...
         Assert.DoesNotContain(PdfExportSupport.Lossy, f => f.Name == "blendMode");
 
-        // ...but a group's is not, because that needs a transparency group this exporter cannot emit.
-        Assert.Contains(PdfExportSupport.Lossy, f => f.Name == "blendModeGroup");
+        // ...and a group's is written too, as an isolated transparency group the page draws with Do.
+        Assert.DoesNotContain(PdfExportSupport.Lossy, f => f.Name == "blendModeGroup");
 
         // The filter is no longer one of them: the exporter draws the graph's answer and places it.
         Assert.DoesNotContain(PdfExportSupport.Lossy, f => f.Name == "filter");

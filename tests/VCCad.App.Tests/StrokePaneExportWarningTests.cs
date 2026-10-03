@@ -5,6 +5,7 @@ using VCCad.App.ViewModels;
 using VCCad.App.Views.Panes;
 using VCCad.Core.Model;
 using VCCad.Geometry;
+using VCCad.Pdf;
 using Xunit;
 
 namespace VCCad.App.Tests;
@@ -132,33 +133,36 @@ public class StrokePaneExportWarningTests
     }
 
     /// <summary>
-    /// **A group's blend is the one the PDF still leaves out**, and the pane says so.
-    ///
-    /// CSS composites a group as a unit against the backdrop, which PDF expresses with an isolated transparency
-    /// group - a form XObject this exporter does not emit. Blending each child separately would be a different
-    /// picture, so the honest answer is to say the group's blend is not in the export.
+    /// **A group's blend is carried now, so the pane no longer warns about it.** This test used to assert the
+    /// opposite, with a doc comment saying the export could not emit a transparency group; the exporter writes one
+    /// now (`PdfFormObjects`), the declaration says so, and the warning is drawn from that declaration.
     /// </summary>
     [AvaloniaFact]
-    public void AGroupBlendModeShowsTheWarning()
+    public void AGroupBlendModeShowsNoWarning()
     {
         (StrokePane pane, EditorViewModel viewModel) = Host();
         SelectedGroup(viewModel);
 
         TextBlock warning = Warning(pane);
 
-        Assert.True(warning.IsVisible);
-        Assert.Contains("blend", warning.Text ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.False(warning.IsVisible);
+        Assert.DoesNotContain("blend", warning.Text ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>And clearing the selection takes the warning away with it. A group's blend is the unwritten
-    /// feature now that a leaf item's is carried, so it is what raises the warning here.</summary>
+    /// <summary>
+    /// **And there is nothing left to clear it from.** Every feature the declaration knows about is written now, so
+    /// `PdfExportSupport.Lossy` is empty and no selection can raise this warning. The assertion is that the state a
+    /// person sees is the same before and after clearing - the mechanism is inert rather than broken - and it says
+    /// why, so nobody reads it as the clearing behaviour having been dropped.
+    /// </summary>
     [AvaloniaFact]
-    public void ClearingTheSelectionClearsTheWarning()
+    public void ClearingTheSelectionChangesNothingBecauseNoFeatureIsUnwritten()
     {
         (StrokePane pane, EditorViewModel viewModel) = Host();
         SelectedGroup(viewModel);
 
-        Assert.True(Warning(pane).IsVisible);
+        Assert.Empty(PdfExportSupport.Lossy);
+        Assert.False(Warning(pane).IsVisible);
 
         viewModel.ClearSelection();
         Settle();

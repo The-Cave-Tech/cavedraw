@@ -156,20 +156,43 @@ public static class PdfDocumentExporter
         // (each usage carries its own geometry), so the content is written first and the
         // resource dictionary - which must name every shading - is assembled afterwards.
         var shadingObjects = new PdfShadingObjects(assembler, notes ?? new List<string>());
+
+        // Form XObjects are allocated while an artboard's content is built, one helper per artboard because the
+        // `/BBox` a form is given is that artboard's page box.
+        var formObjects = new List<PdfFormObjects>();
         var contents = new byte[document.Artboards.Count][];
         for (int i = 0; i < document.Artboards.Count; i++)
         {
+            Artboard artboard = document.Artboards[i];
+            var forms = new PdfFormObjects(
+                assembler, $"0 0 {Num(artboard.Width)} {Num(artboard.Height)}");
+            formObjects.Add(forms);
+
             contents[i] = BuildArtboardContent(
                 document.Artboards[i], document, embedder, alphaStates, blendStates, imageObjects, shadingObjects,
-                notes ?? new List<string>());
+                forms, notes ?? new List<string>());
         }
 
         // One `/ExtGState` key carrying both halves. Two dictionaries under the same key would be a duplicate
         // entry, and a reader that kept the later one would lose every alpha state.
         string extGState = ExtGStateDict(alphaStates.Entries, blendStates.Entries);
 
+        // **One `/XObject` key.** A form and an image are entries of the same dictionary, so they are merged rather
+        // than each writing its own - a second key under the same name is a duplicate the reader resolves however it
+        // likes, losing the other's entries.
+        string xobjectEntries = imageObjects.Entries()
+            + string.Concat(formObjects.Select(f => f.Entries()));
+
         string resources =
-            $"/Resources << {embedder.FontDict()}{extGState}{imageObjects.Dict()}{shadingObjects.Dict()}>>";
+            $"/Resources << {embedder.FontDict()}{extGState}" +
+            (xobjectEntries.Length > 0 ? $" /XObject << {xobjectEntries}>>" : string.Empty) +
+            $"{shadingObjects.Dict()}>>";
+
+        // The forms are patched now that every resource they might name exists.
+        foreach (PdfFormObjects forms in formObjects)
+        {
+            forms.Finish(resources);
+        }
 
         // ------------------------------------------------------------------
         // Sidecar: lossless model JSON, zlib (RFC 1950) compressed — the PDF
@@ -323,6 +346,7 @@ public static class PdfDocumentExporter
         PdfBlendStates blendStates,
         PdfImageObjects? images = null,
         PdfShadingObjects? shadings = null,
+        PdfFormObjects? forms = null,
         List<string>? notes = null)
     {
         var ops = new List<string>();
@@ -345,7 +369,7 @@ public static class PdfDocumentExporter
                 foreach (LayerItem item in layer.Children)
                 {
                     PaintItem(ops, item, AffineTransform.Identity, 1.0, alphaStates, blendStates, embedder, images,
-                        shadings, document, notes);
+                        shadings, document, notes, 0, forms);
                 }
             }
         }
@@ -414,36 +438,23 @@ public static class PdfDocumentExporter
     /// an ancestor's clip is the half that giving it a frame could not reach: a second loop that re-derives the
     /// frame is a second place for it to disagree, so the walk is the only one left.
     /// </summary>
-    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfBlendStates blendStates, PdfFontEmbedder embedder, PdfImageObjects? images = null, PdfShadingObjects? shadings = null, CadDocument? document = null, List<string>? notes = null, int artDepth = 0)
+    private static void PaintItem(List<string> ops, LayerItem item, AffineTransform toDoc, double opacity, PdfAlphaStates alphaStates, PdfBlendStates blendStates, PdfFontEmbedder embedder, PdfImageObjects? images = null, PdfShadingObjects? shadings = null, CadDocument? document = null, List<string>? notes = null, int artDepth = 0, PdfFormObjects? forms = null)
     {
         if (!item.IsEffectivelyVisible())
         {
             return;
         }
 
-        // **A leaf item's blend is the graphics state's `/BM`.** PDF composites the paint with whatever is already
-        // on the group's backdrop, which is exactly what the model means by an item's blend, and CSS's
-        // `mix-blend-mode` on a leaf element is the same picture - so no isolation is needed.
+        // **A blend is the graphics state's `/BM`, whatever carries it.** PDF composites the paint with whatever is
+        // already on the backdrop, which is exactly what the model means by an item's blend, and CSS's
+        // `mix-blend-mode` on a leaf element is the same picture.
         //
-        // **A group's blend is not this**, and is deliberately not written here: CSS composites a group as a unit,
-        // which PDF expresses with an **isolated transparency group** - a form XObject with
-        // `/Group << /S /Transparency /I true /K false >>` - and this exporter emits no form XObjects. Blending
-        // each child against the backdrop instead would be a different picture, which is worse than leaving it
-        // out and saying so in `PdfExportSupport`.
-        string? blendGs = item is ArtGroup ? null : blendStates.Gs(item.BlendMode);
-
-        // **A group's blend is not a per-object `/BM`, and dropping it silently is its own defect.** A `/BM` on a
-        // group's *contents* would composite each child against the page rather than the group against the page,
-        // which is the wrong picture - so the correct treatment is an isolated transparency group, which this
-        // exporter does not write yet. Until it does, the loss is declared rather than ignored: a person who set a
-        // blend on a group is shown it on the canvas and would otherwise find it gone from the page with nothing
-        // said, which is the same silent loss #195's fix was about.
-        if (item is ArtGroup { BlendMode: not BlendMode.Normal } blendedGroup)
-        {
-            notes?.Add(
-                $"the group '{blendedGroup.Name}' has blend mode '{blendedGroup.BlendMode.ToSvgName()}', "
-                + "which the exported page does not apply");
-        }
+        // **A group is the state around a form XObject**, not around each child: CSS composites a group as a unit,
+        // which PDF expresses as an isolated transparency group - a form with
+        // `/Group << /S /Transparency /I true /K false >>`. The state is set in front of the `Do` below, so the
+        // *group* is composited with the page rather than its children being composited one by one; the group's own
+        // content is written into that form by the `ArtGroup` case in the switch.
+        string? blendGs = blendStates.Gs(item.BlendMode);
 
         // A clip is emitted around the item rather than baked into its geometry, because
         // that is what it is: the item is drawn whole and the outline limits what shows.
@@ -496,10 +507,28 @@ public static class PdfDocumentExporter
                 // Compose is defined as "apply argument first, then this", which is
                 // exactly local→parent→doc as the walk descends.
                 AffineTransform childToDoc = toDoc.Compose(group.Transform);
+
+                // **A group is written as a form XObject, so that a blend on it composites the group rather than its
+                // children.** The content is collected on its own and painted with `/FmN Do`; with no blend and no
+                // form helper there is nothing to gain, and the children stay inline so an ordinary document's bytes
+                // do not change.
+                if (group.BlendMode != BlendMode.Normal && forms is not null)
+                {
+                    var content = new List<string>();
+                    foreach (LayerItem child in group.Children)
+                    {
+                        PaintItem(content, child, childToDoc, opacity * group.Opacity, alphaStates, blendStates,
+                            embedder, images, shadings, document, notes, artDepth, forms);
+                    }
+
+                    ops.Add($"/{forms.Add(content)} Do");
+                    break;
+                }
+
                 foreach (LayerItem child in group.Children)
                 {
                     PaintItem(ops, child, childToDoc, opacity * group.Opacity, alphaStates, blendStates, embedder,
-                        images, shadings, document, notes, artDepth);
+                        images, shadings, document, notes, artDepth, forms);
                 }
 
                 break;

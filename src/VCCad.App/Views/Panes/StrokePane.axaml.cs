@@ -1071,9 +1071,11 @@ public partial class StrokePane : UserControl
 
                     break;
 
-                // **A group's blend is the one that is still not carried.** CSS composites a group as a unit
-                // against the backdrop, which PDF needs an isolated transparency group for - and that is a form
-                // XObject this exporter does not emit. The declaration is asked rather than the fact repeated here.
+                // **A group's blend is carried too now.** CSS composites a group as a unit against the backdrop, and
+                // the exporter writes that as an isolated transparency group - a form XObject whose /Group says so -
+                // so the group is listed here like the leaf cases and then filtered by the same declaration. The
+                // declaration, not this switch, is what decides whether a person is warned: with every declared
+                // feature written, `PdfExportSupport.Lossy` is empty and this warning has nothing to show.
                 case ArtGroup group when group.BlendMode != BlendMode.Normal:
                     present.Add("blendModeGroup");
                     break;

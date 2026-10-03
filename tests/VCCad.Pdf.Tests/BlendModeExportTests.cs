@@ -290,19 +290,37 @@ public class BlendModeExportTests
     }
 
     /// <summary>
-    /// **A group's blend is not written, and the file says so by not changing.** CSS composites a group as a
-    /// unit against the backdrop, which PDF expresses with an isolated transparency group - a form XObject this
-    /// exporter does not emit. Blending each child against the backdrop instead would be a different picture, so
-    /// the honest answer is to leave it out; `PdfExportSupport` declares it.
+    /// **A group's blend is written as an isolated transparency group.** CSS composites a group as a unit against the
+    /// backdrop, which PDF expresses with a form XObject whose `/Group` is `/S /Transparency /I true /K false`: the
+    /// page switches to the group's blend state and draws the *form*, so the `Do` and the `gs` are the whole
+    /// statement and the group's children are inside the form rather than scattered through the page.
+    ///
+    /// This test used to assert the opposite - that the file did not change - and was turned over when the form
+    /// XObject landed, rather than replaced.
     /// </summary>
     [Fact]
-    public void AGroupBlendModeIsNotWritten()
+    public void AGroupBlendModeIsWrittenAsAnIsolatedTransparencyGroup()
     {
         CadDocument plain = Document(Group(Rect()));
         CadDocument blended = Document(Group(Rect()));
         ((ArtGroup)blended.Artboards[0].Layers[0].Children[0]).BlendMode = BlendMode.Multiply;
 
-        Assert.Equal(Content(PdfDocumentExporter.Export(plain)), Content(PdfDocumentExporter.Export(blended)));
+        byte[] pdf = PdfDocumentExporter.Export(blended);
+        string content = Content(pdf);
+        string raw = Raw(pdf);
+
+        // The group is an isolated, non-knockout transparency group...
+        Assert.Contains("/Subtype /Form", raw, StringComparison.Ordinal);
+        Assert.Contains("/Group << /S /Transparency /I true /K false >>", raw, StringComparison.Ordinal);
+
+        // ...the page switches to the group's blend state and draws it by name...
+        Assert.Matches(@"q\s+/\w+ gs\s+/Fm1 Do\s+Q", content);
+        Assert.Contains("/BM", raw, StringComparison.Ordinal);
+
+        // ...and the children themselves are inside the form, not in the page's own operators.
+        string plainContent = Content(PdfDocumentExporter.Export(plain));
+        Assert.DoesNotContain("/Fm", plainContent, StringComparison.Ordinal);
+        Assert.NotEqual(plainContent, content);
     }
 
     private static ArtGroup Group(params LayerItem[] children)

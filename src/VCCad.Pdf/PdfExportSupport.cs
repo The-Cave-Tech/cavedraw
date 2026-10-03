@@ -52,11 +52,13 @@ public static class PdfExportSupport
             "with gs before it is drawn - a q/Q around a stroke keeps the mode off the strokes beside it in the " +
             "stack, and around a leaf item keeps it off the items painted after it."),
 
-        new Feature("blendModeGroup", false,
-            "Not written. CSS composites a group as a unit against the backdrop, which PDF expresses with an " +
-            "isolated transparency group - a form XObject with /Group << /S /Transparency /I true /K false >>. " +
-            "This exporter emits no form XObjects, and blending each child against the backdrop separately is a " +
-            "different picture rather than a cheaper one, so a group's blend is left out and named here."),
+        new Feature("blendModeGroup", true,
+            "Written. CSS composites a group as a unit against the backdrop, which PDF expresses with an isolated " +
+            "transparency group: the group's content goes into a form XObject whose /Group is " +
+            "/S /Transparency /I true /K false, and the group's blend becomes the ExtGState the page switches to " +
+            "before drawing it with Do. Isolated, so the group's contents see a transparent backdrop rather than " +
+            "the page, and non-knockout, so overlapping content inside accumulates normally - which is what makes " +
+            "the /BM composite the group rather than its children."),
     };
 
     /// <summary>The declaration for a feature, or null when this list does not know about it.</summary>
