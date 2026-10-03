@@ -90,7 +90,7 @@ public class ArabicShapingTests
 
         Assert.Equal(3, shaped.Length);
         Assert.Equal('\uFEE1', shaped[0]);   // meem, isolated: alef before it does not join forward
-        Assert.Equal('\uFEFB', shaped[1]);   // lam-alef, one code point
+        Assert.Equal('\uFEFC', shaped[1]);   // lam-alef, one code point, in its final form: seen joins it
         Assert.Equal('\uFEB3', shaped[2]);   // seen, initial: it joins the lam that follows it
         Assert.Equal(new[] { 3, 1, 0 }, clusters);
     }

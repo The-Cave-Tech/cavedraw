@@ -72,7 +72,10 @@ public static class ArabicShaping
             // face - so it has to be formed before the two letters take their own medial and final shapes.
             if (current == '\u0644' && next is { } after && IsAlef(after))
             {
-                shaped.Append(LamAlef(after));
+                // **The ligature has a final form as well as an isolated one.** Writing the isolated form after a
+                // letter that joins to it leaves the two shapes with a gap where their strokes should meet - which is
+                // what the rendered page showed - so the context picks the pair, as it does for every other letter.
+                shaped.Append(LamAlef(after, previous is { } lamPrevious && JoinsForward(lamPrevious)));
                 clusters.Add(i);
                 i++;
                 continue;
@@ -136,13 +139,20 @@ public static class ArabicShaping
 
     private static bool IsAlef(char c) => c is '\u0622' or '\u0623' or '\u0625' or '\u0627';
 
-    /// <summary>The lam-alef ligature for each alef it can follow: the pair is one code point.</summary>
-    private static char LamAlef(char alef) => alef switch
+    /// <summary>
+    /// The lam-alef ligature for each alef it can follow: the pair is one code point, and it has **two** shapes - the
+    /// isolated pair, and the final pair that joins whatever comes before it.
+    /// </summary>
+    private static char LamAlef(char alef, bool joinsPrevious) => (alef, joinsPrevious) switch
     {
-        '\u0622' => '\uFEF5',
-        '\u0623' => '\uFEF7',
-        '\u0625' => '\uFEF9',
-        _ => '\uFEFB',
+        ('\u0622', false) => '\uFEF5',
+        ('\u0622', true) => '\uFEF6',
+        ('\u0623', false) => '\uFEF7',
+        ('\u0623', true) => '\uFEF8',
+        ('\u0625', false) => '\uFEF9',
+        ('\u0625', true) => '\uFEFA',
+        (_, false) => '\uFEFB',
+        _ => '\uFEFC',
     };
 
     /// <summary>Whether a letter takes a form that joins to the letter **after** it.</summary>
