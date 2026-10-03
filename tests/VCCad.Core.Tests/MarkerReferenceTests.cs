@@ -84,4 +84,23 @@ public class MarkerReferenceTests
         Assert.Equal("b", copy.MarkerMid);
         Assert.Equal("c", copy.MarkerEnd);
     }
+
+    [Fact]
+    public void AMarkersContentIsKeptInTheDocumentsLibrary()
+    {
+        SvgImportResult result = SvgReader.Read(Document);
+
+        // The `<marker>` is a definition now, not only a registry inside the import: a picker has to be able to list
+        // the markers a document defines, and a renderer has to be able to place one. Its content is the marker's own
+        // drawing, read through the ordinary element walk.
+        ArtGroup arrow = Assert.IsType<ArtGroup>(result.Document.FindDefinition("arrow"));
+        Assert.Single(arrow.Children);
+
+        PathItem content = arrow.Children.OfType<PathItem>().Single();
+        Assert.NotEmpty(content.SubPaths);
+
+        // The definition is in the library, not on an artboard: nothing draws it as artwork of its own.
+        Assert.Contains(arrow, result.Document.Definitions.Children);
+        Assert.DoesNotContain(arrow, result.Document.Artboards[0].Layers[0].Children);
+    }
 }

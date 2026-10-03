@@ -806,12 +806,19 @@ public static class EditorOperations
                             && string.Equals(group.SourceId, definition.Name, StringComparison.Ordinal))
                         .ToArray();
 
+                    // **A definition is used by the paths that name it as a marker too** (issue #202). A marker
+                    // definition has no instances at all - a path names it through one of its three slots - so
+                    // counting only instances would report every marker as unused, which is the opposite of what a
+                    // person about to delete one needs to see.
+                    PathItem[] markers = MarkerUsers(ctx.Document, definition.Name).ToArray();
+
                     return (object)new
                     {
                         name = definition.Name,
                         childCount = definition.Children.Count,
-                        usedBy = instances.Length,
+                        usedBy = instances.Length + markers.Length,
                         instanceIds = instances.Select(instance => instance.Id).ToArray(),
+                        markerIds = markers.Select(path => path.Id).ToArray(),
                     };
                 })
                 .ToArray());
@@ -872,9 +879,14 @@ public static class EditorOperations
                 string name = p.GetString("name") ?? string.Empty;
                 ArtGroup? definition = ctx.Document.FindDefinition(name);
 
+                // The same two kinds of user as `definition.list` counts: instances that name it as their source,
+                // and paths that name it in a marker slot. A guard that disagreed with the count would refuse a
+                // deletion the panel said was safe, or allow one the panel said was not.
                 LayerItem[] users = ctx.Document.AllGroups()
                     .Where(group => InstanceResolver.IsInstance(group)
                         && string.Equals(group.SourceId, name, StringComparison.Ordinal))
+                    .Cast<LayerItem>()
+                    .Concat(MarkerUsers(ctx.Document, name))
                     .ToArray();
 
                 if (definition is not null && users.Length > 0)
@@ -10222,6 +10234,19 @@ public static class EditorOperations
 
     private static LayerItem RequireItem(CadDocument document, Guid id)
         => FindItem(document, id) ?? throw new EditorOperationException($"Item '{id}' does not exist.");
+
+    /// <summary>
+    /// The paths that name a definition in one of their three marker slots (issue #202).
+    ///
+    /// A marker definition is *used* without any instance existing: the reference is a string on the path, so this
+    /// is the usage count's other half - the one that makes `definition.list` honest for the markers the reader now
+    /// puts in the library, and the one `definition.delete` has to consult before removing one.
+    /// </summary>
+    private static IEnumerable<PathItem> MarkerUsers(CadDocument document, string name)
+        => document.AllPaths().Where(path =>
+            string.Equals(path.MarkerStart, name, StringComparison.Ordinal) ||
+            string.Equals(path.MarkerMid, name, StringComparison.Ordinal) ||
+            string.Equals(path.MarkerEnd, name, StringComparison.Ordinal));
 
     /// <summary>
     /// One marker slot as `marker.list` reports it: what it names, and whether the document defines that name

@@ -148,6 +148,11 @@ public static partial class SvgReader
         // needs the path's own tangent, so the definitions are collected here and used where a path is read.
         SvgMarkers markers = SvgMarkers.Collect(root);
 
+        // Every `<marker>` becomes a **definition in the library** once the context exists (issue #202): a marker is
+        // a reusable definition - a name, content, and attributes saying how to place it - so the model keeps it
+        // where a picker can list it and a renderer can place it, rather than in a registry that lives only as long
+        // as the import. `ReadMarkerDefinitions` below does that.
+
         // The live path effects the file defines. Collected up front rather than where `defs` is met, because the
         // reference and the definition can be in either order and a path read before its `defs` would find nothing.
         IReadOnlyDictionary<string, PathEffectDefinition> pathEffects = CollectPathEffects(root);
@@ -216,6 +221,10 @@ public static partial class SvgReader
                 sheet.DeclarationsFor(root, Array.Empty<XElement>()),
                 warning => warnings.Add(warning)),
         };
+
+        // The marker definitions, before the elements are walked: a path read before the `defs` that holds its
+        // marker is the ordinary case in a file where `defs` comes last.
+        ReadMarkerDefinitions(root, context);
 
         foreach (XElement child in root.Elements())
         {
@@ -1695,6 +1704,77 @@ public static partial class SvgReader
                 break;
         }
     }
+
+    /// <summary>
+    /// Reads every `<marker>` a document defines into the document's own library (issue #202).
+    ///
+    /// A marker is a reusable definition: a name, content, and the attributes that say how to place it. Reading it
+    /// into `CadDocument.Definitions` is what lets a picker list the markers a file has, an operation name one, and
+    /// a renderer place it - rather than the marker existing only inside the import that read it.
+    ///
+    /// The content goes through the **ordinary element walk** into a group, so a marker holding a path, a group, a
+    /// gradient or a filter is read exactly as it would be anywhere else. The attributes the model does not model
+    /// (`refX`, `refY`, `markerUnits`, `orient`, the view box) are carried as foreign attributes, which is the
+    /// model's own rule for a fact it must not lose and cannot yet express.
+    ///
+    /// The arrowheads are **still materialised** at each vertex by <see cref="PlaceMarkers"/> as well, so the
+    /// picture is unchanged; stopping that is what a renderer drawing from this definition makes possible.
+    /// </summary>
+    private static void ReadMarkerDefinitions(XElement root, Context context)
+    {
+        if (context.Layer.Document is not { } document)
+        {
+            return;
+        }
+
+        foreach (XElement marker in root.DescendantsAndSelf())
+        {
+            if (marker.Name.LocalName != "marker")
+            {
+                continue;
+            }
+
+            string id = marker.Attribute("id")?.Value ?? string.Empty;
+            if (id.Length == 0 || document.FindDefinition(id) is not null)
+            {
+                continue;
+            }
+
+            var definition = new ArtGroup { Name = id };
+            CaptureForeign(marker, definition);
+
+            var inside = new Context
+            {
+                Layer = context.Layer,
+                Group = definition,
+                Style = context.Style,
+                Counts = context.Counts,
+                Ids = context.Ids,
+                Resolving = context.Resolving,
+                Missing = context.Missing,
+                UsedPathEffects = context.UsedPathEffects,
+                Sheet = context.Sheet,
+                Gradients = context.Gradients,
+                Patterns = context.Patterns,
+                Markers = context.Markers,
+                PathEffects = context.PathEffects,
+                Warnings = context.Warnings,
+                Kept = context.Kept,
+                Viewport = context.Viewport,
+                BaseDirectory = context.BaseDirectory,
+                FontFaces = context.FontFaces,
+                Text = context.Text,
+            };
+
+            foreach (XElement child in marker.Elements())
+            {
+                ReadElement(child, inside);
+            }
+
+            document.Definitions.AddItem(definition);
+        }
+    }
+
 
     /// <summary>
     /// The arrowheads a path's marker properties place, as groups in the space the element is **written** in - the
