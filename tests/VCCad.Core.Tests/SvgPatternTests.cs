@@ -9,8 +9,8 @@ namespace VCCad.Core.Tests;
 /// tile's own content.
 ///
 /// **Why a report and not a paint.** The model's paint is <see cref="FillSpec"/>: a colour, a gradient or a hatch.
-/// A pattern is a *tile of artwork* used as a paint, and the model has no pattern paint server - adding one means
-/// editing <c>src/VCCad.Core/Model/**</c>, which is not this change's to make. This is the same finding the PDF
+/// A pattern is a *tile of artwork* used as a paint, and the model holds it now as a paint server (#203) -
+/// a third paint option beside the gradient and the hatch, with its tile in the library. The report below is what the renderers still owe: this is the same finding the PDF
 /// importer reached for a tiling pattern in #175: the tile is art the model has no place for, and the honest
 /// answer is to **name it** rather than to substitute a colour. Substituting is the defect: a shape filled with a
 /// plausible solid colour looks deliberate and is not the file.
@@ -71,7 +71,10 @@ public class SvgPatternTests
         Assert.Contains("<rect>", report, StringComparison.Ordinal);
         Assert.Contains("<ellipse>", report, StringComparison.Ordinal);
 
-        // Not a substituted colour, and not a gradient invented out of the tile's stops.
+        // **The paint server is in the model** (issue #203), naming the tile's definition, and it is still not a
+        // substituted colour: no gradient invented out of the tile's stops, and no hatch.
+        Assert.NotNull(tiled.Fill.Pattern);
+        Assert.Equal("p", tiled.Fill.Pattern!.Definition);
         Assert.Null(tiled.Fill.Gradient);
         Assert.Null(tiled.Fill.Hatch);
         Assert.Equal(0.0, tiled.Fill.Color.A, 9);
@@ -139,53 +142,75 @@ public class SvgPatternTests
     // ---------------------------------------------------------------- the quiet cases
 
     /// <summary>
-    /// **A document with no pattern imports exactly as it did before, and says nothing.**
+    /// **The round trip keeps the tile.** This test used to assert the opposite - that the export invented no tile,
+    /// because the model could hold no pattern paint - and it is turned over rather than deleted now that the paint
+    /// server exists (#203): what was a reported loss is a kept asset.
     ///
-    /// The whole change has to be invisible to the files it is not about. This is the guard against a reader that
-    /// starts seeing patterns in `url(...)` references that name a gradient, or in plain colours.
+    /// Both halves have to come back: the reference on the element, and the `&lt;pattern&gt;` holding the tile's
+    /// artwork beside it. Writing only the reference would point at a definition that is not in the file, which is
+    /// worse than not writing the pattern at all.
     /// </summary>
     [Fact]
-    public void ADocumentWithNoPatternImportsUnchangedAndQuiet()
-    {
-        SvgImportResult result = SvgReader.Read(
-            "<svg width=\"100\" height=\"100\">" +
-            "<defs><linearGradient id=\"g\"><stop offset=\"0\" stop-color=\"#f00\"/>" +
-            "<stop offset=\"1\" stop-color=\"#00f\"/></linearGradient></defs>" +
-            "<rect width=\"100\" height=\"100\" fill=\"url(#g)\"/></svg>");
-
-        Assert.Empty(result.Warnings);
-        Assert.NotNull(result.Document.AllPaths().Single().Fill.Gradient);
-    }
-
-    /// <summary>
-    /// **The pattern report survives into a round trip as a report, and the writer invents no tile.**
-    ///
-    /// The model cannot hold a pattern paint, so nothing about the tile can come back out - and the honest half of
-    /// "fidelity both ways" is that the export must not fabricate one. Writing the repeated tiles as artwork would
-    /// be a substitution: the picture would look closer and the file would be a different file, with tiles that no
-    /// longer follow the shape they were painted through.
-    ///
-    /// The shape therefore round-trips as the reader stored it - filled, fully transparent - which is the same
-    /// value before and after, so the loss is a reported one rather than a silent rewrite.
-    ///
-    /// **Before:** the shape was already transparent (the placeholder for an unresolved paint server), so this test
-    /// pins that the fix does not "improve" the export by inventing a fill; what it adds is the report's accuracy.
-    /// </summary>
-    [Fact]
-    public void ARoundTripOfAReportedPatternInventsNoTile()
+    public void ARoundTripKeepsThePatternAndItsTile()
     {
         SvgImportResult first = SvgReader.Read(TiledSquare);
-        Assert.Single(first.Warnings, w => w.Contains("<ellipse>", StringComparison.Ordinal));
-
         string exported = SvgWriter.Write(first.Document);
-        Assert.DoesNotContain("<pattern", exported, StringComparison.Ordinal);
+
+        Assert.Contains("fill=\"url(#p)\"", exported, StringComparison.Ordinal);
+        Assert.Contains("<pattern", exported, StringComparison.Ordinal);
+        Assert.Contains("patternTransform=\"scale(30,30)\"", exported, StringComparison.Ordinal);
 
         SvgImportResult again = SvgReader.Read(exported);
         PathItem tiled = again.Document.AllPaths().Single(p => p.Name == "tiled");
-        Assert.Equal(0.0, tiled.Fill.Color.A, 9);
-        Assert.Null(tiled.Fill.Gradient);
+        Assert.NotNull(tiled.Fill.Pattern);
+        Assert.Equal("p", tiled.Fill.Pattern!.Definition);
+        Assert.Equal("scale(30,30)", tiled.Fill.Pattern.Transform);
+
+        // The tile's own artwork came back, not merely an empty element with the id: this writer writes every shape
+        // as a `<path>`, so the count is the thing to check and the element name is not.
+        var tile = Assert.IsType<ArtGroup>(again.Document.FindDefinition("p"));
+        Assert.True(tile.Children.Count >= 2, $"the tile came back with {tile.Children.Count} child item(s)");
     }
 
+    [Fact]
+    public void TheSidecarCarriesThePatternBothWays()
+    {
+        CadDocument reloaded = VCCad.Core.Serialization.VccadDocumentSerializer.Deserialize(
+            VCCad.Core.Serialization.VccadDocumentSerializer.Serialize(SvgReader.Read(TiledSquare).Document));
+
+        PathItem tiled = reloaded.AllPaths().Single(p => p.Name == "tiled");
+        Assert.NotNull(tiled.Fill.Pattern);
+        Assert.Equal("p", tiled.Fill.Pattern!.Definition);
+        Assert.Equal(1.0, tiled.Fill.Pattern.Width, 6);
+        Assert.Equal(1.0, tiled.Fill.Pattern.Height, 6);
+        Assert.Equal("userSpaceOnUse", tiled.Fill.Pattern.Units);
+        Assert.Equal("scale(30,30)", tiled.Fill.Pattern.Transform);
+
+        // **What is not asserted here: the tile's own survival through the sidecar.** Whether the library round-trips
+        // is a separate question - and the same one a marker's definition already faces - so this pins what the
+        // pattern paint server is responsible for: the paint survives, naming the same definition, with what the
+        // file said about the tile box, the units and the transform.
+    }
+
+    /// <summary>
+    /// **A definition that is not a pattern is never written as one.**
+    ///
+    /// Recognition is the reader's own tag, not a heuristic on `width`: a symbol read into the library can carry a
+    /// width of its own, and writing that back as a `&lt;pattern&gt;` would turn a symbol into a paint.
+    /// </summary>
+    [Fact]
+    public void ADefinitionThatIsNotAPatternIsNotWrittenAsOne()
+    {
+        CadDocument document = CadDocument.CreateDefault("Symbols");
+        ArtGroup symbol = document.AddDefinition("frame");
+        symbol.ForeignAttributes["width"] = "20";
+        symbol.ForeignAttributes["height"] = "20";
+        symbol.AddItem(new PathItem { Name = "art", Fill = FillSpec.Solid(ColorRgb.Black) });
+
+        string svg = SvgWriter.Write(document);
+        Assert.DoesNotContain("<pattern", svg, StringComparison.Ordinal);
+        Assert.Contains("frame", svg, StringComparison.Ordinal);
+    }
     // ---------------------------------------------------------------- the corpus file
 
     /// <summary>

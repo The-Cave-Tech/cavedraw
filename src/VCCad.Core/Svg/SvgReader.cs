@@ -1807,21 +1807,6 @@ public static partial class SvgReader
                 }
             }
 
-            // A tile that states `objectBoundingBox` is refused where a clip path's units are: under those units the
-            // numbers are fractions of the painted shape's box rather than user space, and painting one as if it were
-            // user space would put a plausible tile in the wrong place - the substitution this reader declines to
-            // make. The definition is still read, so what the file said is not lost.
-            foreach (string attribute in new[] { "patternUnits", "patternContentUnits" })
-            {
-                if (pattern.Attribute(attribute)?.Value?.Trim() is { Length: > 0 } units &&
-                    units.Equals("objectBoundingBox", StringComparison.OrdinalIgnoreCase))
-                {
-                    context.Warnings.Add(
-                        $"the <pattern> '{id}' states {attribute}=\"{units}\", a coordinate system this reader does " +
-                        "not convert, so its tile's numbers are fractions of the painted shape's box and the pattern " +
-                        "is held rather than painted");
-                }
-            }
 
             var inside = new Context
             {
