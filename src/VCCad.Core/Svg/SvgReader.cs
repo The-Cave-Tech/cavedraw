@@ -1674,15 +1674,40 @@ public static partial class SvgReader
     }
 
     /// <summary>
+    /// Records which marker one of the three properties names (issue #202).
+    ///
+    /// This is the reference the model keeps: the name of the `<marker>` the file asked for, whether or not the
+    /// document defines it. It is what a marker picker reads, what an export has to write back, and what lets a
+    /// renderer place the arrowheads itself rather than drawing artwork somebody else materialised.
+    /// </summary>
+    private static void RecordMarker(PathItem shape, MarkerSlot slot, string id)
+    {
+        switch (slot)
+        {
+            case MarkerSlot.Start:
+                shape.MarkerStart = id;
+                break;
+            case MarkerSlot.Mid:
+                shape.MarkerMid = id;
+                break;
+            default:
+                shape.MarkerEnd = id;
+                break;
+        }
+    }
+
+    /// <summary>
     /// The arrowheads a path's marker properties place, as groups in the space the element is **written** in - the
     /// caller has not yet baked <paramref name="own"/> into the points, so the tangent, the vertex and the stroke
     /// width are all that space's own, and the placement carries the transform itself.
     ///
-    /// **Placed as art, and said out loud.** SVG makes a marker a stroke property: it belongs to the path and moves
-    /// with it. The model's <see cref="StrokeSpec"/> has no member for one - adding it means editing
-    /// `src/VCCad.Core/Model/**`, which is not this change's to make - so the arrowhead's content becomes an object
-    /// of its own beside the path. That is a real loss of editability, so every marker that is placed is reported,
-    /// naming the marker: the picture is right and the difference is stated rather than hidden.
+    /// **Placed as art, and the reference now recorded.** SVG makes a marker a stroke property: it belongs to the
+    /// path and moves with it. The marker each property names is recorded on the path (`PathItem.MarkerStart`,
+    /// `MarkerMid`, `MarkerEnd` - issue #202), and the arrowhead's *content* is still placed as an object of its own
+    /// beside the path, because the renderers do not yet draw from the reference. That is a real loss of editability,
+    /// so every marker that is placed is reported, naming the marker: the picture is right, the reference survives,
+    /// and what is left - drawing and exporting from the reference rather than from materialised art - is the rest of
+    /// #202.
     ///
     /// A reference this reader cannot honour - a dangling id, an id that names something else - is reported too, and
     /// no geometry is invented for it.
@@ -1717,8 +1742,16 @@ public static partial class SvgReader
                       "arrowhead is drawn"
                     : $"{Subject(element)} states {property}=\"url(#{id})\", and the document defines no <marker> " +
                       $"called '{id}', so no arrowhead is drawn");
+
+                // **The reference is recorded even when it cannot be honoured** (issue #202). A dangling marker is a
+                // fact about the file - the path asked for an id the document does not define - and a picker that
+                // showed "no marker" where the file named one would say the opposite of what the file says. The
+                // warning above is what reports that no arrowhead was drawn for it.
+                RecordMarker(shape, slot, id);
                 continue;
             }
+
+            RecordMarker(shape, slot, id);
 
             foreach (string problem in marker.Problems)
             {

@@ -401,6 +401,28 @@ public sealed class PathItem : LayerItem
     /// <summary>See <see cref="SourceFillCmyk"/>.</summary>
     public double[]? SourceStrokeCmyk { get; set; }
 
+    /// <summary>
+    /// The marker this path names for each of SVG's three marker properties, or null when the file stated none
+    /// (issue #202).
+    ///
+    /// **A marker is a property of the path, not a second object beside it.** SVG's `marker-start` / `marker-mid` /
+    /// `marker-end` name a `<marker>` definition, and a renderer places it at the corresponding vertices, turned by
+    /// the tangent there - so the arrowheads follow the path when it is edited. The reference is what makes that
+    /// possible and what a marker picker has to read and write; the name matches a definition in the document's own
+    /// library (<see cref="CadDocument.FindDefinition"/>), the same way an instance's `SourceId` does.
+    ///
+    /// Kept beside the materialised artwork rather than instead of it: the reader still places the arrowheads as
+    /// objects, so the picture is unchanged while this records *which* marker a file asked for. A renderer that
+    /// draws from the reference, and an export that writes it, are the rest of #202.
+    /// </summary>
+    public string? MarkerStart { get; set; }
+
+    /// <summary>See <see cref="MarkerStart"/>.</summary>
+    public string? MarkerMid { get; set; }
+
+    /// <summary>See <see cref="MarkerStart"/>.</summary>
+    public string? MarkerEnd { get; set; }
+
     public override LayerItem Clone()
     {
         var copy = new PathItem
@@ -416,6 +438,12 @@ public sealed class PathItem : LayerItem
             // them would export a different colour from the one it was cloned from.
             SourceFillCmyk = SourceFillCmyk is null ? null : (double[])SourceFillCmyk.Clone(),
             SourceStrokeCmyk = SourceStrokeCmyk is null ? null : (double[])SourceStrokeCmyk.Clone(),
+
+            // A marker reference is part of the path: a copy that dropped it would draw the arrowheads the file
+            // asked for and no longer be able to say which ones they were (issue #202).
+            MarkerStart = MarkerStart,
+            MarkerMid = MarkerMid,
+            MarkerEnd = MarkerEnd,
         };
 
         // The rest of the stroke stack. The initialiser above set the first stroke through the compatibility

@@ -525,7 +525,13 @@ internal sealed record PathDto(
 
     // The live path effect this path carries, when it has one, so the converted width profile the stroke holds can
     // be re-derived after the geometry changes. Absent for every ordinary path.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PathEffectDto? PathEffect = null) : ItemDto;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PathEffectDto? PathEffect = null,
+
+    // The marker each of SVG's three marker properties names (issue #202). Absent for every path that states none,
+    // which keeps a document written before markers were recorded byte-identical to one written now.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MarkerStart = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MarkerMid = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MarkerEnd = null) : ItemDto;
 
 internal sealed record GroupDto(
     Guid Id,
@@ -831,7 +837,12 @@ internal abstract record ItemDto
         // changes on the way out.
         p.Strokes.Count > 1 ? p.Strokes.Select(ToStroke).ToArray() : null,
 
-        ToPathEffect(p.PathEffect));
+        ToPathEffect(p.PathEffect),
+
+        // The marker references travel with the path (issue #202), absent when it states none.
+        p.MarkerStart,
+        p.MarkerMid,
+        p.MarkerEnd);
 
     /// <summary>
     /// A path's live effect as the sidecar carries it, or null when it has none.
@@ -1290,6 +1301,13 @@ internal static class ItemDtoExtensions
                     (effect.Parameters ?? Array.Empty<PathEffectParameterDto>())
                         .Select(parameter => new KeyValuePair<string, string>(parameter.Name, parameter.Value)))
                 : null,
+
+            // The marker references (issue #202): what the path says it uses, kept whether or not the definition is
+            // still in the library, because a dangling reference is a fact about the file and losing it silently is
+            // the failure this member exists to make visible.
+            MarkerStart = p.MarkerStart,
+            MarkerMid = p.MarkerMid,
+            MarkerEnd = p.MarkerEnd,
         };
         path.RestoreIdentity(p.Id);
 
