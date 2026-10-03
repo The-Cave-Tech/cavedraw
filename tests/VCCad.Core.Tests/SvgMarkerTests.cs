@@ -319,12 +319,14 @@ public class SvgMarkerTests
     // ---------------------------------------------------------------- the model gap is said out loud
 
     /// <summary>
-    /// **The import says the arrowhead is art rather than a stroke property.**
+    /// **The import says what it did and what is still missing.**
     ///
-    /// This is the honest half of placing a marker as geometry: the picture is right, and what a person loses is
-    /// that editing the path will leave the arrowhead behind. The model's <see cref="StrokeSpec"/> has no marker
-    /// member to hold it in, and that is a change to `src/VCCad.Core/Model/**` rather than one this reader can
-    /// make - so it is reported, naming the marker, rather than left as a silent difference.
+    /// This test used to assert that the model had *no marker member* and that the arrowhead was therefore only art.
+    /// That stopped being true in #202: the reference is recorded on the path now (`PathItem.MarkerStart`/`Mid`/`End`,
+    /// with the definition in the library), so the honest report is the half that remains - the content is **also**
+    /// placed as art beside the path, because the canvas and the PDF do not draw a marker from its definition yet.
+    /// The assertion is turned over to the new fact rather than deleted, because what it guards is that the
+    /// difference is *said* either way.
     /// </summary>
     [Fact]
     public void PlacingAMarkerAsArtIsReported()
@@ -335,7 +337,8 @@ public class SvgMarkerTests
 
         Assert.Contains(result.Warnings, w =>
             w.Contains("url(#stroke)", StringComparison.Ordinal) &&
-            w.Contains("no marker member", StringComparison.Ordinal));
+            w.Contains("reference is recorded on the path", StringComparison.Ordinal) &&
+            w.Contains("placed as art at the vertex", StringComparison.Ordinal));
     }
 
     /// <summary>

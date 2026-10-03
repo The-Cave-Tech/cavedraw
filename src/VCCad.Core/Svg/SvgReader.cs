@@ -1685,13 +1685,6 @@ public static partial class SvgReader
 
     // ------------------------------------------------------------------ `marker-start` / `-mid` / `-end`
 
-    /// <summary>Which of the three marker properties places an arrowhead at a vertex.</summary>
-    private enum MarkerSlot
-    {
-        Start,
-        Mid,
-        End,
-    }
 
     /// <summary>
     /// Records which marker one of the three properties names (issue #202).
@@ -1882,44 +1875,44 @@ public static partial class SvgReader
             }
 
             bool placedOne = false;
-            foreach (SubPath sub in shape.SubPaths)
+
+            // **The anchors come from the shared rule** (`MarkerAnchors`), not from a second copy of the vertex
+            // selection: the canvas and the exporter place markers too, and a second rule would put an arrowhead on
+            // the wrong point of a curve - which looks like a drawing mistake rather than a bug.
+            foreach (MarkerAnchor anchor in MarkerAnchors.For(shape, slot))
             {
-                foreach (int vertex in VerticesFor(sub, slot))
+                double rotation = marker.Orient switch
                 {
-                    if (Heading(sub, vertex, slot) is not { } heading)
-                    {
-                        continue;
-                    }
+                    MarkerOrient.Angle => marker.AngleDegrees * Math.PI / 180.0,
+                    MarkerOrient.AutoStartReverse when slot == MarkerSlot.Start => anchor.HeadingRadians + Math.PI,
+                    _ => anchor.HeadingRadians,
+                };
 
-                    double rotation = marker.Orient switch
-                    {
-                        MarkerOrient.Angle => marker.AngleDegrees * Math.PI / 180.0,
-                        MarkerOrient.AutoStartReverse when slot == MarkerSlot.Start => heading + Math.PI,
-                        _ => heading,
-                    };
+                ArtGroup art = ReadMarkerInstance(
+                    marker, anchor.Vertex, rotation, style.StrokeWidth, own, context);
 
-                    ArtGroup art = ReadMarkerInstance(
-                        marker, sub.Nodes[vertex].Anchor, rotation, style.StrokeWidth, own, context);
-
-                    // **Marked as the artwork a reference stands for** (issue #202). The writer has to be able to
-                    // tell this apart from art a person drew, or a document would gain a second arrowhead on every
-                    // save: the reference is written on the path, and this copy would be written beside it.
-                    //
-                    // The tag names the **slot and the marker**, never the path's id: an id is generated afresh on
-                    // every import, so a tag carrying one could never match across a round trip - which is exactly
-                    // what the corpus round trip caught.
-                    art.ForeignAttributes[SvgWriter.MarkerArtTag] = $"{slot} {id}";
-                    placed.Add(art);
-                    placedOne = true;
-                }
+                // **Marked as the artwork a reference stands for** (issue #202). The writer has to be able to
+                // tell this apart from art a person drew, or a document would gain a second arrowhead on every
+                // save: the reference is written on the path, and this copy would be written beside it.
+                //
+                // The tag names the **slot and the marker**, never the path's id: an id is generated afresh on
+                // every import, so a tag carrying one could never match across a round trip - which is exactly
+                // what the corpus round trip caught.
+                art.ForeignAttributes[SvgWriter.MarkerArtTag] = $"{slot} {id}";
+                placed.Add(art);
+                placedOne = true;
             }
 
             if (placedOne)
             {
+                // The reference **is** recorded on the path now (`PathItem.MarkerStart`/`Mid`/`End`), so what is
+                // left to say is the half that is still missing: the artwork is also placed beside the path, because
+                // the canvas and the PDF do not draw a marker from its definition yet. A renderer that does - and
+                // the materialisation that then becomes removable - is the rest of #202.
                 context.Warnings.Add(
-                    $"{Subject(element)} is decorated with {property}=\"url(#{id})\"; this model has no marker " +
-                    "member on a stroke, so the arrowhead's content is placed as art at the vertex and will not " +
-                    "follow the path if the path is edited");
+                    $"{Subject(element)} is decorated with {property}=\"url(#{id})\"; the reference is recorded on " +
+                    "the path, and the arrowhead's content is also placed as art at the vertex until every renderer " +
+                    "draws a marker from its definition");
             }
         }
 
