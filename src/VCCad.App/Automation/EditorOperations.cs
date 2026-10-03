@@ -1007,6 +1007,84 @@ public static class EditorOperations
                 return new { renamed = true, refusal = (string?)null, updatedInstances = command.UserCount };
             });
 
+        Add("marker.list",
+            "Every path in the document that names a marker, and what each of the three slots names (issue #202). " +
+            "A marker is a **property of the path** - `marker-start`/`-mid`/`-end` name a definition and a renderer " +
+            "places it at the corresponding vertices, turned by the tangent there - so this is what a marker picker " +
+            "reads and what a driver checks after `marker.set`. Each slot reports whether the document holds a " +
+            "definition by that name: a **dangling reference is reported as such rather than hidden**, because a " +
+            "file that names a marker nobody defines is a fact about the file, and it is the state the reader " +
+            "itself produces. A document whose paths name no markers reports an empty list.",
+            "",
+            (ctx, _) => ctx.Document.AllPaths()
+                .Where(path => path.MarkerStart is not null || path.MarkerMid is not null || path.MarkerEnd is not null)
+                .Select(path => (object)new
+                {
+                    itemId = path.Id,
+                    name = path.Name,
+                    start = MarkerSlotReadout(ctx.Document, path.MarkerStart),
+                    mid = MarkerSlotReadout(ctx.Document, path.MarkerMid),
+                    end = MarkerSlotReadout(ctx.Document, path.MarkerEnd),
+                })
+                .ToArray());
+
+        Add("marker.set",
+            "Set or clear the marker one of a path's three slots names (issue #202). 'slot' is start, mid or end; " +
+            "'name' is the definition to name, and passing null clears the slot, which is how a marker that was set " +
+            "is removed. Only the slot given changes, and it is **one undo step**, because a marker reference is " +
+            "part of the path: undo restores what the slot named before, including nothing. The reference is set " +
+            "whether or not the document defines that name - a dangling reference is a state the model already " +
+            "represents and the reader produces - and 'resolved' says which one this is, so a caller is told rather " +
+            "than left to assume.",
+            "slot:start|mid|end, name?:string|null, itemIds?:guid[] (default: selection)",
+            (ctx, p) =>
+            {
+                string slotName = (p.GetString("slot") ?? string.Empty).ToLowerInvariant();
+                if (slotName is not ("start" or "mid" or "end"))
+                {
+                    throw new EditorOperationException("Parameter 'slot' must be one of start, mid, end.");
+                }
+
+                SetMarkerCommand.MarkerProperty slot = slotName switch
+                {
+                    "start" => SetMarkerCommand.MarkerProperty.Start,
+                    "mid" => SetMarkerCommand.MarkerProperty.Mid,
+                    _ => SetMarkerCommand.MarkerProperty.End,
+                };
+
+                // `Given` rather than a plain read: "name was not passed" and "name was passed as null" both mean
+                // clear, but a caller that passes nothing at all should not be told it cleared something.
+                string? name = Given(p, "name") ? p.GetString("name") : null;
+
+                Guid[] ids = p.TryGetProperty("itemIds", out JsonElement idValue) && idValue.ValueKind == JsonValueKind.Array
+                    ? p.GetGuidArray("itemIds")
+                    : Array.Empty<Guid>();
+                PathItem[] paths = ids.Length > 0
+                    ? ids.Select(id => RequirePath(ctx.Document, id)).ToArray()
+                    : ctx.Session.SelectedPaths().ToArray();
+
+                if (paths.Length == 0)
+                {
+                    return new { changed = 0, refusal = "nothing is selected", slot = slotName, name, resolved = false };
+                }
+
+                foreach (PathItem path in paths)
+                {
+                    ctx.ViewModel.Execute(new SetMarkerCommand(path, slot, name));
+                }
+
+                ctx.ViewModel.NotifyDocumentChanged();
+
+                return new
+                {
+                    changed = paths.Length,
+                    refusal = (string?)null,
+                    slot = slotName,
+                    name,
+                    resolved = name is not null && ctx.Document.FindDefinition(name) is not null,
+                };
+            });
+
         Add("paint.currentColor",
             "Every paint in the document whose colour came from SVG's `currentColor`, and the colour it resolved " +
             "to. `currentColor` is not a colour: it is the `color` property in force where it is written, so the " +
@@ -10144,6 +10222,15 @@ public static class EditorOperations
 
     private static LayerItem RequireItem(CadDocument document, Guid id)
         => FindItem(document, id) ?? throw new EditorOperationException($"Item '{id}' does not exist.");
+
+    /// <summary>
+    /// One marker slot as `marker.list` reports it: what it names, and whether the document defines that name
+    /// (issue #202). Null when the slot names nothing, which is not the same fact as naming something missing.
+    /// </summary>
+    private static object? MarkerSlotReadout(CadDocument document, string? name)
+        => name is null
+            ? null
+            : new { id = name, resolved = document.FindDefinition(name) is not null };
 
     /// <summary>
     /// The container holding an item: the layer it sits on, or the group inside one (issue #135).
