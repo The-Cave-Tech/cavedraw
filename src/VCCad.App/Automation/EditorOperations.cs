@@ -787,6 +787,125 @@ public static class EditorOperations
                 })
                 .ToArray());
 
+        Add("definition.list",
+            "The document's library: every definition, what it holds, and **how many places use it** (issue #135). " +
+            "A definition is what an instance is a reference to - `use href=\"#id\"` names one, and the instance " +
+            "carries a copy of its content plus the id it came from - so a person editing one expects every instance " +
+            "to change, and the count is what makes that visible before they edit rather than after. `usedBy` counts " +
+            "the instances in this document whose SourceId is this definition's name, and `instanceIds` names them, " +
+            "because 'three places use this' and 'these three' are different questions. `childCount` is how much " +
+            "content the definition holds, so an empty definition is distinguishable from one that only looks " +
+            "unused. A document with no definitions reports an empty list, which is the honest answer for a file " +
+            "that carries none.",
+            "",
+            (ctx, _) => ctx.Document.Definitions.Children.OfType<ArtGroup>()
+                .Select(definition =>
+                {
+                    LayerItem[] instances = ctx.Document.AllGroups()
+                        .Where(group => InstanceResolver.IsInstance(group)
+                            && string.Equals(group.SourceId, definition.Name, StringComparison.Ordinal))
+                        .ToArray();
+
+                    return (object)new
+                    {
+                        name = definition.Name,
+                        childCount = definition.Children.Count,
+                        usedBy = instances.Length,
+                        instanceIds = instances.Select(instance => instance.Id).ToArray(),
+                    };
+                })
+                .ToArray());
+
+        Add("definition.place",
+            "Place an instance of a definition on the active artboard (issue #135). The instance is a clone of the " +
+            "definition's content carrying `sourceId` = the definition's name, which is what makes it an instance " +
+            "rather than a copy: `instance.refresh` follows the link, and a later edit to the definition reaches " +
+            "this placement. It is placed at (x, y) - the definition's own origin moved there - because a symbol " +
+            "placed where the definition happens to sit is a placement nobody asked for. A definition the document " +
+            "does not have is refused by name rather than placing an empty group, which would look like a symbol " +
+            "that draws nothing.",
+            "name:string, x:number, y:number",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                ArtGroup? definition = ctx.Document.FindDefinition(name);
+                if (definition is null)
+                {
+                    return new
+                    {
+                        placed = false,
+                        refusal = $"the document has no definition named '{name}'",
+                        itemId = (Guid?)null,
+                        sourceId = (string?)null,
+                    };
+                }
+
+                var instance = (ArtGroup)definition.Clone();
+                instance.SourceId = definition.Name;
+
+                double x = p.GetDouble("x");
+                double y = p.GetDouble("y");
+                (Layer layer, Vector2D offset) = ctx.Session.TargetFor(new Point2D(x, y));
+                instance.Transform = AffineTransform.CreateTranslation(x - offset.X, y - offset.Y);
+
+                ctx.Session.Execute(new AddItemCommand(layer, instance));
+                ctx.Session.SelectObject(instance);
+
+                return new
+                {
+                    placed = true,
+                    refusal = (string?)null,
+                    itemId = (Guid?)instance.Id,
+                    sourceId = instance.SourceId,
+                };
+            });
+
+        Add("definition.delete",
+            "Delete a definition from the library (issue #135). **An instance whose definition can vanish is a " +
+            "broken document**, so a definition that anything still references is refused, by name and with the " +
+            "places that use it, and the document is left exactly as it was. Deleting an unreferenced definition is " +
+            "carried out as one undo step. This is the guard the panel's delete control stands on, and it is an " +
+            "operation so a driver cannot orphan a document by a route a person does not have.",
+            "name:string",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                ArtGroup? definition = ctx.Document.FindDefinition(name);
+
+                LayerItem[] users = ctx.Document.AllGroups()
+                    .Where(group => InstanceResolver.IsInstance(group)
+                        && string.Equals(group.SourceId, name, StringComparison.Ordinal))
+                    .ToArray();
+
+                if (definition is not null && users.Length > 0)
+                {
+                    return new
+                    {
+                        deleted = false,
+                        refusal = $"definition '{name}' is still used by {users.Length} instance(s)",
+                        usedBy = users.Select(user => user.Id).ToArray(),
+                    };
+                }
+
+                if (definition is null)
+                {
+                    return new
+                    {
+                        deleted = false,
+                        refusal = $"the document has no definition named '{name}'",
+                        usedBy = Array.Empty<Guid>(),
+                    };
+                }
+
+                ctx.Session.Execute(new RemoveItemCommand(definition));
+                return new
+                {
+                    deleted = true,
+                    refusal = (string?)null,
+                    usedBy = Array.Empty<Guid>(),
+                };
+            });
+
         Add("paint.currentColor",
             "Every paint in the document whose colour came from SVG's `currentColor`, and the colour it resolved " +
             "to. `currentColor` is not a colour: it is the `color` property in force where it is written, so the " +
