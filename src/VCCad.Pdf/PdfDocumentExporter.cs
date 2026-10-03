@@ -915,7 +915,64 @@ public static class PdfDocumentExporter
             }
         }
 
-        if (fillVisible && contours.Count > 0)
+        // **A pattern is a paint** (issue #203): the tile's artwork written once per tile, through the shape's own
+        // outline as the clip - the construction a shading uses. The tile's `patternTransform` is read with the
+        // reader's own parser, so the page and the canvas cannot tile or turn a pattern differently.
+        //
+        // Nothing is invented when it cannot be drawn: a tile with no box has no repetition, and past the budget the
+        // shape is left unpainted and the reason is **noted**, because a page that silently dropped a pattern would
+        // look like a file that never had one.
+        if (fillVisible && contours.Count > 0 &&
+            path.Fill.Pattern is { UserSpaceUnits: true } pattern &&
+            document?.FindDefinition(pattern.Definition) is ArtGroup tile)
+        {
+            Rect2D box = path.BoundingBox();
+            AffineTransform content = SvgReader.Transform(pattern.Transform);
+
+            int firstColumn = (int)Math.Floor((box.X - pattern.X) / pattern.Width);
+            int lastColumn = (int)Math.Ceiling((box.Right - pattern.X) / pattern.Width);
+            int firstRow = (int)Math.Floor((box.Y - pattern.Y) / pattern.Height);
+            int lastRow = (int)Math.Ceiling((box.Bottom - pattern.Y) / pattern.Height);
+            long tiles = ((long)lastColumn - firstColumn + 1) * ((long)lastRow - firstRow + 1);
+
+            if (pattern.Width > 0 && pattern.Height > 0 && tiles <= 4096)
+            {
+                ops.Add("q");
+                if (alphaStates.HasTransparency)
+                {
+                    ops.Add($"{alphaStates.NameFor(path.Fill.Color.A * opacity)} gs");
+                }
+
+                WriteContours(ops, contours);
+                ops.Add(path.Fill.Rule == FillRule.EvenOdd ? "W* n" : "W n");
+
+                for (int row = firstRow; row <= lastRow; row++)
+                {
+                    for (int column = firstColumn; column <= lastColumn; column++)
+                    {
+                        AffineTransform placed = toDoc
+                            .Compose(AffineTransform.CreateTranslation(
+                                pattern.X + (column * pattern.Width), pattern.Y + (row * pattern.Height)))
+                            .Compose(content);
+
+                        foreach (LayerItem child in tile.Children)
+                        {
+                            PaintItem(ops, child, placed, opacity * tile.Opacity, alphaStates, blendStates, embedder,
+                                images, shadings, document, notes, artDepth + 1, null, null);
+                        }
+                    }
+                }
+
+                ops.Add("Q");
+            }
+            else if (tiles > 4096)
+            {
+                notes?.Add(
+                    $"the pattern '{pattern.Definition}' would need {tiles} tiles here, which is more than this " +
+                    "exporter will write, so the fill is left unpainted");
+            }
+        }
+        else if (fillVisible && contours.Count > 0)
         {
             if (shading is { } paint)
             {
