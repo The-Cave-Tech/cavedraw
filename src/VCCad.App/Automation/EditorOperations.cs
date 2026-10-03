@@ -13,6 +13,7 @@ using VCCad.App.ViewModels;
 using VCCad.App.Views.Panes;
 using VCCad.Core.Commands;
 using VCCad.Core.Model;
+using VCCad.Core.Svg;
 using VCCad.Core.Color;
 using VCCad.Core.Input;
 using VCCad.Core.Selection;
@@ -1075,6 +1076,35 @@ public static class EditorOperations
                     start = MarkerSlotReadout(ctx.Document, path.MarkerStart),
                     mid = MarkerSlotReadout(ctx.Document, path.MarkerMid),
                     end = MarkerSlotReadout(ctx.Document, path.MarkerEnd),
+                })
+                .ToArray());
+
+        Add("pattern.list",
+            "The patterns the document holds, which is what a pattern editor reads (issue #203). A pattern is a " +
+            "**paint** - artwork tiled across whatever it fills - so each row reports the tile box, the units and " +
+            "the `patternTransform` **as the file wrote them**, how many children the tile draws, and how many " +
+            "paths in the document are painted with it. Recognised by the reader's own tag, not by a heuristic on " +
+            "`width`, because a symbol read into the library can carry a width of its own.",
+            "",
+            (ctx, _) => ctx.Document.Definitions.Children.OfType<ArtGroup>()
+                .Where(definition => definition.ForeignAttributes.ContainsKey(SvgWriter.PatternDefinitionTag))
+                .OrderBy(definition => definition.Name, StringComparer.Ordinal)
+                .Select(definition =>
+                {
+                    PatternSpec? spec = PatternSpec.From(definition.Name, definition.ForeignAttributes);
+                    int users = ctx.Document.AllPaths()
+                        .Count(path => path.Fill.Pattern?.Definition == definition.Name);
+
+                    return (object)new
+                    {
+                        name = definition.Name,
+                        width = spec?.Width ?? 0.0,
+                        height = spec?.Height ?? 0.0,
+                        units = spec?.Units,
+                        transform = spec?.Transform,
+                        tileItems = definition.Children.Count,
+                        usedBy = users,
+                    };
                 })
                 .ToArray());
 

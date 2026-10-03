@@ -40,6 +40,7 @@ public sealed partial class SymbolsPane : UserControl
         SlotBox.Items.Add("mid");
         SlotBox.Items.Add("end");
         SlotBox.SelectedIndex = 2;
+        PatternList.SelectionChanged += (_, _) => ShowSelectedPattern();
         SetMarkerButton.Click += (_, _) => SetMarker();
         ClearMarkerButton.Click += (_, _) => ClearMarker();
     }
@@ -97,6 +98,70 @@ public sealed partial class SymbolsPane : UserControl
         JsonElement result = Invoke("marker.set", new { slot = SelectedSlot, name = (string?)null });
         Report(result, "marker cleared");
         Refresh();
+    }
+
+    /// <summary>What the patterns list is showing, in the order it shows them: a test reads the panel through it.</summary>
+    public string[] PatternNames { get; private set; } = Array.Empty<string>();
+
+    /// <summary>The pattern the preview is showing, or null while none is chosen.</summary>
+    public string? PreviewedPattern { get; private set; }
+
+    /// <summary>
+    /// Fills the pattern list from `pattern.list` and points the preview at the selected one (issue #203). The list is
+    /// the operation's own answer - the tile box, the units, the transform and how many paths use it - so the panel
+    /// and a driver read the same thing.
+    /// </summary>
+    private void RefreshPatterns()
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        JsonElement listed = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(new AutomationContext { ViewModel = _vm }, "pattern.list", default));
+
+        string? keep = PatternList.SelectedItem as string;
+        PatternList.Items.Clear();
+        var names = new List<string>();
+
+        foreach (JsonElement pattern in listed.EnumerateArray())
+        {
+            string name = pattern.GetProperty("name").GetString() ?? string.Empty;
+            names.Add(name);
+
+            int tiles = pattern.GetProperty("tileItems").GetInt32();
+            int users = pattern.GetProperty("usedBy").GetInt32();
+            PatternList.Items.Add(name);
+
+            if (name == keep)
+            {
+                PatternText.Text = $"'{name}': {tiles} item(s) in the tile, used by {users} path(s)";
+            }
+        }
+
+        PatternNames = names.ToArray();
+
+        int index = keep is null ? (names.Count > 0 ? 0 : -1) : names.IndexOf(keep);
+        PatternList.SelectedIndex = index;
+
+        if (index >= 0)
+        {
+            ShowSelectedPattern();
+        }
+        else
+        {
+            PatternText.Text = names.Count == 0 ? "no patterns in this document" : string.Empty;
+            PatternPreview.Show(_vm.Document, null);
+            PreviewedPattern = null;
+        }
+    }
+
+    /// <summary>Shows the selected pattern tiling, in the canvas's own painter.</summary>
+    private void ShowSelectedPattern()
+    {
+        PreviewedPattern = PatternList.SelectedItem as string;
+        PatternPreview.Show(_vm?.Document, PreviewedPattern);
     }
 
     /// <summary>
@@ -211,6 +276,7 @@ public sealed partial class SymbolsPane : UserControl
 
             MessageText.Text = Message;
             RefreshMarkers();
+            RefreshPatterns();
         }
         finally
         {

@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:VCCad.App.Controls"
              x:Class="VCCad.App.Views.Panes.SymbolsPane">
   <!--
     The symbol library (issue #135): the document's definitions, how many places use each one, and the controls that
@@ -49,6 +50,12 @@
         <TextBlock Grid.Column="1" Name="MarkerText" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap"/>
       </Grid>
 
+      <!-- The patterns the document holds, and one of them **tiling** (issue #203, and the pattern editor #135 asks
+           for). The preview is the canvas's own painter, so what is shown here is what the canvas would draw. -->
+      <TextBlock Text="Patterns" FontWeight="SemiBold" Margin="0,6,0,0"/>
+      <ListBox Name="PatternList" Height="70"/>
+      <controls:PatternPreview Name="PatternPreview" Height="90" HorizontalAlignment="Stretch"/>
+      <TextBlock Name="PatternText" TextWrapping="Wrap" Opacity="0.7"/>
       <!-- What the last control did, including a refusal: an instance whose definition can vanish is a broken
            document, so a refusal has to reach the person rather than being a silent no-op. -->
       <TextBlock Name="MessageText" TextWrapping="Wrap" Opacity="0.85"/>
