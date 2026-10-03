@@ -3022,7 +3022,7 @@ public static partial class SvgReader
                 Kept = context.Kept,
                 Viewport = context.Viewport,
                 BaseDirectory = external.BaseDirectory,
-                FontFaces = context.FontFaces,
+                FontFaces = external.FontFaces,
                 Text = SvgTextStyle.From(
                     external.Root,
                     useText,
@@ -3058,7 +3058,14 @@ public static partial class SvgReader
         SvgMarkers Markers,
         IReadOnlyDictionary<string, PathEffectDefinition> PathEffects,
         SvgFilters Filters,
-        string? BaseDirectory);
+        string? BaseDirectory,
+
+        // **A referenced document's own `@font-face` belongs to it** (issue #129). The faces are loaded here, from
+        // this document's stylesheet and this document's directory, because `url(...)` in a referenced file is
+        // relative to *that* file - and the element being read through `use` is that document's, so it is that
+        // document's face it means. Inheriting the referencing document's faces instead was the unverified half this
+        // closes.
+        SvgFontFaces FontFaces);
 
     /// <summary>
     /// Parses another document and collects its assets, or reports why it could not be read and returns null.
@@ -3090,7 +3097,8 @@ public static partial class SvgReader
         Index(root, ids);
 
         string? directory = System.IO.Path.GetDirectoryName(path);
-        var sheet = SvgStylesheet.Parse(CollectStyles(root), directory);
+        string css = CollectStyles(root);
+        var sheet = SvgStylesheet.Parse(css, directory);
 
         return new ExternalSvg(
             root,
@@ -3101,7 +3109,8 @@ public static partial class SvgReader
             SvgMarkers.Collect(root),
             CollectPathEffects(root),
             SvgFilters.Collect(root, sheet, context.Warn),
-            directory);
+            directory,
+            SvgFontFaces.Load(css, directory, root));
     }
 
     /// <summary>
