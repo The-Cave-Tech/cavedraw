@@ -1,0 +1,38 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="VCCad.App.Views.Panes.SymbolsPane">
+  <!--
+    The symbol library (issue #135): the document's definitions, how many places use each one, and the controls that
+    act on them. Every control runs an operation from the registry, which is what makes a symbol made here
+    reproducible by a driver - and the counts are what make "editing this changes every instance" visible before
+    somebody edits rather than after.
+  -->
+  <ScrollViewer>
+    <StackPanel Margin="6" Spacing="4">
+      <TextBlock Text="Symbols" FontWeight="SemiBold"/>
+      <TextBlock Name="EmptyHint" TextWrapping="Wrap" Opacity="0.7"
+                 Text="No definitions yet. Select artwork and choose Create from selection."/>
+
+      <ListBox Name="SymbolList" MinHeight="90" MaxHeight="220"/>
+
+      <TextBlock Name="CountText" Opacity="0.7" TextWrapping="Wrap"/>
+
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="4">
+        <TextBlock Grid.Column="0" Text="Name" VerticalAlignment="Center"/>
+        <TextBox Grid.Column="1" Name="NameBox" Watermark="a new name"/>
+      </Grid>
+
+      <Grid ColumnDefinitions="*,*,*" ColumnSpacing="4">
+        <Button Grid.Column="0" Name="CreateButton" Content="Create from selection"/>
+        <Button Grid.Column="1" Name="PlaceButton" Content="Place"/>
+        <Button Grid.Column="2" Name="RenameButton" Content="Rename"/>
+      </Grid>
+
+      <Button Name="DeleteButton" Content="Delete" HorizontalAlignment="Stretch"/>
+
+      <!-- What the last control did, including a refusal: an instance whose definition can vanish is a broken
+           document, so a refusal has to reach the person rather than being a silent no-op. -->
+      <TextBlock Name="MessageText" TextWrapping="Wrap" Opacity="0.85"/>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

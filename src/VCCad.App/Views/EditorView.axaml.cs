@@ -386,6 +386,12 @@ public partial class EditorView : UserControl
         var brushes = new BrushesPane();
         brushes.Attach(_viewModel);
 
+        // The symbol library (issue #135). Definitions are document assets, so the panel belongs beside the brush
+        // editor rather than in the inspector, and every control in it runs an operation from the registry - which is
+        // what makes a symbol made here reproducible by a driver.
+        var symbols = new SymbolsPane();
+        symbols.Attach(_viewModel);
+
         var appearance = new DockPanelModel { Id = "appearance", Title = "Appearance", Side = DockSide.Right };
         appearance.Tabs.Add(new DockTab { Id = "colors", Title = "Color", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => colors, IsOpen = true });
         appearance.Tabs.Add(new DockTab { Id = "gradient", Title = "Gradient", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => gradient });
@@ -398,6 +404,7 @@ public partial class EditorView : UserControl
         appearance.Tabs.Add(new DockTab { Id = "fonts", Title = "Fonts", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => fonts });
         appearance.Tabs.Add(new DockTab { Id = "filter", Title = "Filter", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => filter });
         appearance.Tabs.Add(new DockTab { Id = "brushes", Title = "Brushes", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => brushes });
+        appearance.Tabs.Add(new DockTab { Id = "symbols", Title = "Symbols", PanelId = "appearance", DefaultSide = DockSide.Right, ContentFactory = () => symbols });
         appearance.ActiveTabId = "colors";
 
         // The colour panel is only as tall as its contents; the Layers panel takes everything
