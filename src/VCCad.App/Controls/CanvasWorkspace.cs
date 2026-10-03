@@ -5279,7 +5279,13 @@ public sealed class CanvasWorkspace : Control
             // about the same text.
             IBrush brush = ToBrush(text.ColourOf(run), opacity);
 
-            // Placed by its baseline, never by the line's top edge.
+            // **The run's box TOP.** `RunTop` is `line.Baseline - shift - the model's ascent`, and `DrawText`
+            // anchors a top as well - but the face it shapes puts **its own** baseline below that top, and the
+            // model's ascent and the shaped face's are not the same number (0.8 em against 1.079 em for a
+            // substituted face). That difference is issue #201: the canvas draws the run
+            // `line.Baseline - modelAscent + shapedBaseline` where the page writes `line.Baseline`.
+            // The sentence that used to stand here said the opposite - "placed by its baseline, never by the line's
+            // top edge" - which is why the site read as correct.
             Point2D origin = text.Origin + offset
                 + new Vector2D(box.X, TextLayoutEngine.RunTop(run, line));
 
