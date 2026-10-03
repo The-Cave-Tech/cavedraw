@@ -92,94 +92,36 @@ internal sealed class SvgMarkers
         public IReadOnlyList<string> Problems { get; init; } = Array.Empty<string>();
 
         /// <summary>
-        /// The transform carrying the marker's own content into the user space the vertex is stated in.
-        ///
-        /// Read it outermost first: put the vertex at the origin, turn the axes along the heading, scale into the
-        /// marker's units, move the reference point onto the origin, and finally let the view box map the content
-        /// into those units.
+        /// How this marker is placed. **The arithmetic lives in <see cref="MarkerSpec"/>, not here** (issue #202):
+        /// the canvas and the exporter place markers too, and a second copy of this formula is a second chance to
+        /// disagree about which way an arrowhead points.
         /// </summary>
+        public MarkerSpec Spec => new(
+            StrokeWidthUnits,
+            MarkerWidth,
+            MarkerHeight,
+            RefX,
+            RefY,
+            Orient,
+            AngleDegrees,
+            ViewBox,
+            Aspect,
+            Clips);
+
+        /// <summary>The transform carrying the marker's own content into the user space the vertex is stated in.</summary>
         public AffineTransform Placement(Point2D vertex, double headingRadians, double strokeWidth)
-        {
-            (AffineTransform viewBox, Point2D reference) = ContentFrame();
+            => Spec.Placement(vertex, headingRadians, strokeWidth);
 
-            return AffineTransform.CreateTranslation(vertex.X, vertex.Y)
-                .Compose(AffineTransform.CreateRotation(headingRadians))
-                .Compose(AffineTransform.CreateScale(Unit(strokeWidth), Unit(strokeWidth)))
-                .Compose(AffineTransform.CreateTranslation(-reference.X, -reference.Y))
-                .Compose(viewBox);
-        }
-
-        /// <summary>
-        /// The marker's viewport - `markerWidth` by `markerHeight` in the marker's own units - as an outline in the
-        /// user space the vertex is stated in, for the implicit clip SVG's default `overflow: hidden` establishes.
-        /// </summary>
+        /// <summary>The marker's viewport as an outline, for the clip `overflow: hidden` establishes.</summary>
         public ClipSpec? ViewportClip(Point2D vertex, double headingRadians, double strokeWidth)
-        {
-            if (!Clips || MarkerWidth <= 0 || MarkerHeight <= 0)
-            {
-                return null;
-            }
+            => Spec.ViewportClip(vertex, headingRadians, strokeWidth);
 
-            AffineTransform units = AffineTransform.CreateTranslation(vertex.X, vertex.Y)
-                .Compose(AffineTransform.CreateRotation(headingRadians))
-                .Compose(AffineTransform.CreateScale(Unit(strokeWidth), Unit(strokeWidth)));
 
-            var clip = new ClipSpec { Rule = FillRule.NonZero };
-            var outline = new SubPath { IsClosed = true };
 
-            foreach ((double x, double y) in new[]
-                     {
-                         (0.0, 0.0), (MarkerWidth, 0.0), (MarkerWidth, MarkerHeight), (0.0, MarkerHeight),
-                     })
-            {
-                outline.Nodes.Add(new PathNode(units.Transform(new Point2D(x, y))));
-            }
 
-            clip.SubPaths.Add(outline);
-            return clip;
-        }
-
-        /// <summary>The scale one marker unit is worth: the stroke's width, or one for `userSpaceOnUse`.</summary>
-        private double Unit(double strokeWidth) => StrokeWidthUnits ? strokeWidth : 1.0;
-
-        /// <summary>
-        /// The transform carrying the marker's content into its viewport, together with where the reference point
-        /// ends up in that viewport.
-        ///
-        /// With no `viewBox` SVG assumes one the size of the viewport at the same origin, which is the identity - so
-        /// `refX`/`refY` are the content's own numbers.
-        /// </summary>
-        private (AffineTransform Frame, Point2D Reference) ContentFrame()
-        {
-            if (ViewBox is not { Length: 4 } box || box[2] <= 0 || box[3] <= 0 ||
-                MarkerWidth <= 0 || MarkerHeight <= 0)
-            {
-                return (AffineTransform.Identity, new Point2D(RefX, RefY));
-            }
-
-            (double scaleX, double scaleY, double offsetX, double offsetY) =
-                SvgReader.Fit(MarkerWidth, MarkerHeight, box[2], box[3], Aspect);
-
-            AffineTransform frame = AffineTransform.CreateTranslation(offsetX, offsetY)
-                .Compose(AffineTransform.CreateScale(scaleX, scaleY))
-                .Compose(AffineTransform.CreateTranslation(-box[0], -box[1]));
-
-            return (frame, frame.Transform(new Point2D(RefX, RefY)));
-        }
     }
 
-    /// <summary>How a marker's `orient` decides its rotation.</summary>
-    internal enum MarkerOrient
-    {
-        /// <summary>Along the path's tangent - SVG's `auto`.</summary>
-        Auto,
 
-        /// <summary>`auto`, except that a marker at a start vertex points the other way.</summary>
-        AutoStartReverse,
-
-        /// <summary>A fixed angle in the referencing element's user space.</summary>
-        Angle,
-    }
 
     private static MarkerDefinition Read(XElement marker, string id)
     {

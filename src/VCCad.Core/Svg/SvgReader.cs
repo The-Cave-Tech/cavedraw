@@ -1777,7 +1777,7 @@ public static partial class SvgReader
             foreach (string attribute in new[]
                      {
                          "refX", "refY", "markerWidth", "markerHeight", "markerUnits", "orient", "viewBox",
-                         "preserveAspectRatio",
+                         "preserveAspectRatio", "overflow",
                      })
             {
                 if (marker.Attribute(attribute) is { } value)
@@ -1893,8 +1893,8 @@ public static partial class SvgReader
 
                     double rotation = marker.Orient switch
                     {
-                        SvgMarkers.MarkerOrient.Angle => marker.AngleDegrees * Math.PI / 180.0,
-                        SvgMarkers.MarkerOrient.AutoStartReverse when slot == MarkerSlot.Start => heading + Math.PI,
+                        MarkerOrient.Angle => marker.AngleDegrees * Math.PI / 180.0,
+                        MarkerOrient.AutoStartReverse when slot == MarkerSlot.Start => heading + Math.PI,
                         _ => heading,
                     };
 
