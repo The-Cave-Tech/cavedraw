@@ -906,6 +906,62 @@ public static class EditorOperations
                 };
             });
 
+        Add("definition.create",
+            "Turn the selected artwork into a definition and leave an **instance** of it in the artwork's place " +
+            "(issue #135), as 'create symbol from selection' does. The definition holds a copy of what was " +
+            "selected, the originals leave the document, and what remains is a group that links to the definition - " +
+            "so a later edit to the definition reaches this placement through `instance.refresh`, which is the whole " +
+            "point of an instance rather than a copy. It is one undo step: creating the definition, moving the " +
+            "artwork into it and placing the instance are four changes that are only correct together, and " +
+            "`document.undo` puts the artwork back where it was. A selection spanning more than one container is " +
+            "refused rather than half-done, and a name already in the library is refused.",
+            "name?:string, itemIds?:guid[] (default: selection)",
+            (ctx, p) =>
+            {
+                Guid[] ids = p.TryGetProperty("itemIds", out JsonElement idValue) && idValue.ValueKind == JsonValueKind.Array
+                    ? p.GetGuidArray("itemIds")
+                    : Array.Empty<Guid>();
+                LayerItem[] items = ids.Length > 0
+                    ? ids.Select(id => RequireItem(ctx.Document, id)).ToArray()
+                    : ctx.ViewModel.SelectedObjects.ToArray();
+
+                if (items.Length == 0)
+                {
+                    return new { created = false, refusal = "nothing is selected", name = (string?)null, itemId = (Guid?)null };
+                }
+
+                IItemContainer? container = ContainerOf(ctx.Document, items[0]);
+                if (container is null || items.Any(item => !container.Children.Contains(item)))
+                {
+                    return new { created = false, refusal = "the selection spans more than one container", name = (string?)null, itemId = (Guid?)null };
+                }
+
+                string? requested = p.GetString("name");
+                string name = requested is { Length: > 0 } ? requested : UniqueDefinitionName(ctx.Document);
+                if (ctx.Document.FindDefinition(name) is not null)
+                {
+                    return new { created = false, refusal = $"the document already has a definition named '{name}'", name = (string?)null, itemId = (Guid?)null };
+                }
+
+                var command = new CreateDefinitionCommand(ctx.Document, container, items, name);
+                ctx.ViewModel.Execute(command);
+                if (command.Instance is { } instance)
+                {
+                    ctx.Session.SelectObject(instance);
+                }
+
+                ctx.ViewModel.NotifyDocumentChanged();
+
+                return new
+                {
+                    created = true,
+                    refusal = (string?)null,
+                    name,
+                    itemCount = items.Length,
+                    itemId = (Guid?)command.Instance!.Id,
+                };
+            });
+
         Add("definition.rename",
             "Rename a definition, re-pointing every instance that names it (issue #135). **A rename is not only a " +
             "rename**: an instance names its definition by the string in `sourceId`, so changing the definition and " +
@@ -10088,6 +10144,55 @@ public static class EditorOperations
 
     private static LayerItem RequireItem(CadDocument document, Guid id)
         => FindItem(document, id) ?? throw new EditorOperationException($"Item '{id}' does not exist.");
+
+    /// <summary>
+    /// The container holding an item: the layer it sits on, or the group inside one (issue #135).
+    ///
+    /// Needed by `definition.create`, which has to take the artwork out of where it is and put the instance back in
+    /// the same place. The document's own tree is searched rather than a parent pointer followed, because a parent
+    /// pointer is exactly what an item moved between containers has to keep telling the truth about - and there is
+    /// no such member to follow.
+    /// </summary>
+    private static IItemContainer? ContainerOf(CadDocument document, LayerItem item)
+    {
+        foreach (Artboard artboard in document.Artboards)
+        {
+            foreach (Layer layer in artboard.Layers)
+            {
+                if (layer.Children.Contains(item))
+                {
+                    return layer;
+                }
+            }
+        }
+
+        return document.AllGroups().FirstOrDefault(group => group.Children.Contains(item));
+    }
+
+    /// <summary>
+    /// A name no definition in the library uses: `symbol`, then `symbol2`, `symbol3`… (issue #135).
+    ///
+    /// Deterministic rather than random, because two runs of the same document should produce the same name - and
+    /// numbered from 2 rather than 1, because the first one is the unadorned name.
+    /// </summary>
+    private static string UniqueDefinitionName(CadDocument document)
+    {
+        if (document.FindDefinition("symbol") is null)
+        {
+            return "symbol";
+        }
+
+        for (int n = 2; n < 10_000; n++)
+        {
+            string candidate = $"symbol{n}";
+            if (document.FindDefinition(candidate) is null)
+            {
+                return candidate;
+            }
+        }
+
+        return $"symbol{Environment.TickCount64}";
+    }
 
     private static PathItem RequirePath(CadDocument document, Guid id)
         => FindPath(document, id) ?? throw new EditorOperationException($"Path '{id}' does not exist.");

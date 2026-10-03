@@ -165,6 +165,103 @@ public class LibraryOperationTests
     }
 
     [Fact]
+    public void CreatingADefinitionFromTheSelectionLeavesAnInstanceWhereTheArtworkWas()
+    {
+        var viewModel = new EditorViewModel();
+        CadDocument document = viewModel.Document;
+        PathItem artwork = Artwork();
+        document.Artboards[0].Layers[0].AddItem(artwork);
+
+        var context = new AutomationContext { ViewModel = viewModel };
+        context.Session.SelectObject(artwork);
+        Rect2D before = artwork.BoundingBox();
+
+        JsonElement created = Invoke(context, "definition.create", new { name = "sym" });
+        Assert.True(created.GetProperty("created").GetBoolean());
+        Assert.Equal("sym", created.GetProperty("name").GetString());
+        Assert.Equal(1, created.GetProperty("itemCount").GetInt32());
+
+        // The artwork is in the library, out of the layer, and an instance stands where it was - at the same place,
+        // which is the geometry half of "as create symbol from selection does".
+        ArtGroup definition = document.FindDefinition("sym")!;
+        Assert.NotNull(definition);
+        Assert.Single(definition.Children);
+        Assert.DoesNotContain(artwork, document.Artboards[0].Layers[0].Children);
+
+        ArtGroup instance = Assert.Single(document.AllGroups().Where(InstanceResolver.IsInstance));
+        Assert.Equal("sym", instance.SourceId);
+        Rect2D after = instance.BoundingBox();
+        Assert.Equal(before.X, after.X, 3);
+        Assert.Equal(before.Y, after.Y, 3);
+        Assert.Equal(before.Width, after.Width, 3);
+        Assert.Equal(before.Height, after.Height, 3);
+
+        // Editing the definition reaches the placement - the reason an instance is a link and not a copy.
+        // **The undo is asserted first**, because it must undo the *create*: a command run after it (the refresh
+        // below) would be the one undone, and the assertion would be about the wrong step - which it was, until
+        // this test said so.
+        Invoke(context, "document.undo");
+        Assert.Contains(artwork, document.Artboards[0].Layers[0].Children);
+        Assert.Null(document.FindDefinition("sym"));
+        Assert.Empty(document.AllGroups().Where(InstanceResolver.IsInstance));
+
+        // Redo puts the placement back, and then the edit to the definition follows through it.
+        Invoke(context, "document.redo");
+        Assert.Single(document.AllGroups().Where(InstanceResolver.IsInstance));
+        definition.AddItem(Artwork());
+        Assert.Equal(1, Invoke(context, "instance.refresh").GetProperty("refreshed").GetInt32());
+        Assert.Equal(2, Assert.Single(document.AllGroups().Where(InstanceResolver.IsInstance)).Children.Count);
+    }
+
+    [Fact]
+    public void CreatingADefinitionRefusesWhatItCannotDoHonestly()
+    {
+        AutomationContext context = Context(out _, out _);
+
+        JsonElement empty = Invoke(context, "definition.create", new { });
+        Assert.False(empty.GetProperty("created").GetBoolean());
+        Assert.Contains("nothing is selected", empty.GetProperty("refusal").GetString()!);
+    }
+
+    [Fact]
+    public void TheAutomaticDefinitionNameIsDeterministicAndSkipsWhatIsTaken()
+    {
+        var viewModel = new EditorViewModel();
+        CadDocument document = viewModel.Document;
+        PathItem first = Artwork();
+        PathItem second = Artwork();
+        document.Artboards[0].Layers[0].AddItem(first);
+        document.Artboards[0].Layers[0].AddItem(second);
+
+        var context = new AutomationContext { ViewModel = viewModel };
+        context.Session.SelectObject(first);
+        Assert.Equal("symbol", Invoke(context, "definition.create", new { }).GetProperty("name").GetString());
+
+        // The second one is numbered rather than given the same name, which is what makes the library addressable.
+        context.Session.SelectObject(second);
+        Assert.Equal("symbol2", Invoke(context, "definition.create", new { }).GetProperty("name").GetString());
+
+        // And asking for a name the library holds is refused rather than renamed or overwritten.
+        PathItem third = Artwork();
+        document.Artboards[0].Layers[0].AddItem(third);
+        context.Session.SelectObject(third);
+        JsonElement taken = Invoke(context, "definition.create", new { name = "symbol" });
+        Assert.False(taken.GetProperty("created").GetBoolean());
+        Assert.Contains("already has a definition named", taken.GetProperty("refusal").GetString()!);
+    }
+
+    private static PathItem Artwork()
+    {
+        var path = new PathItem { Name = "art", Fill = FillSpec.Solid(ColorRgb.Black) };
+        SubPath sub = path.AddSubPath(closed: true);
+        sub.Nodes.Add(new PathNode(new Point2D(10, 10)));
+        sub.Nodes.Add(new PathNode(new Point2D(30, 10)));
+        sub.Nodes.Add(new PathNode(new Point2D(30, 25)));
+        sub.Nodes.Add(new PathNode(new Point2D(10, 25)));
+        return path;
+    }
+
+    [Fact]
     public void PlacingADefinitionTheDocumentDoesNotHaveIsRefusedByName()
     {
         AutomationContext context = Context(out _, out _);
