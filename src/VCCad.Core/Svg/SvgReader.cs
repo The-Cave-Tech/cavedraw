@@ -335,6 +335,17 @@ public static partial class SvgReader
 
         foreach (XAttribute attribute in element.Attributes())
         {
+            // **Our own marker-art tag is read back** (issue #202). It has no namespace - the writer states it as a
+            // plain `data-` attribute - and it records that this artwork is the arrowhead a path's reference stands
+            // for, which the writer consults. Dropping it here would lose that on every reopen. Only this name is
+            // treated so: a file's own `data-*` attributes are not this reader's to keep, and keeping them would
+            // change what a round trip produces for files that have them.
+            if (attribute.Name.Namespace == XNamespace.None && attribute.Name.LocalName == SvgWriter.MarkerArtTag)
+            {
+                attributes[attribute.Name.LocalName] = attribute.Value;
+                continue;
+            }
+
             if (attribute.IsNamespaceDeclaration || attribute.Name.Namespace == XNamespace.None)
             {
                 continue;
@@ -1743,6 +1754,23 @@ public static partial class SvgReader
             var definition = new ArtGroup { Name = id };
             CaptureForeign(marker, definition);
 
+            // **The marker's own placement attributes, which the model has no member for.** `CaptureForeign` keeps
+            // the file's *namespaced* attributes; these live in SVG's own namespace and would otherwise be lost with
+            // the element - and losing them is not cosmetic: a written `<marker>` without its `refX`/`refY` places
+            // its content at the wrong point, and without `orient` it points the wrong way. The list is the set the
+            // specification defines for a marker, kept verbatim.
+            foreach (string attribute in new[]
+                     {
+                         "refX", "refY", "markerWidth", "markerHeight", "markerUnits", "orient", "viewBox",
+                         "preserveAspectRatio",
+                     })
+            {
+                if (marker.Attribute(attribute) is { } value)
+                {
+                    definition.ForeignAttributes[attribute] = value.Value;
+                }
+            }
+
             var inside = new Context
             {
                 Layer = context.Layer,
@@ -1855,8 +1883,18 @@ public static partial class SvgReader
                         _ => heading,
                     };
 
-                    placed.Add(ReadMarkerInstance(
-                        marker, sub.Nodes[vertex].Anchor, rotation, style.StrokeWidth, own, context));
+                    ArtGroup art = ReadMarkerInstance(
+                        marker, sub.Nodes[vertex].Anchor, rotation, style.StrokeWidth, own, context);
+
+                    // **Marked as the artwork a reference stands for** (issue #202). The writer has to be able to
+                    // tell this apart from art a person drew, or a document would gain a second arrowhead on every
+                    // save: the reference is written on the path, and this copy would be written beside it.
+                    //
+                    // The tag names the **slot and the marker**, never the path's id: an id is generated afresh on
+                    // every import, so a tag carrying one could never match across a round trip - which is exactly
+                    // what the corpus round trip caught.
+                    art.ForeignAttributes[SvgWriter.MarkerArtTag] = $"{slot} {id}";
+                    placed.Add(art);
                     placedOne = true;
                 }
             }

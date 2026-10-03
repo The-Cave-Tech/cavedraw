@@ -52,6 +52,14 @@ public sealed record SvgWriteResult(
 /// </summary>
 public static class SvgWriter
 {
+    /// <summary>
+    /// The foreign attribute the reader leaves on the artwork it materialised for a marker (issue #202): the id of
+    /// the path it decorates, the slot, and the marker's name. It is what lets the writer tell that artwork apart
+    /// from art a person drew, so a path that names a marker is written as a reference **instead of** the
+    /// materialised copy rather than as well as it.
+    /// </summary>
+    public const string MarkerArtTag = "data-vccad-marker";
+
     private static readonly XNamespace Svg = "http://www.w3.org/2000/svg";
     private static readonly XNamespace Xlink = "http://www.w3.org/1999/xlink";
 
@@ -151,6 +159,12 @@ public static class SvgWriter
             writer.WriteItems(document.Orphans.Children, orphans);
             root.Add(orphans);
         }
+
+        // **The marker definitions, after the content that names them** (issue #202). A path is written with
+        // `marker-start`/`-mid`/`-end` when it names a marker, and the definition those attributes point at is
+        // written here, from the document's own library - which is where the reader put it. Last rather than with
+        // the gradients because the names are only known once the content has been walked.
+        writer.WriteMarkerDefinitions(document);
 
         var xml = new XDocument(new XDeclaration("1.0", "UTF-8", null), root);
         return new SvgWriteResult(xml.ToString(), writer.ByElement, writer.Missing);
@@ -276,8 +290,142 @@ public static class SvgWriter
         /// carried a label**, because the name is carried by the `id` as well and inventing one for an element the
         /// file left unlabelled is a rewrite in the other direction - see the note at the bottom of the method.
         /// </summary>
+
+        /// <summary>The marker names the content named, gathered while the paths were written.</summary>
+        private readonly HashSet<string> _markersUsed = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// The document being written, so a marker reference can be checked against the library before the art it
+        /// replaced is dropped (issue #202). Set once when the write starts.
+        /// </summary>
+
+
+        /// <summary>
+        /// The `marker-start`/`-mid`/`-end` attributes a path carries (issue #202), attached to the first element
+        /// the path became.
+        ///
+        /// The first element rather than all of them: a path written as several elements - a blended stroke, a
+        /// stroke stack - is still one path, and stating the reference on each would draw the arrowheads once per
+        /// element.
+        /// </summary>
+        private void WriteMarkerAttributes(PathItem path, XElement parent, int indexBefore)
+        {
+            (string Property, string? Name)[] slots =
+            {
+                ("marker-start", path.MarkerStart),
+                ("marker-mid", path.MarkerMid),
+                ("marker-end", path.MarkerEnd),
+            };
+
+            if (slots.All(slot => slot.Name is null))
+            {
+                return;
+            }
+
+            XElement? element = parent.Elements().Skip(indexBefore).FirstOrDefault();
+            if (element is null)
+            {
+                return;
+            }
+
+            foreach ((string property, string? name) in slots)
+            {
+                if (name is not null)
+                {
+                    element.SetAttributeValue(property, $"url(#{name})");
+                    _markersUsed.Add(name);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The `<marker>` definitions the written content refers to (issue #202), from the document's own library.
+        ///
+        /// A name the library does not hold writes **no definition and no invention**: the reference is still
+        /// written, because the path really does name it, and a marker that does not exist draws nothing either
+        /// way. Its content is written with the ordinary item writer, so a marker holding a path, a group or a
+        /// gradient comes back as what it is.
+        /// </summary>
+        public void WriteMarkerDefinitions(CadDocument document)
+        {
+            if (_markersUsed.Count == 0)
+            {
+                return;
+            }
+
+            XElement? defs = _root.Element(Svg + "defs");
+            bool created = defs is null;
+            defs ??= new XElement(Svg + "defs");
+
+            foreach (string name in _markersUsed.OrderBy(value => value, StringComparer.Ordinal))
+            {
+                if (document.FindDefinition(name) is not ArtGroup definition)
+                {
+                    continue;
+                }
+
+                var marker = new XElement(Svg + "marker", new XAttribute("id", name));
+                CopyMarkerPlacement(definition, marker);
+                WriteItems(definition.Children, marker);
+
+                // **The definition is written as a marker, not as a group as well.** The definitions pass has already
+                // written the library entry as `<g id="arrow">`, and a `<g>` by that id would make
+                // `marker-end="url(#arrow)"` resolve to something that is not a marker - the reader would warn and
+                // draw nothing, which is a worse picture than the one this writer started with. Whatever already
+                // holds that id gives way to the marker.
+                foreach (XElement previous in defs.Elements()
+                    .Where(element => (string?)element.Attribute("id") == name)
+                    .ToArray())
+                {
+                    previous.Remove();
+                }
+
+                defs.Add(marker);
+                Wrote("marker");
+            }
+
+            if (created && defs.HasElements)
+            {
+                _root.Add(defs);
+            }
+        }
+
+        /// <summary>
+        /// The attributes that say how a marker is placed, carried from the definition's own foreign attributes: the
+        /// reference point, the unit and the orientation, and the view box. They are the file's own values, kept as
+        /// foreign data because the model has no member for them - writing anything else would be inventing the
+        /// placement of a marker whose placement the file already stated.
+        /// </summary>
+        private static void CopyMarkerPlacement(ArtGroup definition, XElement marker)
+        {
+            string[] known =
+            {
+                "refX", "refY", "markerWidth", "markerHeight", "markerUnits", "orient",
+                "viewBox", "preserveAspectRatio",
+            };
+
+            foreach (KeyValuePair<string, string> attribute in definition.ForeignAttributes)
+            {
+                int colon = attribute.Key.IndexOf(':');
+                string local = colon >= 0 ? attribute.Key[(colon + 1)..] : attribute.Key;
+                if (known.Contains(local, StringComparer.Ordinal))
+                {
+                    marker.SetAttributeValue(local, attribute.Value);
+                }
+            }
+        }
+
         private void ApplyForeign(XElement element, LayerItem item)
         {
+            // **Our own bookkeeping travels too** (issue #202). The artwork the reader materialised for a marker is
+            // written when the definition it stands for is not in the library - and the reader has to be able to
+            // tell it apart again, so the tag is written beside it. A round trip that lost it would change the
+            // model, which the corpus asks about; data-source is the same kind of thing for an instance.
+            if (item.ForeignAttributes.TryGetValue(MarkerArtTag, out string? markerArt))
+            {
+                element.SetAttributeValue(MarkerArtTag, markerArt);
+            }
+
             _namespaces.TryGetValue("inkscape", out string? inkscape);
             bool labelled = false;
 
@@ -906,8 +1054,46 @@ public static class SvgWriter
 
         public void WriteItems(IEnumerable<LayerItem> items, XElement parent)
         {
+            // **The artwork a replaced reference stands for is not written** (issue #202). The reader materialised
+            // each marker as art beside its path and marked it with `MarkerArtTag` - the slot and the marker it
+            // stands for; a path that still names a marker is written with `marker-*` and its definition, so writing
+            // the materialised copy as well would draw every arrowhead twice.
+            //
+            // **Only when the definition can actually be written.** A path may name a marker defined in another
+            // document - `test-use.svg` is a bare `use` of `test-use-ref.svg`, and the arrowhead travels into the
+            // model through that reference while the `<marker>` stays behind in the other file. Writing a reference
+            // the output cannot resolve, and dropping the art it replaced, loses the arrowhead: exactly the failure
+            // the corpus round trip caught. The art is kept whenever the library holds no definition by that name.
+            //
+            // The match is on the **slot and the marker**, not on a path id: an id is generated afresh on every
+            // import, so a tag carrying one could never match - which the corpus round trip caught first. Two paths
+            // naming one marker in one slot therefore share a tag, and that is right: both are written as references,
+            // so neither materialised copy belongs in the output.
+            var decorated = new HashSet<string>(StringComparer.Ordinal);
+            foreach (PathItem path in items.OfType<PathItem>())
+            {
+                AddDecorated(decorated, "Start", path.MarkerStart);
+                AddDecorated(decorated, "Mid", path.MarkerMid);
+                AddDecorated(decorated, "End", path.MarkerEnd);
+            }
+
+            void AddDecorated(HashSet<string> set, string slot, string? name)
+            {
+                if (name is not null && _document.FindDefinition(name) is not null)
+                {
+                    set.Add($"{slot} {name}");
+                }
+            }
+
             foreach (LayerItem item in items)
             {
+                if (item is ArtGroup tagged &&
+                    tagged.ForeignAttributes.TryGetValue(MarkerArtTag, out string? markerArt) &&
+                    decorated.Contains(markerArt))
+                {
+                    continue;
+                }
+
                 switch (item)
                 {
                     case ArtGroup group:
@@ -982,8 +1168,12 @@ public static class SvgWriter
                     }
 
                     case PathItem path:
+                    {
+                        int before = parent.Elements().Count();
                         WritePath(path, parent);
+                        WriteMarkerAttributes(path, parent, before);
                         break;
+                    }
 
                     case TextItem text:
                         WriteText(text, parent);
