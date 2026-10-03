@@ -54,14 +54,17 @@ public class NonLatinExportTests
         }
 
 
-        // **A script that joins is declared**, because this export cannot shape it (issue #197): the characters are
-        // drawn, and nothing says they are wrong. That is the difference a person has to be told about.
-        bool joins = text.Length > 0 && (text[0] >= '\u0590' && text[0] <= '\u07FF' ||
-            text[0] >= '\uFB50' && text[0] <= '\uFEFF');
-
-        if (joins)
+        // **A joining script is drawn in its contextual forms** (issue #197): `سلام` is four characters and three
+        // glyphs once lam-alef has formed its ligature, where picking one glyph per character gave four.
+        if (text == "\u0633\u0644\u0627\u0645")
         {
-            Assert.Contains(notes, note => note.Contains("joined forms", StringComparison.Ordinal));
+            Assert.Equal(3, show.Groups[1].Value.Length / 4);
+        }
+
+        // Arabic and Hebrew are shaped now, so the export declares nothing about them.
+        if (text.Any(c => c is >= '\u0590' and <= '\u06FF'))
+        {
+            Assert.DoesNotContain(notes, note => note.Contains("does not shape", StringComparison.Ordinal));
         }
 
         // And the export does not claim to have lost the run it just drew.
@@ -69,4 +72,17 @@ public class NonLatinExportTests
             note.Contains(text, StringComparison.Ordinal) &&
             note.Contains("could not", StringComparison.OrdinalIgnoreCase));
     }
-}
+
+    /// <summary>
+    /// **A script this export cannot shape is declared.** Arabic and Hebrew are shaped now (issue #197), so the note
+    /// that used to fire for them is gone; Syriac is drawn one character at a time and says so - the rule the
+    /// missing-glyph loss already followed.
+    /// </summary>
+    [Fact]
+    public void AScriptThisCannotShapeIsDeclared()
+    {
+        byte[] pdf = PdfDocumentExporter.Export(Document("\u0710\u0712\u0713"), out IReadOnlyList<string> notes);
+
+        Assert.NotEmpty(pdf);
+        Assert.Contains(notes, note => note.Contains("does not shape", StringComparison.Ordinal));
+    }}

@@ -81,6 +81,31 @@ public class ArabicShapingTests
     }
 
     [Fact]
+    public void TheRunIsWrittenInVisualOrderWithItsContextualForms()
+    {
+        // `سلام` read right to left is seen, lam-alef, meem - so a pen that advances left to right writes meem
+        // **first**, and seen last. Asserting the ends pins both the reversal and the form selection: an unmapped
+        // per-character run would put seen at the front, isolated.
+        (string shaped, int[] clusters) = ArabicShaping.ShapeWithClusters("سلام");
+
+        Assert.Equal(3, shaped.Length);
+        Assert.Equal('\uFEE1', shaped[0]);   // meem, isolated: alef before it does not join forward
+        Assert.Equal('\uFEFB', shaped[1]);   // lam-alef, one code point
+        Assert.Equal('\uFEB3', shaped[2]);   // seen, initial: it joins the lam that follows it
+        Assert.Equal(new[] { 3, 1, 0 }, clusters);
+    }
+
+    [Fact]
+    public void HebrewReversesWithoutJoining()
+    {
+        // Hebrew's letters keep their shapes and the run still has to run right to left: שלום comes out םולש.
+        (string shaped, int[] clusters) = ArabicShaping.ShapeWithClusters("שלום");
+
+        Assert.Equal("םולש", shaped);
+        Assert.Equal(new[] { 3, 2, 1, 0 }, clusters);
+    }
+
+    [Fact]
     public void LamAlefIsOneCodePoint()
     {
         // The mandatory ligature: two letters, one glyph.

@@ -533,14 +533,9 @@ public static class PdfDocumentExporter
     private static bool NotesShaping(string text)
         => text.Any(c => c switch
         {
-            >= '\u0590' and <= '\u05FF' => true,   // Hebrew
-            >= '\u0600' and <= '\u06FF' => true,   // Arabic
             >= '\u0700' and <= '\u074F' => true,   // Syriac
-            >= '\u0750' and <= '\u077F' => true,   // Arabic Supplement
             >= '\u0780' and <= '\u07BF' => true,   // Thaana, N'Ko
             >= '\u07C0' and <= '\u07FF' => true,   // N'Ko, Samaritan, Mandaic
-            >= '\uFB50' and <= '\uFDFF' => true,   // Arabic Presentation Forms-A
-            >= '\uFE70' and <= '\uFEFF' => true,   // Arabic Presentation Forms-B
             _ => false,
         });
 
@@ -1682,8 +1677,8 @@ public static class PdfDocumentExporter
             if (NotesShaping(run.Text))
             {
                 notes?.Add(
-                    $"the run '{run.Text}' is in a script that needs joined forms, and this export draws its " +
-                    "characters one by one in logical order, so they appear isolated and unjoined");
+                    $"the run '{run.Text}' is in a script this export does not shape - Arabic and Hebrew are shaped, " +
+                    "and anything else that joins or reorders is drawn one character at a time, in logical order");
             }
         }
         // **A vertical column cannot go through the one-text-object path.** It emits a single `Tm` for the whole
@@ -1824,6 +1819,17 @@ public static class PdfDocumentExporter
                     ? VCCad.Core.Text.TextLayoutEngine.Compute(text)
                     : VCCad.Core.Text.TextLayout.Empty;
 
+                // The run as it will be drawn, with the shaped characters mapped back to the **original** characters
+                // they came from: a joining script is written in its contextual forms (issue #197), and a ligature
+                // makes the shaped run shorter than the text. `shapedAt[i]` is the shaped character for original
+                // character `i`, or -1 when that character went into a ligature already drawn.
+                (string shaped, int[] shapedClusters) = VCCad.Core.Text.ArabicShaping.ShapeWithClusters(run.Text);
+                int[] shapedAt = new int[run.Text.Length];
+                Array.Fill(shapedAt, -1);
+                for (int s = 0; s < shapedClusters.Length; s++)
+                {
+                    shapedAt[shapedClusters[s]] = s;
+                }
                 for (int li = 0; li < displayLines.Count; li++)
                 {
                     TextWrapping.LineRange line = displayLines[li];
@@ -1839,7 +1845,17 @@ public static class PdfDocumentExporter
 
                     for (int i = from; i < to; i++)
                     {
-                        char ch = run.Text[i - charBase];
+                        // **The character walk, translated - and nothing else** (issue #197). The loop keeps iterating
+                        // the text's own indices, because the per-run matrix and colour operator are emitted around
+                        // it and replacing the walk took those with it (three suite failures said so). A shaped
+                        // character is drawn once, at the first original character it covers.
+                        int shapedIndex = shapedAt[i - charBase];
+                        if (shapedIndex < 0)
+                        {
+                            continue;
+                        }
+
+                        char ch = shaped[shapedIndex];
                         if (ch == '\n')
                         {
                             continue;
