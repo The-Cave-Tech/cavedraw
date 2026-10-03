@@ -54,15 +54,20 @@ public class NonLatinExportTests
         }
 
 
+        // **A joining script is drawn in its contextual forms** (issue #197): `سلام` is four characters and three
+        // glyphs once lam-alef has formed its ligature, where picking one glyph per character gave four. The count is
+        // the assertion because it is what "shaped" means here, and a per-character path cannot reach it.
+        if (text == "\u0633\u0644\u0627\u0645")
+        {
+            Assert.Equal(3, show.Groups[1].Value.Length / 4);
+        }
+
         // **A script that joins is declared**, because this export cannot shape it (issue #197): the characters are
         // drawn, and nothing says they are wrong. That is the difference a person has to be told about.
-        bool joins = text.Length > 0 && (text[0] >= '\u0590' && text[0] <= '\u07FF' ||
-            text[0] >= '\uFB50' && text[0] <= '\uFEFF');
-
-        if (joins)
-        {
-            Assert.Contains(notes, note => note.Contains("joined forms", StringComparison.Ordinal));
-        }
+        // **Arabic and Hebrew are shaped now**, so nothing is declared for them; a script this export still cannot
+        // shape is declared, and Syriac is one.
+        bool shaped = text.Any(c => c is >= '\u0590' and <= '\u06FF');
+        Assert.Equal(shaped, !notes.Any(note => note.Contains("does not shape", StringComparison.Ordinal)));
 
         // And the export does not claim to have lost the run it just drew.
         Assert.DoesNotContain(notes, note =>

@@ -533,14 +533,12 @@ public static class PdfDocumentExporter
     private static bool NotesShaping(string text)
         => text.Any(c => c switch
         {
-            >= '\u0590' and <= '\u05FF' => true,   // Hebrew
-            >= '\u0600' and <= '\u06FF' => true,   // Arabic
+            // **Hebrew and Arabic are absent on purpose**: they are shaped and reordered now (ArabicShaping), so a
+            // note saying otherwise would be the kind of stale claim this repository keeps correcting.
             >= '\u0700' and <= '\u074F' => true,   // Syriac
-            >= '\u0750' and <= '\u077F' => true,   // Arabic Supplement
             >= '\u0780' and <= '\u07BF' => true,   // Thaana, N'Ko
             >= '\u07C0' and <= '\u07FF' => true,   // N'Ko, Samaritan, Mandaic
-            >= '\uFB50' and <= '\uFDFF' => true,   // Arabic Presentation Forms-A
-            >= '\uFE70' and <= '\uFEFF' => true,   // Arabic Presentation Forms-B
+
             _ => false,
         });
 
@@ -1682,8 +1680,8 @@ public static class PdfDocumentExporter
             if (NotesShaping(run.Text))
             {
                 notes?.Add(
-                    $"the run '{run.Text}' is in a script that needs joined forms, and this export draws its " +
-                    "characters one by one in logical order, so they appear isolated and unjoined");
+                    $"the run '{run.Text}' is in a script this export does not shape - Arabic and Hebrew are, and " +
+                    "anything else that joins or reorders is drawn one character at a time, in logical order");
             }
         }
         // **A vertical column cannot go through the one-text-object path.** It emits a single `Tm` for the whole
@@ -1824,6 +1822,11 @@ public static class PdfDocumentExporter
                     ? VCCad.Core.Text.TextLayoutEngine.Compute(text)
                     : VCCad.Core.Text.TextLayout.Empty;
 
+                // The run as it will be drawn, with the map from each shaped character back to its source character:
+                // a joining script is written in its contextual forms (issue #197), and a ligature makes the shaped
+                // run shorter than the text.
+                (string shaped, int[] shapedClusters) = VCCad.Core.Text.ArabicShaping.ShapeWithClusters(run.Text);
+
                 for (int li = 0; li < displayLines.Count; li++)
                 {
                     TextWrapping.LineRange line = displayLines[li];
@@ -1837,9 +1840,18 @@ public static class PdfDocumentExporter
                     hex.Clear();
                     lineAdvance = 0;
 
-                    for (int i = from; i < to; i++)
+                    // **Iterate the shaped run, and let the cluster map say which line each character belongs to.**
+                    // The original indices cannot drive this loop any more: they walk the text, and the shaped run is
+                    // shorter whenever a ligature has formed - which is what the first wiring attempt got wrong.
+                    for (int si = 0; si < shaped.Length; si++)
                     {
-                        char ch = run.Text[i - charBase];
+                        int i = shapedClusters[si];
+                        if (i < from || i >= to)
+                        {
+                            continue;
+                        }
+
+                        char ch = shaped[si];
                         if (ch == '\n')
                         {
                             continue;

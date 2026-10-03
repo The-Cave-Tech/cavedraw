@@ -25,13 +25,25 @@ public static class ArabicShaping
     /// The text as the shapes its context asks for, in **visual** order - which is what a pen that advances
     /// left-to-right has to write for a script that runs right to left.
     /// </summary>
-    public static string Shape(string text)
+    public static string Shape(string text) => ShapeWithClusters(text).Text;
+
+    /// <summary>
+    /// The shaped text **and the cluster map**: for each shaped character, the index in <paramref name="text"/> of the
+    /// character it came from (issue #197).
+    ///
+    /// The map is not a convenience. A shaped run is **shorter** than its text whenever a ligature forms - `lam` +
+    /// `alef` is two characters and one glyph - while the export walks the run by character index for its display
+    /// lines, its `GlyphBox` layout and its hex string. Without the map, index 3 of a four-character run indexes a
+    /// three-character string, which is the `IndexOutOfRangeException` the first wiring attempt produced.
+    /// </summary>
+    public static (string Text, int[] Clusters) ShapeWithClusters(string text)
     {
         if (!Applies(text))
         {
-            return text;
+            return (text, Enumerable.Range(0, text.Length).ToArray());
         }
 
+        var clusters = new List<int>();
         var shaped = new StringBuilder();
         for (int i = 0; i < text.Length; i++)
         {
@@ -42,12 +54,14 @@ public static class ArabicShaping
                 // Hebrew's letters keep their shapes and reverse. Collecting the whole run and reversing at the end
                 // would reorder marks with them; Hebrew here is consonants, which is what the model carries.
                 shaped.Append(current);
+                clusters.Add(i);
                 continue;
             }
 
             if (!IsArabicLetter(current))
             {
                 shaped.Append(current);
+                clusters.Add(i);
                 continue;
             }
 
@@ -59,6 +73,7 @@ public static class ArabicShaping
             if (current == '\u0644' && next is { } after && IsAlef(after))
             {
                 shaped.Append(LamAlef(after));
+                clusters.Add(i);
                 i++;
                 continue;
             }
@@ -67,10 +82,22 @@ public static class ArabicShaping
             bool joinsNext = next is { } following && JoinsForward(current) && JoinsBackward(following);
 
             shaped.Append(Form(current, joinsPrevious, joinsNext));
+            clusters.Add(i);
         }
 
         string result = shaped.ToString();
-        return ContainsArabic(text) ? Reverse(result) : result;
+        // A run of Hebrew alone still has to be reversed: its letters keep their shapes, its order does not.
+        if (!ContainsArabic(text) && !text.Any(IsHebrewLetter))
+        {
+            return (result, clusters.ToArray());
+        }
+
+        // Reversing the run reverses the map with it, so the two stay aligned.
+        char[] visual = result.ToCharArray();
+        Array.Reverse(visual);
+        int[] order = clusters.ToArray();
+        Array.Reverse(order);
+        return (new string(visual), order);
     }
 
     /// <summary>
