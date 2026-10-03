@@ -9,6 +9,7 @@ using VCCad.App.ViewModels;
 using VCCad.Core.Text;
 using VCCad.Core.Commands;
 using VCCad.Core.Model;
+using VCCad.Core.Svg;
 using VCCad.Core.Selection;
 using ModelFillRule = VCCad.Core.Model.FillRule;
 using ModelTextAlignment = VCCad.Core.Model.TextAlignment;
@@ -4043,6 +4044,29 @@ public sealed class CanvasWorkspace : Control
 
     private void PaintLayers(DrawingContext context, Artboard artboard)
     {
+        // **Which materialised arrowheads this pass replaces** (issue #202): a slot and a marker that some path
+        // names and the library holds, because that path is drawn from the definition instead. Recomputed every
+        // pass, because a reference can be set or cleared between them.
+        _markersDrawnFromDefinitions.Clear();
+        if (_document is not null)
+        {
+            foreach (PathItem path in _document.AllPaths())
+            {
+                foreach ((MarkerSlot slot, string? name) in new[]
+                         {
+                             (MarkerSlot.Start, path.MarkerStart),
+                             (MarkerSlot.Mid, path.MarkerMid),
+                             (MarkerSlot.End, path.MarkerEnd),
+                         })
+                {
+                    if (name is not null && _document.FindDefinition(name) is not null)
+                    {
+                        _markersDrawnFromDefinitions.Add($"{slot} {name}");
+                    }
+                }
+            }
+        }
+
         foreach (Layer layer in artboard.Layers)
         {
             if (!layer.IsEffectivelyVisible)
@@ -4197,6 +4221,61 @@ public sealed class CanvasWorkspace : Control
         }
     }
 
+    /// <summary>
+    /// The `<c>slot marker</c>` keys whose materialised artwork this paint pass replaces with a placement from the
+    /// definition (issue #202). Recomputed each pass, because a reference can be set or cleared between them.
+    /// </summary>
+    private readonly HashSet<string> _markersDrawnFromDefinitions = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Draws the markers a path names, from the document's own definitions (issue #202).
+    ///
+    /// A marker is a **property of the path**: the path states where it goes (a vertex of each slot, with the
+    /// tangent there - <see cref="MarkerAnchors"/>) and the definition states how it is placed and what it draws
+    /// (<see cref="MarkerSpec"/>). Both halves are shared with the importer, which is what keeps the canvas, the
+    /// page and the SVG export showing one arrowhead rather than three opinions.
+    ///
+    /// A reference the library does not hold draws **nothing here**: its materialised artwork is still in the
+    /// document and still drawn, because skipping it would lose the arrowhead rather than move it - the same rule
+    /// the writer follows for a reference it cannot write.
+    /// </summary>
+    private void PaintMarkers(DrawingContext context, PathItem path, double opacity, AffineTransform toWorld)
+    {
+        if (_document is null || !path.IsVisible)
+        {
+            return;
+        }
+
+        double strokeWidth = path.Strokes.FirstOrDefault(stroke => stroke.HasVisibleOutline)?.Width ?? path.Stroke.Width;
+
+        foreach ((MarkerSlot slot, string? name) in new[]
+                 {
+                     (MarkerSlot.Start, path.MarkerStart),
+                     (MarkerSlot.Mid, path.MarkerMid),
+                     (MarkerSlot.End, path.MarkerEnd),
+                 })
+        {
+            if (name is null || _document.FindDefinition(name) is not ArtGroup definition)
+            {
+                continue;
+            }
+
+            MarkerSpec spec = MarkerSpec.From(definition.ForeignAttributes, _vm is null ? null : message => _vm.ReportStatus(message));
+            foreach (MarkerAnchor anchor in MarkerAnchors.For(path, slot))
+            {
+                // **The placement is pushed onto the context**, which is what actually places the artwork: the
+                // painter's group branch pushes the group's *own* transform and takes the surrounding frame from the
+                // context stack, so handing it a composed frame only moves the bounds it culls against - the first
+                // version of this drew every arrowhead at the definition's own origin.
+                using (context.PushTransform(GroupTransform(
+                    default, spec.Placement(anchor.Vertex, anchor.HeadingRadians, strokeWidth))))
+                {
+                    PaintItemDirect(context, definition, opacity, toWorld);
+                }
+            }
+        }
+    }
+
     private void PaintItemCore(DrawingContext context, LayerItem item, double opacity, AffineTransform toWorld)
     {
         // **An item that states a blend mode is composited with what is beneath it, not laid over it.** The value
@@ -4225,6 +4304,19 @@ public sealed class CanvasWorkspace : Control
     /// compositing step around it rather than anything it draws.</summary>
     private void PaintItemDirect(DrawingContext context, LayerItem item, double opacity, AffineTransform toWorld)
     {
+        // **The artwork a marker reference stands for is not drawn twice** (issue #202). The reader materialises
+        // each arrowhead beside its path and tags it with the slot and the marker it stands for; a path that names a
+        // marker whose definition the document holds is drawn from that definition below, so the materialised copy
+        // is skipped - otherwise every arrowhead would appear twice. The tag is document-scoped rather than
+        // sibling-scoped because it names a slot and a marker, not a path: whichever container the art ended up in,
+        // it is the shadow of the same reference.
+        if (item is ArtGroup tagged &&
+            tagged.ForeignAttributes.TryGetValue(SvgWriter.MarkerArtTag, out string? markerArt) &&
+            _markersDrawnFromDefinitions.Contains(markerArt))
+        {
+            return;
+        }
+
         switch (item)
         {
             case PathItem path when path.IsVisible:
@@ -4244,6 +4336,7 @@ public sealed class CanvasWorkspace : Control
                 }
 
                 PaintPath(context, path, opacity * path.Opacity, toWorld);
+                PaintMarkers(context, path, opacity * path.Opacity, toWorld);
                 break;
 
             case TextItem text when text.IsVisible:
