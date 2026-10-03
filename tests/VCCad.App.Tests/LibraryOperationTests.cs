@@ -96,6 +96,75 @@ public class LibraryOperationTests
     }
 
     [Fact]
+    public void RenamingADefinitionCarriesEveryInstanceWithItAndUndoesBothHalves()
+    {
+        AutomationContext context = Context(out CadDocument document, out ArtGroup definition);
+        Invoke(context, "definition.place", new { name = "sym", x = 0.0, y = 0.0 });
+        Invoke(context, "definition.place", new { name = "sym", x = 40.0, y = 0.0 });
+
+        JsonElement renamed = Invoke(context, "definition.rename", new { from = "sym", to = "symbol-a" });
+        Assert.True(renamed.GetProperty("renamed").GetBoolean());
+        Assert.Equal(2, renamed.GetProperty("updatedInstances").GetInt32());
+
+        // Both halves: the definition is renamed **and** the instances name the new one, which is what keeps
+        // `instance.refresh` able to follow the link.
+        Assert.Null(document.FindDefinition("sym"));
+        Assert.Same(definition, document.FindDefinition("symbol-a"));
+        ArtGroup[] instances = document.AllGroups().Where(InstanceResolver.IsInstance).ToArray();
+        Assert.Equal(2, instances.Length);
+        Assert.All(instances, instance => Assert.Equal("symbol-a", instance.SourceId));
+
+        // The library reads under the new name with the same count.
+        JsonElement entry = Assert.Single(Invoke(context, "definition.list").EnumerateArray());
+        Assert.Equal("symbol-a", entry.GetProperty("name").GetString());
+        Assert.Equal(2, entry.GetProperty("usedBy").GetInt32());
+
+        // **Undo puts the link back**, which is why the two halves are one command: an undo that renamed the
+        // definition alone would leave both instances pointing at a name that no longer exists. The rename is the
+        // last command at this point, so one undo is the rename and nothing else.
+        Invoke(context, "document.undo");
+        Assert.NotNull(document.FindDefinition("sym"));
+        Assert.Null(document.FindDefinition("symbol-a"));
+        Assert.All(
+            document.AllGroups().Where(InstanceResolver.IsInstance),
+            instance => Assert.Equal("sym", instance.SourceId));
+
+        // And redo puts both halves back, after which the refresh follows the link under the new name.
+        Invoke(context, "document.redo");
+        Assert.NotNull(document.FindDefinition("symbol-a"));
+        Assert.All(
+            document.AllGroups().Where(InstanceResolver.IsInstance),
+            instance => Assert.Equal("symbol-a", instance.SourceId));
+
+        JsonElement refreshed = Invoke(context, "instance.refresh");
+        Assert.Equal(2, refreshed.GetProperty("refreshed").GetInt32());
+        Assert.Empty(refreshed.GetProperty("notFollowed").EnumerateArray());
+    }
+
+    [Fact]
+    public void ARenameIsRefusedWhenTheNameIsTakenMissingOrUnchanged()
+    {
+        AutomationContext context = Context(out CadDocument document, out _);
+        document.AddDefinition("other");
+
+        JsonElement taken = Invoke(context, "definition.rename", new { from = "sym", to = "other" });
+        Assert.False(taken.GetProperty("renamed").GetBoolean());
+        Assert.Contains("already has a definition named", taken.GetProperty("refusal").GetString()!);
+
+        JsonElement missing = Invoke(context, "definition.rename", new { from = "nowhere", to = "x" });
+        Assert.False(missing.GetProperty("renamed").GetBoolean());
+        Assert.Contains("nowhere", missing.GetProperty("refusal").GetString()!);
+
+        JsonElement unchanged = Invoke(context, "definition.rename", new { from = "sym", to = "sym" });
+        Assert.False(unchanged.GetProperty("renamed").GetBoolean());
+        Assert.Contains("already named", unchanged.GetProperty("refusal").GetString()!);
+
+        // Nothing was renamed by any of the refused calls.
+        Assert.NotNull(document.FindDefinition("sym"));
+        Assert.NotNull(document.FindDefinition("other"));
+    }
+
+    [Fact]
     public void PlacingADefinitionTheDocumentDoesNotHaveIsRefusedByName()
     {
         AutomationContext context = Context(out _, out _);

@@ -906,6 +906,51 @@ public static class EditorOperations
                 };
             });
 
+        Add("definition.rename",
+            "Rename a definition, re-pointing every instance that names it (issue #135). **A rename is not only a " +
+            "rename**: an instance names its definition by the string in `sourceId`, so changing the definition and " +
+            "leaving the instances alone breaks every link at once - the instances keep drawing the copy they hold, " +
+            "`instance.refresh` refuses the link by name, and the document looks fine until someone refreshes it. " +
+            "So both halves happen as one undo step, which is what `renamed` and `updatedInstances` report. A name " +
+            "another definition already uses is refused, because two definitions with one name is a document " +
+            "nothing can resolve.",
+            "from:string, to:string",
+            (ctx, p) =>
+            {
+                string from = p.GetString("from") ?? string.Empty;
+                string to = p.GetString("to") ?? string.Empty;
+                ArtGroup? definition = ctx.Document.FindDefinition(from);
+
+                if (definition is null)
+                {
+                    return new { renamed = false, refusal = $"the document has no definition named '{from}'", updatedInstances = 0 };
+                }
+
+                if (to.Length == 0)
+                {
+                    return new { renamed = false, refusal = "a definition needs a name", updatedInstances = 0 };
+                }
+
+                if (string.Equals(from, to, StringComparison.Ordinal))
+                {
+                    // Asked before the "already taken" check, because the same name is trivially taken by this very
+                    // definition - and "already has a definition named 'sym'" for a rename to 'sym' sends the
+                    // caller looking for a second definition that does not exist.
+                    return new { renamed = false, refusal = $"the definition is already named '{to}'", updatedInstances = 0 };
+                }
+
+                if (ctx.Document.FindDefinition(to) is not null)
+                {
+                    return new { renamed = false, refusal = $"the document already has a definition named '{to}'", updatedInstances = 0 };
+                }
+
+                var command = new RenameDefinitionCommand(ctx.Document, definition, to);
+                ctx.ViewModel.Execute(command);
+                ctx.ViewModel.NotifyDocumentChanged();
+
+                return new { renamed = true, refusal = (string?)null, updatedInstances = command.UserCount };
+            });
+
         Add("paint.currentColor",
             "Every paint in the document whose colour came from SVG's `currentColor`, and the colour it resolved " +
             "to. `currentColor` is not a colour: it is the `color` property in force where it is written, so the " +
