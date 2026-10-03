@@ -30,6 +30,14 @@ public interface ISvgGlyphFont
     int AdvanceFor(int glyphId);
 
     /// <summary>
+    /// The glyph a whole **sequence** names - a ligature, `unicode="fi"` - or 0 when the source has none.
+    ///
+    /// Asked before the first character's own glyph: a ligature is one drawing for several characters, and a caller
+    /// that only ever asks for one code point cannot find it.
+    /// </summary>
+    int GlyphForSequence(string sequence);
+
+    /// <summary>
     /// The shapes that draw a glyph, in font units. Anything the source cannot draw is reported through
     /// <paramref name="warn"/> rather than dropped.
     /// </summary>

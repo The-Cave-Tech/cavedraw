@@ -216,6 +216,12 @@ public sealed class SvgFontProgramme : ISvgGlyphFont
     public int GlyphFor(int codePoint) => _cmap.TryGetValue(codePoint, out int gid) ? gid : 0;
 
     /// <summary>
+    /// An OpenType programme's ligatures live in its GSUB table, which this reader does not parse - so it
+    /// answers 0 for every sequence, which is the honest answer rather than a guess at the first character's glyph.
+    /// </summary>
+    public int GlyphForSequence(string sequence) => 0;
+
+    /// <summary>
     /// The `SVG ` table: a header, then one record per glyph range naming an offset and length into the same table.
     /// A record's document may be gzipped on its own, which is why the inflation is per record rather than per file.
     /// </summary>

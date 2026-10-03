@@ -45,6 +45,16 @@ internal static class SvgGlyphText
         int placed = 0;
         int missing = 0;
 
+        // Where each run begins in the flattened text, so a ligature can be looked for **inside one run**: a
+        // sequence that ran across two runs would be a drawing the file never asked for.
+        var runStart = new int[text.Runs.Count];
+        for (int i = 1; i < text.Runs.Count; i++)
+        {
+            runStart[i] = runStart[i - 1] + text.Runs[i - 1].Text.Length;
+        }
+
+        int coveredUntil = -1;
+
         foreach (GlyphBox glyph in layout.Glyphs)
         {
             TextRun run = text.Runs[glyph.Run];
@@ -55,14 +65,40 @@ internal static class SvgGlyphText
                 continue;
             }
 
-            int id = font.GlyphFor(flat[glyph.Index]);
+            if (glyph.Index < coveredUntil)
+            {
+                // Already drawn: this character is part of a ligature placed at an earlier one.
+                continue;
+            }
+
+            // **A ligature is one drawing for several characters**, so the sequence is asked for before the
+            // character is, and the characters it covers are skipped rather than drawn on top of it. Longest first,
+            // because a font may name both `f`+`i` and a longer run beginning with them.
+            int id = 0;
+            int span = 1;
+            int available = Math.Min(4, (runStart[glyph.Run] + run.Text.Length) - glyph.Index);
+            for (int length = available; length >= 2; length--)
+            {
+                int sequence = font.GlyphForSequence(flat.Substring(glyph.Index, length));
+                if (sequence != 0)
+                {
+                    id = sequence;
+                    span = length;
+                    break;
+                }
+            }
+
+            id = id != 0 ? id : font.GlyphFor(flat[glyph.Index]);
             if (id == 0)
             {
                 // A character the supplied face has no glyph for: reported, because a missing glyph is invisible on
-                // the page and looks deliberate.
+                // the page and looks deliberate. A font that declares a `<missing-glyph>` answers with it instead,
+                // so this counts only characters it truly has no drawing for.
                 missing++;
                 continue;
             }
+
+            coveredUntil = glyph.Index + span;
 
             double penX = text.Origin.X + glyph.X;
 
