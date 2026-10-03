@@ -1731,7 +1731,7 @@ public static partial class SvgReader
     /// The arrowheads are **still materialised** at each vertex by <see cref="PlaceMarkers"/> as well, so the
     /// picture is unchanged; stopping that is what a renderer drawing from this definition makes possible.
     /// </summary>
-    private static void ReadMarkerDefinitions(XElement root, Context context)
+    private static void ReadMarkerDefinitions(XElement root, Context context, string? source = null)
     {
         if (context.Layer.Document is not { } document)
         {
@@ -1746,8 +1746,23 @@ public static partial class SvgReader
             }
 
             string id = marker.Attribute("id")?.Value ?? string.Empty;
-            if (id.Length == 0 || document.FindDefinition(id) is not null)
+            if (id.Length == 0)
             {
+                continue;
+            }
+
+            if (document.FindDefinition(id) is not null)
+            {
+                // A referenced document defining a name this one already holds is a collision: the ids come from
+                // two files and both mean their own marker. The library keeps the first and the second is **named**,
+                // because a silent choice between two markers is a picture nobody can explain.
+                if (source is not null)
+                {
+                    context.Warnings.Add(
+                        $"'{source}' defines a marker called '{id}', and the document already has a definition by " +
+                        "that name, so the one already in the library is kept");
+                }
+
                 continue;
             }
 
@@ -3133,6 +3148,13 @@ public static partial class SvgReader
 
         var ids = new Dictionary<string, XElement>(StringComparer.Ordinal);
         Index(root, ids);
+
+        // **A referenced document's markers join the library too** (issue #202). Its gradient, its pattern and its
+        // filter are used through the `use` that named it; a marker is the same kind of asset, and leaving it behind
+        // is why a reference could not be written for `test-use.svg` - the arrowhead travelled into the model while
+        // the `<marker>` stayed in the file that defined it. A name this document already holds is left alone and
+        // **reported**, because two documents with one marker name is a collision nothing can resolve silently.
+        ReadMarkerDefinitions(root, context, href);
 
         string? directory = System.IO.Path.GetDirectoryName(path);
         string css = CollectStyles(root);
