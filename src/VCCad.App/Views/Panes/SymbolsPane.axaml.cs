@@ -4,6 +4,7 @@ using Avalonia.Interactivity;
 using Avalonia.Threading;
 using VCCad.App.Automation;
 using VCCad.App.ViewModels;
+using VCCad.Core.Model;
 
 namespace VCCad.App.Views.Panes;
 
@@ -32,6 +33,95 @@ public sealed partial class SymbolsPane : UserControl
         PlaceButton.Click += (_, _) => Place();
         RenameButton.Click += (_, _) => Rename();
         DeleteButton.Click += (_, _) => Delete();
+
+        // The marker picker (issue #135): the three slots, the markers the library holds, and the two actions.
+        SlotBox.Items.Add("start");
+        SlotBox.Items.Add("mid");
+        SlotBox.Items.Add("end");
+        SlotBox.SelectedIndex = 2;
+        SetMarkerButton.Click += (_, _) => SetMarker();
+        ClearMarkerButton.Click += (_, _) => ClearMarker();
+    }
+
+    /// <summary>The slot the picker is pointed at: `start`, `mid` or `end`.</summary>
+    public string SelectedSlot => SlotBox.SelectedItem as string ?? "end";
+
+    /// <summary>The marker the picker offers, or null when nothing is chosen.</summary>
+    public string? SelectedMarker => MarkerBox.SelectedItem as string;
+
+    /// <summary>What the picker is showing about the selected path's markers.</summary>
+    public string MarkerSummary { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// Sets the marker the selected path names in the chosen slot, through `marker.set` - the operation a driver
+    /// uses. Both the canvas and the page draw from the definition, so this is a change a person can *see* rather
+    /// than one that only moves a model field.
+    /// </summary>
+    public void SetMarker()
+    {
+        if (SelectedMarker is not { Length: > 0 } name)
+        {
+            Message = "no marker definition to set";
+            Refresh();
+            return;
+        }
+
+        JsonElement result = Invoke("marker.set", new { slot = SelectedSlot, name });
+        Report(result, "marker set");
+        Refresh();
+    }
+
+    /// <summary>Clears the chosen slot, which is how a marker that was set is removed.</summary>
+    public void ClearMarker()
+    {
+        JsonElement result = Invoke("marker.set", new { slot = SelectedSlot, name = (string?)null });
+        Report(result, "marker cleared");
+        Refresh();
+    }
+
+    /// <summary>
+    /// Fills the picker's two lists and its readout from `marker.definitions` and `marker.list`: what the document
+    /// can offer, and what the selected path currently names.
+    /// </summary>
+    private void RefreshMarkers()
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        var context = new AutomationContext { ViewModel = _vm };
+
+        JsonElement definitions = JsonSerializer.SerializeToElement(
+            EditorOperations.Invoke(context, "marker.definitions", default));
+
+        string? keep = SelectedMarker;
+        MarkerBox.Items.Clear();
+        foreach (JsonElement definition in definitions.EnumerateArray())
+        {
+            MarkerBox.Items.Add(definition.GetProperty("name").GetString() ?? string.Empty);
+        }
+
+        MarkerBox.SelectedIndex = keep is null ? -1 : MarkerBox.Items.IndexOf(keep);
+
+        // **The readout comes from the selection itself**, not from `marker.list`: that operation reports the paths
+        // that *name* a marker, so a path with none - exactly the one a person is about to give a marker to - would
+        // read as "no path selected", which is the opposite of what is on screen.
+        PathItem? selected = _vm.SelectedObjects.OfType<PathItem>().FirstOrDefault();
+
+        if (selected is null)
+        {
+            MarkerSummary = MarkerBox.Items.Count == 0
+                ? "no marker definitions in this document"
+                : "select a path to give it a marker";
+        }
+        else
+        {
+            MarkerSummary =
+                $"start {selected.MarkerStart ?? "-"}, mid {selected.MarkerMid ?? "-"}, end {selected.MarkerEnd ?? "-"}";
+        }
+
+        MarkerText.Text = MarkerSummary;
     }
 
     /// <summary>The definition the list has selected, or null while it holds none.</summary>
@@ -100,6 +190,7 @@ public sealed partial class SymbolsPane : UserControl
             }
 
             MessageText.Text = Message;
+            RefreshMarkers();
         }
         finally
         {

@@ -30,6 +30,20 @@
 
       <Button Name="DeleteButton" Content="Delete" HorizontalAlignment="Stretch"/>
 
+      <!-- The marker picker (issues #202 and #135): the three slots SVG gives a path, the markers the document's
+           library holds, and what the selected path currently names. Every control runs an operation, and both the
+           canvas and the page draw from the definition - so a change here is one a person can see. -->
+      <TextBlock Text="Markers" FontWeight="SemiBold" Margin="0,6,0,0"/>
+      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="4">
+        <ComboBox Grid.Column="0" Name="SlotBox" Width="80"/>
+        <ComboBox Grid.Column="1" Name="MarkerBox" HorizontalAlignment="Stretch"/>
+        <Button Grid.Column="2" Name="SetMarkerButton" Content="Set"/>
+      </Grid>
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="4">
+        <Button Grid.Column="0" Name="ClearMarkerButton" Content="Clear slot"/>
+        <TextBlock Grid.Column="1" Name="MarkerText" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap"/>
+      </Grid>
+
       <!-- What the last control did, including a refusal: an instance whose definition can vanish is a broken
            document, so a refusal has to reach the person rather than being a silent no-op. -->
       <TextBlock Name="MessageText" TextWrapping="Wrap" Opacity="0.85"/>

@@ -51,6 +51,46 @@ public class SymbolsPaneTests
     }
 
     [AvaloniaFact]
+    public void TheMarkerPickerSetsAndClearsAReferenceThroughTheOperation()
+    {
+        (SymbolsPane pane, EditorViewModel viewModel) = Host();
+
+        // A marker definition and a path to give it to.
+        ArtGroup definition = viewModel.Document.AddDefinition("arrow");
+        definition.ForeignAttributes["markerWidth"] = "10";
+        definition.ForeignAttributes["markerHeight"] = "10";
+        definition.ForeignAttributes["refX"] = "5";
+        definition.ForeignAttributes["refY"] = "5";
+
+        var line = new PathItem { Name = "line", Stroke = StrokeSpec.Hairline(ColorRgb.Black) };
+        SubPath sub = line.AddSubPath(closed: false);
+        sub.Nodes.Add(new PathNode(new Point2D(20, 50)));
+        sub.Nodes.Add(new PathNode(new Point2D(120, 50)));
+        viewModel.Document.Artboards[0].Layers[0].AddItem(line);
+
+        viewModel.SelectRange(new[] { line }, additive: false);
+        Settle();
+        pane.Refresh();
+
+        // The picker offers the definition because it carries a marker's placement attributes, and its readout says
+        // what the selected path currently names.
+        Assert.Contains("arrow", pane.FindControl<ComboBox>("MarkerBox")!.Items.Cast<string>());
+        Assert.Contains("end -", pane.MarkerSummary);
+
+        pane.FindControl<ComboBox>("SlotBox")!.SelectedItem = "end";
+        pane.FindControl<ComboBox>("MarkerBox")!.SelectedItem = "arrow";
+        Click(pane, "SetMarkerButton");
+
+        // The model changed **through the operation**, and the readout the person sees agrees with it.
+        Assert.Equal("arrow", line.MarkerEnd);
+        Assert.Contains("end arrow", pane.MarkerSummary);
+
+        Click(pane, "ClearMarkerButton");
+        Assert.Null(line.MarkerEnd);
+        Assert.Contains("end -", pane.MarkerSummary);
+    }
+
+    [AvaloniaFact]
     public void TheCreateControlMakesADefinitionAndLeavesAnInstance()
     {
         (SymbolsPane pane, EditorViewModel viewModel) = Host();

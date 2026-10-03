@@ -1040,6 +1040,26 @@ public static class EditorOperations
                 })
                 .ToArray());
 
+        Add("marker.definitions",
+            "The markers the document's library holds, which is what a picker offers (issue #202). A marker definition " +
+            "is recognised by the placement attributes it carries - `markerWidth`, or a `refX`/`refY` - because a " +
+            "definition named `arrow` that carries none is not a marker any renderer could place. Read by the " +
+            "operation rather than guessed from the name, for the same reason `definition.list` reports counts rather " +
+            "than titles: a picker offering something the model cannot draw is worse than one offering nothing.",
+            "",
+            (ctx, _) => ctx.Document.Definitions.Children.OfType<ArtGroup>()
+                .Where(definition => definition.ForeignAttributes.ContainsKey("markerWidth") ||
+                    definition.ForeignAttributes.ContainsKey("refX"))
+                .Select(definition => (object)new
+                {
+                    name = definition.Name,
+                    childCount = definition.Children.Count,
+                    refX = definition.ForeignAttributes.TryGetValue("refX", out string? x) ? x : null,
+                    refY = definition.ForeignAttributes.TryGetValue("refY", out string? y) ? y : null,
+                    units = definition.ForeignAttributes.TryGetValue("markerUnits", out string? units) ? units : null,
+                })
+                .ToArray());
+
         Add("marker.set",
             "Set or clear the marker one of a path's three slots names (issue #202). 'slot' is start, mid or end; " +
             "'name' is the definition to name, and passing null clears the slot, which is how a marker that was set " +
