@@ -33,6 +33,7 @@ public sealed partial class SymbolsPane : UserControl
         PlaceButton.Click += (_, _) => Place();
         RenameButton.Click += (_, _) => Rename();
         DeleteButton.Click += (_, _) => Delete();
+        RedefineButton.Click += (_, _) => Redefine();
 
         // The marker picker (issue #135): the three slots, the markers the library holds, and the two actions.
         SlotBox.Items.Add("start");
@@ -57,6 +58,25 @@ public sealed partial class SymbolsPane : UserControl
     /// uses. Both the canvas and the page draw from the definition, so this is a change a person can *see* rather
     /// than one that only moves a model field.
     /// </summary>
+    /// <summary>
+    /// Takes the current selection into the definition named in the list (issues #135 and #202), through
+    /// `definition.redefine` - the operation a driver uses. This is the only way a definition's geometry is edited:
+    /// a definition lives in the library, which is not on an artboard, so nothing can be selected and drawn into it.
+    /// </summary>
+    public void Redefine()
+    {
+        if (SelectedDefinition is not { Length: > 0 } name)
+        {
+            Message = "select a definition to redefine";
+            Refresh();
+            return;
+        }
+
+        JsonElement result = Invoke("definition.redefine", new { name });
+        Report(result, "definition redefined");
+        Refresh();
+    }
+
     public void SetMarker()
     {
         if (SelectedMarker is not { Length: > 0 } name)

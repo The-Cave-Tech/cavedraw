@@ -974,6 +974,44 @@ public static class EditorOperations
                 };
             });
 
+        Add("definition.redefine",
+            "Replace a definition's content with artwork from the canvas (issues #135 and #202), which is how a " +
+            "definition's geometry is edited: a definition lives in the document's library, which is not on an " +
+            "artboard, so nothing can be selected and drawn into it - edit a copy where you can see it and take the " +
+            "result into the definition, as Illustrator's redefine does. The **instances do not move**: each holds " +
+            "its own placement, and its content follows on `instance.refresh`, which is what 'an instance is a " +
+            "reference, not a copy' means. The selection is left where it is, because the artwork a person drew is " +
+            "theirs and redefining must not silently consume it. One undo step, restoring the previous content.",
+            "name:string, itemIds?:guid[] (default: selection)",
+            (ctx, p) =>
+            {
+                string name = p.GetString("name") ?? string.Empty;
+                ArtGroup? definition = ctx.Document.FindDefinition(name);
+                if (definition is null)
+                {
+                    return new { redefined = false, refusal = $"the document has no definition named '{name}'", childCount = 0 };
+                }
+
+                Guid[] ids = p.TryGetProperty("itemIds", out JsonElement idValue) && idValue.ValueKind == JsonValueKind.Array
+                    ? p.GetGuidArray("itemIds")
+                    : Array.Empty<Guid>();
+                LayerItem[] items = ids.Length > 0
+                    ? ids.Select(id => RequireItem(ctx.Document, id)).ToArray()
+                    : ctx.ViewModel.SelectedObjects.ToArray();
+
+                if (items.Length == 0)
+                {
+                    return new { redefined = false, refusal = "nothing is selected", childCount = 0 };
+                }
+
+
+                var command = new RedefineDefinitionCommand(definition, items);
+                ctx.ViewModel.Execute(command);
+                ctx.ViewModel.NotifyDocumentChanged();
+
+                return new { redefined = true, refusal = (string?)null, childCount = command.ChildCount };
+            });
+
         Add("definition.rename",
             "Rename a definition, re-pointing every instance that names it (issue #135). **A rename is not only a " +
             "rename**: an instance names its definition by the string in `sourceId`, so changing the definition and " +

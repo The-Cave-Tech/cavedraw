@@ -30,6 +30,11 @@
 
       <Button Name="DeleteButton" Content="Delete" HorizontalAlignment="Stretch"/>
 
+      <!-- Redefine takes the selection into the chosen definition (issues #135 and #202): a definition has no
+           canvas of its own, so this is how its geometry is edited - draw a copy where you can see it, then take
+           it in. The instances follow on the refresh. -->
+      <Button Name="RedefineButton" Content="Redefine from selection" HorizontalAlignment="Stretch"/>
+
       <!-- The marker picker (issues #202 and #135): the three slots SVG gives a path, the markers the document's
            library holds, and what the selected path currently names. Every control runs an operation, and both the
            canvas and the page draw from the definition - so a change here is one a person can see. -->
