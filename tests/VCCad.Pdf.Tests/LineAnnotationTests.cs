@@ -93,20 +93,44 @@ public class LineAnnotationTests
     }
 
     /// <summary>
-    /// **The gap, pinned.** The annotation states two open arrowheads; nothing in the document names them. When this
-    /// starts failing, the annotation is being read - turn the assertions over.
+    /// **The annotation's arrowheads are read into the model** (issue #202). This was the sentinel that pinned the
+    /// gap - "no marker slots, no arrowhead in the library" - and it is turned over now that the annotation is read:
+    /// the line carries both slots, each naming a definition the library holds, whose geometry is this reader's
+    /// rendering of the style the file named.
     /// </summary>
     [Fact]
-    public void TheAnnotationsArrowheadsAreNotReadYet()
+    public void ALineAnnotationsArrowheadsBecomeMarkers()
     {
         CadDocument document = PdfImporter.Import(Pdf());
 
-        Assert.DoesNotContain(
-            document.AllPaths(),
-            path => path.MarkerStart is not null || path.MarkerEnd is not null);
+        PathItem line = document.AllPaths().Single(path => path.Name == "annotation");
+        Assert.Equal("pdf-openarrow", line.MarkerStart);
+        Assert.Equal("pdf-openarrow", line.MarkerEnd);
 
-        Assert.DoesNotContain(
-            document.Definitions.Children.OfType<ArtGroup>(),
-            definition => definition.Name.Contains("Arrow", StringComparison.OrdinalIgnoreCase));
+        // Both ends are the file's own points, converted out of PDF's y-up space.
+        SubPath sub = Assert.Single(line.SubPaths);
+        Assert.Equal(20.0, sub.Nodes[0].Anchor.X, 6);
+        Assert.Equal(160.0, sub.Nodes[0].Anchor.Y, 6);
+        Assert.Equal(280.0, sub.Nodes[1].Anchor.X, 6);
+        Assert.Equal(40.0, sub.Nodes[1].Anchor.Y, 6);
+
+        var arrow = Assert.IsType<ArtGroup>(document.FindDefinition("pdf-openarrow"));
+        Assert.Equal("OpenArrow", arrow.ForeignAttributes["data-pdf-line-ending"]);
+        Assert.Equal("6", arrow.ForeignAttributes["refX"]);
+        Assert.NotEmpty(arrow.Children);
+    }
+
+    /// <summary>An empty ending draws nothing, which is what the specification says `/None` is.</summary>
+    [Fact]
+    public void AnEmptyLineEndingLeavesTheSlotUnset()
+    {
+        string text = System.Text.Encoding.Latin1.GetString(Pdf())
+            .Replace("/LE [/OpenArrow /OpenArrow]", "/LE [/None /None]");
+
+        PathItem line = PdfImporter.Import(System.Text.Encoding.Latin1.GetBytes(text))
+            .AllPaths().Single(path => path.Name == "annotation");
+
+        Assert.Null(line.MarkerStart);
+        Assert.Null(line.MarkerEnd);
     }
 }

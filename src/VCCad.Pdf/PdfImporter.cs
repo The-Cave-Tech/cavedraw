@@ -337,6 +337,16 @@ public static class PdfImporter
                 LayerFor(imported.Layer).AddItem(imported.Item);
             }
 
+            // **The page's own arrowheads** (issue #202): a PDF states a marker as a line ending on an annotation,
+            // which is the same fact SVG states as `marker-start`/`marker-end`. Read into the same slots and the same
+            // library, so every renderer draws it with the code that already exists.
+            foreach (PathItem annotation in PdfLineAnnotations.Read(file, page, h))
+            {
+                annotation.MarkerStart = PdfLineAnnotations.DefinitionFor(document, annotation.MarkerStart);
+                annotation.MarkerEnd = PdfLineAnnotations.DefinitionFor(document, annotation.MarkerEnd);
+                LayerFor(null).AddItem(annotation);
+            }
+
             if (layers.Count == 0)
             {
                 // A page whose content asked for no layer at all still needs one to hold it.
