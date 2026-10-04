@@ -175,7 +175,12 @@ function Run-Scene {
             Check 'select-all inside the text replaces the whole string' ((TextOf $id) -eq 'In a hole in the ground there lived a hobbit') 'the sentence' "'$(TextOf $id)'"
 
             Keys 'End'; Keys 'Back'; Keys 'Back'
-            Check 'two backspaces remove two characters' ((TextOf $id) -eq 'In a hole in the ground there lived a hob') '...hob' "'$(TextOf $id)'"
+            # **Two Backs from a 44-character string give 42, not 43.** 'In a hole in the ground there lived a
+            # hobbit' is 44 characters; this check expected '...hob' (43) for two presses, which is one removal.
+            # Measured four ways on the built binary - immediately, after 600 ms, after 1800 ms, through
+            # text.update and through ui.dump - every readback says 42 and 'In a hole in the ground there lived
+            # a hobb'. The expectation was wrong; the editor removed exactly two characters.
+            Check 'two backspaces remove two characters' ((TextOf $id) -eq 'In a hole in the ground there lived a hobb') '...hobb' "'$(TextOf $id)'"
 
             Keys 'Home'; Keys 'Enter'
             $nl = TextOf $id
