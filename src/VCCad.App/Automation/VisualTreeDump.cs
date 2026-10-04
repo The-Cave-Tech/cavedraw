@@ -256,7 +256,7 @@ public static class VisualTreeDump
             sb.Append(pad).Append(item switch
             {
                 PathItem p => $"path \"{item.Name}\" subpaths={p.SubPaths.Count} nodes={p.SubPaths.Sum(s => s.Nodes.Count)}",
-                TextItem t => $"text \"{item.Name}\" \"{Compact(t.PlainText)}\" fontSize={t.MaxFontSize:F1}",
+                TextItem t => $"text \"{item.Name}\" \"{t.PlainText.Replace("\\", "\\\\").Replace("\r", "\\r").Replace("\n", "\\n").Replace("\"", "\\\"")}\" fontSize={t.MaxFontSize:F1}",
                 ArtGroup => $"group \"{item.Name}\"",
                 _ => item.GetType().Name,
             });
