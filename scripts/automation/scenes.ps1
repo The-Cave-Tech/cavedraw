@@ -292,7 +292,7 @@ function Run-Scene {
         12 {
             New-Scene 'adding a layer'
             DrawRect 80 80 200 140 | Out-Null
-            $before = ((DocText) -split "`r?`n" | Where-Object { $_ -match '^LAYER' }).Count
+            $before = (LayerCount)
             $add = Find-ByText 'Add layer'
             if (-not $add) { $add = Find-Control 'AddLayerButton' }
             if ($add) {
@@ -303,7 +303,7 @@ function Run-Scene {
                 $clicked = Invoke-Op 'ui.click' @{ type = 'Button'; text = 'Add layer' }
                 Start-Sleep -Milliseconds 350
             } else { Record-Failure 'the layers pane offers Add layer' 'a control to add a layer' 'not found' }
-            $after = ((DocText) -split "`r?`n" | Where-Object { $_ -match '^LAYER' }).Count
+            $after = (LayerCount)
             Check 'the layers pane can add a layer' ($after -gt $before) "$($before + 1) layers" "$after layers"
         }
 

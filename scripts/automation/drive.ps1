@@ -204,6 +204,20 @@ function Tool {
 
 function DocText { return ((Invoke-Op 'ui.dump' @{ scope = 'document' }).result.text) }
 
+# How many layers the document reports. **The dump at scope document does not carry the LAYER rows**, so a
+# count of them there reads 0 on both sides of a change and a check can never see the change happen. layer.list
+# is the operation built for the question; it answers per artboard, so this sums rather than assuming one.
+function LayerCount {
+    $r = (Invoke-Op 'layer.list' @{}).result
+    if ($null -eq $r) { return 0 }
+    if ($r -is [System.Array]) {
+        $n = 0
+        foreach ($a in $r) { $n += @($a.layers).Count }
+        return $n
+    }
+    return @($r.layers).Count
+}
+
 function Items {
     $out = New-Object System.Collections.ArrayList
     foreach ($line in ((DocText) -split "`r?`n")) {
