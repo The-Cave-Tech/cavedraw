@@ -17,7 +17,7 @@ param([string]$Only = '', [string]$ReportPath = 'artifacts\auto\report-h.json')
 
 # How many scenes this file currently defines. Bumped as batches are added, so the runner can never report a
 # scene as passing when it has no case at all.
-$SceneCount = 10
+$SceneCount = 20
 
 # A shape's outline always selects it: clear, click the top edge, expect exactly it.
 function VerifyOutlineSelect {
@@ -255,6 +255,197 @@ function Run-Scene {
                 Check 'releasing a compound path gives the pieces back' ($back -eq 2) '2 items' "$back items"
                 Check 'releasing a compound path answers' ($rel.ok -ne $false) 'a result' "$($rel.error)"
             } else { Record-Failure 'the compound path can be released' 'one object' "$n items" }
+        }
+
+        # ---------------------------------------------------------------- filters
+
+        11 {
+            New-Scene 'a blurred rectangle'
+            $r = New-Obj 'rectangle' @{ x = 140; y = 140; width = 260; height = 180; fillColor = @(200, 60, 60) } 'blur-rect'
+            SelectIds @($r.itemId)
+            $c = Invoke-Op 'filter.create' @{ name = 'soft'; primitives = @(@{ kind = 'gaussianBlur'; radius = 8.0 }) }
+            Check 'a filter can be created' ($c.ok -ne $false) 'a result' "$($c.error)"
+            Check 'the filter holds one primitive' ($c.result.primitives -eq 1) '1 primitive' "$($c.result.primitives)"
+            $a = Invoke-Op 'filter.apply' @{ name = 'soft' }
+            Check 'the filter is applied to one item' ($a.result.items -eq 1) '1 item' "$($a.result.items)"
+            $f = (Invoke-Op 'filter.list' @{}).result
+            Check 'the document reports the filter' ($f.name -eq 'soft') 'soft' "$($f.name)"
+            Check 'its step is a gaussian blur' (@($f.primitives)[0].kind -eq 'GaussianBlur') 'GaussianBlur' "$(@($f.primitives)[0].kind)"
+            Check 'the radius is the one that was asked for' ([Math]::Abs(@($f.primitives)[0].radius - 8) -lt 0.01) 'radius 8' "$(@($f.primitives)[0].radius)"
+        }
+
+        12 {
+            New-Scene 'a drop shadow built from three steps'
+            $r = New-Obj 'rectangle' @{ x = 160; y = 160; width = 220; height = 150; fillColor = @(240, 240, 240) } 'shadow-rect'
+            SelectIds @($r.itemId)
+            $c = Invoke-Op 'filter.create' @{ name = 'shadow'; primitives = @(
+                @{ kind = 'offset'; dx = 12.0; dy = 12.0; result = 'off' },
+                @{ kind = 'flood'; floodColor = @(0, 0, 0); floodOpacity = 0.5; result = 'col' },
+                @{ kind = 'composite'; in = 'col'; in2 = 'off'; operator = 'in'; result = 'shadow' }
+            ) }
+            Check 'a three-step filter can be created' ($c.result.primitives -eq 3) '3 primitives' "$($c.result.primitives)"
+            Invoke-Op 'filter.apply' @{ name = 'shadow' } | Out-Null
+            Start-Sleep -Milliseconds 200
+            $f = (Invoke-Op 'filter.list' @{}).result
+            $kinds = @($f.primitives | ForEach-Object { $_.kind }) -join ','
+            Check 'the chain is kept in order' ($kinds -eq 'Offset,Flood,Composite') 'Offset,Flood,Composite' $kinds
+            Check 'the offset carries its distance' (@($f.primitives)[0].dx -eq 12) 'dx 12' "$(@($f.primitives)[0].dx)"
+        }
+
+        13 {
+            New-Scene 'a colour matrix desaturates'
+            $r = New-Obj 'rectangle' @{ x = 150; y = 150; width = 240; height = 170; fillColor = @(220, 40, 40) } 'cm-rect'
+            SelectIds @($r.itemId)
+            $c = Invoke-Op 'filter.create' @{ name = 'grey'; primitives = @(@{ kind = 'colorMatrix'; type = 'saturate'; values = @(0.0) }) }
+            Check 'a colour matrix filter can be created' ($c.ok -ne $false) 'a result' "$($c.error)"
+            Invoke-Op 'filter.apply' @{ name = 'grey' } | Out-Null
+            Start-Sleep -Milliseconds 200
+            $f = (Invoke-Op 'filter.list' @{}).result
+            Check 'the step is a colour matrix' (@($f.primitives)[0].kind -eq 'ColorMatrix') 'ColorMatrix' "$(@($f.primitives)[0].kind)"
+        }
+
+        14 {
+            New-Scene 'changing a turbulence seed'
+            $r = New-Obj 'rectangle' @{ x = 150; y = 150; width = 240; height = 170; fillColor = @(80, 120, 200) } 'tb-rect'
+            SelectIds @($r.itemId)
+            Invoke-Op 'filter.create' @{ name = 'grain'; primitives = @(@{ kind = 'turbulence'; baseFrequency = 0.05; numOctaves = 3; seed = 1.0 }) } | Out-Null
+            Invoke-Op 'filter.apply' @{ name = 'grain' } | Out-Null
+            Start-Sleep -Milliseconds 200
+            $before = ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
+            Check 'the turbulence step is in the document' ($before -match 'Turbulence') 'a turbulence step' 'not found'
+            Check 'it holds the seed it was created with' ($before -match '"Seed":1') 'Seed 1' 'no seed of 1'
+            $set = Invoke-Op 'filter.setPrimitiveParameter' @{ name = 'grain'; index = 0; parameter = 'seed'; value = 7.0 }
+            Check 'setting a parameter answers' ($set.ok -ne $false) 'a result' "$($set.error)"
+            Start-Sleep -Milliseconds 200
+            $after = ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
+            Check 'the seed is the one that was set' ($after -match '"Seed":7') 'Seed 7' 'unchanged'
+            # **Read through the model, not through filter.list.** filter.list reports radius, dx, dy,
+            # floodOpacity, op and mode whatever the kind is, so a turbulence's baseFrequency, numOctaves and
+            # seed are settable and unreadable through the registry - filed as #241. This scene verifies the
+            # change where it is stored, and the check below pins what filter.list does report.
+            $listed = ((Invoke-Op 'filter.list' @{}).result | ConvertTo-Json -Depth 8 -Compress)
+            Check 'filter.list reports the step itself' ($listed -match 'Turbulence') 'a turbulence step' 'not reported'
+        }
+
+        15 {
+            New-Scene 'morphology thickens a stroke'
+            $r = New-Obj 'rectangle' @{ x = 170; y = 170; width = 200; height = 140; fillColor = @(255, 255, 255); strokeColor = @(0, 0, 0); strokeWidth = 4 } 'mo-rect'
+            SelectIds @($r.itemId)
+            $c = Invoke-Op 'filter.create' @{ name = 'thick'; primitives = @(@{ kind = 'morphology'; operator = 'dilate'; radius = 5.0 }) }
+            Check 'a morphology filter can be created' ($c.ok -ne $false) 'a result' "$($c.error)"
+            Invoke-Op 'filter.apply' @{ name = 'thick' } | Out-Null
+            Start-Sleep -Milliseconds 200
+            $f = (Invoke-Op 'filter.list' @{}).result
+            Check 'the step is a morphology' (@($f.primitives)[0].kind -eq 'Morphology') 'Morphology' "$(@($f.primitives)[0].kind)"
+            Check 'it kept the radius' ([Math]::Abs(@($f.primitives)[0].radius - 5) -lt 0.01) 'radius 5' "$(@($f.primitives)[0].radius)"
+        }
+
+        16 {
+            New-Scene 'wiring a step to the source'
+            $r = New-Obj 'rectangle' @{ x = 180; y = 180; width = 200; height = 140; fillColor = @(120, 200, 120) } 'w-rect'
+            SelectIds @($r.itemId)
+            Invoke-Op 'filter.create' @{ name = 'wired'; primitives = @(@{ kind = 'gaussianBlur'; radius = 4.0; result = 'blurred' }) } | Out-Null
+            $add = Invoke-Op 'filter.addPrimitive' @{ name = 'wired'; kind = 'offset'; in = 'blurred'; dx = 20.0; dy = 0.0 }
+            Check 'a step can be added to a filter' ($add.ok -ne $false) 'a result' "$($add.error)"
+            $con = Invoke-Op 'filter.connectPrimitive' @{ name = 'wired'; index = 1; in = 'SourceAlpha' }
+            Check 'wiring a step to the source answers' ($con.ok -ne $false) 'a result' "$($con.error)"
+            Invoke-Op 'filter.apply' @{ name = 'wired' } | Out-Null
+            Start-Sleep -Milliseconds 200
+            $f = (Invoke-Op 'filter.list' @{}).result
+            Check 'the filter now holds two steps' (@($f.primitives).Count -eq 2) '2 primitives' "@($($f.primitives).Count)"
+            $dump = ((Invoke-Op 'filter.list' @{}).result | ConvertTo-Json -Depth 8 -Compress)
+            Check 'the rewiring is reported' ($dump -match 'SourceAlpha') 'SourceAlpha named as an input' 'not named'
+        }
+
+        17 {
+            New-Scene 'the filter region in user space'
+            $r = New-Obj 'rectangle' @{ x = 200; y = 200; width = 180; height = 120; fillColor = @(200, 200, 120) } 'reg-rect'
+            SelectIds @($r.itemId)
+            Invoke-Op 'filter.create' @{ name = 'region'; primitives = @(@{ kind = 'gaussianBlur'; radius = 6.0 }) } | Out-Null
+            $s = Invoke-Op 'filter.setRegion' @{ name = 'region'; x = 100.0; y = 100.0; width = 400.0; height = 300.0; userSpace = $true; primitiveUnits = 'userSpaceOnUse' }
+            Check 'setting a region answers' ($s.ok -ne $false) 'a result' "$($s.error)"
+            $f = (Invoke-Op 'filter.list' @{}).result
+            Check 'the region is the one that was set' ([Math]::Abs($f.width - 400) -le 1 -and [Math]::Abs($f.height - 300) -le 1) 'w 400 h 300' ("w {0:N1} h {1:N1}" -f $f.width, $f.height)
+            Check 'the region reports user space units' ($f.primitiveUnits -eq 'userSpaceOnUse') 'userSpaceOnUse' "$($f.primitiveUnits)"
+        }
+
+        # ---------------------------------------------------------------- gradients
+
+        18 {
+            New-Scene 'a radial ramp and what it samples'
+            $r = New-Obj 'rectangle' @{ x = 160; y = 160; width = 240; height = 200 } 'rg-rect'
+            SelectIds @($r.itemId)
+            Invoke-Op 'gradient.setStops' @{ stops = @(
+                @{ position = 0.0; color = 'ff0000' },
+                @{ position = 1.0; color = '0000ff' }
+            ) } | Out-Null
+            Invoke-Op 'gradient.setKind' @{ kind = 'radial' } | Out-Null
+            Start-Sleep -Milliseconds 200
+            $g = (Invoke-Op 'gradient.get' @{}).result
+            Check 'the fill is a gradient' ($g.hasGradient -eq $true) 'a gradient' "$($g.hasGradient)"
+            Check 'the kind is radial' ($g.gradient.kind -eq 'radial') 'radial' "$($g.gradient.kind)"
+            Check 'it has two stops' (@($g.gradient.stops).Count -eq 2) '2 stops' "@(@($g.gradient.stops).Count)"
+            $s0 = (Invoke-Op 'gradient.sample' @{ position = 0.0 }).result
+            $s5 = (Invoke-Op 'gradient.sample' @{ position = 0.5 }).result
+            $s1 = (Invoke-Op 'gradient.sample' @{ position = 1.0 }).result
+            Check 'the start of the ramp is the first stop' ($s0.color.r -gt 0.9 -and $s0.color.b -lt 0.1) 'red' ("r {0:N2} b {1:N2}" -f $s0.color.r, $s0.color.b)
+            Check 'the end of the ramp is the second stop' ($s1.color.b -gt 0.9) 'blue' ("b {0:N2}" -f $s1.color.b)
+            Check 'the middle is between them' ([Math]::Abs($s5.color.r - 0.5) -lt 0.06 -and [Math]::Abs($s5.color.b - 0.5) -lt 0.06) 'half of each' ("r {0:N2} b {1:N2}" -f $s5.color.r, $s5.color.b)
+        }
+
+        19 {
+            New-Scene 'conical and freeform ramps'
+            $r = New-Obj 'ellipse' @{ cx = 300; cy = 260; rx = 150; ry = 130 } 'cf-shape'
+            SelectIds @($r.itemId)
+            Invoke-Op 'gradient.setStops' @{ stops = @(
+                @{ position = 0.0; color = 'ff0000' },
+                @{ position = 0.5; color = '00ff00' },
+                @{ position = 1.0; color = '0000ff' }
+            ) } | Out-Null
+            Invoke-Op 'gradient.setKind' @{ kind = 'conical' } | Out-Null
+            Start-Sleep -Milliseconds 200
+            $g1 = (Invoke-Op 'gradient.get' @{}).result
+            Check 'a conical gradient can be made' ($g1.gradient.kind -eq 'conical') 'conical' "$($g1.gradient.kind)"
+            Check 'the three stops survive the kind change' (@($g1.gradient.stops).Count -eq 3) '3 stops' "@(@($g1.gradient.stops).Count)"
+            Invoke-Op 'gradient.setKind' @{ kind = 'freeform' } | Out-Null
+            Invoke-Op 'gradient.setGeometry' @{ freeformMode = 'points'; points = @(
+                @{ x = 0.1; y = 0.1; color = 'ff0000' },
+                @{ x = 0.5; y = 0.5; color = 'ffff00' },
+                @{ x = 0.9; y = 0.2; color = '00aaff' }
+            ) } | Out-Null
+            Start-Sleep -Milliseconds 200
+            $g2 = (Invoke-Op 'gradient.get' @{}).result
+            Check 'a freeform gradient can be made' ($g2.gradient.kind -eq 'freeform') 'freeform' "$($g2.gradient.kind)"
+            Check 'its points are the ones given' (@($g2.gradient.freeform.points).Count -eq 3) '3 points' "@(@($g2.gradient.freeform.points).Count)"
+        }
+
+        20 {
+            New-Scene 'spread, reverse and stop surgery'
+            $r = New-Obj 'rectangle' @{ x = 140; y = 180; width = 280; height = 160 } 'sp-rect'
+            SelectIds @($r.itemId)
+            Invoke-Op 'gradient.setStops' @{ stops = @(
+                @{ position = 0.0; color = 'ff0000' },
+                @{ position = 1.0; color = '0000ff' }
+            ) } | Out-Null
+            $s = Invoke-Op 'gradient.setSpread' @{ spread = 'repeat' }
+            Check 'the spread can be set to repeat' ($s.result.spread -eq 'repeat') 'repeat' "$($s.result.spread)"
+            $rev = Invoke-Op 'gradient.reverse' @{}
+            Check 'reversing answers' ($rev.ok -ne $false) 'a result' "$($rev.error)"
+            $g1 = (Invoke-Op 'gradient.get' @{}).result
+            Check 'reversing puts the second stop first' (@($g1.gradient.stops)[0].color.b -gt 0.9) 'blue at position 0' ("b {0:N2}" -f @($g1.gradient.stops)[0].color.b)
+            $add = Invoke-Op 'gradient.addStop' @{ position = 0.5; color = '00ff00' }
+            Start-Sleep -Milliseconds 150
+            $g2 = (Invoke-Op 'gradient.get' @{}).result
+            Check 'adding a stop gives three' (@($g2.gradient.stops).Count -eq 3) '3 stops' "@(@($g2.gradient.stops).Count)"
+            $mv = Invoke-Op 'gradient.moveStop' @{ index = 1; position = 0.7 }
+            Start-Sleep -Milliseconds 150
+            $g3 = (Invoke-Op 'gradient.get' @{}).result
+            $mid = @($g3.gradient.stops) | Where-Object { $_.color.g -gt 0.9 } | Select-Object -First 1
+            Check 'the moved stop is at its new position' ($null -ne $mid -and [Math]::Abs($mid.position - 0.7) -lt 0.02) '0.70' "$($mid.position)"
+            $rm = Invoke-Op 'gradient.removeStop' @{ index = 1 }
+            Start-Sleep -Milliseconds 150
+            $g4 = (Invoke-Op 'gradient.get' @{}).result
+            Check 'removing it gives two again' (@($g4.gradient.stops).Count -eq 2) '2 stops' "@(@($g4.gradient.stops).Count)"
         }
     }
 }
