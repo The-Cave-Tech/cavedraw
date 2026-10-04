@@ -134,7 +134,8 @@ public sealed record InputEvent(
     string? Key = null,
     string? Text = null,
     int? PointerId = null,
-    double? WheelDelta = null)
+    double? WheelDelta = null,
+    int? ClickCount = null)
 {
     /// <summary>This event as the selection engine's own kind, or null when it is not a pointer.</summary>
     public SelectEvent? ToSelectEvent() => Kind switch

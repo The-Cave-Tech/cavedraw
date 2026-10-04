@@ -26,7 +26,8 @@ public static class InjectionInputSink
                 case InputKinds.Down:
                 case InputKinds.PenDown:
                 case InputKinds.TouchDown:
-                    InputInjection.Press(root, input.X, input.Y, input.Extend, right);
+                    InputInjection.Press(
+                        root, input.X, input.Y, input.Extend, right, clickCount: input.ClickCount ?? 1);
                     break;
 
                 case InputKinds.Move:

@@ -107,8 +107,8 @@ function ClickModel {
     $y = [int]([double]$r.result.y - $script:Oy)
     $events = @()
     for ($i = 0; $i -lt $count; $i++) {
-        $events += @{ kind = 'down'; x = $x; y = $y; deltaMs = 40 }
-        $events += @{ kind = 'up'; x = $x; y = $y; deltaMs = 40 }
+        $events += @{ kind = 'down'; x = $x; y = $y; deltaMs = 40; clickCount = ($i + 1) }
+        $events += @{ kind = 'up'; x = $x; y = $y; deltaMs = 40; clickCount = ($i + 1) }
     }
     Gesture $events 20000 $true | Out-Null
 }

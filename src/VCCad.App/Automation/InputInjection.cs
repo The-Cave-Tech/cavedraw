@@ -141,7 +141,7 @@ public static class InputInjection
     /// </summary>
     public static string Press(Visual root, double x, double y, bool shift, bool right = false,
         PointerType pointerType = PointerType.Mouse,
-        float? pressure = null, float? xTilt = null, float? yTilt = null)
+        float? pressure = null, float? xTilt = null, float? yTilt = null, int clickCount = 1)
     {
         Visual target = HitTest(root, x, y)
             ?? throw new EditorOperationException($"Nothing is at ({x},{y}).");
@@ -156,7 +156,7 @@ public static class InputInjection
                 right ? RawInputModifiers.RightMouseButton : RawInputModifiers.LeftMouseButton,
                 right ? PointerUpdateKind.RightButtonPressed : PointerUpdateKind.LeftButtonPressed,
                 pressure, xTilt, yTilt),
-            shift ? KeyModifiers.Shift : KeyModifiers.None, 1));
+            shift ? KeyModifiers.Shift : KeyModifiers.None, clickCount));
 
         return $"pressed at ({x:F0},{y:F0})";
     }
