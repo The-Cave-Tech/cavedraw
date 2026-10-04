@@ -358,8 +358,13 @@ function Run-Scene {
         16 {
             New-Scene 'a second artboard'
             DrawRect 60 60 150 110 | Out-Null
+            # **The drag has to start off the page, and the default page is A4 LANDSCAPE: 841.9 x 595.3.** This
+            # drag started at (560,60), which is inside that page, so ArtboardPress took the page-body branch -
+            # correct, since a page's body belongs to the artwork and an artboard is moved by its name label -
+            # and the create branch was never reached. Measured at the press: model (699.7,59.3), artboard
+            # (0,0) 841.9 x 595.3. Starting past the page's right edge reaches AddArtboardFromRect.
             Tool 'ToolArtboard' 'artboard' | Out-Null
-            DragModel 560 60 820 320
+            DragModel 900 60 1180 340
             $boards = ((DocText) -split "`r?`n" | Where-Object { $_ -match '^ARTBOARD' }).Count
             Check 'dragging the artboard tool adds an artboard' ($boards -ge 2) '2 artboards' "$boards artboards"
         }
