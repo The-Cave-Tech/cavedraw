@@ -7568,6 +7568,28 @@ public sealed class CanvasWorkspace : Control
             EditWidthProfile(null);
         }
 
+        // **Ctrl+A selects everything; it is not the node tool.** The tool switch below matches `case Key.A`
+        // with no modifier guard, so Ctrl+A toggled the node tool and left the selection alone - the operation
+        // `selection.selectAll` selected every object while the shortcut a person presses changed tools (#228).
+        // The items come from the document this canvas is attached to, not the view model's: with a second
+        // document open those are different objects. It sits above the switch, where it is reached outside an
+        // edit; an earlier attempt put the same branch in the text-editing key handler, where it never ran.
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.A && _document is not null)
+        {
+            List<LayerItem> everything = new();
+            foreach (Artboard artboard in _document.Artboards)
+            {
+                foreach (Layer layer in artboard.Layers)
+                {
+                    everything.AddRange(layer.Children);
+                }
+            }
+
+            everything.AddRange(_document.Orphans.Children);
+            _vm.ActiveSession.SelectRange(everything, additive: false);
+            e.Handled = true;
+            return;
+        }
         switch (e.Key)
         {
             case Key.W:
