@@ -6490,9 +6490,9 @@ public sealed class CanvasWorkspace : Control
         // document for good: invisible on the canvas, counted by the model, selectable by id, and twice today
         // mistaken for damage to the text beside it (#215). The edit is the only thing that knows whether
         // anything was typed, so this is where the object goes. RemoveItemCommand finds the container itself.
-        if (_vm is not null && _editingText.PlainText.Length == 0 && _editingText.Container is not null)
+        if (_vm is not null)
         {
-            _vm.Execute(new RemoveItemCommand(_editingText));
+            _vm.ActiveSession.RemoveEmptyText(_editingText);
         }
 
         _editingText = null;

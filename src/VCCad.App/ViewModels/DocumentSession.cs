@@ -1090,6 +1090,27 @@ public sealed class DocumentSession : INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// Removes a text object that an edit has left empty, and says whether it did.
+    ///
+    /// A click with the text tool adds the object before a character is typed - <see cref="CreateTextAt"/>
+    /// does that deliberately, so the tool does not litter the page with a placeholder word - so abandoning
+    /// the gesture used to leave a zero-width empty text in the document for good: invisible on the canvas,
+    /// counted by the model, selectable by id, and easy to mistake for damage to the text beside it (#215).
+    /// The edit is the only thing that knows whether anything was typed, so the canvas calls this as an edit
+    /// ends. A text that ended with characters is left alone, and the call is a no-op for it.
+    /// </summary>
+    public bool RemoveEmptyText(TextItem item)
+    {
+        if (item.PlainText.Length > 0 || item.Container is null)
+        {
+            return false;
+        }
+
+        Execute(new RemoveItemCommand(item));
+        return true;
+    }
+
     /// <summary>Creates a text object at a world point in the artboard under it
     /// (or the pasteboard), selects it and returns it.</summary>
     public TextItem CreateTextAt(Point2D world, string family, double fontSize)
