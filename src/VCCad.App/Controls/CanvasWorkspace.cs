@@ -5658,7 +5658,19 @@ public sealed class CanvasWorkspace : Control
     /// faces every viewer supplies for it — never an arbitrary bundled font, whose
     /// letterforms and widths would not match the document.</summary>
     private static FontFamily ResolveFontFamily(TextRun run)
-        => new(StandardFontResolver.FamilyFor(run));
+    {
+        // **A run whose family resolves to nothing still has to draw.** A null or blank name reaches
+        // Avalonia's FontFamily constructor, which throws ArgumentNullException - on the render path,
+        // during a paint pass, so it does not leave one run unrendered: it terminates the application.
+        // Measured: "System.ArgumentNullException: Value cannot be null. (Parameter 'name')" from
+        // PaintText -> CreateFormattedText, with a crash dump and a CLR20r3 WER entry behind it.
+        //
+        // The fallback is Avalonia's own default family rather than a named face, because a machine
+        // need not have any particular family installed and an unresolvable name is the very thing
+        // that got here.
+        string? family = StandardFontResolver.FamilyFor(run);
+        return new FontFamily(string.IsNullOrWhiteSpace(family) ? FontFamily.Default.Name : family);
+    }
 
     /// <summary>
     /// The block's layout, indexed the way the editing code wants it.
