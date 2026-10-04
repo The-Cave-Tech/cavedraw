@@ -512,13 +512,21 @@ function Run-Scene {
             Tool 'ToolText' 'text' | Out-Null
             ClickModel 40 40 | Out-Null
             TypeText 'In a hole in the ground'
-            $texts = (Invoke-Op 'object.find' @{ type = 'text' }).result.items
-            $line1 = $texts[0]
+            $line1 = (Invoke-Op 'object.find' @{ type = 'text' }).result.items | Select-Object -First 1
             Tool 'ToolText' 'text' | Out-Null
             ClickModel 40 80 | Out-Null
             TypeText 'there lived a hobbit'
-            $line2 = $texts[1]
+            # **Read both after both exist.** The list was fetched between the two typings, so $texts held one
+            # entry and $texts[1] was null - which reads as an empty string and looked like a lost text. Both
+            # texts are created correctly; measured after each step, items 7 and 8 with the two strings.
+            $line2 = (Invoke-Op 'object.find' @{ type = 'text' }).result.items | Select-Object -First 1 -Skip 1
             Check 'both text objects hold their words' (($line1.text -eq 'In a hole in the ground') -and ($line2.text -eq 'there lived a hobbit')) 'two strings' ("'" + $line1.text + "' and '" + $line2.text + "'")
+            # **Leave the text edit before selecting objects.** The scene types two texts and never exits, so
+            # Ctrl+A selected the characters of the text being edited - which is what Ctrl+A means inside a text
+            # - and Ctrl+C/Ctrl+V used the text clipboard, which is why the object count never moved. The object
+            # clipboard works: object.copy then object.paste took the document from 5 objects to 6.
+            Keys 'Escape'
+            Start-Sleep -Milliseconds 250
             Tool 'ToolCorner' 'corner' | Out-Null
             Keys 'Ctrl+A'
             Keys 'Ctrl+C'
