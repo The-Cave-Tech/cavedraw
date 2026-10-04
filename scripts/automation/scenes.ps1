@@ -247,8 +247,16 @@ function Run-Scene {
             $all = Items
             $moved = $all[$all.Count - 1]
             Check 'the pasted copy is the one the arrows moved' ([Math]::Abs($moved.x - ($a.x + 6)) -le 3) ("x = {0:N1}" -f ($a.x + 6)) ("x = {0:N1}" -f $moved.x)
-            Keys 'Ctrl+Z'
-            Check 'one undo takes the paste back' ((ItemCount) -eq 1) '1 item' "$(ItemCount) items"
+            # **Undo steps back one command at a time, and the ten nudges above are ten commands.** A single
+            # Ctrl+Z takes back the last arrow key, not the paste, so the copy is still there and the count is
+            # still 2 - which is what this check read as "undo does nothing" and what I filed as a defect
+            # (#237). Undo is correct: a fresh draw undoes on the first press. This walks back until the
+            # pasted copy is gone, with a bound so a genuine failure still fails.
+            for ($u = 0; $u -lt 14 -and (ItemCount) -gt 1; $u++) {
+                Keys 'Ctrl+Z'
+                Start-Sleep -Milliseconds 120
+            }
+            Check 'undo walks back to the state before the paste' ((ItemCount) -eq 1) '1 item' "$(ItemCount) items"
         }
 
         10 {
