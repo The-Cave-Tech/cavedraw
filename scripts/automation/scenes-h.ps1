@@ -17,7 +17,7 @@ param([string]$Only = '', [string]$ReportPath = 'artifacts\auto\report-h.json')
 
 # How many scenes this file currently defines. Bumped as batches are added, so the runner can never report a
 # scene as passing when it has no case at all.
-$SceneCount = 40
+$SceneCount = 50
 
 # A shape's outline always selects it: clear, click the top edge, expect exactly it.
 function VerifyOutlineSelect {
@@ -813,6 +813,233 @@ function Run-Scene {
             Start-Sleep -Milliseconds 200
             $m = ModelText
             Check 'the reference is gone from the document' (-not ($m -match '(?i)"markerend":"arrow"')) 'no marker-end' 'still stored'
+        }
+
+        # ---------------------------------------------------------------- composition, structure and the shell
+
+        41 {
+            New-Scene 'a blend mode on the top shape'
+            $under = New-Obj 'rectangle' @{ x = 180; y = 180; width = 240; height = 200; fillColor = @(240, 200, 60) } 'bm-under'
+            $over = New-Obj 'rectangle' @{ x = 280; y = 240; width = 240; height = 200; fillColor = @(80, 140, 220) } 'bm-over'
+            SelectIds @($over.itemId)
+            $s = Invoke-Op 'object.setBlendMode' @{ mode = 'multiply' }
+            Check 'a blend mode can be set' ($s.ok -ne $false) 'a result' "$($s.error)"
+            Start-Sleep -Milliseconds 200
+            $m = ModelText
+            Check 'the blend mode is stored' ($m -match '(?i)multiply') 'a multiply blend' 'not stored'
+            $cl = Invoke-Op 'object.setBlendMode' @{ mode = 'normal' }
+            Check 'and can be cleared' ($cl.ok -ne $false) 'a result' "$($cl.error)"
+            Start-Sleep -Milliseconds 200
+            $m2 = ModelText
+            Check 'the blend is gone' (-not ($m2 -match '(?i)"blendmode":"multiply"')) 'no multiply' 'still stored'
+        }
+
+        42 {
+            New-Scene 'aligning and distributing three shapes'
+            $a = New-Obj 'rectangle' @{ x = 120; y = 140; width = 90; height = 60; fillColor = @(200, 60, 60) } 'al-a'
+            $b = New-Obj 'rectangle' @{ x = 340; y = 260; width = 90; height = 60; fillColor = @(60, 200, 60) } 'al-b'
+            $c = New-Obj 'rectangle' @{ x = 560; y = 200; width = 90; height = 60; fillColor = @(60, 60, 200) } 'al-c'
+            SelectIds @($a.itemId, $b.itemId, $c.itemId)
+            Check 'three shapes are selected' ((Selection).Count -eq 3) '3 selected' "$((Selection).Count) selected"
+            # axis is horizontal|vertical and edge is start|centre|end - the documented words, not x/y and top.
+            $al = Invoke-Op 'arrange.align' @{ axis = 'vertical'; edge = 'start' }
+            Check 'aligning answers' ($al.ok -ne $false) 'a result' "$($al.error)"
+            Start-Sleep -Milliseconds 250
+            # Three separate calls: passing them as one comma list would bind the array to a [string] parameter
+            # and look up a name that is not there, which reads as the shapes having disappeared.
+            $ys = @((ByName 'al-a'), (ByName 'al-b'), (ByName 'al-c'))
+            $tops = @($ys | Where-Object { $_ } | ForEach-Object { [Math]::Round($_.y, 1) })
+            Check 'the three tops agree after aligning' (@($tops | Select-Object -Unique).Count -eq 1) 'one common top' ($tops -join ',')
+            $di = Invoke-Op 'arrange.distribute' @{ axis = 'horizontal' }
+            Check 'distributing answers' ($di.ok -ne $false) 'a result' "$($di.error)"
+            # **An unknown axis is not refused, and that is filed as #244.** The edge member of the same call is
+            # checked and refused by name; the axis member silently becomes horizontal, so a caller who mistypes
+            # an axis gets a different and destructive edit with a reply that reads as confirmation. This pins
+            # the current behaviour: when #244 is fixed the call must fail and the document must be untouched.
+            $before = @((ByName 'al-a'), (ByName 'al-b'), (ByName 'al-c'))
+            $bad = Invoke-Op 'arrange.align' @{ axis = 'sideways'; edge = 'start' }
+            $after = @((ByName 'al-a'), (ByName 'al-b'), (ByName 'al-c'))
+            $moved = $false
+            for ($i = 0; $i -lt 3; $i++) { if ($null -ne $before[$i] -and $null -ne $after[$i] -and [Math]::Abs($before[$i].x - $after[$i].x) -gt 0.5) { $moved = $true } }
+            Check 'an unknown axis is accepted and does the wrong thing (#244)' (($bad.ok -ne $false) -and $moved) 'accepted and objects moved' ("ok {0}, moved {1}" -f ($bad.ok -ne $false), $moved)
+        }
+
+        43 {
+            New-Scene 'rotating and scaling about a pivot'
+            $r = New-Obj 'rectangle' @{ x = 200; y = 200; width = 200; height = 120; fillColor = @(120, 180, 220) } 'tf-rect'
+            SelectIds @($r.itemId)
+            $before = ByName 'tf-rect'
+            $t = Invoke-Op 'object.transform' @{ rotationDegrees = 45.0; pivotX = 300.0; pivotY = 260.0 }
+            Check 'a rotation about a pivot answers' ($t.ok -ne $false) 'a result' "$($t.error)"
+            Start-Sleep -Milliseconds 250
+            $rot = ByName 'tf-rect'
+            Check 'the rotation changes the bounding box' ($null -ne $rot -and [Math]::Abs($rot.w - $before.w) -gt 5) 'a different box' ("w {0:N1} then {1:N1}" -f $before.w, $rot.w)
+            $sc = Invoke-Op 'object.transform' @{ scaleX = 1.5; scaleY = 1.5 }
+            Check 'a scale answers' ($sc.ok -ne $false) 'a result' "$($sc.error)"
+            Start-Sleep -Milliseconds 250
+            $big = ByName 'tf-rect'
+            Check 'the scale makes it bigger' ($null -ne $big -and $big.w -gt $rot.w) 'a wider box' ("w {0:N1} then {1:N1}" -f $rot.w, $big.w)
+            $so = Invoke-Op 'transform.scaleOptions' @{ lineWeights = $false }
+            Check 'the scale options can be read and set' ($so.ok -ne $false) 'a result' "$($so.error)"
+        }
+
+        44 {
+            New-Scene 'flipping twice is the identity'
+            $p = New-Obj 'polyline' @{ points = @(@(120.0, 340.0), @(300.0, 180.0), @(420.0, 360.0)); strokeColor = @(0, 0, 0); strokeWidth = 3 } 'fl-path'
+            SelectIds @($p.itemId)
+            $m0 = ModelText
+            $f1 = Invoke-Op 'object.flip' @{ axis = 'horizontal' }
+            Check 'a flip answers' ($f1.ok -ne $false) 'a result' "$($f1.error)"
+            Start-Sleep -Milliseconds 250
+            $m1 = ModelText
+            Check 'the flip changes the geometry' ($m0 -ne $m1) 'a different model' 'unchanged'
+            SelectIds @($p.itemId)
+            Invoke-Op 'object.flip' @{ axis = 'horizontal' } | Out-Null
+            Start-Sleep -Milliseconds 250
+            $m2 = ModelText
+            Check 'flipping back returns the original geometry' ($m2 -eq $m0) 'the original model' 'a different model'
+        }
+
+        45 {
+            New-Scene 'layers that can be renamed, hidden and locked'
+            $r = New-Obj 'rectangle' @{ x = 180; y = 180; width = 200; height = 140; fillColor = @(200, 120, 60) } 'ly-rect'
+            $add = Invoke-Op 'layer.add' @{ name = 'Ink' }
+            Check 'a layer can be added' ($add.ok -ne $false) 'a result' "$($add.error)"
+            Start-Sleep -Milliseconds 200
+            $l1 = ((Invoke-Op 'layer.list' @{}).result | ConvertTo-Json -Depth 8 -Compress)
+            Check 'the new layer is listed' ($l1 -match 'Ink') 'Ink' 'not listed'
+            # layer.list names the field layerId, not id - read from the operation's own answer rather than
+            # guessed from the model's spelling.
+            $layerId = [regex]::Match($l1, '"layerId":"([0-9a-f-]{36})"').Groups[1].Value
+            if (-not $layerId) { $layerId = [regex]::Match($l1, '"id":"([0-9a-f-]{36})"').Groups[1].Value }
+            if ($layerId) {
+                $rn = Invoke-Op 'layer.rename' @{ layerId = $layerId; name = 'Ink and wash' }
+                Check 'a layer can be renamed' ($rn.ok -ne $false) 'a result' "$($rn.error)"
+                $lv = Invoke-Op 'layer.setVisible' @{ layerId = $layerId; visible = $false }
+                Check 'a layer can be hidden' ($lv.ok -ne $false) 'a result' "$($lv.error)"
+                $ll = Invoke-Op 'layer.setLocked' @{ layerId = $layerId; locked = $true }
+                Check 'a layer can be locked' ($ll.ok -ne $false) 'a result' "$($ll.error)"
+                $ov = Invoke-Op 'layer.onlyVisible' @{ keep = @('Ink and wash') }
+                Check 'only-visible answers' ($ov.ok -ne $false) 'a result' "$($ov.error)"
+                Start-Sleep -Milliseconds 200
+                $m = ModelText
+                Check 'the renamed layer is in the document' ($m -match 'Ink and wash') 'Ink and wash' 'not stored'
+            } else { Record-Failure 'the layer id can be read' 'a guid from layer.list' "$l1" }
+        }
+
+        46 {
+            New-Scene 'a second page with its own layer'
+            $r = New-Obj 'rectangle' @{ x = 120; y = 120; width = 160; height = 120; fillColor = @(90, 170, 120) } 'ab-rect'
+            $add = Invoke-Op 'artboard.add' @{ width = 400.0; height = 300.0; x = 1000.0; y = 120.0; name = 'Page 2' }
+            Check 'an artboard can be added' ($add.ok -ne $false) 'a result' "$($add.error)"
+            Start-Sleep -Milliseconds 250
+            $al = ((Invoke-Op 'artboard.list' @{}).result | ConvertTo-Json -Depth 8 -Compress)
+            Check 'the second page is listed' ($al -match 'Page 2') 'Page 2' 'not listed'
+            $m = ModelText
+            $abId = [regex]::Match($m, '"Artboards":\[\{"Id":"([0-9a-f-]+)"').Groups[1].Value
+            Check 'an artboard id can be read' ($abId -ne '') 'a guid' 'none'
+            if ($abId) {
+                $sb = Invoke-Op 'artboard.setBounds' @{ artboardId = $abId; x = 0.0; y = 0.0; width = 300.0; height = 200.0 }
+                Check 'an artboard can be resized' ($sb.ok -ne $false) 'a result' "$($sb.error)"
+                Start-Sleep -Milliseconds 250
+                $m2 = ModelText
+                Check 'the new bounds are stored' ($m2 -match '"Width":300') 'Width 300' 'not stored'
+            }
+            $layerId = [regex]::Match($m, '"Layers":\[\{"Id":"([0-9a-f-]+)"').Groups[1].Value
+            if ($layerId) {
+                $mv = Invoke-Op 'object.moveToLayer' @{ layerId = $layerId; itemIds = @($r.itemId) }
+                Check 'an object can be moved onto a layer' ($mv.ok -ne $false) 'a result' "$($mv.error)"
+                # Until it is renamed the row carries the label derived from its geometry, so the object is
+                # found in the panel by that, not by the name it was created with - see the rename below.
+                $ex = ((Invoke-Op 'object.explorer' @{}).result | ConvertTo-Json -Depth 8 -Compress)
+                Check 'the explorer reports the object it was moved' ($ex -match '(?i)"label":"Rectangle"') 'a Rectangle row' $ex.Substring(0, [Math]::Min(200, $ex.Length))
+                # **A name given at creation is for addressing; the panel shows the derived label until the
+                # person renames it.** Measured: an object created as 'ab-rect' has label "Rectangle" with
+                # userNamed false, and object.rename changes the label to the given text with userNamed true.
+                $rn2 = Invoke-Op 'object.rename' @{ itemId = $r.itemId; name = 'the green box' }
+                Check 'an object can be renamed' ($rn2.ok -ne $false) 'a result' "$($rn2.error)"
+                Start-Sleep -Milliseconds 200
+                $ex2 = ((Invoke-Op 'object.explorer' @{}).result | ConvertTo-Json -Depth 8 -Compress)
+                Check 'the panel shows the name the person gave it' ($ex2 -match 'the green box') 'the green box' $ex2.Substring(0, [Math]::Min(200, $ex2.Length))
+                Check 'and marks it as the person s own' ($ex2 -match '"userNamed":true') 'userNamed true' 'still derived'
+            } else { Record-Failure 'the layer id can be read' 'a guid from the model' 'none' }
+        }
+
+        47 {
+            New-Scene 'units and a measurement'
+            $g0 = (Invoke-Op 'units.get' @{}).result
+            Check 'the unit can be read' ($null -ne $g0) 'a unit' 'nothing'
+            $s = Invoke-Op 'units.set' @{ unit = 'in' }
+            Check 'the unit can be set' ($s.ok -ne $false) 'a result' "$($s.error)"
+            Start-Sleep -Milliseconds 150
+            $g1 = ((Invoke-Op 'units.get' @{}).result | ConvertTo-Json -Compress)
+            Check 'the unit is now inches' ($g1 -match '(?i)in') 'inches' $g1
+            $ev = Invoke-Op 'units.evaluate' @{ expression = '1in + 6pt' }
+            Check 'an expression with units evaluates' ($ev.ok -ne $false) 'a result' "$($ev.error)"
+            $ej = ($ev.result | ConvertTo-Json -Compress)
+            Check '1in + 6pt is 27.5 mm' ($ej -match '27\.5') '27.5 mm' $ej
+            Invoke-Op 'units.set' @{ unit = 'mm' } | Out-Null
+        }
+
+        48 {
+            New-Scene 'a colour set and applied to the fill'
+            $r = New-Obj 'rectangle' @{ x = 200; y = 200; width = 220; height = 160 } 'co-rect'
+            SelectIds @($r.itemId)
+            $s = Invoke-Op 'color.set' @{ hex = '#3366cc' }
+            Check 'a colour can be set' ($s.ok -ne $false) 'a result' "$($s.error)"
+            $g = ((Invoke-Op 'color.get' @{}).result | ConvertTo-Json -Compress)
+            Check 'the colour reads back as the one set' ($g -match '(?i)3366cc|0\.2,|51,|r"?:0\.2') 'the blue that was set' $g
+            $ap = Invoke-Op 'color.apply' @{ target = 'fill' }
+            Check 'the colour can be applied to the fill' ($ap.ok -ne $false) 'a result' "$($ap.error)"
+            Start-Sleep -Milliseconds 250
+            $m = ModelText
+            Check 'the shape now carries that blue' ($m -match '"B":0\.8|"B":204|"G":0\.4|"R":0\.2') 'the blue components' 'not stored'
+            $rec = ((Invoke-Op 'color.recent' @{}).result | ConvertTo-Json -Compress)
+            Check 'the recent colours answer' ($null -ne $rec) 'a list' 'nothing'
+        }
+
+        49 {
+            New-Scene 'the pane tabs and the windows the shell has'
+            $tab = Invoke-Op 'pane.setTab' @{ tab = 'Gradient' }
+            Check 'a pane tab can be selected' ($tab.ok -ne $false) 'a result' "$($tab.error)"
+            Start-Sleep -Milliseconds 300
+            $pj = ($tab.result | ConvertTo-Json -Compress)
+            Check 'the gradient tab is the one showing' ($pj -match '(?i)gradient') 'Gradient' $pj
+            # The ramp is GradientRamp by TYPE and Ramp by NAME - the dump writes GradientRamp#Ramp - so a lookup
+            # by name returns nothing however the pane is set.
+            $g = (Invoke-Op 'ui.find' @{ type = 'GradientRamp' }).result.controls
+            Check 'the ramp is on screen with that tab' (@($g).Count -ge 1) 'the ramp' "$(@($g).Count) controls"
+            $w = ((Invoke-Op 'ui.windows' @{}).result | ConvertTo-Json -Depth 6 -Compress)
+            Check 'the windows answer' ($null -ne $w) 'a list of windows' 'nothing'
+            $pp = (Invoke-Op 'ui.popups' @{}).result
+            Check 'the popups answer' ($null -ne $pp) 'a list of popups' 'nothing'
+            $back = Invoke-Op 'pane.setTab' @{ tab = 'Color' }
+            Check 'the colour tab can be selected again' ($back.ok -ne $false) 'a result' "$($back.error)"
+            Start-Sleep -Milliseconds 300
+            $h = (Invoke-Op 'ui.find' @{ name = 'HexBox' }).result.controls
+            Check 'the hex box is back with the colour tab' (@($h).Count -ge 1) 'the hex box' "$(@($h).Count) controls"
+        }
+
+        50 {
+            New-Scene 'export, round-trip and the document facts'
+            $r = New-Obj 'rectangle' @{ x = 200; y = 200; width = 220; height = 160; fillColor = @(180, 90, 40) } 'ex-rect'
+            New-Text 'exported' 240 240 | Out-Null
+            $svg = Invoke-Op 'document.exportSvg' @{}
+            Check 'the document exports as SVG' ($svg.ok -ne $false) 'a result' "$($svg.error)"
+            # The export comes back as base64, so the check decodes it rather than looking for markup in the
+            # envelope - which is also what proves the payload is a real document and not a placeholder.
+            $svgText = ''
+            try { $svgText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($svg.result.svgBase64)) } catch { $svgText = '' }
+            Check 'the export is an svg document' ($svgText -match '(?i)<svg') 'an svg root' $svgText.Substring(0, [Math]::Min(80, $svgText.Length))
+            Check 'the exported svg carries the artwork' ($svgText -match 'ex-rect' -or $svgText -match '<path' -or $svgText -match '<rect') 'artwork in the svg' $svgText.Substring(0, [Math]::Min(80, $svgText.Length))
+            $rt = Invoke-Op 'document.verifyRoundTrip' @{ save = $false }
+            Check 'a round trip can be verified' ($rt.ok -ne $false) 'a result' "$($rt.error)"
+            $rj = ($rt.result | ConvertTo-Json -Depth 6 -Compress)
+            Check 'the round trip is faithful' ($rj -match '"match":true') 'match true' $rj
+            $md = (Invoke-Op 'document.metadata' @{}).result
+            Check 'the metadata answers' ($null -ne $md) 'metadata' 'nothing'
+            $sec = (Invoke-Op 'document.security' @{}).result
+            Check 'the security state answers' ($null -ne $sec) 'a security report' 'nothing'
         }
     }
 }
