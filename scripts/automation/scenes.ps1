@@ -288,15 +288,20 @@ function Run-Scene {
             New-Scene 'stroke pane and hatch'
             $r = DrawRect 100 100 260 180
             VerifyOutlineSelect $r 'the rectangle'
-            $tab = Find-ByText 'Stroke'
-            if ($tab) {
-                ClickAt ([int]($tab.x + $tab.width / 2)) ([int]($tab.y + $tab.height / 2))
-                Start-Sleep -Milliseconds 350
-            } else { Record-Failure 'the Stroke tab is present' 'a control titled Stroke' 'not found' }
-            $hatch = Find-Control 'HatchCross'
+            # **The hatch swatches live in the Swatches tab, and the tab has to be opened by name.** This looked
+            # for HatchCross while the Stroke tab was showing - the hatch buttons are not in it - and it opened
+            # Stroke with ClickAt, whose coordinate frame never matched view.toScreen. Measured: the Swatches tab
+            # holds Button#Hatch45 "/", Button#HatchCross "X" and Button#HatchNone "-" beside a PickedSwatch.
+            # **No tab click at all.** The hatch swatches are on screen as soon as the appearance pane is
+            # showing, which is what New-Scene arms: measured with the default state, ui.find name=HatchCross
+            # returns one control. Opening the Stroke tab hid them, and opening Swatches hid them again - the
+            # buttons belong to neither.
+            # **By name, through the operation that finds by name.** Find-Control did not locate it even with
+            # the Swatches tab open; ui.find name=HatchCross returns exactly one control, the "X" button.
+            $hatch = (Invoke-Op 'ui.find' @{ name = 'HatchCross' }).result.controls | Select-Object -First 1
             if ($hatch) {
                 $before = (Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 12 -Compress
-                ClickAt ([int]($hatch.x + $hatch.width / 2)) ([int]($hatch.y + $hatch.height / 2))
+                Invoke-Op 'ui.click' @{ name = 'HatchCross' } | Out-Null
                 Start-Sleep -Milliseconds 300
                 $after = (Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 12 -Compress
                 Check 'the hatch swatch changes the shape' ($before -ne $after) 'a different model' 'unchanged'
