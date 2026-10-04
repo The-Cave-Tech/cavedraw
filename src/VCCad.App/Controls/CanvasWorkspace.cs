@@ -978,6 +978,17 @@ public sealed class CanvasWorkspace : Control
                     break;
                 }
 
+                // **A press on existing text opens it, rather than starting a frame on top of it.** This used
+                // to create a new object on every press, so clicking a block you could see put a second, empty
+                // text beside it and sent every keystroke there: the words stayed where they were and the
+                // typing landed in the new object, which is how a document ends up with stray text over text
+                // (#212). The same hit-test the selection uses decides it.
+                if (HitTestTopItem(model) is TextItem opened)
+                {
+                    EnterTextEdit(opened, model);
+                    break;
+                }
+
                 // New text uses the face the person last chose, which is what makes
                 // picking a font with nothing selected mean something.
                 TextItem created = _vm!.CreateTextAt(
