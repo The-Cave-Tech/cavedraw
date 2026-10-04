@@ -104,6 +104,27 @@ public class TextToolbarEnterTests : IDisposable
     }
 
     /// <summary>
+    /// Paragraph spacing, on a block that really has two paragraphs, commits on Enter.
+    ///
+    /// This is #217: the field was reported as inert, and it was not - the commit was, because it only committed
+    /// when focus left it. The change that fixed #216 fixed this too, and this is the test that says so rather
+    /// than my word for it.
+    /// </summary>
+    [AvaloniaFact]
+    public void EnterInTheParagraphSpacingFieldStoresItOnATwoParagraphBlock()
+    {
+        (EditorView view, _, TextItem text) = Host();
+        text.Runs[0].Text = "One\nTwo";
+        Settle();
+
+        TextBox spacing = view.FindControl<TextBox>("TtParagraphSpacing")!;
+        spacing.Text = "12";
+        Enter(spacing);
+
+        Assert.Equal(12.0, text.ParagraphSpacing, 3);
+    }
+
+    /// <summary>
     /// Leaving a field still commits - Enter is an addition, not a replacement, and a person who types and then
     /// clicks elsewhere must not lose the value.
     /// </summary>
