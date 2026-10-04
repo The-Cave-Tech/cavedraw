@@ -17,7 +17,7 @@ param([string]$Only = '', [string]$ReportPath = 'artifacts\auto\report-h.json')
 
 # How many scenes this file currently defines. Bumped as batches are added, so the runner can never report a
 # scene as passing when it has no case at all.
-$SceneCount = 30
+$SceneCount = 40
 
 # A shape's outline always selects it: clear, click the top edge, expect exactly it.
 function VerifyOutlineSelect {
@@ -104,10 +104,26 @@ function PaintOf {
     return $line
 }
 
-function Run-Scene {
-    param([int]$index)
+# A text block is created through the registry and then addressed by type: the id comes back from object.find
+# rather than from the create result, because every later call needs the id and only one of the two is
+# documented to carry it.
+function New-Text {
+    param([string]$body, [double]$x = 140.0, [double]$y = 200.0, [double]$size = 24.0)
+    Invoke-Op 'text.create' @{ x = $x; y = $y; text = $body; fontSize = $size } | Out-Null
+    Start-Sleep -Milliseconds 150
+    $rows = (Invoke-Op 'object.find' @{ type = 'text' }).result.items
+    return (Shape (@($rows) | Where-Object { $_.text -eq $body } | Select-Object -First 1))
+}
 
-    switch ($index) {
+# The whole document as one JSON string. Most of these checks are about what the model holds rather than what an
+# operation returns, and the serialized model is the honest place to read that - it is also where a gap in the
+# registry's own readouts shows up, as #241 and #242 did.
+function ModelText {
+    return ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
+}
+
+function Run-Scene {
+    param([int]$index)    switch ($index) {
 
         # ---------------------------------------------------------------- boolean path operations
 
@@ -627,6 +643,176 @@ function Run-Scene {
             Start-Sleep -Milliseconds 200
             $m2 = ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
             Check 'the hatch is gone' (-not ($m2 -match '(?i)"hatch"')) 'no hatch' 'still stored'
+        }
+
+        # ---------------------------------------------------------------- text runs and layout
+
+        31 {
+            New-Scene 'a text run with its own colour and weight'
+            $t = New-Text 'The quick brown fox'
+            if (-not $t) { Record-Failure 'a text block can be created' 'a text item' 'not found'; return }
+            SelectIds @($t.itemId)
+            $r0 = (Invoke-Op 'text.runs' @{ itemId = $t.itemId }).result
+            Check 'a fresh block has one run' (@($r0.runs).Count -eq 1) '1 run' "$(@($r0.runs).Count)"
+            $u = Invoke-Op 'text.update' @{ runColor = @(220, 20, 20); bold = $true }
+            Check 'a run colour and weight can be set' ($u.ok -ne $false) 'a result' "$($u.error)"
+            Start-Sleep -Milliseconds 200
+            $m = ModelText
+            Check 'the run colour is stored' ($m -match '(?i)runc(h)?olor|"Color"') 'a run colour' 'not stored'
+            $r1 = (Invoke-Op 'text.runs' @{ itemId = $t.itemId }).result
+            Check 'the block reports its run' (@($r1.runs).Count -eq 1) '1 run' "$(@($r1.runs).Count)"
+        }
+
+        32 {
+            New-Scene 'superscript and subscript runs'
+            $t = New-Text 'E = mc2 and H2O'
+            if (-not $t) { Record-Failure 'a text block can be created' 'a text item' 'not found'; return }
+            SelectIds @($t.itemId)
+            $sup = Invoke-Op 'text.update' @{ baselineShift = 'super' }
+            Check 'a superscript shift can be set' ($sup.ok -ne $false) 'a result' "$($sup.error)"
+            Start-Sleep -Milliseconds 200
+            $m1 = ModelText
+            Check 'the shift is stored' ($m1 -match '(?i)baselineshift') 'a baseline shift' 'not stored'
+            $back = Invoke-Op 'text.update' @{ baselineShift = 0.0 }
+            Check 'the shift can be taken back' ($back.ok -ne $false) 'a result' "$($back.error)"
+            Start-Sleep -Milliseconds 200
+            $m2 = ModelText
+            Check 'a zero shift is the same as none' (-not ($m2 -match '(?i)"baselineshift":0\.5')) 'no half-em shift' 'still shifted'
+        }
+
+        33 {
+            New-Scene 'letter and word spacing'
+            $t = New-Text 'Spaced out words here'
+            if (-not $t) { Record-Failure 'a text block can be created' 'a text item' 'not found'; return }
+            SelectIds @($t.itemId)
+            $u = Invoke-Op 'text.update' @{ letterSpacing = 3.0; wordSpacing = 6.0 }
+            Check 'spacing can be set on a run' ($u.ok -ne $false) 'a result' "$($u.error)"
+            Start-Sleep -Milliseconds 200
+            $m = ModelText
+            Check 'the letter spacing is stored' ($m -match '(?i)letterspacing') 'a letter spacing' 'not stored'
+            Check 'the word spacing is stored' ($m -match '(?i)wordspacing') 'a word spacing' 'not stored'
+            $wider = ByName $t.name
+            Check 'the block measures wider than a plain one' ($null -ne $wider) 'a measured block' 'not found'
+        }
+
+        34 {
+            New-Scene 'alignment, leading and paragraph spacing'
+            $t = New-Text "first line`nsecond line"
+            if (-not $t) { Record-Failure 'a text block can be created' 'a text item' 'not found'; return }
+            SelectIds @($t.itemId)
+            $s = Invoke-Op 'text.style' @{ alignment = 'center'; lineSpacing = 1.6; paragraphSpacing = 8.0 }
+            Check 'paragraph style can be set' ($s.ok -ne $false) 'a result' "$($s.error)"
+            Start-Sleep -Milliseconds 200
+            $m = ModelText
+            Check 'the alignment is stored' ($m -match '(?i)"Alignment":"center"|alignment=center') 'center' 'not stored'
+            Check 'the leading is stored' ($m -match '(?i)linespacing') 'a line spacing' 'not stored'
+        }
+
+        35 {
+            New-Scene 'a vertical text column'
+            $t = New-Text 'VERTICAL COLUMN'
+            if (-not $t) { Record-Failure 'a text block can be created' 'a text item' 'not found'; return }
+            SelectIds @($t.itemId)
+            $before = ByName $t.name
+            $s = Invoke-Op 'text.style' @{ writingMode = 'vertical-rl' }
+            Check 'a writing mode can be set' ($s.ok -ne $false) 'a result' "$($s.error)"
+            Start-Sleep -Milliseconds 250
+            $m = ModelText
+            # The model names its own enums: the stored value is VerticalRl, not the CSS spelling a caller sends.
+            Check 'the writing mode is stored' ($m -match '(?i)"WritingMode":"VerticalRl"') 'WritingMode VerticalRl' 'not stored'
+            $after = ByName $t.name
+            Check 'a vertical column is taller than it is wide' ($null -ne $after -and $after.h -gt $after.w) 'h > w' ("w {0:N1} h {1:N1}" -f $after.w, $after.h)
+        }
+
+        36 {
+            New-Scene 'a right-to-left block'
+            $t = New-Text 'shalom olam'
+            if (-not $t) { Record-Failure 'a text block can be created' 'a text item' 'not found'; return }
+            SelectIds @($t.itemId)
+            $s = Invoke-Op 'text.style' @{ direction = 'rtl' }
+            Check 'a base direction can be set' ($s.ok -ne $false) 'a result' "$($s.error)"
+            Start-Sleep -Milliseconds 200
+            $m = ModelText
+            # Same again: the model stores RightToLeft, and that is the fact worth pinning.
+            Check 'the direction is stored' ($m -match '(?i)"Direction":"RightToLeft"') 'Direction RightToLeft' 'not stored'
+        }
+
+        37 {
+            New-Scene 'a text frame width and a rotation'
+            $t = New-Text 'A frame of words that has to wrap somewhere sensible'
+            if (-not $t) { Record-Failure 'a text block can be created' 'a text item' 'not found'; return }
+            SelectIds @($t.itemId)
+            $before = ByName $t.name
+            $s = Invoke-Op 'text.style' @{ frameWidth = 160.0 }
+            Check 'a frame width can be set' ($s.ok -ne $false) 'a result' "$($s.error)"
+            Start-Sleep -Milliseconds 250
+            $wrapped = ByName $t.name
+            Check 'wrapping makes the block taller' ($null -ne $wrapped -and $null -ne $before -and $wrapped.h -gt $before.h) 'a taller block' ("h {0:N1} then {1:N1}" -f $before.h, $wrapped.h)
+            $r = Invoke-Op 'text.style' @{ rotationDegrees = 30.0 }
+            Check 'a rotation can be set' ($r.ok -ne $false) 'a result' "$($r.error)"
+            Start-Sleep -Milliseconds 250
+            $m = ModelText
+            Check 'the rotation is stored' ($m -match '(?i)rotation') 'a rotation' 'not stored'
+        }
+
+        38 {
+            New-Scene 'centring a label on a shape'
+            $r = New-Obj 'rectangle' @{ x = 200; y = 200; width = 300; height = 200 } 'ci-rect'
+            $t = New-Text 'centred'
+            if (-not $t) { Record-Failure 'a text block can be created' 'a text item' 'not found'; return }
+            SelectIds @($t.itemId)
+            $c = Invoke-Op 'text.centerIn' @{ target = 'rect'; x = 200.0; y = 200.0; width = 300.0; height = 200.0 }
+            Check 'centring a text block answers' ($c.ok -ne $false) 'a result' "$($c.error)"
+            Start-Sleep -Milliseconds 250
+            $after = ByName $t.name
+            if ($after) {
+                $cx = $after.x + $after.w / 2.0
+                $cy = $after.y + $after.h / 2.0
+                Check 'the text now sits in the middle of the rectangle' ([Math]::Abs($cx - 350) -le 6 -and [Math]::Abs($cy - 300) -le 6) 'centre (350, 300)' ("centre ({0:N1}, {1:N1})" -f $cx, $cy)
+            } else { Record-Failure 'the centred text is findable' 'a text item' 'not found' }
+        }
+
+        # ---------------------------------------------------------------- definitions, instances and markers
+
+        39 {
+            New-Scene 'a definition and two placements'
+            $a = New-Obj 'ellipse' @{ cx = 220; cy = 240; rx = 60; ry = 60; fillColor = @(90, 160, 220) } 'df-a'
+            $b = New-Obj 'rectangle' @{ x = 240; y = 220; width = 80; height = 40; fillColor = @(240, 200, 90) } 'df-b'
+            SelectIds @($a.itemId, $b.itemId)
+            $c = Invoke-Op 'definition.create' @{ name = 'chip' }
+            Check 'a definition can be created from a selection' ($c.ok -ne $false) 'a result' "$($c.error)"
+            Start-Sleep -Milliseconds 300
+            $l = (Invoke-Op 'definition.list' @{}).result
+            $lj = ($l | ConvertTo-Json -Depth 8 -Compress)
+            Check 'the definition is listed' ($lj -match 'chip') 'chip' 'not listed'
+            $p = Invoke-Op 'definition.place' @{ name = 'chip'; x = 480.0; y = 360.0 }
+            Check 'a definition can be placed again' ($p.ok -ne $false) 'a result' "$($p.error)"
+            Start-Sleep -Milliseconds 300
+            $lj2 = (((Invoke-Op 'definition.list' @{}).result) | ConvertTo-Json -Depth 8 -Compress)
+            Check 'the placements are reported' ($lj2 -match 'chip') 'chip' 'not reported'
+            $rf = Invoke-Op 'instance.refresh' @{}
+            Check 'instances can be refreshed' ($rf.ok -ne $false) 'a result' "$($rf.error)"
+            $ip = (Invoke-Op 'instance.presentation' @{}).result
+            Check 'the presentation of the instances is reported' ($null -ne $ip) 'a report' 'nothing'
+        }
+
+        40 {
+            New-Scene 'a marker reference, dangling then cleared'
+            $p = New-Obj 'polyline' @{ points = @(@(160.0, 320.0), @(340.0, 200.0), @(520.0, 320.0)); strokeColor = @(0, 0, 0); strokeWidth = 3 } 'mk-path'
+            SelectIds @($p.itemId)
+            $s = Invoke-Op 'marker.set' @{ slot = 'end'; name = 'arrow' }
+            Check 'a marker can be named on a slot' ($s.ok -ne $false) 'a result' "$($s.error)"
+            Start-Sleep -Milliseconds 200
+            $l = ((Invoke-Op 'marker.list' @{}).result | ConvertTo-Json -Depth 8 -Compress)
+            Check 'the marker is listed on the path' ($l -match 'arrow') 'arrow' 'not listed'
+            Check 'a marker nobody defines is reported as unresolved' ($l -match '(?i)"resolved":false|resolved=false') 'resolved false' 'reported as resolved'
+            $d = (Invoke-Op 'marker.definitions' @{}).result
+            Check 'the document reports no marker definitions' (@($d) -eq $null -or @($d).Count -eq 0 -or (($d | ConvertTo-Json -Compress) -notmatch 'arrow')) 'no arrow definition' 'a definition exists'
+            $clear = Invoke-Op 'marker.set' @{ slot = 'end'; name = $null }
+            Check 'a marker can be cleared' ($clear.ok -ne $false) 'a result' "$($clear.error)"
+            Start-Sleep -Milliseconds 200
+            $m = ModelText
+            Check 'the reference is gone from the document' (-not ($m -match '(?i)"markerend":"arrow"')) 'no marker-end' 'still stored'
         }
     }
 }
