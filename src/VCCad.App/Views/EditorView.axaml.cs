@@ -578,6 +578,13 @@ public partial class EditorView : UserControl
             ? IconButton(icon, tip, (_, _) => _viewModel.Tool = tool)
             : MarkButton(mark, tip, (_, _) => _viewModel.Tool = tool);
 
+        // **A tool button must not take focus.** Clicking one used to move focus to the button, so the canvas
+        // stopped receiving keystrokes: Ctrl+A, Ctrl+Z and the arrow nudges did nothing until the canvas was
+        // clicked again (#239). Focusing the canvas after the click fixed that and broke the pane fields -
+        // HexBox lost the keyboard and eleven checks failed - because both were relying on the same focus in
+        // opposite directions. A button that does not take focus fixes the canvas and leaves the fields alone.
+        button.Focusable = false;
+
         _toolButtons[tool] = button;
 
         // Named for a driver. `ui.find` can match a tooltip, but a name is the thing a caller can rely on:
