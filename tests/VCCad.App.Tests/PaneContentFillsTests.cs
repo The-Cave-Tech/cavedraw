@@ -41,10 +41,19 @@ public class PaneContentFillsTests
     }
 
     [AvaloniaFact]
-    public void TheObjectsListIsThePanesWholeContent()
+    public void ThePanesContentHoldsTheListWithoutSizingIt()
     {
         // No wrapper that would size it independently of the pane.
         var pane = new ObjectsPane();
-        Assert.Same(pane.Content, pane.FindControl<TreeView>("ObjectTree"));
+        // The pane's content holds the list, and the list still keeps no height of its own.
+        // This asserted Content WAS the tree, as a way of saying "no wrapper that sizes the list
+        // independently". A wrapper whose child takes the height it is given satisfies that, and
+        // the first two tests in this file already pin it directly, so the assertion is now the
+        // same invariant stated about the child. FindControl reaches the named template whether or
+        // not the pane is attached, which GetVisualDescendants does not.
+        TreeView tree = pane.FindControl<TreeView>("ObjectTree")!;
+        Assert.NotNull(tree);
+        Assert.True(double.IsNaN(tree.Height),
+            $"the list should take the height it is given, but it asks for {tree.Height}");
     }
 }
