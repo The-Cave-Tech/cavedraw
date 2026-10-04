@@ -257,12 +257,18 @@ function Run-Scene {
             VerifyOutlineSelect $r 'the rectangle'
             $tab = Find-ByText 'Gradient'
             if ($tab) {
-                ClickAt ([int]($tab.x + $tab.width / 2)) ([int]($tab.y + $tab.height / 2))
+                # **Click by name, not by coordinate.** ClickAt goes through input.pointer, whose frame
+                # never matched view.toScreen, so the pane never opened and the ramp was looked for in
+                # the wrong tab. Measured with ui.click: the Gradient tab opens, and GradientRamp#Ramp
+                # is in it.
+                Invoke-Op 'ui.click' @{ text = 'Gradient' } | Out-Null
                 Start-Sleep -Milliseconds 400
                 $before = (Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 12 -Compress
-                $ramp = Find-Control 'GradientRamp'
+                # The ramp is GradientRamp by TYPE and Ramp by NAME - the dump writes GradientRamp#Ramp - so a
+                # lookup by name does not find it even with the pane open.
+                $ramp = (Invoke-Op 'ui.find' @{ type = 'GradientRamp' }).result.controls | Select-Object -First 1
                 if ($ramp) {
-                    ClickAt ([int]($ramp.x + $ramp.width * 0.3)) ([int]($ramp.y + $ramp.height / 2))
+                    Invoke-Op 'ui.click' @{ type = 'GradientRamp' } | Out-Null
                     Start-Sleep -Milliseconds 300
                     $after = (Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 12 -Compress
                     Check 'clicking the gradient ramp changes the paint' ($before -ne $after) 'a different model' 'unchanged'
