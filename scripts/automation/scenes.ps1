@@ -36,11 +36,14 @@ function StrokeWidth {
     # Two traps here, both learned by failing: a Stroke block carries a nested Color object, so a pattern that
     # forbids braces between the key and Width never matches at all; and a document with more than one shape
     # has more than one Stroke block, so the read has to start at the item under test rather than at the first.
-    $i = if ($id) { $j.IndexOf('"' + $id + '"') } else { $j.IndexOf('"Stroke":') }
-    if ($i -lt 0) { return -1 }
+    # The JSON holds lower-case ids and the dump does not promise any case, so the search normalises: the
+    # reader returned -1 for two rounds because it looked for the id exactly as the dump gave it.
+    $i = if ($id) { $j.IndexOf('"' + $id.ToLowerInvariant() + '"') } else { $j.IndexOf('"Stroke":') }
+    if ($i -lt 0) { Write-Host ("     [StrokeWidth] searched for id='" + $id + "' and did not find it") -ForegroundColor DarkYellow; return -1 }
     $seg = $j.Substring($i, [Math]::Min(500, $j.Length - $i))
     $m = [regex]::Match($seg, '"Width"\s*:\s*(-?[0-9.]+)')
     if ($m.Success) { return [double]$m.Groups[1].Value }
+    Write-Host ("     [StrokeWidth] id='" + $id + "' index=" + $i + " segment=" + $seg.Substring(0, [Math]::Min(120, $seg.Length))) -ForegroundColor DarkYellow
     return -1
 }
 
@@ -475,23 +478,30 @@ function Run-Scene {
             # path.expandStroke is Illustrator's Outline Stroke, and its own description fixes the width rule:
             # "below 4pt the original over four, otherwise 1pt". Both halves are checked here, and the whole
             # gesture is one undo step.
-            $e = DrawEllipse 150 150 200 140
+            #
+            # Every item comes from LastItem, never from what a draw helper emits: those helpers push more
+            # than one object down the pipeline, so a cached "item" can be a stream and "$item.id" on it is
+            # the empty string. That is how this scene spent three rounds searching for the literal id ".id" -
+            # and why the "wider path" comparison beside it passed for the wrong reason, comparing against
+            # nothing.
+            [void](DrawEllipse 150 150 200 140)
             StyleStroke '0000ff' 6
-            Check 'the stroke is 6pt before expanding' ((StrokeWidth .id) -eq 6) '6' (StrokeWidth .id)
             $before = LastItem
+            Check 'the stroke is 6pt before expanding' ((StrokeWidth $before.id) -eq 6) '6' (StrokeWidth $before.id)
             $r = Invoke-Op 'path.expandStroke' @{}
             Check 'expanding reports what it did' ($null -ne $r.result.expanded) 'a count' ($r.result | ConvertTo-Json -Compress)
-            Check 'a 6pt stroke expands to an outline carrying 1pt' ((StrokeWidth .id) -eq 1) '1' (StrokeWidth .id)
             $after = LastItem
+            Check 'a 6pt stroke expands to an outline carrying 1pt' ((StrokeWidth $after.id) -eq 1) '1' (StrokeWidth $after.id)
             Check 'the outline has both edges and is wider than the shape' (($after.w -gt $before.w) -and ($after.id -ne $before.id)) 'a new, wider path' ("{0:N1} on id {1}" -f $after.w, $after.id)
             Keys 'Ctrl+Z'
             Check 'one undo restores the original path' ([Math]::Abs((LastItem).w - $before.w) -le 1) ("{0:N1}" -f $before.w) ("{0:N1}" -f (LastItem).w)
 
             # The other half of the rule: a stroke thinner than 4pt expands to a quarter of itself.
-            $thin = DrawRect 420 200 140 100
+            [void](DrawRect 420 200 140 100)
             StyleStroke '008000' 2
             Invoke-Op 'path.expandStroke' @{} | Out-Null
-            Check 'a 2pt stroke expands to a 0.5pt outline' (((StrokeWidth (LastItem).id) - 0.5) -lt 0.0001) '0.5' (StrokeWidth (LastItem).id)
+            $afterThin = LastItem
+            Check 'a 2pt stroke expands to a 0.5pt outline' (((StrokeWidth $afterThin.id) - 0.5) -lt 0.0001) '0.5' (StrokeWidth $afterThin.id)
         }
     }
 }
