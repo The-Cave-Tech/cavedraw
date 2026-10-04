@@ -17,7 +17,7 @@ param([string]$Only = '', [string]$ReportPath = 'artifacts\auto\report-h.json')
 
 # How many scenes this file currently defines. Bumped as batches are added, so the runner can never report a
 # scene as passing when it has no case at all.
-$SceneCount = 20
+$SceneCount = 30
 
 # A shape's outline always selects it: clear, click the top edge, expect exactly it.
 function VerifyOutlineSelect {
@@ -446,6 +446,187 @@ function Run-Scene {
             Start-Sleep -Milliseconds 150
             $g4 = (Invoke-Op 'gradient.get' @{}).result
             Check 'removing it gives two again' (@($g4.gradient.stops).Count -eq 2) '2 stops' "@(@($g4.gradient.stops).Count)"
+        }
+
+        # ---------------------------------------------------------------- stroke stacks, profiles and effects
+
+        21 {
+            New-Scene 'a second stroke on one path'
+            $r = New-Obj 'rectangle' @{ x = 160; y = 160; width = 240; height = 170; fillColor = @(250, 250, 250) } 'ms-rect'
+            SelectIds @($r.itemId)
+            $s0 = (Invoke-Op 'style.strokes' @{}).result
+            Check 'a fresh path carries one stroke' ($s0.count -eq 1) '1 stroke' "$($s0.count)"
+            $add = Invoke-Op 'style.addStroke' @{ color = @(220, 30, 30); width = 6; cap = 'round' }
+            Check 'a stroke can be added' ($add.ok -ne $false) 'a result' "$($add.error)"
+            Start-Sleep -Milliseconds 150
+            $s1 = (Invoke-Op 'style.strokes' @{}).result
+            # **Read the array, not the count.** style.strokes' own `count` is stale after addStroke - it reports
+            # 1 while the same response lists 2 - which is filed as #242. The add is not in doubt: it answers
+            # {"changed":1} and the second row is the stroke that was asked for.
+            Check 'the stack now holds two strokes' (@($s1.strokes).Count -eq 2) '2 strokes' "$(@($s1.strokes).Count)"
+            $top = @($s1.strokes)[1]
+            Check 'the new stroke is on top with its width' ([Math]::Abs($top.width - 6) -lt 0.01) 'width 6' "$($top.width)"
+            Check 'and with its colour' ($top.hex -eq '#dc1e1e') '#dc1e1e' "$($top.hex)"
+            Check 'and with its cap' ($top.cap -eq 'round') 'round' "$($top.cap)"
+        }
+
+        22 {
+            New-Scene 'reordering and hiding a stroke'
+            $r = New-Obj 'rectangle' @{ x = 170; y = 170; width = 220; height = 150; fillColor = @(240, 240, 240) } 'ro-rect'
+            SelectIds @($r.itemId)
+            Invoke-Op 'style.addStroke' @{ color = @(30, 90, 200); width = 5 } | Out-Null
+            Start-Sleep -Milliseconds 150
+            $re = Invoke-Op 'style.reorderStroke' @{ from = 0; to = 1 }
+            Check 'reordering a stroke answers' ($re.ok -ne $false) 'a result' "$($re.error)"
+            Start-Sleep -Milliseconds 150
+            $s = (Invoke-Op 'style.strokes' @{}).result
+            Check 'both strokes are still there after reordering' (@($s.strokes).Count -eq 2) '2 strokes' "$(@($s.strokes).Count)"
+            Invoke-Op 'style.setStrokeVisible' @{ visible = $false; index = 0 } | Out-Null
+            Start-Sleep -Milliseconds 150
+            $s2 = (Invoke-Op 'style.strokes' @{}).result
+            $hidden = @($s2.strokes | Where-Object { -not $_.visible })
+            Check 'one stroke is now hidden' (@($hidden).Count -eq 1) '1 hidden stroke' "@($hidden).Count hidden"
+        }
+
+        23 {
+            New-Scene 'a translucent stroke that multiplies'
+            $r = New-Obj 'rectangle' @{ x = 180; y = 180; width = 200; height = 140; fillColor = @(255, 240, 200) } 'bl-rect'
+            SelectIds @($r.itemId)
+            Invoke-Op 'style.addStroke' @{ color = @(20, 20, 20); width = 8 } | Out-Null
+            Start-Sleep -Milliseconds 150
+            $set = Invoke-Op 'style.setStroke' @{ index = 1; opacity = 0.4; blend = 'multiply'; width = 8 }
+            Check 'per-stroke opacity and blend can be set' ($set.ok -ne $false) 'a result' "$($set.error)"
+            Start-Sleep -Milliseconds 150
+            $s = (Invoke-Op 'style.strokes' @{}).result
+            $top = @($s.strokes)[1]
+            Check 'the stroke reports its opacity' ([Math]::Abs($top.effectiveOpacity - 0.4) -lt 0.02) '0.40' ("{0:N2}" -f $top.effectiveOpacity)
+        }
+
+        24 {
+            New-Scene 'a width profile along a stroke'
+            $p = New-Obj 'polyline' @{ points = @(@(120.0, 330.0), @(280.0, 180.0), @(440.0, 330.0)); strokeColor = @(0, 0, 0); strokeWidth = 6 } 'wp-path'
+            SelectIds @($p.itemId)
+            $set = Invoke-Op 'style.setWidthProfile' @{ points = @(
+                @{ position = 0.0; left = 1.0; right = 1.0 },
+                @{ position = 1.0; left = 9.0; right = 9.0 }
+            ) }
+            Check 'a width profile can be set' ($set.ok -ne $false) 'a result' "$($set.error)"
+            Start-Sleep -Milliseconds 200
+            $m = ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
+            Check 'the profile is stored on the stroke' ($m -match '(?i)widthprofile|profile') 'a width profile' 'no profile in the model'
+            $common = (Invoke-Op 'style.commonStroke' @{}).result
+            Check 'the common stroke answers' ($null -ne $common) 'a summary' 'nothing'
+        }
+
+        25 {
+            New-Scene 'a tablet response on a stroke'
+            $p = New-Obj 'polyline' @{ points = @(@(140.0, 320.0), @(300.0, 200.0), @(460.0, 320.0)); strokeColor = @(20, 20, 20); strokeWidth = 5 } 'dy-path'
+            SelectIds @($p.itemId)
+            $d = Invoke-Op 'style.setDynamics' @{ target = 'width'; preset = 'soft' }
+            Check 'dynamics can be set' ($d.ok -ne $false) 'a result' "$($d.error)"
+            Start-Sleep -Milliseconds 200
+            $m = ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
+            Check 'the dynamics are stored' ($m -match '(?i)dynamics') 'a dynamics block' 'no dynamics in the model'
+            $off = Invoke-Op 'style.setDynamics' @{ target = 'width'; enabled = $false }
+            Check 'one target can be switched off' ($off.ok -ne $false) 'a result' "$($off.error)"
+        }
+
+        26 {
+            New-Scene 'a zigzag outline effect'
+            $r = New-Obj 'rectangle' @{ x = 180; y = 180; width = 200; height = 140; fillColor = @(255, 255, 255); strokeColor = @(0, 0, 0); strokeWidth = 3 } 'zz-rect'
+            SelectIds @($r.itemId)
+            $a = Invoke-Op 'style.addStrokeEffect' @{ kind = 'zigZag'; size = 5.0; ridges = 3; seed = 2.0 }
+            Check 'an outline effect can be added' ($a.ok -ne $false) 'a result' "$($a.error)"
+            Start-Sleep -Milliseconds 200
+            $m1 = ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
+            Check 'the effect is stored' ($m1 -match '(?i)zigzag') 'a zigZag effect' 'no zigZag in the model'
+            $p = Invoke-Op 'style.setEffectParameter' @{ name = 'ridges'; value = 6; index = 0 }
+            Check 'an effect parameter can be set' ($p.ok -ne $false) 'a result' "$($p.error)"
+            Start-Sleep -Milliseconds 200
+            $m2 = ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
+            Check 'the new ridge count is stored' ($m2 -match '(?i)"ridges":6|ridges=6|"Ridges":6') 'six ridges' 'unchanged'
+        }
+
+        27 {
+            New-Scene 'two effects, reordered then one removed'
+            $r = New-Obj 'rectangle' @{ x = 190; y = 190; width = 180; height = 130; fillColor = @(255, 255, 255); strokeColor = @(0, 0, 0); strokeWidth = 3 } 'ef-rect'
+            SelectIds @($r.itemId)
+            Invoke-Op 'style.addStrokeEffect' @{ kind = 'zigZag'; size = 4.0; ridges = 2 } | Out-Null
+            Start-Sleep -Milliseconds 150
+            Invoke-Op 'style.addStrokeEffect' @{ kind = 'roughen'; size = 3.0; detail = 2.0 } | Out-Null
+            Start-Sleep -Milliseconds 200
+            $m1 = ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
+            Check 'both effects are stored' (($m1 -match '(?i)zigzag') -and ($m1 -match '(?i)roughen')) 'zigZag and roughen' 'one is missing'
+            $ro = Invoke-Op 'style.reorderStrokeEffect' @{ from = 0; to = 1 }
+            Check 'an effect can be reordered' ($ro.ok -ne $false) 'a result' "$($ro.error)"
+            $rm = Invoke-Op 'style.removeStrokeEffect' @{ index = 0 }
+            Check 'an effect can be removed' ($rm.ok -ne $false) 'a result' "$($rm.error)"
+            Start-Sleep -Milliseconds 200
+            $m2 = ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
+            $left = 0
+            if ($m2 -match '(?i)zigzag') { $left++ }
+            if ($m2 -match '(?i)roughen') { $left++ }
+            Check 'one effect is left' ($left -eq 1) '1 effect' "$left effects"
+        }
+
+        28 {
+            New-Scene 'a drop shadow as a raster effect'
+            $r = New-Obj 'rectangle' @{ x = 200; y = 200; width = 180; height = 130; fillColor = @(250, 250, 250) } 'rs-rect'
+            SelectIds @($r.itemId)
+            $a = Invoke-Op 'style.addRasterEffect' @{ kind = 'dropShadow'; radius = 6.0; offsetX = 8.0; offsetY = 8.0; opacity = 0.5; tint = @(0, 0, 0) }
+            Check 'a raster effect can be added' ($a.ok -ne $false) 'a result' "$($a.error)"
+            Start-Sleep -Milliseconds 200
+            $m = ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
+            Check 'the shadow is stored' ($m -match '(?i)dropshadow') 'a dropShadow effect' 'no dropShadow in the model'
+            $rm = Invoke-Op 'style.removeRasterEffect' @{ index = 0 }
+            Check 'a raster effect can be removed' ($rm.ok -ne $false) 'a result' "$($rm.error)"
+            Start-Sleep -Milliseconds 200
+            $m2 = ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
+            Check 'the shadow is gone' (-not ($m2 -match '(?i)dropshadow')) 'no dropShadow' 'still stored'
+        }
+
+        29 {
+            New-Scene 'the powerstroke path effect'
+            $p = New-Obj 'polyline' @{ points = @(@(140.0, 340.0), @(280.0, 180.0), @(420.0, 340.0)); strokeColor = @(0, 0, 0); strokeWidth = 6 } 'ps-path'
+            SelectIds @($p.itemId)
+            $l0 = (Invoke-Op 'pathEffect.list' @{}).result
+            Check 'the build reports powerstroke as implemented' (@($l0.implemented) -contains 'powerstroke') 'powerstroke' "$(@($l0.implemented) -join ',')"
+            Check 'the list names the path it can act on' (@($l0.items).Count -ge 1) 'the path' "$(@($l0.items).Count) items"
+            # **Powerstroke cannot be built today.** A path that carries a width profile - through either the
+            # per-stroke route or the profile library, both tried by hand - is still refused with "'powerstroke'
+            # carries no offset points, so there is no width to build". The library route is exercised here
+            # because it is the one a person uses, and the refusal is pinned as a sentinel: when #243 is fixed
+            # this check must become the positive assertion that the effect lands.
+            $pc = Invoke-Op 'profile.create' @{ name = 'wide'; points = @(
+                @{ position = 0.0; left = 2.0; right = 2.0 },
+                @{ position = 0.5; left = 14.0; right = 14.0 },
+                @{ position = 1.0; left = 2.0; right = 2.0 }
+            ) }
+            Check 'a width profile can be created' ($pc.result.points -eq 3) '3 points' "$($pc.result.points)"
+            $pa = Invoke-Op 'profile.apply' @{ name = 'wide' }
+            Check 'the profile applies to the path' ($pa.result.paths -eq 1) '1 path' "$($pa.result.paths)"
+            Start-Sleep -Milliseconds 200
+            $st = (Invoke-Op 'style.strokes' @{}).result.strokes
+            Check 'the stroke carries the profile' ($null -ne $st.profile -and @($st.profile.points).Count -eq 3) 'a 3-point profile' "$(if ($st.profile) { @($st.profile.points).Count } else { 'none' })"
+            $a = Invoke-Op 'pathEffect.apply' @{ effect = 'powerstroke' }
+            $refused = @($a.result.refused)
+            Check 'powerstroke is refused although the path carries a width profile (#243)' ($refused.Count -eq 1 -and $a.result.strokes -eq 0) 'one refusal and no stroke effect' "$($refused.Count) refused, $($a.result.strokes) strokes"
+        }
+
+        30 {
+            New-Scene 'a hatch fill, then off again'
+            $r = New-Obj 'rectangle' @{ x = 180; y = 180; width = 220; height = 160; strokeColor = @(20, 40, 90); strokeWidth = 2 } 'ha-rect'
+            SelectIds @($r.itemId)
+            $h = Invoke-Op 'style.setHatch' @{ angle = 30.0; spacing = 6.0; width = 2.0; cross = $true }
+            Check 'a hatch can be set' ($h.ok -ne $false) 'a result' "$($h.error)"
+            Start-Sleep -Milliseconds 200
+            $m = ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
+            Check 'the hatch is stored on the fill' ($m -match '(?i)hatch') 'a hatch' 'no hatch in the model'
+            $c = Invoke-Op 'style.setHatch' @{ clear = $true }
+            Check 'the hatch can be cleared' ($c.ok -ne $false) 'a result' "$($c.error)"
+            Start-Sleep -Milliseconds 200
+            $m2 = ((Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress)
+            Check 'the hatch is gone' (-not ($m2 -match '(?i)"hatch"')) 'no hatch' 'still stored'
         }
     }
 }
