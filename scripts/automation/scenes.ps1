@@ -122,6 +122,14 @@ function Run-Scene {
             Check 'holding the shape tool opens its flyout' ($open.Count -gt 0) 'an open popup' (($open | ForEach-Object { $_.name }) -join ',')
             Keys 'Escape'
             Start-Sleep -Milliseconds 300
+            # **A long press opens the flyout; it does not arm a shape.** Measured: with the tool at select, a
+            # hold leaves it at select - the tool is armed by a normal click (tool.get: shape, shape=rectangle)
+            # and a shape is picked from the flyout itself. So the drag below was a marquee, which draws
+            # nothing, and the check read that as the gesture failing. Arm the tool the way a person does, then
+            # drag.
+            Invoke-Op 'ui.click' @{ name = 'ShapeToolButton' } | Out-Null
+            Start-Sleep -Milliseconds 300
+            Tool 'ToolShape' 'shape' | Out-Null
             DragModel 120 200 220 300
             Check 'a shape is drawn after the flyout gesture' ((ItemCount) -gt $before) "$($before + 1) items" "$(ItemCount) items"
         }
