@@ -184,7 +184,11 @@ function Run-Scene {
 
             Keys 'Home'; Keys 'Enter'
             $nl = TextOf $id
-            Check 'Enter inserts a newline rather than doing nothing' ($nl.StartsWith("`n")) 'a leading newline' ("'" + $nl.Replace("`n", '\n') + "'")
+            # TextOf reads the dump, which now **escapes** a newline as the two characters \n rather than
+            # substituting a space for it: the substitution had the right length and the wrong characters, and
+            # it hid this check behind a string the document did not contain (#234). The check therefore tests
+            # the escaped form, which is what a reader of the dump sees.
+            Check 'Enter inserts a newline rather than doing nothing' ($nl.StartsWith('\n')) 'a leading newline' ("'" + $nl + "'")
 
             Keys 'Ctrl+A'
             TypeText 'Bilbo Baggins — ë ü 漢字'
