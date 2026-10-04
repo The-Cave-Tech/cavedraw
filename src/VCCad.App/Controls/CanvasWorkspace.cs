@@ -983,9 +983,9 @@ public sealed class CanvasWorkspace : Control
                 // text beside it and sent every keystroke there: the words stayed where they were and the
                 // typing landed in the new object, which is how a document ends up with stray text over text
                 // (#212). The same hit-test the selection uses decides it.
-                if (HitTestTopItem(model) is TextItem opened)
+                if (TextToOpenAt(model) is { } openedText)
                 {
-                    EnterTextEdit(opened, model);
+                    EnterTextEdit(openedText, model);
                     break;
                 }
 
@@ -6622,6 +6622,16 @@ public sealed class CanvasWorkspace : Control
         InvalidateVisual();
         return true;
     }
+
+    /// <summary>
+    /// The text object a press at a world point should open, or null when there is nothing to open there.
+    ///
+    /// The text tool used to create a new object on every press (#212): clicking a block you could see put a
+    /// second, empty text beside it and every keystroke went into the new one, while the words stayed where
+    /// they were. Whether a press opens an existing block or starts a new one is the decision this method
+    /// makes, and it is internal so a test can assert it without driving a pointer or a window.
+    /// </summary>
+    internal TextItem? TextToOpenAt(Point2D model) => HitTestTopItem(model) as TextItem;
 
     private static bool TextEquals(TextItem a, TextItem b)
     {
