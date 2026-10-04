@@ -312,14 +312,19 @@ function New-Scene {
 
 function Calibrate {
     param([double]$x = 120.0, [double]$y = 120.0)
-    Tool 'ToolRectangle' 'rectangle' | Out-Null
-    DragModel $x $y ($x + 90) ($y + 70)
-    $item = LastItem
-    if (-not $item) { throw 'calibration drew nothing' }
-    $script:Ox = $item.x - $x
-    $script:Oy = $item.y - $y
-    Keys 'Ctrl+Z'
-    Write-Host ("calibrated: canvas origin ({0:N1},{1:N1})" -f $script:Ox, $script:Oy)
+    # **The canvas' window origin is where it is drawn, not something to infer by drawing.** This used to
+    # drag a rectangle and take the difference between the requested and the created position, which measures
+    # the rounding of a synthetic drag - it reported (-0.3,-0.7) while the canvas actually sits at (50,93.3).
+    # Every ClickModel gesture aimed through that pair then landed a canvas-origin away from its target, which
+    # is how a caret click inside a text arrived forty points below it (#211 closed as that measurement error).
+    # ui.find answers the question directly.
+    $canvas = (Invoke-Op 'ui.find' @{ type = 'CanvasWorkspace' }).result.controls | Select-Object -First 1
+    if (-not $canvas) { throw 'calibration could not find the canvas' }
+    $script:Ox = [double]$canvas.x
+    $script:Oy = [double]$canvas.y
+    $script:Ow = [double]$canvas.width
+    $script:Oh = [double]$canvas.height
+    Write-Host ("calibrated: canvas at window ({0:N1},{1:N1}) {2:N1}x{3:N1}" -f $script:Ox, $script:Oy, $script:Ow, $script:Oh)
 }
 
 # ------------------------------------------------------------------ drawing helpers (gestures only)
