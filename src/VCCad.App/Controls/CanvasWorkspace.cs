@@ -7428,6 +7428,53 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        // Arrow keys nudge the selection - one point, or ten with Shift, which is what Adobe and
+        // Inkscape do and what closes a one-point gap without a drag. It goes through the session's
+        // own transform, the same call `object.move` makes, so a key and the API move a thing
+        // identically rather than each having its own idea of "move by a bit".
+        if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down)
+        {
+            if (_vm.SelectedObjects.Count > 0)
+            {
+                double step = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? 10.0 : 1.0;
+                double dx = e.Key == Key.Left ? -step : e.Key == Key.Right ? step : 0.0;
+                double dy = e.Key == Key.Up ? -step : e.Key == Key.Down ? step : 0.0;
+
+                Rect2D bounds = _vm.SelectionBounds();
+                Point2D pivot = bounds.IsEmpty ? new Point2D(0, 0) : bounds.Center;
+                _vm.ApplyTransform(pivot, new Vector2D(dx, dy), 1, 1, 0);
+                e.Handled = true;
+            }
+
+            return;
+        }
+
+        // The object clipboard: Ctrl+C, Ctrl+X and Ctrl+V with objects selected. Text editing has its
+        // own clipboard and never reaches here, because that path returns above. The operations
+        // object.copy, object.cut and object.paste call the very same class, so the keyboard and the
+        // API cannot come to mean different things.
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key is Key.C or Key.X or Key.V)
+        {
+            DocumentSession session = _vm.ActiveSession;
+            if (e.Key == Key.C)
+            {
+                ObjectClipboard.Copy(session);
+            }
+            else if (e.Key == Key.X)
+            {
+                ObjectClipboard.Cut(session);
+                _vm.NotifyDocumentChanged();
+            }
+            else
+            {
+                ObjectClipboard.Paste(session);
+                _vm.NotifyDocumentChanged();
+            }
+
+            e.Handled = true;
+            return;
+        }
+
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.G)
         {
             if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))

@@ -1622,6 +1622,58 @@ public static class EditorOperations
                 return Summary(ctx);
             });
 
+        Add("object.copy",
+            "Copy the selected objects to the object clipboard - what Ctrl+C does when objects, not " +
+            "text, are selected.",
+            "",
+            (ctx, _) =>
+            {
+                int copied = ObjectClipboard.Copy(ctx.Session);
+                return new
+                {
+                    copied,
+                    held = ObjectClipboard.Count,
+                    hint = copied == 0
+                        ? "nothing is selected: select objects first, or use selection.selectAll"
+                        : "object.paste puts them back, and object.cut takes them away",
+                };
+            });
+
+        Add("object.cut",
+            "Copy the selected objects to the object clipboard and delete them - what Ctrl+X does.",
+            "",
+            (ctx, _) =>
+            {
+                int cut = ObjectClipboard.Cut(ctx.Session);
+                if (cut > 0)
+                {
+                    ctx.ViewModel.NotifyDocumentChanged();
+                }
+
+                return new { cut, held = ObjectClipboard.Count };
+            });
+
+        Add("object.paste",
+            "Paste the object clipboard in place and select the copies, as one undo step - what Ctrl+V " +
+            "does. The copies land on the original, selected, so one arrow key takes them clear, and " +
+            "that is what keeps a paste a single undo.",
+            "",
+            (ctx, _) =>
+            {
+                LayerItem[] pasted = ObjectClipboard.Paste(ctx.Session);
+                if (pasted.Length > 0)
+                {
+                    ctx.ViewModel.NotifyDocumentChanged();
+                }
+
+                return new
+                {
+                    pasted = pasted.Length,
+                    held = ObjectClipboard.Count,
+                    selected = ctx.Session.SelectedObjects.Count,
+                };
+            });
+
         Add("object.moveToLayer",
             "Move objects onto another layer, as dragging them in the Layers panel does. This " +
             "is how an object comes to belong to a different artboard, and without it a driver " +
@@ -7560,7 +7612,9 @@ public static class EditorOperations
     private static object ReplayInputBatch(
         AutomationContext ctx, Avalonia.Visual root, InputBatch batch, bool fast, string? savePath)
     {
-        var clock = new SystemInputClock();
+        // Pumping, not sleeping: a gesture's deltas are part of the gesture, and a timer that cannot
+        // tick during a hold turns a long press into a dead one - see DispatchingInputClock.
+        var clock = new DispatchingInputClock();
         var recorder = new InputRecorder(clock);
         InputReplayResult done;
 

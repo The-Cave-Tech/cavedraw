@@ -42,6 +42,7 @@ public static class InputInjection
             throw new EditorOperationException($"Nothing is at ({x},{y}).");
         }
 
+        FocusFor(control);
         var pointer = new Pointer(++_pointerId, PointerType.Mouse, true);
         _activePointer = pointer;
         Point position = root.TranslatePoint(new Point(x, y), control) ?? new Point(x, y);
@@ -144,6 +145,7 @@ public static class InputInjection
     {
         Visual target = HitTest(root, x, y)
             ?? throw new EditorOperationException($"Nothing is at ({x},{y}).");
+        FocusFor(target);
         var pointer = new Pointer(++_pointerId, pointerType, true);
         _activePointer = pointer;
         Point position = root.TranslatePoint(new Point(x, y), target) ?? new Point(x, y);
@@ -333,6 +335,32 @@ public static class InputInjection
         return $"wheel {delta:+0;-0} at ({x:F0},{y:F0})";
     }
 
+    /// <summary>
+    /// Gives the target the keyboard focus a real press gives it.
+    ///
+    /// A real pointer press focuses the first focusable element on the way, which is what makes the
+    /// next keystroke land where the person clicked: typing into a field, nudging a shape, Escape out
+    /// of an edit. Raising the press by hand skips that step, so keys went to whatever held focus
+    /// before - a hex typed into the Fill box went nowhere, and an arrow key did not move the shape -
+    /// and neither reported an error.
+    ///
+    /// The hit test often lands on an *inner* visual - a `TextPresenter` inside a TextBox, an icon
+    /// inside a button - so walking up to the first focusable element is the part that matters. A
+    /// control that is not focusable is skipped rather than forced, because that is what the input
+    /// manager does and a control that refuses focus has a reason.
+    /// </summary>
+    private static void FocusFor(Visual target)
+    {
+        for (Visual? v = target; v is not null; v = v.GetVisualParent())
+        {
+            if (v is InputElement { Focusable: true, IsEffectivelyEnabled: true } element)
+            {
+                element.Focus(NavigationMethod.Pointer);
+                return;
+            }
+        }
+    }
+
     private static void Press(Control control, Pointer pointer, Point position,
         PointerPointProperties properties, KeyModifiers modifiers, int clickCount)
         => control.RaiseEvent(new PointerPressedEventArgs(
@@ -369,10 +397,55 @@ public static class InputInjection
             if (visual is Control { IsVisible: true, IsHitTestVisible: true } control &&
                 control.Bounds.Width > 0 && control.Bounds.Height > 0)
             {
-                return control;
+                return Deepest(control, root, point);
             }
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The innermost hit-testable visual under the point, because a routed event travels **up** from
+    /// its source and never down.
+    ///
+    /// Taking the first visual Avalonia reports is not enough. When that is an outer control - and for
+    /// a button built from a template it often is - raising the press on it delivers the event to that
+    /// control and its ancestors, and every handler on the parts *inside* it is skipped. That is how a
+    /// long press on the shape tool produced no flyout while the same press by hand did: the control
+    /// that opens the flyout is an inner button, and it never heard about the press.
+    ///
+    /// The walk stops at the last visual that is both hit-testable and actually contains the point, so
+    /// a transparent parent cannot swallow a gesture aimed at a child.
+    /// </summary>
+    private static Visual Deepest(Visual candidate, Visual root, Point point)
+    {
+        Visual current = candidate;
+
+        while (true)
+        {
+            Visual? next = null;
+            foreach (Visual child in current.GetVisualChildren())
+            {
+                if (child is not Control { IsVisible: true, IsHitTestVisible: true } control ||
+                    control.Bounds.Width <= 0 || control.Bounds.Height <= 0)
+                {
+                    continue;
+                }
+
+                if (root.TranslatePoint(point, control) is { } local &&
+                    new Rect(control.Bounds.Size).Contains(local))
+                {
+                    next = control;
+                    break;
+                }
+            }
+
+            if (next is null)
+            {
+                return current;
+            }
+
+            current = next;
+        }
     }
 }
