@@ -296,7 +296,11 @@ function Run-Scene {
             $add = Find-ByText 'Add layer'
             if (-not $add) { $add = Find-Control 'AddLayerButton' }
             if ($add) {
-                ClickAt ([int]($add.x + $add.width / 2)) ([int]($add.y + $add.height / 2))
+                # **Click it by name, not by coordinate.** ClickAt goes through input.pointer, whose coordinate
+                # frame is the one that has never matched view.toScreen; the same button clicked with ui.click
+                # adds the layer (measured: Layer 1 -> Layer 2, layer.list and ui.dump agreeing). ui.click finds
+                # the control itself, so there is no aim to get wrong.
+                $clicked = Invoke-Op 'ui.click' @{ type = 'Button'; text = 'Add layer' }
                 Start-Sleep -Milliseconds 350
             } else { Record-Failure 'the layers pane offers Add layer' 'a control to add a layer' 'not found' }
             $after = ((DocText) -split "`r?`n" | Where-Object { $_ -match '^LAYER' }).Count
