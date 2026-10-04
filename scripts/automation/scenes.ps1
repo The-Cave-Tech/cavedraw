@@ -448,7 +448,11 @@ function Run-Scene {
             Tool 'ToolText' 'text' | Out-Null
             ClickModel 40 30 | Out-Null
             TypeText 'There and Back Again'
-            Check 'the collage title is stored' ((LastItem).text -eq 'There and Back Again') 'the title' "'$((LastItem).text)'"
+            # **Read the text, not the last item in the tree.** After a dozen shapes LastItem is a path, which has
+            # no text at all, so this compared '' with the title. object.find type=text answers directly: measured
+            # on the built binary, the text is in the document with the right string and LastItem is a polygon.
+            $title = (Invoke-Op 'object.find' @{ type = 'text' }).result.items | Select-Object -First 1
+            Check 'the collage title is stored' ($title.text -eq 'There and Back Again') 'the title' ("'" + $title.text + "'")
             VerifyOutlineSelect $lake 'the lake'
             Check 'the collage has at least fifteen objects' ((ItemCount) -ge 15) '15+ items' "$(ItemCount) items"
         }
@@ -503,11 +507,12 @@ function Run-Scene {
             Tool 'ToolText' 'text' | Out-Null
             ClickModel 40 40 | Out-Null
             TypeText 'In a hole in the ground'
-            $line1 = LastItem
+            $texts = (Invoke-Op 'object.find' @{ type = 'text' }).result.items
+            $line1 = $texts[0]
             Tool 'ToolText' 'text' | Out-Null
             ClickModel 40 80 | Out-Null
             TypeText 'there lived a hobbit'
-            $line2 = LastItem
+            $line2 = $texts[1]
             Check 'both text objects hold their words' (($line1.text -eq 'In a hole in the ground') -and ($line2.text -eq 'there lived a hobbit')) 'two strings' ("'" + $line1.text + "' and '" + $line2.text + "'")
             Tool 'ToolCorner' 'corner' | Out-Null
             Keys 'Ctrl+A'
