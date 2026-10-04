@@ -79,8 +79,23 @@ function ClickAt {
 
 # Both injection paths act on coordinates **relative to the canvas**; view.toScreen returns window pixels.
 # So an aimed gesture subtracts the canvas origin, measured by Calibrate - for clicks and drags alike.
+# **The canvas origin is re-read before every gesture.** Calibrate measures it once, and the layout shifts under
+# it - a document tab appears, a pane opens - so a value read at the start of a scene went stale by 41.7 pt in
+# Y. Measured in one run: sent (518,335) arrived at control (468.0,200.0) - X translated by exactly the canvas
+# origin, Y by 41.7 more - and the canvas' own conversion was consistent to the tenth for two different points.
+# So the harness origin was wrong, not the editor: a click aimed at the middle of a text arrived outside it and
+# the editor correctly started a new object, which I filed as a defect twice.
+function Sync-Origin {
+    $cv = (Invoke-Op 'ui.find' @{ type = 'CanvasWorkspace' }).result.controls | Select-Object -First 1
+    if ($cv) {
+        $script:Ox = [double]$cv.x
+        $script:Oy = [double]$cv.y
+    }
+}
+
 function ClickModel {
-    param([double]$mx, [double]$my, [int]$count = 1)
+    param([double]$mx, [double]$my, [int]$count = 1)    Sync-Origin
+
     $r = Invoke-Op 'view.toScreen' @{ x = $mx; y = $my }
     if (-not $r -or -not $r.result) { return }
     # **A click and a drag must travel the same path.** input.pointer translates window coordinates to the
@@ -98,7 +113,8 @@ function ClickModel {
     Gesture $events 20000 $true | Out-Null
 }
 function DragModel {
-    param([double]$x1, [double]$y1, [double]$x2, [double]$y2, [bool]$fast = $true)
+    param([double]$x1, [double]$y1, [double]$x2, [double]$y2, [bool]$fast = $true)    Sync-Origin
+
     $a = Invoke-Op 'view.toScreen' @{ x = $x1; y = $y1 }
     $b = Invoke-Op 'view.toScreen' @{ x = $x2; y = $y2 }
     $ax = [int]([double]$a.result.x - $script:Ox); $ay = [int]([double]$a.result.y - $script:Oy)
