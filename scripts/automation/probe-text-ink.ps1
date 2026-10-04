@@ -57,9 +57,20 @@ Write-Host ("image box ({0},{1})..({2},{3}) at scale {4:N4}" -f $bx0, $by0, $bx1
 
 # Select it by its own bounds, through the harness's measured origin, and refuse to continue if the selection
 # is not the text - otherwise the two frames both contain it and the comparison proves nothing.
+# Selecting by clicking is exactly what fails when the object is not painted, so the frame test must not depend
+# on it: click empty canvas with the selection tool to focus, select all by keyboard, and verify the selection
+# is the text by id before anything is compared.
+# Select without the canvas at all - the pointer and keyboard routes are what fail when the object is not
+# painted, so the route that takes the id is the only one that can be trusted here.
 Tool 'ToolSelect' 'select' | Out-Null
-SelectByOutline $item
-Start-Sleep -Milliseconds 400
+$apiSelect = (Invoke-Op 'selection.selectAll' @{}).result
+Start-Sleep -Milliseconds 300
+Write-Host ("selection.selectAll -> selected {0}" -f ((Selection) -join ','))
+if (@(Selection).Count -lt 1) {
+    $byId = (Invoke-Op 'selection.set' @{ ids = @($item.id) }).result
+    Start-Sleep -Milliseconds 300
+    Write-Host ("selection.set by id -> selected {0}" -f ((Selection) -join ','))
+}
 $selected = @(Selection)
 if ($selected.Count -ne 1 -or $selected[0] -ne $item.id.ToLowerInvariant()) {
     Write-Host ("the marquee selected '{0}' rather than the text; stopping so the comparison means something" -f ($selected -join ',')) -ForegroundColor Yellow
@@ -67,8 +78,8 @@ if ($selected.Count -ne 1 -or $selected[0] -ne $item.id.ToLowerInvariant()) {
     exit 1
 }
 
-Keys 'Delete'
-Start-Sleep -Milliseconds 700
+Invoke-Op 'object.delete' @{ id = $item.id } | Out-Null
+Start-Sleep -Milliseconds 800
 $remaining = ItemCount
 if ($remaining -ne 0) {
     Write-Host ("the delete left {0} objects; stopping" -f $remaining) -ForegroundColor Yellow

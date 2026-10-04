@@ -28,6 +28,29 @@ function VerifyInteriorSelect {
     AssertSelection $item.id "$label is selectable by clicking inside its fill"
 }
 
+# The width rule that path.expandStroke promises is read from the model, not from a control: the first Stroke
+# block in the document JSON, which is unambiguous in a scene that draws one shape at a time.
+function StrokeWidth {
+    $j = (Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress
+    # A Stroke block carries a nested Color object, so a pattern that forbids braces between the key and Width
+    # never matches: search forward from the key instead.
+    $i = $j.IndexOf('"Stroke":')
+    if ($i -lt 0) { return -1 }
+    $seg = $j.Substring($i, [Math]::Min(400, $j.Length - $i))
+    $m = [regex]::Match($seg, '"Width"\s*:\s*(-?[0-9.]+)')
+    if ($m.Success) { return [double]$m.Groups[1].Value }
+    return -1
+}
+
+function StyleStroke {
+    param([string]$hex, [double]$width)
+    $r = [int][Convert]::ToInt32($hex.Substring(0, 2), 16)
+    $g = [int][Convert]::ToInt32($hex.Substring(2, 2), 16)
+    $b = [int][Convert]::ToInt32($hex.Substring(4, 2), 16)
+    Invoke-Op 'style.setStroke' @{ color = @($r, $g, $b); width = $width } | Out-Null
+    Start-Sleep -Milliseconds 200
+}
+
 function Run-Scene {
     param([int]$index)
 
@@ -444,6 +467,30 @@ function Run-Scene {
             Keys 'Ctrl+Z'
             Check 'undo removes the duplicated scene' ((ItemCount) -eq 8) '8 items' "$(ItemCount) items"
         }
+
+        25 {
+            New-Scene 'stroke expansion'
+            # path.expandStroke is Illustrator's Outline Stroke, and its own description fixes the width rule:
+            # "below 4pt the original over four, otherwise 1pt". Both halves are checked here, and the whole
+            # gesture is one undo step.
+            $e = DrawEllipse 150 150 200 140
+            StyleStroke '0000ff' 6
+            Check 'the stroke is 6pt before expanding' ((StrokeWidth) -eq 6) '6' (StrokeWidth)
+            $before = LastItem
+            $r = Invoke-Op 'path.expandStroke' @{}
+            Check 'expanding reports what it did' ($null -ne $r.result.expanded) 'a count' ($r.result | ConvertTo-Json -Compress)
+            Check 'a 6pt stroke expands to an outline carrying 1pt' ((StrokeWidth) -eq 1) '1' (StrokeWidth)
+            $after = LastItem
+            Check 'the outline has both edges and is wider than the shape' (($after.w -gt $before.w) -and ($after.id -ne $before.id)) 'a new, wider path' ("{0:N1} on id {1}" -f $after.w, $after.id)
+            Keys 'Ctrl+Z'
+            Check 'one undo restores the original path' ([Math]::Abs((LastItem).w - $before.w) -le 1) ("{0:N1}" -f $before.w) ("{0:N1}" -f (LastItem).w)
+
+            # The other half of the rule: a stroke thinner than 4pt expands to a quarter of itself.
+            $thin = DrawRect 420 200 140 100
+            StyleStroke '008000' 2
+            Invoke-Op 'path.expandStroke' @{} | Out-Null
+            Check 'a 2pt stroke expands to a 0.5pt outline' (((StrokeWidth) - 0.5) -lt 0.0001) '0.5' (StrokeWidth)
+        }
     }
 }
 
@@ -453,7 +500,7 @@ Calibrate | Out-Null
 
 $wanted = @()
 if ($Only) { $wanted = @($Only.Split(';') | Where-Object { $_ } | ForEach-Object { [int]$_ }) }
-for ($index = 1; $index -le 24; $index++) {
+for ($index = 1; $index -le 25; $index++) {
     if ($wanted.Count -gt 0 -and ($wanted -notcontains $index)) { continue }
     Write-Host ("scene {0}" -f $index) -ForegroundColor Cyan
     $sw = [Diagnostics.Stopwatch]::StartNew()
