@@ -504,6 +504,23 @@ public partial class ObjectsPane : UserControl
 
     private void OnHideClicked(object? sender, RoutedEventArgs e) => SetRowVisible(false);
 
+    /// <summary>
+    /// Adds a layer to the active artboard - the panel's half of `layer.add`.
+    ///
+    /// The registry has had that operation while this panel had no control calling it, so the assistant could
+    /// add a layer and a person working in the Layers tab could not (#236). Both now run the same
+    /// artboard.AddLayer and the same document-changed notification.
+    /// </summary>
+    private void OnAddLayerClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_vm is null || _vm.Document.Artboards.Count == 0)
+        {
+            return;
+        }
+
+        _vm.Document.Artboards[0].AddLayer((string?)null);
+        _vm.NotifyDocumentChanged();
+    }
     private void SetRowVisible(bool visible)
     {
         if (ActionRow() is { } node)
