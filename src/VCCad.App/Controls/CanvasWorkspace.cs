@@ -6484,6 +6484,17 @@ public sealed class CanvasWorkspace : Control
             _vm!.Execute(new ReplaceTextCommand(_editingText, _editBefore, (TextItem)_editingText.Clone(), "Edit text"));
         }
 
+        // **An edit that ends empty leaves nothing behind.** A click with the text tool creates the object
+        // before a character is typed - CreateTextAt adds it deliberately, so the tool does not litter the page
+        // with a placeholder word - so abandoning the gesture used to leave a zero-width empty text in the
+        // document for good: invisible on the canvas, counted by the model, selectable by id, and twice today
+        // mistaken for damage to the text beside it (#215). The edit is the only thing that knows whether
+        // anything was typed, so this is where the object goes. RemoveItemCommand finds the container itself.
+        if (_vm is not null && _editingText.PlainText.Length == 0 && _editingText.Container is not null)
+        {
+            _vm.Execute(new RemoveItemCommand(_editingText));
+        }
+
         _editingText = null;
         _editBefore = null;
         _textSelecting = false;
