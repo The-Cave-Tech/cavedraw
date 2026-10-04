@@ -351,8 +351,21 @@ function Run-Scene {
             DrawRect 80 100 100 80 $false | Out-Null
             DrawRect 220 100 100 80 $false | Out-Null
             DrawRect 360 100 100 80 $false | Out-Null
+            # **A lasso encloses an area; a straight drag encloses none.** The canvas hands the pointer's own
+            # path to SelectionEngine.ByLasso, so a drag from corner to corner is a line and correctly selects
+            # nothing. This gesture traces a loop around the three shapes, which is what a lasso is for, and it
+            # is the suite's only exercise of rectangle/lasso selection - every other selection check clicks.
             Tool 'ToolLasso' 'lasso' | Out-Null
-            DragModel 40 60 520 240
+            $track = @()
+            $corners = @(@(40, 60), @(520, 60), @(520, 240), @(40, 240), @(40, 60))
+            for ($c = 0; $c -lt $corners.Count; $c++) {
+                $p = (Invoke-Op 'view.toScreen' @{ x = [double]$corners[$c][0]; y = [double]$corners[$c][1] }).result
+                $px = [int]([double]$p.x - $script:Ox); $py = [int]([double]$p.y - $script:Oy)
+                if ($c -eq 0) { $track += @{ kind = 'down'; x = $px; y = $py; deltaMs = 40 } }
+                elseif ($c -eq $corners.Count - 1) { $track += @{ kind = 'up'; x = $px; y = $py; deltaMs = 40 } }
+                else { $track += @{ kind = 'move'; x = $px; y = $py; deltaMs = 40 } }
+            }
+            Gesture $track 20000 $true | Out-Null
             Check 'a lasso around three shapes selects them' ((Selection).Count -eq 3) '3 selected' "$((Selection).Count) selected"
         }
 
