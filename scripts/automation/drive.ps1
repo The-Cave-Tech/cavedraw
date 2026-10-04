@@ -312,10 +312,13 @@ function New-Scene {
     Invoke-Op 'view.centerOn' @{ x = 420.0; y = 300.0 } | Out-Null
     Start-Sleep -Milliseconds 350
     ClickControl 'ToolSelect' | Out-Null
-    # **Bring the colour tab back.** HexBox lives in the Color pane and is only there while that tab shows,
-    # so a scene that visits Gradient or Stroke leaves every later FillHex reporting "fill box missing" -
-    # a leak between scenes that looks exactly like an editor fault.
+    # **Bring the colour TAB back, not just the pane.** pane.set makes the appearance pane visible but does not
+    # select its tab, so after a scene visits Gradient or Stroke every later FillHex reports "fill box missing"
+    # - a leak between scenes that looks exactly like an editor fault, and one that makes the suite order
+    # dependent. Clicking the tab is what a person does, and it is the only route that works (#NN filed).
     Invoke-Op 'pane.set' @{ pane = 'colors'; visible = $true } | Out-Null
+    Start-Sleep -Milliseconds 120
+    Invoke-Op 'ui.click' @{ text = 'Color' } | Out-Null
     Start-Sleep -Milliseconds 150
     $tool = (Invoke-Op 'tool.get' @{}).result.tool
     if ($tool -ne 'select') { Record-Failure 'the selection tool activates for a new scene' 'select' "$tool" }
