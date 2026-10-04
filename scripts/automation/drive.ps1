@@ -83,7 +83,19 @@ function ClickModel {
     param([double]$mx, [double]$my, [int]$count = 1)
     $r = Invoke-Op 'view.toScreen' @{ x = $mx; y = $my }
     if (-not $r -or -not $r.result) { return }
-    ClickAt ([int]([double]$r.result.x - $script:Ox)) ([int]([double]$r.result.y - $script:Oy)) $count
+    # **A click and a drag must travel the same path.** input.pointer translates window coordinates to the
+    # target control and input.batch does not, so ClickModel - which passes canvas-relative pixels - landed a
+    # canvas-origin away from its target when it went through input.pointer: a caret click aimed at the middle
+    # of a text arrived 76 pt off and the editor correctly started a new object, which I filed as a defect
+    # twice. Both helpers build the same coordinates; this one now uses the operation the drag uses (#227).
+    $x = [int]([double]$r.result.x - $script:Ox)
+    $y = [int]([double]$r.result.y - $script:Oy)
+    $events = @()
+    for ($i = 0; $i -lt $count; $i++) {
+        $events += @{ kind = 'down'; x = $x; y = $y; deltaMs = 40 }
+        $events += @{ kind = 'up'; x = $x; y = $y; deltaMs = 40 }
+    }
+    Gesture $events 20000 $true | Out-Null
 }
 function DragModel {
     param([double]$x1, [double]$y1, [double]$x2, [double]$y2, [bool]$fast = $true)
