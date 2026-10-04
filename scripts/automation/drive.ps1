@@ -387,7 +387,7 @@ function FillHex {
 }
 
 function SetField {
-    param([string]$field, [string]$value, [string]$label = '')
+    param([string]$field, [string]$value, [string]$label = '', [switch]$NoUnit)
     $box = Find-Control $field
     if (-not $box) { Record-Failure 'field missing' $field 'ui.find returned nothing'; return }
     # The panel works in millimetres - its own readout says so - and a bare number is read as the current
@@ -395,7 +395,11 @@ function SetField {
     # unit. So a check that means points must say points, and the hint in the panel is what told us:
     # "Type a measurement or a sum, e.g. 5.5in * 5 / 2".
     $withUnit = $value
-    if ($value -match '^-?[0-9]+(\.[0-9]+)?$') { $withUnit = "$value pt" }
+    # The transform pane reads millimetres, so a bare number there means the current unit and a check that
+    # means points has to say so. Not every field takes a unit, though: the text size control rejects "48 pt"
+    # and silently keeps its old value, which looks exactly like the defect in #216 - so -NoUnit exists for
+    # the fields whose hint does not invite one.
+    if ((-not $NoUnit) -and ($value -match '^-?[0-9]+(\.[0-9]+)?$')) { $withUnit = "$value pt" }
     ClickAt ([int]($box.x + $box.width / 2)) ([int]($box.y + $box.height / 2))
     Keys 'Ctrl+A'
     TypeText $withUnit

@@ -39,3 +39,18 @@ selected - the smallest thing that tells "the editor cannot select" from "my coo
 `probe-text.ps1` walks the three ways of re-entering an existing text. `probe-family.ps1` walks the text
 toolbar and prints the runs' font families after each control, which is how the family-destroying field edit
 behind #213 was found.
+## Screenshots, and the scale that costs a round to find
+
+Two operations answer for what a person sees: `ui.describe` asks a vision model, and `GET
+/api/v1/screenshot` returns the pixels. The payload is JSON - `{ ok, result: { available, pngBase64 } }` - and
+the image is **1600x1000 for a 1920x1200 window**, so a window coordinate has to be scaled by **0.8333**
+before it is sampled.
+
+Sampling at unscaled coordinates returns white everywhere, which reads exactly like "nothing was drawn". Three
+attempts at the text-ink question in issue #221 were lost to that before the payload was decoded properly, so
+the number is written down here rather than rediscovered.
+
+Two other traps in the same vein: the with-text/without-text image diff is pure noise unless the object was
+actually deleted - an image diff over the whole window catches chrome churn, and the 16x16 tile map is what
+makes a cluster visible - and a click that is supposed to select something has to be **verified by id** before
+the frames around it are compared.
