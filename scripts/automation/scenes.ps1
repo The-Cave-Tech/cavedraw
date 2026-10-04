@@ -31,12 +31,14 @@ function VerifyInteriorSelect {
 # The width rule that path.expandStroke promises is read from the model, not from a control: the first Stroke
 # block in the document JSON, which is unambiguous in a scene that draws one shape at a time.
 function StrokeWidth {
+    param([string]$id = '')
     $j = (Invoke-Op 'document.model' @{}).result | ConvertTo-Json -Depth 24 -Compress
-    # A Stroke block carries a nested Color object, so a pattern that forbids braces between the key and Width
-    # never matches: search forward from the key instead.
-    $i = $j.IndexOf('"Stroke":')
+    # Two traps here, both learned by failing: a Stroke block carries a nested Color object, so a pattern that
+    # forbids braces between the key and Width never matches at all; and a document with more than one shape
+    # has more than one Stroke block, so the read has to start at the item under test rather than at the first.
+    $i = if ($id) { $j.IndexOf('"' + $id + '"') } else { $j.IndexOf('"Stroke":') }
     if ($i -lt 0) { return -1 }
-    $seg = $j.Substring($i, [Math]::Min(400, $j.Length - $i))
+    $seg = $j.Substring($i, [Math]::Min(500, $j.Length - $i))
     $m = [regex]::Match($seg, '"Width"\s*:\s*(-?[0-9.]+)')
     if ($m.Success) { return [double]$m.Groups[1].Value }
     return -1
@@ -475,11 +477,11 @@ function Run-Scene {
             # gesture is one undo step.
             $e = DrawEllipse 150 150 200 140
             StyleStroke '0000ff' 6
-            Check 'the stroke is 6pt before expanding' ((StrokeWidth) -eq 6) '6' (StrokeWidth)
+            Check 'the stroke is 6pt before expanding' ((StrokeWidth .id) -eq 6) '6' (StrokeWidth .id)
             $before = LastItem
             $r = Invoke-Op 'path.expandStroke' @{}
             Check 'expanding reports what it did' ($null -ne $r.result.expanded) 'a count' ($r.result | ConvertTo-Json -Compress)
-            Check 'a 6pt stroke expands to an outline carrying 1pt' ((StrokeWidth) -eq 1) '1' (StrokeWidth)
+            Check 'a 6pt stroke expands to an outline carrying 1pt' ((StrokeWidth .id) -eq 1) '1' (StrokeWidth .id)
             $after = LastItem
             Check 'the outline has both edges and is wider than the shape' (($after.w -gt $before.w) -and ($after.id -ne $before.id)) 'a new, wider path' ("{0:N1} on id {1}" -f $after.w, $after.id)
             Keys 'Ctrl+Z'
@@ -489,7 +491,7 @@ function Run-Scene {
             $thin = DrawRect 420 200 140 100
             StyleStroke '008000' 2
             Invoke-Op 'path.expandStroke' @{} | Out-Null
-            Check 'a 2pt stroke expands to a 0.5pt outline' (((StrokeWidth) - 0.5) -lt 0.0001) '0.5' (StrokeWidth)
+            Check 'a 2pt stroke expands to a 0.5pt outline' (((StrokeWidth (LastItem).id) - 0.5) -lt 0.0001) '0.5' (StrokeWidth (LastItem).id)
         }
     }
 }
