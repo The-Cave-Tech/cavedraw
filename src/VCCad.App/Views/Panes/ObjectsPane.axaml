@@ -4,9 +4,6 @@
              x:Class="VCCad.App.Views.Panes.ObjectsPane">
   <!-- No height of its own: the panel's row is the height, and a fixed one here left the
        list stranded in the middle of a resized panel instead of filling it. -->
-  <DockPanel>
-    <Button x:Name="AddLayerButton" DockPanel.Dock="Top" Content="Add layer" Click="OnAddLayerClicked"
-            Margin="6,6,6,0" HorizontalAlignment="Left"/>
   <TreeView x:Name="ObjectTree" Margin="6" SelectionMode="Multiple"
             SelectionChanged="OnTreeSelectionChanged">
     <!-- One menu for the tree rather than one per row. A row can be recycled the moment it
@@ -14,6 +11,7 @@
     <TreeView.ContextMenu>
       <ContextMenu Name="RowMenu">
         <MenuItem Header="Rename…" Click="OnRenameClicked"/>
+        <MenuItem Header="Add layer" Click="OnAddLayerClicked"/>
         <Separator/>
         <MenuItem Header="Show" Click="OnShowClicked"/>
         <MenuItem Header="Hide" Click="OnHideClicked"/>
@@ -68,5 +66,4 @@
       </TreeDataTemplate>
     </TreeView.ItemTemplate>
   </TreeView>
-  </DockPanel>
 </UserControl>
