@@ -5665,11 +5665,21 @@ public sealed class CanvasWorkspace : Control
         // Measured: "System.ArgumentNullException: Value cannot be null. (Parameter 'name')" from
         // PaintText -> CreateFormattedText, with a crash dump and a CLR20r3 WER entry behind it.
         //
-        // The fallback is Avalonia's own default family rather than a named face, because a machine
-        // need not have any particular family installed and an unresolvable name is the very thing
-        // that got here.
+        // **The fallback has to be a real face, not an engine object's name.** The first version of this
+        // guard re-derived a family from FontFamily.Default.Name - a string taken out of a valid object and
+        // parsed again - and a name that does not resolve as a family gives a typeface that yields no
+        // glyphs: text laid out, positioned, selectable, black in the model and invisible on the canvas
+        // (issue #221). The blank case now asks the same chain that supplies every other run for the face it
+        // gives a document that names nothing, and falls back to the clone that chain itself uses.
         string? family = StandardFontResolver.FamilyFor(run);
-        return new FontFamily(string.IsNullOrWhiteSpace(family) ? FontFamily.Default.Name : family);
+        if (!string.IsNullOrWhiteSpace(family))
+        {
+            return new FontFamily(family);
+        }
+
+        string? substitute = StandardFontResolver.FamilyFor(
+            new TextRun { Text = string.Empty, FontFamily = "Helvetica" });
+        return new FontFamily(string.IsNullOrWhiteSpace(substitute) ? "Arial" : substitute);
     }
 
     /// <summary>
