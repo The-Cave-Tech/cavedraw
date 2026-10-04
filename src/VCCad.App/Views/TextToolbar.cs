@@ -62,10 +62,19 @@ public sealed class TextToolbar
         _bold.IsCheckedChanged += (_, _) => ApplyFace();
         _italic.IsCheckedChanged += (_, _) => ApplyFace();
         _align.SelectionChanged += (_, _) => ApplyParagraph();
+        // **Enter commits, as well as leaving the field.** The size field above has always done both; the
+        // tracking fields only committed when focus left them, so a value typed and confirmed with Enter sat in
+        // the box, the text did not change, and the value landed later - when the person moved to another field
+        // for an unrelated reason. That is #216: a confirmed edit that appears to have been ignored and then
+        // arrives unasked.
         _lineSpacing.LostFocus += (_, _) => ApplyParagraph();
+        _lineSpacing.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) { ApplyParagraph(); } };
         _paragraphSpacing.LostFocus += (_, _) => ApplyParagraph();
+        _paragraphSpacing.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) { ApplyParagraph(); } };
         _rotation.LostFocus += (_, _) => ApplyParagraph();
+        _rotation.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) { ApplyParagraph(); } };
         _color.LostFocus += (_, _) => ApplyColor();
+        _color.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) { ApplyColor(); } };
 
         Button width = view.FindControl<Button>("TtWidth")!;
         width.Click += OnSetWidth;
