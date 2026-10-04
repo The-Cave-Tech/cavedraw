@@ -6340,15 +6340,17 @@ public static class EditorOperations
             });
 
         Add("input.batch",
-            "Replay a whole session of input in one call: an ordered list of events, each with " +
-            "a delta in milliseconds from the one before it. Every event goes through the same " +
-            "injection path a person's events take, so a batch and a hand cannot diverge. This " +
-            "is how a task like drawing by mouse and keyboard is carried out as gestures rather " +
-            "than as operations. kind is one of down, move, up, wheel, hover, hover-out, enter, " +
-            "leave, keydown, keyup, text, pen-down, pen-move, pen-up, touch-down, touch-move, " +
-            "touch-up. x and y are WINDOW pixels, NOT model points: convert with view.toScreen " +
-            "before aiming a gesture. A batch focuses the canvas before its key events, so a " +
-            "shortcut and a drag can go in one call without a separate click.",
+            "Replay a whole session of input: an ordered list of events, each with a delta in " +
+            "milliseconds from the one before it. Every event goes through the same injection path a " +
+            "person's events take, so a batch and a hand cannot diverge. This is how a task like " +
+            "drawing by mouse and keyboard is carried out as gestures rather than as operations. " +
+            "kind is one of down, move, up, wheel, hover, hover-out, enter, leave, keydown, keyup, " +
+            "text, pen-down, pen-move, pen-up, touch-down, touch-move, touch-up. x and y are WINDOW " +
+            "pixels, NOT model points: convert with view.toScreen before aiming a gesture. " +
+            "**It starts the replay and returns**: events are delivered on the UI thread while the " +
+            "waiting happens on another, so the application keeps running and a gesture's own timers " +
+            "can fire - a hold is measured by a timer, and a thread asleep inside the operation never " +
+            "lets it be signalled. Poll input.status until it reports finished.",
             "events:[{kind,x,y,deltaMs,extend?,modifier?,button?,modifiers?,device?,pressure?," +
             "tiltX?,tiltY?,key?,text?,pointerId?,wheelDelta?}], fast?:bool (skip the waits)",
             (ctx, p) =>
@@ -6356,20 +6358,28 @@ public static class EditorOperations
                 Avalonia.Visual root = Root(ctx);
 
                 var batch = new InputBatch { Events = ReadInputEvents(p) };
-                return ReplayInputBatch(
+                return StartInputBatch(
                     ctx, root, batch, p.GetBool("fast", false), p.GetString("save"));
             });
+
+        Add("input.status",
+            "Whether a batch is replaying, how many of its events have been delivered, and what the " +
+            "last one returned or threw. This is how a caller waits for input.batch without blocking " +
+            "the application it is driving.",
+            "",
+            (ctx, _) => DescribeInputBatch());
 
         Add("input.batchFile",
             "Load a batch file and replay it through the same input path a person's events " +
             "take, optionally recording it again and saving the recording somewhere else. A " +
-            "session captured in one run replays in another with no window logic of its own.",
+            "session captured in one run replays in another with no window logic of its own. " +
+            "Like input.batch it starts the replay and returns; poll input.status.",
             "path:string, fast?:bool, save?:string",
             (ctx, p) =>
             {
                 string path = RequireExistingFile(p, "path");
                 InputBatch batch = InputBatch.Load(path);
-                return ReplayInputBatch(
+                return StartInputBatch(
                     ctx, Root(ctx), batch, p.GetBool("fast", false), p.GetString("save"));
             });
 
@@ -7609,54 +7619,132 @@ public static class EditorOperations
     /// is the existing injection path, not a second implementation of input; a malformed batch
     /// is rejected by index before anything is played.
     /// </summary>
-    private static object ReplayInputBatch(
+    private static object StartInputBatch(
         AutomationContext ctx, Avalonia.Visual root, InputBatch batch, bool fast, string? savePath)
     {
-        // Pumping, not sleeping: a gesture's deltas are part of the gesture, and a timer that cannot
-        // tick during a hold turns a long press into a dead one - see DispatchingInputClock.
-        var clock = new DispatchingInputClock();
-        var recorder = new InputRecorder(clock);
-        InputReplayResult done;
+        CadDocument document = ctx.Document;
+        bool asFastAsPossible = fast;
+        string? save = savePath;
 
-        try
+        lock (InputBatchGate)
         {
-            done = batch.Replay(
-                new TeeInputSink(recorder, InjectionInputSink.For(root)),
-                fast ? InputTiming.AsFastAsPossible : InputTiming.RealTime,
-                clock);
-        }
-        catch (InputBatchException bad)
-        {
-            // The index is the whole value of this: a driver has to be told which event was
-            // wrong, not merely that the batch was.
-            throw new EditorOperationException(bad.Message);
-        }
-
-        LastInputBatch = recorder.Finish(
-            batch.Name, ctx.Document, batch.FocusedArtboard, batch.Expected);
-
-        string? file = null;
-        if (!string.IsNullOrWhiteSpace(savePath))
-        {
-            file = Path.GetFullPath(savePath);
-            string? directory = Path.GetDirectoryName(file);
-            if (!string.IsNullOrEmpty(directory))
+            if (InputBatchRunning is not null)
             {
-                Directory.CreateDirectory(directory);
+                throw new EditorOperationException(
+                    "a batch is already replaying - poll input.status until it reports finished");
             }
 
-            LastInputBatch.Save(file);
+            InputBatchRunning = batch;
+            InputBatchSent = 0;
+            InputBatchTotal = batch.Events.Count;
+            InputBatchError = null;
+            InputBatchOutcome = null;
         }
+
+        // **The waiting happens on this thread, which is not the UI thread.** That is the whole fix for
+        // timed gestures: every event is still delivered on the UI thread, because that is where input
+        // belongs, but the application is left free between them so its own timers can fire.
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var recorder = new InputRecorder(new SystemInputClock());
+                var sink = new UiThreadInputSink(
+                    new TeeInputSink(recorder, InjectionInputSink.For(root)),
+                    () => Interlocked.Increment(ref InputBatchSent));
+
+                InputReplayResult done = batch.Replay(
+                    sink,
+                    asFastAsPossible ? InputTiming.AsFastAsPossible : InputTiming.RealTime,
+                    new SystemInputClock());
+
+                InputBatch finished = recorder.Finish(
+                    batch.Name, document, batch.FocusedArtboard, batch.Expected);
+
+                string? file = null;
+                if (!string.IsNullOrWhiteSpace(save))
+                {
+                    file = Path.GetFullPath(save);
+                    string? directory = Path.GetDirectoryName(file);
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+
+                    finished.Save(file);
+                }
+
+                lock (InputBatchGate)
+                {
+                    LastInputBatch = finished;
+                    InputBatchOutcome = new
+                    {
+                        delivered = done.Delivered,
+                        milliseconds = Math.Round(done.Duration.TotalMilliseconds, 1),
+                        timing = done.Timing.ToString(),
+                        recorded = finished.Events.Count,
+                        file,
+                    };
+                }
+            }
+            catch (InputBatchException bad)
+            {
+                // The index is the whole value of this: a driver has to be told which event was
+                // wrong, not merely that the batch was.
+                lock (InputBatchGate)
+                {
+                    InputBatchError = bad.Message;
+                }
+            }
+            catch (Exception ex)
+            {
+                lock (InputBatchGate)
+                {
+                    InputBatchError = ex.Message;
+                }
+            }
+            finally
+            {
+                lock (InputBatchGate)
+                {
+                    InputBatchRunning = null;
+                }
+            }
+        });
 
         return new
         {
-            delivered = done.Delivered,
-            milliseconds = Math.Round(done.Duration.TotalMilliseconds, 1),
-            timing = done.Timing.ToString(),
-            recorded = LastInputBatch.Events.Count,
-            file,
+            started = true,
+            events = InputBatchTotal,
+            timing = fast ? "fast" : "real",
+            note = "replaying off the UI thread so a gesture's own timers can fire; poll input.status",
         };
     }
+
+    /// <summary>How far a replaying batch has got, and what the last one returned or threw.</summary>
+    private static object DescribeInputBatch()
+    {
+        lock (InputBatchGate)
+        {
+            return new
+            {
+                running = InputBatchRunning is not null,
+                name = InputBatchRunning?.Name,
+                delivered = InputBatchSent,
+                total = InputBatchTotal,
+                error = InputBatchError,
+                result = InputBatchOutcome,
+            };
+        }
+    }
+
+    /// <summary>The state a replaying batch reports through input.status.</summary>
+    private static readonly object InputBatchGate = new();
+    private static InputBatch? InputBatchRunning;
+    private static int InputBatchSent;
+    private static int InputBatchTotal;
+    private static string? InputBatchError;
+    private static object? InputBatchOutcome;
 
     /// <summary>The last batch played through the registry, for input.last.</summary>
     private static InputBatch? LastInputBatch { get; set; }
