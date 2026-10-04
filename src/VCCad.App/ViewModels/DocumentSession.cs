@@ -1234,9 +1234,17 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 TextRun run = text.Runs[r];
                 bool faceChanged = false;
 
-                if (family is { } face && !string.Equals(run.FontFamily, face, StringComparison.Ordinal))
+                // **A blank family is not a choice of face.** The size/bold/italic handler passes the font
+                // field's text along with the field it is actually editing, and that text is empty whenever
+                // the block holds no single face - so writing it through wiped the run's family. Measured:
+                // "Nimbus Sans" before a size edit, "" after. An empty name in the model is also what used
+                // to reach Avalonia's FontFamily constructor and terminate the process (#213), so this is
+                // the second half of that fix: the guard in PaintText stops the crash, and this stops the
+                // blank being written in the first place.
+                if (!string.IsNullOrWhiteSpace(family) &&
+                    !string.Equals(run.FontFamily, family, StringComparison.Ordinal))
                 {
-                    run.FontFamily = face;
+                    run.FontFamily = family;
                     faceChanged = true;
                 }
 
