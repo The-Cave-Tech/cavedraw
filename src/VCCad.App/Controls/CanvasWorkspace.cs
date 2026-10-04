@@ -7460,6 +7460,18 @@ public sealed class CanvasWorkspace : Control
             return;
         }
 
+        // **Enter opens a selected text.** The gesture existed with nothing behind it: a text object selected,
+        // Enter pressed, and the keystrokes that followed went nowhere - no new object, no change to the
+        // string, no caret (#212). Enter on a selected text opens it the way a press does. While an edit is
+        // running the guard above sends Enter to the text itself, where it inserts a newline.
+        List<TextItem> openable = _vm.ActiveSession.SelectedTextItems().ToList();
+        if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None && openable.Count == 1)
+        {
+            EnterTextEdit(openable[0]);
+            e.Handled = true;
+            return;
+        }
+
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.Z)
         {
             if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
