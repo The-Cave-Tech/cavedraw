@@ -575,8 +575,8 @@ public partial class EditorView : UserControl
         // lasso.png that does not exist throws at startup, which the desktop bootstrap test
         // caught the moment the button was added.
         Button button = mark is null
-            ? IconButton(icon, tip, (_, _) => SetTool(tool))
-            : MarkButton(mark, tip, (_, _) => SetTool(tool));
+            ? IconButton(icon, tip, (_, _) => _viewModel.Tool = tool)
+            : MarkButton(mark, tip, (_, _) => _viewModel.Tool = tool);
 
         _toolButtons[tool] = button;
 
@@ -585,20 +585,6 @@ public partial class EditorView : UserControl
         // by a named control" a claim a test can make about the whole enum at once.
         button.Name = ToolbarLayout.NameFor(tool);
         return button;
-    }
-
-    /// <summary>
-    /// Chooses a tool **and gives the keyboard back to the canvas**.
-    ///
-    /// A button takes focus when it is clicked, so a person who picks a tool and then presses Ctrl+A - or
-    /// Ctrl+Z, or an arrow key - is typing at the toolbar: the canvas never sees the key and nothing happens
-    /// (#239). Measured: with a tool button clicked, Ctrl+A left one object selected and the canvas' own
-    /// Ctrl+A branch never ran; with the canvas clicked first, every object was selected.
-    /// </summary>
-    private void SetTool(EditorTool tool)
-    {
-        _viewModel.Tool = tool;
-        WorkspaceControl.Focus();
     }
 
     /// <summary>A toolbar button whose mark is drawn rather than loaded from an icon file.</summary>
