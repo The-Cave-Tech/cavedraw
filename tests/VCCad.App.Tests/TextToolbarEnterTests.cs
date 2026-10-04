@@ -17,20 +17,43 @@ namespace VCCad.App.Tests;
 ///
 /// The size field always did; the tracking fields only committed when focus left them, so a value typed and
 /// confirmed with Enter stayed in the box and the text did not change - and then the value arrived later, when
-/// the person moved to another field for an unrelated reason (#216). That is invisible to a test that sets a
-/// property and reads the model afterwards, because such a test never blurs anything either: it has to press
-/// the key a person presses.
+/// the person moved to another field for an unrelated reason (#216). A test that sets a property and reads the
+/// model afterwards cannot see that, because it never blurs anything either: it has to press the key a person
+/// presses.
+///
+/// Two things this class learned the hard way, both recorded because the next person will meet them:
+///
+/// 1. EditorView creates and keeps its own EditorViewModel and ignores DataContext. An earlier version of this
+///    test built a view model of its own, so the fields changed one model and the assertions read another - and
+///    all three tests failed, including the blur case that had always worked.
+/// 2. The window is closed after every test. Three of these left a live window in the shared headless session
+///    and eighty-four other tests in this suite failed, which only shows up when the whole suite runs.
 /// </summary>
-public class TextToolbarEnterTests
+public class TextToolbarEnterTests : IDisposable
 {
-    private static (EditorView View, EditorViewModel Model, TextItem Text) Host()
+    private Window? _window;
+
+    public void Dispose()
     {
-        // The view makes its own view model and ignores DataContext, so the text has to go into **its** model:
-        // the first version of this test wrote into a model of its own and asserted on that, which is why three
-        // assertions failed with "nothing applied" - including the blur case that has always worked.
+        _window?.Close();
+        _window = null;
+        Settle();
+    }
+
+    private static void Settle()
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        }
+    }
+
+    private (EditorView View, EditorViewModel Model, TextItem Text) Host()
+    {
         var view = new EditorView();
-        var window = new Window { Width = 900, Height = 700, Content = view };
-        window.Show();
+        _window = new Window { Width = 900, Height = 700, Content = view };
+        _window.Show();
         Settle();
 
         EditorViewModel viewModel = view.ViewModel;
@@ -41,15 +64,6 @@ public class TextToolbarEnterTests
         Settle();
 
         return (view, viewModel, text);
-    }
-
-    private static void Settle()
-    {
-        for (int i = 0; i < 3; i++)
-        {
-            Dispatcher.UIThread.RunJobs();
-            Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick();
-        }
     }
 
     private static void Enter(TextBox box)
