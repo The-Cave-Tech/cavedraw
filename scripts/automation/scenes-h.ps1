@@ -1024,6 +1024,10 @@ function Run-Scene {
             Start-Sleep -Milliseconds 300
             $pj = ($tab.result | ConvertTo-Json -Compress)
             Check 'the gradient tab is the one showing' ($pj -match '(?i)gradient') 'Gradient' $pj
+            # **#245 fixed**: the reply names the pane it landed in and the tab's own id and title, instead of
+            # falling back to an empty pane because the caller named the tab by its title rather than its id.
+            Check 'the reply names the pane that is showing' ([bool]$tab.result.pane) 'a pane id' "[$($tab.result.pane)]"
+            Check 'and the tab by its own title' ($tab.result.title -eq 'Gradient') 'Gradient' "[$($tab.result.title)]"
             # The ramp is GradientRamp by TYPE and Ramp by NAME - the dump writes GradientRamp#Ramp - so a lookup
             # by name returns nothing however the pane is set.
             $g = (Invoke-Op 'ui.find' @{ type = 'GradientRamp' }).result.controls
@@ -1036,7 +1040,7 @@ function Run-Scene {
             Check 'the colour tab can be selected again' ($back.ok -ne $false) 'a result' "$($back.error)"
             Start-Sleep -Milliseconds 300
             $h = (Invoke-Op 'ui.find' @{ name = 'HexBox' }).result.controls
-            Check 'the hex box is back with the colour tab' (@($h).Count -ge 1) 'the hex box' "$(@($h).Count) controls"
+            Check 'the hex box is back with the colour tab' (@($h).Count -ge 1) 'the hex box' "$(@($h).Count) controls"            Check 'the colour tab reply names its pane too' ([bool]$back.result.pane) 'a pane id' "[$($back.result.pane)]"
         }
 
         50 {

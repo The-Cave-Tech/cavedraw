@@ -323,10 +323,11 @@ function New-Scene {
     # **Bring the colour TAB back, not just the pane.** pane.set makes the appearance pane visible but does not
     # select its tab, so after a scene visits Gradient or Stroke every later FillHex reports "fill box missing"
     # - a leak between scenes that looks exactly like an editor fault, and one that makes the suite order
-    # dependent. Clicking the tab is what a person does, and it is the only route that works (#NN filed).
+    # dependent. pane.setTab is the operation that owns the tab; this used to click the tab strip, which worked
+    # and depended on a UI click, until #245 was fixed and the operation reported what it had done.
     Invoke-Op 'pane.set' @{ pane = 'colors'; visible = $true } | Out-Null
     Start-Sleep -Milliseconds 120
-    Invoke-Op 'ui.click' @{ text = 'Color' } | Out-Null
+    Invoke-Op 'pane.setTab' @{ tab = 'Color' } | Out-Null
     Start-Sleep -Milliseconds 150
     $tool = (Invoke-Op 'tool.get' @{}).result.tool
     if ($tool -ne 'select') { Record-Failure 'the selection tool activates for a new scene' 'select' "$tool" }

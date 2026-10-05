@@ -7178,7 +7178,11 @@ public static class EditorOperations
                     .SelectMany(pane => pane.Tabs
                         .Where(t => t.Active)
                         .Select(t => new { pane = pane.Id, tab = t.Id, title = t.Title }))
-                    .FirstOrDefault(t => string.Equals(t.tab, tab, StringComparison.OrdinalIgnoreCase))
+                    // **By id or by title, because both are accepted.** SetPaneTab resolves either, and this
+                    // matched the caller's word against tab ids alone - so a title found nothing and the reply
+                    // fell back to an empty pane and an empty title while the tab was showing (issue #245).
+                    .FirstOrDefault(t => string.Equals(t.tab, tab, StringComparison.OrdinalIgnoreCase) ||
+                                         string.Equals(t.title, tab, StringComparison.OrdinalIgnoreCase))
                     ?? new { pane = string.Empty, tab, title = string.Empty };
             });
 
