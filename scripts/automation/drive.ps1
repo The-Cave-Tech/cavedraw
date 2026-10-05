@@ -87,9 +87,8 @@ function ClickAt {
 # the editor correctly started a new object, which I filed as a defect twice.
 function Sync-Origin {
     $cv = (Invoke-Op 'ui.find' @{ type = 'CanvasWorkspace' }).result.controls | Select-Object -First 1
-    if ($cv) {
-        $script:Ox = [double]$cv.x
-        $script:Oy = [double]$cv.y
+    if ($cv -and $script:Ox -eq 0.0 -and $script:Oy -eq 0.0) {
+        # Nothing to do: the correction is zero and view.toScreen is already in the window s own frame.
     }
 }
 
@@ -380,8 +379,12 @@ function Calibrate {
     # ui.find answers the question directly.
     $canvas = (Invoke-Op 'ui.find' @{ type = 'CanvasWorkspace' }).result.controls | Select-Object -First 1
     if (-not $canvas) { throw 'calibration could not find the canvas' }
-    $script:Ox = [double]$canvas.x
-    $script:Oy = [double]$canvas.y
+    # **Zeroed on purpose.** view.toScreen returns window coordinates now that its double-translation is fixed,
+    # and both input operations take window coordinates - so a point from it is aimed with directly. This used to
+    # hold the canvas origin because toScreen was out by exactly that, and subtracting it here cancelled the error
+    # instead of showing it (issues #206, #210, #227).
+    $script:Ox = 0.0
+    $script:Oy = 0.0
     $script:Ow = [double]$canvas.width
     $script:Oh = [double]$canvas.height
     Write-Host ("calibrated: canvas at window ({0:N1},{1:N1}) {2:N1}x{3:N1}" -f $script:Ox, $script:Oy, $script:Ow, $script:Oh)

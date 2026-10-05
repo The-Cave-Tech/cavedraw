@@ -4978,10 +4978,10 @@ public static class EditorOperations
                     // canvas, and a caller aims with window coordinates. The translation starts at the
                     // window, not at the canvas - translating a control to itself is the identity, which
                     // is how the first attempt at this kept the bug it was meant to fix.
-                    Avalonia.Point local = Avalonia.Controls.TopLevel.GetTopLevel(canvas) is { } fromWindow
-                        ? fromWindow.TranslatePoint(new Avalonia.Point(x, y), canvas) ?? new Avalonia.Point(x, y)
-                        : new Avalonia.Point(x, y);
-                    var model = canvas.WindowToModel(local);
+                    // **The same double-count the other way about.** WindowToModel translates from the window
+                    // itself, so the point goes in as it arrived rather than being translated and then treated
+                    // as canvas-local by the model lookup.
+                    var model = canvas.WindowToModel(new Avalonia.Point(x, y));
                     return new { x = model.X, y = model.Y };
                 }
 
@@ -4989,12 +4989,16 @@ public static class EditorOperations
                 // handed straight to `input.pointer` was off by wherever the canvas sits in the window -
                 // which is into a neighbouring panel, where the click lands on something else and quietly
                 // selects nothing. The operation promises window pixels, so it has to deliver them.
+                // **ModelToWindow already answers in window coordinates.** It translates the canvas-local point
+                // to the TopLevel itself, and this translated the result again - so a window point was treated
+                // as canvas-local and the canvas' own origin was added twice. Every point this operation returned
+                // was out by exactly the canvas position, and the documented recipe - aim with view.toScreen -
+                // missed by that much.
+                //
+                // Measured (issues #206, #210, #227): with the canvas at (50,92), a click at the returned point
+                // landed on the canvas but 50,92 away from the object, while the same point minus (50,92) hit it.
+                // Both input operations behaved identically, so this readout was the one that was wrong.
                 Avalonia.Point screen = canvas.ModelToWindow(new VCCad.Geometry.Point2D(x, y));
-                if (Avalonia.Controls.TopLevel.GetTopLevel(canvas) is { } top)
-                {
-                    screen = canvas.TranslatePoint(screen, top) ?? screen;
-                }
-
                 return new { x = screen.X, y = screen.Y };
             });
 
