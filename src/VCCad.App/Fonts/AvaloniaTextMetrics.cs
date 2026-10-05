@@ -124,7 +124,10 @@ public sealed class AvaloniaTextMetrics : ITextMetrics
 
     private static Typeface TypefaceFor(TextRun run)
         => new(
-            new FontFamily(VCCad.App.Fonts.StandardFontResolver.FamilyFor(run)),
+            // **Through the shared resolver, not the constructor.** This built a FontFamily straight from the
+            // resolve step, so a run with no family threw here as it did in the paint pass - and this is reached
+            // while measuring, which is on the way to drawing (issue #213).
+            FontFamilyResolver.For(run),
             run.Italic ? FontStyle.Italic : FontStyle.Normal,
             run.Bold ? FontWeight.Bold : FontWeight.Normal);
 

@@ -5682,15 +5682,9 @@ public sealed class CanvasWorkspace : Control
         // glyphs: text laid out, positioned, selectable, black in the model and invisible on the canvas
         // (issue #221). The blank case now asks the same chain that supplies every other run for the face it
         // gives a document that names nothing, and falls back to the clone that chain itself uses.
-        string? family = StandardFontResolver.FamilyFor(run);
-        if (!string.IsNullOrWhiteSpace(family))
-        {
-            return new FontFamily(family);
-        }
-
-        string? substitute = StandardFontResolver.FamilyFor(
-            new TextRun { Text = string.Empty, FontFamily = "Helvetica" });
-        return new FontFamily(string.IsNullOrWhiteSpace(substitute) ? "Arial" : substitute);
+        // The guard itself lives in FontFamilyResolver, because this was the second place to build a FontFamily
+        // from a run and the other one - the text metrics - was reached while drawing too (issue #213).
+        return FontFamilyResolver.For(run);
     }
 
     /// <summary>
