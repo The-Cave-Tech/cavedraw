@@ -195,7 +195,15 @@ function Tool {
     param([string]$control, [string]$want)
     ClickControl $control | Out-Null
     $now = (Invoke-Op 'tool.get' @{}).result.tool
-    if ($want -and $now -ne $want) { ClickControl $control | Out-Null; $now = (Invoke-Op 'tool.get' @{}).result.tool }
+    # A click on a tool button can race a window that has just started - the button is there but the window is
+    # still settling - so the retry waits rather than clicking immediately. Seen once in a run of fifty scenes:
+    # the tool stayed select, the calibration probe drew nothing, and the failure was recorded against the scene
+    # that happened to be running rather than against the harness that raced.
+    if ($want -and $now -ne $want) {
+        Start-Sleep -Milliseconds 350
+        ClickControl $control | Out-Null
+        $now = (Invoke-Op 'tool.get' @{}).result.tool
+    }
     if ($want -and $now -ne $want) { Record-Failure "tool did not activate" $want "tool.get = $now" }
     return $now
 }

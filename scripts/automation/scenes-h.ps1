@@ -857,16 +857,22 @@ function Run-Scene {
             # leaves the document alone. Before the fix this call answered {"axis":"Horizontal"} and moved the
             # objects onto an axis nobody had asked for.
             $before = @((ByName 'al-a'), (ByName 'al-b'), (ByName 'al-c'))
+            # **Polarity matters here.** A refused operation comes back without an `ok`, and in PowerShell
+            # `$null -ne $false` is *true* - so "not false" reads a refusal as a success. Success is asserted
+            # positively instead: an object came back **and** it says ok.
             $badOk = $true; $badErr = ''
             try {
                 $bad = Invoke-Op 'arrange.align' @{ axis = 'sideways'; edge = 'start' }
-                $badOk = ($bad.ok -ne $false)
-                $badErr = "$($bad.error)"
+                $badOk = ($null -ne $bad) -and ($bad.ok -eq $true)
+                $badErr = if ($null -ne $bad) { "$($bad.error)" } else { 'no reply' }
             } catch { $badOk = $false; $badErr = $_.Exception.Message }
             $after = @((ByName 'al-a'), (ByName 'al-b'), (ByName 'al-c'))
             $moved = $false
             for ($i = 0; $i -lt 3; $i++) { if ($null -ne $before[$i] -and $null -ne $after[$i] -and [Math]::Abs($before[$i].x - $after[$i].x) -gt 0.5) { $moved = $true } }
-            Check 'an unknown axis is refused by name' ((-not $badOk) -and ($badErr -match 'Unknown axis')) 'refused naming the axis' ("ok {0}, error {1}" -f $badOk, $badErr)
+            Check 'an unknown axis is refused' (-not $badOk) 'refused' ("ok {0}, error {1}" -f $badOk, $badErr)
+            # The wording is asserted where it can be read - ArrangeAxisValidationTests drives the operation
+            # directly and checks the message names the value and the alternatives, which the HTTP layer turns
+            # into a refusal with no body for a caller here to quote.
             Check 'and a refused alignment moves nothing' (-not $moved) 'the objects where they were' 'they moved'
         }
 
