@@ -8871,6 +8871,9 @@ public static class EditorOperations
         floodOpacity = Math.Round(primitive.FloodOpacity, 4),
         op = primitive.Operator,
         mode = primitive.Mode,
+        // Every parameter this kind declares, by the name the declaration gives it, so what
+        // filter.setPrimitiveParameter can write is what filter.list can read (issue #241).
+        parameters = ParametersOf(primitive),
     };
 
     private static int[] ColourBytes(ColorRgb colour) => new[]
@@ -9180,6 +9183,80 @@ public static class EditorOperations
             ["elevation"] = (primitive, value) => primitive with { Elevation = value.GetDouble() },
         };
 
+    /// <summary>
+    /// Every declared parameter's value, by the name the declaration gives it.
+    ///
+    /// **The inverse of `Setters`, and it has to exist** (issue #241). `filter.setPrimitiveParameter` can set any
+    /// parameter `filter.kinds` declares, and `filter.list` reported the same six members whichever kind the step
+    /// was - so a turbulence's `seed`, a colour matrix's `values`, a displacement's `scale` and a light's `azimuth`
+    /// could be written and never read back. A parameter that can be set and cannot be read is a state a driver
+    /// can put the editor into and never check, which is the half of capability parity that is easy to miss.
+    ///
+    /// The two dictionaries are keyed by the **same names on purpose**: a parameter added to one and not the
+    /// other shows up as a value that can be written and not read, which is exactly what this is here to prevent.
+    /// Colours come back as 0-255, the way every operation takes them, so a caller can send what it read.
+    /// </summary>
+    private static readonly Dictionary<string, Func<FilterPrimitive, object?>> Getters =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["radius"] = primitive => Round4(primitive.Radius),
+            ["dx"] = primitive => Round4(primitive.Dx),
+            ["dy"] = primitive => Round4(primitive.Dy),
+            ["floodColor"] = primitive => primitive.FloodColor is { } ink ? ColourBytes(ink) : null,
+            ["floodOpacity"] = primitive => Round4(primitive.FloodOpacity),
+            ["operator"] = primitive => primitive.Operator,
+            ["mode"] = primitive => primitive.Mode,
+            ["type"] = primitive => primitive.Type,
+            ["values"] = primitive => primitive.Matrix,
+            ["scale"] = primitive => Round4(primitive.Scale),
+            ["xChannel"] = primitive => primitive.XChannel,
+            ["yChannel"] = primitive => primitive.YChannel,
+            ["baseFrequency"] = primitive => Round4(primitive.BaseFrequency),
+            ["numOctaves"] = primitive => primitive.Octaves,
+            ["seed"] = primitive => primitive.Seed,
+            ["surfaceScale"] = primitive => Round4(primitive.SurfaceScale),
+            ["diffuseConstant"] = primitive => Round4(primitive.DiffuseConstant),
+            ["specularConstant"] = primitive => Round4(primitive.SpecularConstant),
+            ["specularExponent"] = primitive => Round4(primitive.SpecularExponent),
+            ["lightingColor"] = primitive => primitive.LightingColor is { } light ? ColourBytes(light) : null,
+            ["azimuth"] = primitive => Round4(primitive.Azimuth),
+            ["elevation"] = primitive => Round4(primitive.Elevation),
+        };
+
+    private static double Round4(double value) => Math.Round(value, 4);
+
+    /// <summary>
+    /// The values a primitive holds, under the names its kind declares them - the readout `filter.kinds` makes
+    /// possible and `filter.setPrimitiveParameter` makes necessary.
+    ///
+    /// Wiring is left out: `in`, `in2` and `result` are buffers rather than values, they are reported as their
+    /// own members, and a caller looking for what to send back to `filter.setPrimitiveParameter` is not looking
+    /// for them. A kind this build no longer declares reports no parameters rather than a guessed set.
+    /// </summary>
+    private static Dictionary<string, object?> ParametersOf(FilterPrimitive primitive)
+    {
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+        FilterPrimitiveDefinition? definition = FilterPrimitiveRegistry.Find(primitive.Kind.ToString());
+        if (definition is null)
+        {
+            return values;
+        }
+
+        foreach (FilterParameter parameter in definition.Parameters)
+        {
+            if (parameter.Kind == FilterParameterKind.Buffer)
+            {
+                continue;
+            }
+
+            if (Getters.TryGetValue(parameter.Name, out Func<FilterPrimitive, object?>? get))
+            {
+                values[parameter.Name] = get(primitive);
+            }
+        }
+
+        return values;
+    }
     /// <summary>One value of one primitive, set by the name the declaration gives it.</summary>
     private static FilterPrimitive WithParameter(FilterPrimitive primitive, string parameter, JsonElement value)
         => Setters.TryGetValue(parameter, out Func<FilterPrimitive, JsonElement, FilterPrimitive>? set)

@@ -339,8 +339,15 @@ function Run-Scene {
             # floodOpacity, op and mode whatever the kind is, so a turbulence's baseFrequency, numOctaves and
             # seed are settable and unreadable through the registry - filed as #241. This scene verifies the
             # change where it is stored, and the check below pins what filter.list does report.
-            $listed = ((Invoke-Op 'filter.list' @{}).result | ConvertTo-Json -Depth 8 -Compress)
-            Check 'filter.list reports the step itself' ($listed -match 'Turbulence') 'a turbulence step' 'not reported'
+            # **#241 fixed, so the readout carries the kind's own parameters.** The seed that was just set is
+            # read back through the operation rather than through the serialized model - which is the assertion
+            # the issue asked for and could not pass while filter.list reported six members whatever the kind.
+            $listed = (Invoke-Op 'filter.list' @{}).result
+            $step = @($listed)[0].primitives[0]
+            Check 'filter.list reports the step itself' ("$($step.kind)" -match '(?i)turbulence') 'a turbulence step' "$($step.kind)"
+            Check 'the seed is readable through filter.list' ($step.parameters.seed -eq 7) 'seed 7' "$($step.parameters.seed)"
+            Check 'and the base frequency it was created with' ([Math]::Abs($step.parameters.baseFrequency - 0.05) -lt 0.0001) 'baseFrequency 0.05' "$($step.parameters.baseFrequency)"
+            Check 'and the octave count' ($step.parameters.numOctaves -eq 3) '3 octaves' "$($step.parameters.numOctaves)"
         }
 
         15 {
