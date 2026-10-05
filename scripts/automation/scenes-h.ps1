@@ -852,16 +852,22 @@ function Run-Scene {
             Check 'the three tops agree after aligning' (@($tops | Select-Object -Unique).Count -eq 1) 'one common top' ($tops -join ',')
             $di = Invoke-Op 'arrange.distribute' @{ axis = 'horizontal' }
             Check 'distributing answers' ($di.ok -ne $false) 'a result' "$($di.error)"
-            # **An unknown axis is not refused, and that is filed as #244.** The edge member of the same call is
-            # checked and refused by name; the axis member silently becomes horizontal, so a caller who mistypes
-            # an axis gets a different and destructive edit with a reply that reads as confirmation. This pins
-            # the current behaviour: when #244 is fixed the call must fail and the document must be untouched.
+            # **#244 is fixed, so the sentinel becomes the assertion it was standing in for.** An unknown axis is
+            # now refused by name, exactly as the edge member of the same call always was, and a refused call
+            # leaves the document alone. Before the fix this call answered {"axis":"Horizontal"} and moved the
+            # objects onto an axis nobody had asked for.
             $before = @((ByName 'al-a'), (ByName 'al-b'), (ByName 'al-c'))
-            $bad = Invoke-Op 'arrange.align' @{ axis = 'sideways'; edge = 'start' }
+            $badOk = $true; $badErr = ''
+            try {
+                $bad = Invoke-Op 'arrange.align' @{ axis = 'sideways'; edge = 'start' }
+                $badOk = ($bad.ok -ne $false)
+                $badErr = "$($bad.error)"
+            } catch { $badOk = $false; $badErr = $_.Exception.Message }
             $after = @((ByName 'al-a'), (ByName 'al-b'), (ByName 'al-c'))
             $moved = $false
             for ($i = 0; $i -lt 3; $i++) { if ($null -ne $before[$i] -and $null -ne $after[$i] -and [Math]::Abs($before[$i].x - $after[$i].x) -gt 0.5) { $moved = $true } }
-            Check 'an unknown axis is accepted and does the wrong thing (#244)' (($bad.ok -ne $false) -and $moved) 'accepted and objects moved' ("ok {0}, moved {1}" -f ($bad.ok -ne $false), $moved)
+            Check 'an unknown axis is refused by name' ((-not $badOk) -and ($badErr -match 'Unknown axis')) 'refused naming the axis' ("ok {0}, error {1}" -f $badOk, $badErr)
+            Check 'and a refused alignment moves nothing' (-not $moved) 'the objects where they were' 'they moved'
         }
 
         43 {

@@ -10317,10 +10317,28 @@ public static class EditorOperations
         ctx.ViewModel.NotifyDocumentChanged();
         return new { itemId = path.Id, index, outlines = path.SubPaths.Count };
     }
+    /// <summary>
+    /// The axis an arrangement acts along: <c>horizontal</c> or <c>vertical</c> (issue #244).
+    ///
+    /// **A closed set, checked like its neighbour.** This used to be <c>string.Equals(axis, "vertical")</c> with
+    /// everything else falling through to horizontal, so <c>axis:"sideways"</c> - or a mistyped <c>"y"</c> - was
+    /// accepted, answered <c>"axis":"Horizontal"</c>, and aligned objects along the axis the caller had not
+    /// asked for. The reply read as confirmation of a different edit. <c>edge</c> on the same call had refused
+    /// its unknown values by name all along; this is the same rule applied to the other member.
+    ///
+    /// <c>x</c> and <c>y</c> are accepted on purpose rather than refused: they are the names a person reaches
+    /// for, they are unambiguous, and mapping them here is the difference between a typed axis working and a
+    /// destructive edit happening quietly.
+    /// </summary>
     private static ArrangeAxis ReadAxis(string? axis) =>
-        string.Equals(axis, "vertical", StringComparison.OrdinalIgnoreCase)
-            ? ArrangeAxis.Vertical
-            : ArrangeAxis.Horizontal;
+        axis?.Trim().ToLowerInvariant() switch
+        {
+            "horizontal" or "x" => ArrangeAxis.Horizontal,
+            "vertical" or "y" => ArrangeAxis.Vertical,
+            null or "" => throw new EditorOperationException(
+                "Parameter 'axis' is required. Use horizontal|vertical."),
+            _ => throw new EditorOperationException($"Unknown axis '{axis}'. Use horizontal|vertical."),
+        };
 
     private static (ArrangeAxis Axis, ArrangeEdge Edge) ReadAlign(JsonElement p)
     {
