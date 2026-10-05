@@ -4953,6 +4953,26 @@ public static class EditorOperations
                 selected = ctx.ViewModel.TextSelectionEnd - ctx.ViewModel.TextSelectionStart,
             });
 
+        Add("text.caretLine",
+            "Where the caret is **drawn**, as the two ends of its line in window pixels - the value the canvas " +
+            "paints, rather than the offset it is derived from. The caret and the glyphs come from different " +
+            "measurements, so an offset that reads correctly can still be painted in the wrong place; this is the " +
+            "half that says which. Null when no block is being edited.",
+            "",
+            (ctx, _) =>
+            {
+                VCCad.App.Controls.CanvasWorkspace? canvas = Workspace(ctx);
+                (Avalonia.Point Top, Avalonia.Point Bottom)? line = canvas?.CaretLine();
+                return line is { } caret
+                    ? new
+                    {
+                        available = true,
+                        top = new { x = caret.Top.X, y = caret.Top.Y },
+                        bottom = new { x = caret.Bottom.X, y = caret.Bottom.Y },
+                    }
+                    : (object)new { available = false };
+            });
+
         Add("view.toScreen",
             "Convert between model and window coordinates through the live canvas. A " +
             "driver that cannot see needs this to aim the pointer: guessing the viewport " +
