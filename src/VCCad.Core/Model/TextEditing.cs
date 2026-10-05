@@ -101,9 +101,41 @@ public static class TextEditing
         TextRun original = text.Runs[run];
         string left = original.Text[..ch];
         string right = original.Text[ch..];
-        original.Text = left;
+        double[]? positions = original.PositionOffsets;
+        double[]? inline = original.InlineOffsets;
         var tail = original.Clone();
+
+        // **A piece's advance is split with the piece** (issue #246). The number the importer recorded covers the
+        // whole piece, and cloning the run gave both halves the full amount: splitting "3464 " to put a caret
+        // between the 4 and the 6 handed each half the piece's 19.4 units, so the block's total grew by a piece
+        // every time a caret was placed inside one - which is the other half of why the box misbehaved while
+        // editing. The two halves share it in proportion to what the face gives each of them.
+        if (original.AdvanceWidth is { } was)
+        {
+            double leftWidth = WidthOf(left, original);
+            double rightWidth = WidthOf(right, original);
+            double span = leftWidth + rightWidth;
+            original.AdvanceWidth = span > 0 ? was * (leftWidth / span) : was / 2;
+            tail.AdvanceWidth = span > 0 ? was * (rightWidth / span) : was / 2;
+        }
+
+        original.Text = left;
         tail.Text = right;
+
+        // The per-character placements are indexed by the characters they were written for, so each half keeps
+        // its own end of the list.
+        if (positions is not null && positions.Length >= ch)
+        {
+            original.PositionOffsets = positions[..ch];
+            tail.PositionOffsets = positions[ch..];
+        }
+
+        if (inline is not null && inline.Length >= ch)
+        {
+            original.InlineOffsets = inline[..ch];
+            tail.InlineOffsets = inline[ch..];
+        }
+
         text.Runs.Insert(run + 1, tail);
     }
 
@@ -129,6 +161,7 @@ public static class TextEditing
         target = Math.Clamp(target, 0, text.Runs.Count - 1);
         int at = ch == 0 && run > 0 ? text.Runs[target].Text.Length : ch;
         text.Runs[target].Text = text.Runs[target].Text.Insert(at, value);
+        GrewBy(text.Runs[target], value);
         Merge(text);
     }
 
@@ -159,7 +192,10 @@ public static class TextEditing
 
             int take = Math.Min(len, (end - start) - removed);
             int localStart = Math.Max(0, start - pos);
-            text.Runs[r].Text = text.Runs[r].Text.Remove(localStart, Math.Min(take, len - localStart));
+            int cut = Math.Min(take, len - localStart);
+            string removedText = text.Runs[r].Text.Substring(localStart, cut);
+            text.Runs[r].Text = text.Runs[r].Text.Remove(localStart, cut);
+            ShrunkBy(text.Runs[r], removedText);
             removed += take;
             pos += len - take;
 
@@ -219,6 +255,85 @@ public static class TextEditing
         Merge(text);
     }
 
+    /// <summary>
+    /// **An edit changes the run's own advance by what it added, and leaves the rest of the file's layout alone**
+    /// (issue #246).
+    ///
+    /// `AdvanceWidth` is the importer's record of how far a piece the file wrote should run - a `TJ` array becomes
+    /// one run per piece, each carrying the advance to the next - and the layout honours it, scaling or placing the
+    /// glyphs to match. It describes **the piece the file wrote**; typing into that piece does not invalidate the
+    /// spacing of the characters that were already there, so the run's advance grows by the new character's own
+    /// width and everything else stays where the file put it.
+    ///
+    /// Dropping the advance instead - which was the first attempt at this - does clear the collapse, but it also
+    /// discards the file's own spacing, so a block that had 21 units of it *shrank* slightly when a character was
+    /// added. The person's expectation is the other way round: the rectangle extends to the right to make room, and
+    /// shortens when text is deleted.
+    ///
+    /// A run with no advance of its own is left alone: it is already laid out with the face's metrics, so there is
+    /// nothing to adjust. The per-character offset lists are a different matter and are still cleared - they are
+    /// indexed by the characters they were written for, so a run whose text has changed cannot keep them.
+    /// </summary>
+    private static void GrewBy(TextRun run, string inserted)
+    {
+        run.PositionOffsets = null;
+        run.InlineOffsets = null;
+
+        if (run.AdvanceWidth is { } was)
+        {
+            run.AdvanceWidth = was + WidthOf(inserted, run);
+        }
+    }
+
+    /// <summary>The same, the other way: what was deleted comes off the run's advance (issue #246).</summary>
+    private static void ShrunkBy(TextRun run, string removed)
+    {
+        run.PositionOffsets = null;
+        run.InlineOffsets = null;
+
+        if (run.AdvanceWidth is { } was)
+        {
+            run.AdvanceWidth = Math.Max(0, was - WidthOf(removed, run));
+        }
+    }
+
+    /// <summary>
+    /// Two runs becoming one: their advances add, so the merged run spans what the two pieces spanned (issue #246).
+    /// A run that states no advance contributes what the face would give it, which is what the layout was already
+    /// drawing for it.
+    /// </summary>
+    private static void MergeAdvances(TextRun keeper, TextRun absorbed)
+    {
+        keeper.PositionOffsets = null;
+        keeper.InlineOffsets = null;
+
+        if (keeper.AdvanceWidth is null && absorbed.AdvanceWidth is null)
+        {
+            return;
+        }
+
+        keeper.AdvanceWidth = TotalAdvance(keeper) + TotalAdvance(absorbed);
+
+        static double TotalAdvance(TextRun run)
+            => run.AdvanceWidth ?? WidthOf(run.Text, run);
+    }
+
+    /// <summary>What a piece of text is worth in this run's own face - its natural advances, summed.</summary>
+    private static double WidthOf(string text, TextRun style)
+    {
+        if (text.Length == 0)
+        {
+            return 0;
+        }
+
+        var probe = (TextRun)style.Clone();
+        probe.Text = text;
+        probe.AdvanceWidth = null;
+        probe.PositionOffsets = null;
+        probe.InlineOffsets = null;
+        return probe.Advances().Sum();
+    }
+
     /// <summary>Merges adjacent runs whose style is identical.</summary>
     public static void Merge(TextItem text)
     {
@@ -230,6 +345,7 @@ public static class TextEditing
                 a.Bold == b.Bold && a.Italic == b.Italic)
             {
                 a.Text += b.Text;
+                MergeAdvances(a, b);
                 text.Runs.RemoveAt(r + 1);
             }
             else
