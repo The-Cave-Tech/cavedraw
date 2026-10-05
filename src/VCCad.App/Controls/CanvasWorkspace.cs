@@ -172,6 +172,33 @@ public sealed class CanvasWorkspace : Control
         _caretTimer.Start();
     }
 
+    /// <summary>
+    /// **Show the caret for a capture, whatever the blink is doing** (issue #249).
+    ///
+    /// The caret blinks at 530 ms and the paint is gated on that state, so a screenshot taken between two ticks
+    /// has no caret in it at all - and a driver reading the picture cannot tell "the caret is somewhere else"
+    /// from "the blink is off". That is precisely the distinction a caret screenshot is taken to make, so half
+    /// of all captures answered nothing. A capture is a reading of the state, not a moment of the animation, so
+    /// it shows the caret; the blink resumes on its next tick, which is what a person watching still sees.
+    /// </summary>
+    public void ShowCaretForCapture()
+    {
+        if (_editingText is null)
+        {
+            return;
+        }
+
+        _caretOn = true;
+        InvalidateVisual();
+    }
+
+    /// <summary>The blink state, so a capture can be asserted to have shown the caret.</summary>
+    internal bool CaretOnForTests
+    {
+        get => _caretOn;
+        set => _caretOn = value;
+    }
+
     /// <summary>Where a text frame drag began, while the text tool is drawing a box.</summary>
     private Point2D? _textFrameStart;
 

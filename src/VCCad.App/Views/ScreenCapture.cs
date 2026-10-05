@@ -1,9 +1,12 @@
 using System.IO;
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using VCCad.App.Capture;
+using VCCad.App.Controls;
 
 namespace VCCad.App.Views;
 
@@ -60,6 +63,7 @@ public static class ScreenCapture
 
         try
         {
+            ShowCaret(window);
             using var bitmap = new RenderTargetBitmap(pixelSize, new Vector(96 * scale, 96 * scale));
             bitmap.Render(window);
 
@@ -86,6 +90,20 @@ public static class ScreenCapture
         }
     }
 
+    /// <summary>
+    /// **Show any caret before the frame is taken** (issue #249).
+    ///
+    /// The caret blinks, and the paint is gated on that state, so a capture taken between two ticks had no caret
+    /// in it - and a driver cannot tell "the caret is elsewhere" from "the blink is off". A capture shows the
+    /// state, so an editing canvas is asked to show its caret first.
+    /// </summary>
+    private static void ShowCaret(Window window)
+    {
+        foreach (CanvasWorkspace canvas in window.GetVisualDescendants().OfType<CanvasWorkspace>())
+        {
+            canvas.ShowCaretForCapture();
+        }
+    }
     private static byte[]? Capture(Window window, double maxWidth)
     {
         Size size = window.ClientSize;
@@ -103,6 +121,7 @@ public static class ScreenCapture
 
         try
         {
+            ShowCaret(window);
             using var bitmap = new RenderTargetBitmap(pixelSize, new Vector(96 * scale, 96 * scale));
             bitmap.Render(window);
             using var stream = new MemoryStream();
