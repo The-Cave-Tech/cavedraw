@@ -1178,7 +1178,12 @@ internal static class ItemDtoExtensions
         var run = new TextRun
         {
             Text = dto.Text,
-            FontFamily = dto.FontFamily,
+            // **A document that omits a run's family reads as the default** (issue #213). The DTO declares the
+            // member non-nullable, and System.Text.Json leaves it null when the JSON has no such member - which
+            // arrives on the render path, where a blank name is what terminated the process from a paint pass.
+            // The model's own default is the honest reading of an absent member, and it is the rule this
+            // serializer follows for every other absent member.
+            FontFamily = string.IsNullOrWhiteSpace(dto.FontFamily) ? TextItem.DefaultFontFamily : dto.FontFamily,
             FontSize = dto.FontSize,
             Bold = dto.Bold,
             Italic = dto.Italic,
