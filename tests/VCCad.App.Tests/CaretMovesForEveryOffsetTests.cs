@@ -28,13 +28,16 @@ public class CaretMovesForEveryOffsetTests
     private static TextItem ImportedHeader()
     {
         var text = new TextItem { Name = "header", Origin = new Point2D(60, 80) };
-        Add(text, "Jalie ", 16.8574);
-        Add(text, "3464 ", 19.406);
-        Add(text, "- ", 3.599);
-        Add(text, "LILLIE ", 22.052);
-        Add(text, "- ", 3.599);
-        Add(text, "Page ", 19.318);
-        Add(text, "1/12", 18.061);
+        // **The advances the file actually states**, read from the running application with text.runs - not the
+        // run's own measured width, which is what the first version of this fixture used and why it could not
+        // reproduce anything. Each is the distance to the next piece, a TJ adjustment's gap included:
+        Add(text, "Jalie ", 21.006);
+        Add(text, "3464 ", 22.518);
+        Add(text, "- ", 5.499);
+        Add(text, "LILLIE ", 28.521);
+        Add(text, "- ", 5.499);
+        Add(text, "Page ", 23.517);
+        Add(text, "1/12", 17.514);
         return text;
 
         static void Add(TextItem text, string piece, double advance)
