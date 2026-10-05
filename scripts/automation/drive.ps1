@@ -346,7 +346,13 @@ function New-Scene {
     $savedOy = $script:Oy
     $script:Ox = 0.0
     $script:Oy = 0.0
-    Tool 'ToolRectangle' 'rectangle' | Out-Null
+    # **The operation, not the button.** This is a measurement, not a gesture test: arming the tool by clicking
+    # its toolbar button made the calibration depend on a UI click landing, and when it did not the probe drew
+    # nothing, the origin fell back to the previous document's, and the failure was recorded against whichever
+    # scene was running. AGENTS.md says the API is the primary way to drive the application and a click is for
+    # when the gesture itself is under test - being able to drag a rectangle at all is well covered by the
+    # drawing scenes, so the probe uses tool.set and keeps its drag.
+    Invoke-Op 'tool.set' @{ tool = 'rectangle' } | Out-Null
     DragModel 700 500 760 560
     $probe = LastItem
     if ($probe) {
