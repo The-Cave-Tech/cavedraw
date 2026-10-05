@@ -4919,6 +4919,17 @@ public static class EditorOperations
                         size = r.FontSize,
                         bold = r.Bold,
                         italic = r.Italic,
+                        // **What decides which route the paint path takes** (issue #251). A run is drawn glyph by
+                        // glyph, from the file's own positions, when any of these is present - and an edit leaves them
+                        // behind from the text the file wrote, so a grown run is drawn only as far as the old data
+                        // reaches. They were invisible from outside, which is why seven fixes for this symptom were
+                        // written against assumptions: reported as lengths, so "is this run on the tracked route, and
+                        // does its data cover its text" is a fact rather than a guess.
+                        positionOffsets = r.PositionOffsets?.Length,
+                        inlineOffsets = r.InlineOffsets?.Length,
+                        letterSpacing = r.LetterSpacing,
+                        wordSpacing = r.WordSpacing,
+
                         advance = Math.Round(
                             VCCad.Core.Text.TextMeasurement.Advances(r).Sum(), 4),
 
