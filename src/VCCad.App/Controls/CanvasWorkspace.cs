@@ -6734,6 +6734,69 @@ public sealed class CanvasWorkspace : Control
         InvalidateVisual();
     }
 
+    /// <summary>
+    /// **The block's own clipboard, as three methods the keyboard and the operations both call** (issue #253).
+    ///
+    /// It was three branches in the key handler, so the only way to copy text was to press a key: a driver had no
+    /// copy, no cut and no paste, and the capability a person has was missing from the registry - the parity rule
+    /// broken exactly where `object.copy` and friends show it need not be. The branches call these now, so there is
+    /// one implementation rather than two that can drift.
+    ///
+    /// It is still **plain text and still in-process**: a `string` cannot carry a run's formatting, and nothing here
+    /// touches the system clipboard. Both are what the issue is for; this is the half that makes the capability
+    /// reachable.
+    /// </summary>
+    internal int CopyTextSelection()
+    {
+        if (_editingText is null)
+        {
+            return 0;
+        }
+
+        (int start, int end) = Selection();
+        _textClipboard = TextEditing.GetRange(_editingText, start, end);
+        return _textClipboard.Length;
+    }
+
+    /// <summary>The copy above, and the characters go (issue #253). One change, so one undo step.</summary>
+    internal int CutTextSelection()
+    {
+        if (_editingText is null)
+        {
+            return 0;
+        }
+
+        (int start, int end) = Selection();
+        _textClipboard = TextEditing.GetRange(_editingText, start, end);
+        if (start == end)
+        {
+            return 0;
+        }
+
+        TextEditing.DeleteRange(_editingText, start, end);
+        _caret = start;
+        _editAnchor = start;
+        AfterTextEdit();
+        RecordTextChange();
+        return _textClipboard.Length;
+    }
+
+    /// <summary>Puts the clipboard in at the caret (issue #253).</summary>
+    internal int PasteTextClipboard()
+    {
+        if (_editingText is null || string.IsNullOrEmpty(_textClipboard))
+        {
+            return 0;
+        }
+
+        int length = _textClipboard!.Length;
+        InsertText(_textClipboard);
+        return length;
+    }
+
+    /// <summary>What the block's clipboard holds, so a driver can see a copy landed (issue #253).</summary>
+    internal string? TextClipboardForTests => _textClipboard;
+
     private (int Start, int End) Selection()
         => (Math.Min(_caret, _editAnchor), Math.Max(_caret, _editAnchor));
 
@@ -6931,27 +6994,15 @@ public sealed class CanvasWorkspace : Control
         }
         else if (ctrl && e.Key == Key.C)
         {
-            (int s, int en) = Selection();
-            _textClipboard = TextEditing.GetRange(_editingText, s, en);
+            CopyTextSelection();
         }
         else if (ctrl && e.Key == Key.X)
         {
-            (int s, int en) = Selection();
-            _textClipboard = TextEditing.GetRange(_editingText, s, en);
-            if (s != en)
-            {
-                TextEditing.DeleteRange(_editingText, s, en);
-                _caret = s;
-                _editAnchor = s;
-                AfterTextEdit();
-            }
+            CutTextSelection();
         }
         else if (ctrl && e.Key == Key.V)
         {
-            if (!string.IsNullOrEmpty(_textClipboard))
-            {
-                InsertText(_textClipboard!);
-            }
+            PasteTextClipboard();
         }
         else
         {

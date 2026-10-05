@@ -4982,6 +4982,53 @@ public static class EditorOperations
                     : (object)new { available = false };
             });
 
+        Add("text.copy",
+            "Copy the selected characters of the text block being edited. The block's clipboard is the one Ctrl+C " +
+            "writes to - this is the same implementation, so the keyboard and the API cannot come to mean different " +
+            "things. Plain text, and the clipboard lives in this editor rather than on the system's; both are what " +
+            "issue #253 is for.",
+            "",
+            (ctx, _) =>
+            {
+                VCCad.App.Controls.CanvasWorkspace? canvas = Workspace(ctx);
+                if (canvas is null)
+                {
+                    throw new EditorOperationException("No canvas is attached.");
+                }
+
+                return new { copied = canvas.CopyTextSelection() };
+            });
+
+        Add("text.cut",
+            "Copy the selected characters of the text block being edited and remove them (issue #253). One change, " +
+            "so one undo step - the same edit Ctrl+X makes.",
+            "",
+            (ctx, _) =>
+            {
+                VCCad.App.Controls.CanvasWorkspace? canvas = Workspace(ctx);
+                if (canvas is null)
+                {
+                    throw new EditorOperationException("No canvas is attached.");
+                }
+
+                return new { cut = canvas.CutTextSelection() };
+            });
+
+        Add("text.paste",
+            "Put the block's clipboard in at the caret of the text block being edited (issue #253). What Ctrl+V " +
+            "does, through the same call, so a driver has the capability a person has.",
+            "",
+            (ctx, _) =>
+            {
+                VCCad.App.Controls.CanvasWorkspace? canvas = Workspace(ctx);
+                if (canvas is null)
+                {
+                    throw new EditorOperationException("No canvas is attached.");
+                }
+
+                return new { pasted = canvas.PasteTextClipboard() };
+            });
+
         Add("text.caretMetrics",
             "**The caret x the canvas holds**, one entry per character offset - the array CaretLine() indexes and " +
             "PaintTextCaret draws. The positions the layout states and the positions the canvas uses are two " +
