@@ -6721,6 +6721,14 @@ public sealed class CanvasWorkspace : Control
 
         _caret = Math.Clamp(_caret, 0, TextEditing.Length(_editingText));
         _editAnchor = Math.Clamp(_editAnchor, 0, TextEditing.Length(_editingText));
+
+        // **The block's own box changes as the text does, so the cached selection rectangle is stale** (issue #251).
+        // `ChromeRect()` caches the oriented box and it was dropped on gestures and on selection changes only - never
+        // when the words changed - so while a block was being edited the chrome kept drawing the box it had when the
+        // edit opened while the edit box, which comes from the layout, grew with the text. That is the pair of
+        // rectangles the person saw: one frozen at the original size and one following what they typed.
+        _chromeRect = null;
+
         UpdateCaretInfo();
         _vm?.RaiseTransformChanged();
         InvalidateVisual();
