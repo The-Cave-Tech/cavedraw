@@ -81,8 +81,13 @@ public static class InputInjection
     private static string Describe(Control control)
     {
         var names = new List<string> { Label(control) };
-        bool insideCanvas = false;
-        CanvasWorkspace? canvas = null;
+
+        // **The control that was hit counts as being in the canvas** (issue #227). This walked the parents only,
+        // so a gesture that landed on the canvas *itself* reported "the canvas is not under this point" and then
+        // named the canvas' own rect as the place the click had missed. That reads as a missed click, and it was
+        // read as one: a double-click that had in fact reached the canvas was written up as never arriving.
+        bool insideCanvas = control is CanvasWorkspace;
+        CanvasWorkspace? canvas = control as CanvasWorkspace;
 
         for (Visual? v = control.GetVisualParent(); v is not null && names.Count < 8; v = v.GetVisualParent())
         {
