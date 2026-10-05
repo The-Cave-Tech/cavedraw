@@ -1250,7 +1250,27 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 changed = true;
             }
 
-            foreach (int r in RunsToStyle(text, runIndex))
+            // **A selection styles only the characters it covers** (issue #259). Split the block at the selection's
+            // ends first, so the range below is a whole number of runs and the rest of the block is untouched.
+            int? styledFrom = null;
+            int? styledTo = null;
+            if (runIndex is null && IsEditingText && ReferenceEquals(text, EditingText) &&
+                TextSelectionStart != TextSelectionEnd)
+            {
+                styledFrom = Math.Min(TextSelectionStart, TextSelectionEnd);
+                styledTo = Math.Max(TextSelectionStart, TextSelectionEnd);
+                if (styledFrom > 0)
+                {
+                    TextEditing.SplitAt(text, styledFrom.Value);
+                }
+
+                if (styledTo < TextEditing.Length(text))
+                {
+                    TextEditing.SplitAt(text, styledTo.Value);
+                }
+            }
+
+            foreach (int r in RunsToStyle(text, runIndex, styledFrom, styledTo))
             {
                 TextRun run = text.Runs[r];
                 bool faceChanged = false;
@@ -1399,10 +1419,28 @@ public sealed class DocumentSession : INotifyPropertyChanged
             : trimmed;
     }
 
-    /// <summary>The runs a member-by-member edit names: the one at the index, or every run when none is named.</summary>
-    private static IEnumerable<int> RunsToStyle(TextItem text, int? runIndex)
+    /// <summary>
+    /// The runs a member-by-member edit names: the one at the index, every run when none is named, or - when a
+    /// character range is given - only the runs that lie inside it (issue #259).
+    ///
+    /// The range matters because a **selection means characters, not runs**. With no index this used to answer with
+    /// every run, and after any edit the block is a single run (typing merges the file's pieces), so choosing a face
+    /// with a few words selected changed the whole block. The caller splits the run at the selection's ends and hands
+    /// the range in, so what is styled is exactly what the person selected.
+    /// </summary>
+    private static IEnumerable<int> RunsToStyle(TextItem text, int? runIndex, int? from = null, int? to = null)
     {
-        if (runIndex is not { } index)
+        if (runIndex is { } index)
+        {
+            if (index >= 0 && index < text.Runs.Count)
+            {
+                yield return index;
+            }
+
+            yield break;
+        }
+
+        if (from is not { } start || to is not { } end)
         {
             for (int i = 0; i < text.Runs.Count; i++)
             {
@@ -1412,9 +1450,19 @@ public sealed class DocumentSession : INotifyPropertyChanged
             yield break;
         }
 
-        if (index >= 0 && index < text.Runs.Count)
+        int position = 0;
+        for (int i = 0; i < text.Runs.Count; i++)
         {
-            yield return index;
+            int runStart = position;
+            int runEnd = position + text.Runs[i].Text.Length;
+            position = runEnd;
+
+            // A run counts as inside only when the whole of it is: the caller has already split at the ends, so a run
+            // that straddles the boundary would mean the split did not happen and nothing should be styled silently.
+            if (runStart >= start && runEnd <= end && runEnd > runStart)
+            {
+                yield return i;
+            }
         }
     }
 
