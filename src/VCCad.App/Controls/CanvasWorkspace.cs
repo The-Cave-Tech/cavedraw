@@ -6270,6 +6270,42 @@ public sealed class CanvasWorkspace : Control
     }
 
     /// <summary>
+    /// **The pieces an edited block is painted from, beside the runs it holds** (issue #251).
+    ///
+    /// The painter walks `Layout.Runs`, one box per run per line piece, and draws `box.Length` characters from
+    /// `box.Start`. A block whose text is longer than the pieces that draw it therefore loses characters **silently** -
+    /// no error and no empty box, just a run that is shorter than it claims to be. That is the shape the person's cut
+    /// text has, so this reports both halves: the boxes, and the runs the item actually holds.
+    /// </summary>
+    internal object TextRunBoxes()
+    {
+        if (_editingText is not { } text)
+        {
+            return new { available = false };
+        }
+
+        TextLayout layout = TextLayoutEngine.Compute(text);
+        return new
+        {
+            available = true,
+            blockLength = TextEditing.Length(text),
+            runCount = text.Runs.Count,
+            runLengths = text.Runs.Select(run => run.Text.Length).ToArray(),
+            boxes = layout.Runs
+                .Select(box => new
+                {
+                    run = box.Run,
+                    start = box.Start,
+                    length = box.Length,
+                    line = box.Line,
+                    x = Math.Round(box.X, 4),
+                    width = Math.Round(box.Width, 4),
+                })
+                .ToArray(),
+        };
+    }
+
+    /// <summary>
     /// **The caret x the canvas actually holds, one entry per character offset** (issue #254).
     ///
     /// `CaretLine()` reads `MeasureText(_editingText).X[_caret]`, and this exposes that same array. It is the

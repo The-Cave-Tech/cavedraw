@@ -5029,6 +5029,23 @@ public static class EditorOperations
                 return new { pasted = canvas.PasteTextClipboard() };
             });
 
+        Add("text.runBoxes",
+            "**The pieces the canvas paints a text block from**, one per run per line: the run it indexes, the "
+            + "characters it draws, the line they sit on and where they are drawn - beside the runs the block actually "
+            + "holds and their lengths. A block whose text is longer than the pieces that draw it loses characters "
+            + "silently, and this is the readout that says so rather than leaving it to be argued (issue #251).",
+            "",
+            (ctx, _) =>
+            {
+                VCCad.App.Controls.CanvasWorkspace? canvas = Workspace(ctx);
+                if (canvas is null)
+                {
+                    throw new EditorOperationException("No canvas is attached.");
+                }
+
+                return canvas.TextRunBoxes();
+            });
+
         Add("text.caretMetrics",
             "**The caret x the canvas holds**, one entry per character offset - the array CaretLine() indexes and " +
             "PaintTextCaret draws. The positions the layout states and the positions the canvas uses are two " +
