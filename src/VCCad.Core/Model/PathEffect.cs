@@ -221,6 +221,17 @@ public static class PathEffects
         }
 
         (WidthProfileSpec? profile, string? refusal) = PowerStrokeProfile(effect, path, curves);
+        if (profile is null && CarriesNoOffsetPoints(effect) && stroke.WidthProfile is { } already)
+        {
+            // **A stroke that already carries a width profile is the width this effect describes** (issue #243).
+            // The file's `offset_points` and the model's profile are two spellings of one thing - a width that
+            // changes along the path - and refusing the effect when the second is present made it unreachable from
+            // the model side while the drawing it would produce was already on the stroke. The file's own route
+            // is untouched: offset points, when given, still build the profile they describe.
+            profile = already;
+            refusal = null;
+        }
+
         if (profile is null)
         {
             return PathEffectTranslation.Unsupported(effect, refusal ?? $"'{effect.Effect}' could not be read");
@@ -259,6 +270,10 @@ public static class PathEffects
 
         return new PathEffectTranslation(effect, translated, null, notes);
     }
+
+    /// <summary>Whether the effect carries no offset points of its own - the case a stroke's profile may speak for.</summary>
+    private static bool CarriesNoOffsetPoints(PathEffectSpec effect)
+        => effect.Parameter("offset_points") is not { } text || text.Trim().Length == 0;
 
     /// <summary>
     /// The powerstroke's offset points, read as a width profile.

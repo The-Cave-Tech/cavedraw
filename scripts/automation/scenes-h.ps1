@@ -631,9 +631,12 @@ function Run-Scene {
             Start-Sleep -Milliseconds 200
             $st = (Invoke-Op 'style.strokes' @{}).result.strokes
             Check 'the stroke carries the profile' ($null -ne $st.profile -and @($st.profile.points).Count -eq 3) 'a 3-point profile' "$(if ($st.profile) { @($st.profile.points).Count } else { 'none' })"
+            # **#243 fixed.** A stroke that already carries a width profile is the width this effect describes, so
+            # the model-side route works; and the file's own route works by supplying `offset_points`.
             $a = Invoke-Op 'pathEffect.apply' @{ effect = 'powerstroke' }
-            $refused = @($a.result.refused)
-            Check 'powerstroke is refused although the path carries a width profile (#243)' ($refused.Count -eq 1 -and $a.result.strokes -eq 0) 'one refusal and no stroke effect' "$($refused.Count) refused, $($a.result.strokes) strokes"
+            Check 'powerstroke applies to a stroke that has a width profile' ($a.ok -ne $false -and $a.result.strokes -eq 1 -and @($a.result.refused).Count -eq 0) '1 stroke and no refusals' "$($a.result.strokes) strokes, $(@($a.result.refused).Count) refused"
+            $b = Invoke-Op 'pathEffect.apply' @{ effect = 'powerstroke'; parameters = @{ offset_points = '0,3|0.5,12|1,3' } }
+            Check 'and to one described by the file s own offset points' ($b.ok -ne $false -and $b.result.strokes -eq 1) '1 stroke' "$($b.result.strokes) strokes"
         }
 
         30 {
