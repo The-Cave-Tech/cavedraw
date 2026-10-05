@@ -16,6 +16,49 @@ public static class TextEditing
     /// <summary>Concatenated text.</summary>
     public static string GetText(TextItem text) => string.Concat(text.Runs.Select(r => r.Text));
 
+    /// <summary>
+    /// **The runs of the global range [start, end), sliced and copied** (issue #253), so what a person copies carries
+    /// its formatting and not only its characters. `GetRange` answers with the characters; this answers with the runs.
+    /// A range can begin and end inside a run, so both ends are sliced, and the file's per-piece advance and offsets
+    /// are dropped because they described the text they came from rather than the fragment taken.
+    /// </summary>
+    public static List<TextRun> GetRuns(TextItem text, int start, int end)
+    {
+        start = Math.Clamp(start, 0, Length(text));
+        end = Math.Clamp(end, start, Length(text));
+
+        var taken = new List<TextRun>();
+        int position = 0;
+
+        foreach (TextRun run in text.Runs)
+        {
+            int runStart = position;
+            int runEnd = position + run.Text.Length;
+            position = runEnd;
+
+            if (runEnd <= start || runStart >= end)
+            {
+                continue;
+            }
+
+            int from = Math.Max(start, runStart) - runStart;
+            int to = Math.Min(end, runEnd) - runStart;
+            if (to <= from)
+            {
+                continue;
+            }
+
+            var slice = (TextRun)run.Clone();
+            slice.Text = run.Text.Substring(from, to - from);
+            slice.AdvanceWidth = null;
+            slice.PositionOffsets = null;
+            slice.InlineOffsets = null;
+            taken.Add(slice);
+        }
+
+        return taken;
+    }
+
     /// <summary>Substring of the global character range [start, end).</summary>
     public static string GetRange(TextItem text, int start, int end)
     {

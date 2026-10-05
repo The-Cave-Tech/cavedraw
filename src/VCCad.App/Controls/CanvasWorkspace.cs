@@ -286,6 +286,14 @@ public sealed class CanvasWorkspace : Control
     private bool _textSelecting;
     private string? _textClipboard;
 
+    /// <summary>
+    /// **What the block's clipboard holds, as runs rather than characters** (issue #253). A `string` cannot carry a
+    /// run's face, size, weight or slant, so pasting used to drop every one of them - the half of the request that
+    /// matters for a rich text editor. The characters stay in <see cref="_textClipboard"/> for anything wanting plain
+    /// text; this is what paste restores from.
+    /// </summary>
+    private readonly List<TextRun> _textClipboardRuns = new();
+
     // Whether the current gesture actually displaced anything (commit gating).
     private bool _gestureMoved;
 
@@ -6755,6 +6763,7 @@ public sealed class CanvasWorkspace : Control
 
         (int start, int end) = Selection();
         _textClipboard = TextEditing.GetRange(_editingText, start, end);
+        RememberClipboardRuns(start, end);
         return _textClipboard.Length;
     }
 
@@ -6768,6 +6777,7 @@ public sealed class CanvasWorkspace : Control
 
         (int start, int end) = Selection();
         _textClipboard = TextEditing.GetRange(_editingText, start, end);
+        RememberClipboardRuns(start, end);
         if (start == end)
         {
             return 0;
@@ -6789,9 +6799,38 @@ public sealed class CanvasWorkspace : Control
             return 0;
         }
 
-        int length = _textClipboard!.Length;
-        InsertText(_textClipboard);
-        return length;
+        int total = 0;
+        foreach (TextRun copied in _textClipboardRuns)
+        {
+            int from = _caret;
+            InsertText(copied.Text);
+            int to = _caret;
+            total += to - from;
+
+            // Each copied run's own face, size, weight and slant are written onto the range that received it,
+            // through the same ApplyStyle a person's style controls use, so there is one implementation of what a
+            // run is rather than a second insert path.
+            TextEditing.ApplyStyle(_editingText, from, to, run =>
+            {
+                run.FontFamily = copied.FontFamily;
+                run.FontSize = copied.FontSize;
+                run.Bold = copied.Bold;
+                run.Italic = copied.Italic;
+            });
+        }
+
+        AfterTextEdit();
+        return total;
+    }
+
+    /// <summary>Keeps the copied range as runs, so a paste can restore what was copied (issue #253).</summary>
+    private void RememberClipboardRuns(int start, int end)
+    {
+        _textClipboardRuns.Clear();
+        if (_editingText is not null && end > start)
+        {
+            _textClipboardRuns.AddRange(TextEditing.GetRuns(_editingText, start, end));
+        }
     }
 
     /// <summary>What the block's clipboard holds, so a driver can see a copy landed (issue #253).</summary>
