@@ -1227,31 +1227,21 @@ public sealed class CanvasWorkspace : Control
     {
         base.OnPointerWheelChanged(e);
 
-        // A whole-notch delta is a click on a notched wheel; anything smaller is a trackpad, which
-        // reports one small delta per frame and is meant to accumulate smoothly.
-        bool notched = Math.Abs(e.Delta.Y) >= 0.999;
-
-        // A notched wheel's click arrives as a BURST of whole-notch events, so only the first is a
-        // step - see WheelNotches. Without this one click zoomed by 1.1^(events in the burst), which
-        // is what made the view fly and precision impossible.
-        if (notched && !_wheelNotches.BeginsClick(Environment.TickCount64))
-        {
-            e.Handled = true;
-            return;
-        }
-
-        // One click is one step; a trackpad's delta is taken as the fraction it is.
-        double steps = notched ? Math.Sign(e.Delta.Y) : e.Delta.Y;
-
+        // **Every wheel event is one step again.** This collapsed the burst of whole-notch events a
+        // smooth-scrolling driver delivers for a single click - six inside 100 ms - into one step, and then
+        // raised the pan distance to 90 to make one click move as far as it used to. The burst is the
+        // **device**, not this application: the mouse that prompted it does the same in most programs, so
+        // compensating here made VCCad behave differently from everything else on the machine. Both halves
+        // are undone: an event is a step, and a notch pans 60 pixels as it did before.
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             Point cursor = e.GetPosition(this);
             Point2D before = ModelPointAtScreen(cursor);
 
-            // Anchored on the pointer, so the thing being examined stays put while the zoom changes -
-            // the other half of "the page flies all over the screen".
+            // Anchored on the pointer, so the thing being examined stays put while the zoom changes.
+            double factor = e.Delta.Y > 0 ? ZoomStepPerNotch : 1 / ZoomStepPerNotch;
             _userAdjustedZoom = true;
-            _layout.Zoom *= Math.Pow(ZoomStepPerNotch, steps);
+            _layout.Zoom *= factor;
             _offset = new Vector2D(
                 cursor.X - (before.X - _layout.Extent.Left) * _layout.Zoom,
                 cursor.Y - (before.Y - _layout.Extent.Top) * _layout.Zoom);
@@ -1259,7 +1249,7 @@ public sealed class CanvasWorkspace : Control
         }
         else
         {
-            Vector2D delta = new(0, -steps * PanPerNotchPixels);
+            Vector2D delta = new(0, -e.Delta.Y * PanPerNotchPixels);
             _offset = _layout.ClampTopLeft(_offset + delta, ViewportPixels);
         }
 
@@ -1267,12 +1257,9 @@ public sealed class CanvasWorkspace : Control
         e.Handled = true;
     }
 
-    // One wheel click is one step: a notched wheel's click arrives as a burst of events, so they
-    // are collapsed into one, and a trackpad's fractional deltas are left to accumulate.
-    private readonly WheelNotches _wheelNotches = new();
+
 
     /// <summary>The wheel-click detector, exposed so a test can fix its burst window.</summary>
-    internal WheelNotches WheelNotches => _wheelNotches;
 
     /// <summary>How much one notch of the wheel zooms. 10% is the conventional step and, applied once
     /// per click rather than per event, it is small enough to land on a seam.</summary>
@@ -1286,7 +1273,7 @@ public sealed class CanvasWorkspace : Control
     /// around a twelve-page pattern with, so the step is larger while the collapsing stays. Kept separate
     /// from the zoom step on purpose - tuning the scroll must not move Ctrl+wheel.
     /// </summary>
-    internal const double PanPerNotchPixels = 90.0;
+    internal const double PanPerNotchPixels = 60.0;
 
     /// <summary>
     /// How much one press of the toolbar's + / - zooms.

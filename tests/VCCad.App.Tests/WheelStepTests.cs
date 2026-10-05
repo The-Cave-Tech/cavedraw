@@ -23,8 +23,8 @@ public class WheelStepTests
 {
     /// <summary>The pan step: how far one notch scrolls, in screen pixels.</summary>
     [Fact]
-    public void ThePanStepPerNotchIsNinetyPixels()
-        => Assert.Equal(90.0, CanvasWorkspace.PanPerNotchPixels, 1);
+    public void ThePanStepPerNotchIsSixtyPixels()
+        => Assert.Equal(60.0, CanvasWorkspace.PanPerNotchPixels, 1);
 
     /// <summary>
     /// The zoom step stays where it was. Ctrl+wheel is a different gesture with a conventional size, and
@@ -61,7 +61,7 @@ public class WheelStepTests
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
         }
 
-        workspace.WheelNotches.BurstGapMs = 60_000;
+        // The burst-collapsing this used to disable is gone: every wheel event is a step again.
         Point before = workspace.ModelToWindow(new Point2D(0, 0));
 
         workspace.RaiseEvent(new PointerWheelEventArgs(
