@@ -20,6 +20,12 @@ namespace VCCad.App.Fonts;
 /// </summary>
 public sealed class AvaloniaTextMetrics : ITextMetrics
 {
+    /// <summary>
+    /// What is appended to a prefix that ends in white space before measuring it. Any character that is not white
+    /// space would do; this one is narrow and does not kern against a space. See <see cref="Advances"/>.
+    /// </summary>
+    private const string SentinelText = "x";
+
     private readonly Dictionary<string, double[]> _advanceCache = new();
     private readonly Dictionary<string, (double Ascent, double Descent)> _verticalCache = new();
 
@@ -42,11 +48,25 @@ public sealed class AvaloniaTextMetrics : ITextMetrics
 
         try
         {
+            // **A prefix that ends in white space has to be measured with the white space in it.**
+            // `FormattedText.Width` trims trailing white space, so `width("Jalie ")` is `width("Jalie")` and the
+            // difference - the space's own advance - came out **zero**. Every run of the Lillie header ends in a
+            // space, so every one of them had a zero-width space: the caret stopped moving when it crossed one
+            // (issue #254), and the layout, which scales each run's glyphs to the advance the file states, took the
+            // missing room out of the space by stretching everything else (the "white space is compressed" the
+            // person saw while typing).
+            //
+            // A sentinel that is not white space keeps the space away from the end of the string, and the sentinel's
+            // own width comes back off the reading. It is only appended where the prefix actually ends in white
+            // space, so no other character's width is disturbed by kerning against it.
+            double sentinel = Build(run, SentinelText).Width;
+
             double previous = 0;
             for (int i = 1; i <= n; i++)
             {
-                probe = Build(run, run.Text[..i]);
-                double width = probe.Width;
+                bool trailingSpace = char.IsWhiteSpace(run.Text[i - 1]);
+                probe = Build(run, trailingSpace ? run.Text[..i] + SentinelText : run.Text[..i]);
+                double width = probe.Width - (trailingSpace ? sentinel : 0);
                 widths[i - 1] = Math.Max(0, width - previous);
                 previous = width;
             }

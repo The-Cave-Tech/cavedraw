@@ -4982,6 +4982,29 @@ public static class EditorOperations
                     : (object)new { available = false };
             });
 
+        Add("text.caretMetrics",
+            "**The caret x the canvas holds**, one entry per character offset - the array CaretLine() indexes and " +
+            "PaintTextCaret draws. The positions the layout states and the positions the canvas uses are two " +
+            "readings of one block, and when an offset appears not to move the caret this says which of them is " +
+            "wrong. Empty when no block is being edited.",
+            "",
+            (ctx, _) =>
+            {
+                VCCad.App.Controls.CanvasWorkspace? canvas = Workspace(ctx);
+                if (canvas is null)
+                {
+                    throw new EditorOperationException("No canvas is attached.");
+                }
+
+                IReadOnlyList<double> x = canvas.TextCaretMetrics();
+                return new
+                {
+                    available = x.Count > 0,
+                    count = x.Count,
+                    x = x.Select(v => Math.Round(v, 4)).ToArray(),
+                };
+            });
+
         Add("view.toScreen",
             "Convert between model and window coordinates through the live canvas. A " +
             "driver that cannot see needs this to aim the pointer: guessing the viewport " +

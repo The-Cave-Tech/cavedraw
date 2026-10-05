@@ -6254,6 +6254,17 @@ public sealed class CanvasWorkspace : Control
     }
 
     /// <summary>
+    /// **The caret x the canvas actually holds, one entry per character offset** (issue #254).
+    ///
+    /// `CaretLine()` reads `MeasureText(_editingText).X[_caret]`, and this exposes that same array. It is the
+    /// measurement that was missing between the layout - whose per-offset positions are all distinct - and the paint,
+    /// which draws whatever this returns. When the two disagree the disagreement is in here, inside the canvas, and
+    /// reading the array says so in one call rather than another round of guessing.
+    /// </summary>
+    internal IReadOnlyList<double> TextCaretMetrics()
+        => _editingText is { } text ? MeasureText(text).X : Array.Empty<double>();
+
+    /// <summary>
     /// Node tool chrome: anchors and handles only — no bounding rectangle.
     ///
     /// The nodes are stored in the path's own placement frame and the overlay is drawn outside every
