@@ -6679,6 +6679,63 @@ public sealed class CanvasWorkspace : Control
 
         _vm.TextSelectionStart = Math.Min(_caret, _editAnchor);
         _vm.TextSelectionEnd = Math.Max(_caret, _editAnchor);
+
+        // **The view follows the caret while editing** (issue #258). A block that grows past the right edge of the canvas
+        // is drawn correctly and cannot be seen: the caret leaves the viewport along with the words around it, and the
+        // person reads that as text clipped at the end. This runs after every caret change, which is the only moment the
+        // question needs answering.
+        KeepCaretInView();
+    }
+
+    /// <summary>
+    /// **Keeps the caret inside the visible canvas while editing** (issue #258).
+    ///
+    /// The canvas knows where the caret is (<see cref="CaretLine"/>, in screen coordinates) and how large it is
+    /// (<see cref="Visual.Bounds"/>), so the pan is nudged by exactly the distance the caret lies outside a margin. It is
+    /// **not** moved while the caret is inside that margin, deliberately: a view that scrolls on every keystroke is worse
+    /// than one that never scrolls, because the person loses the place they were reading.
+    ///
+    /// Both axes are handled. The reported case is horizontal - a block growing to the right - but a block with many lines
+    /// leaves the viewport downwards in the same way.
+    /// </summary>
+    private void KeepCaretInView()
+    {
+        if (CaretLine() is not { } caret || Bounds.Width <= 0 || Bounds.Height <= 0)
+        {
+            return;
+        }
+
+        // A couple of characters of margin, so the person sees what they are typing rather than the caret jammed against
+        // the edge of the window.
+        const double Margin = 48;
+
+        double dx = 0;
+        if (caret.Top.X > Bounds.Width - Margin)
+        {
+            dx = (Bounds.Width - Margin) - caret.Top.X;
+        }
+        else if (caret.Top.X < Margin)
+        {
+            dx = Margin - caret.Top.X;
+        }
+
+        double dy = 0;
+        if (caret.Top.Y > Bounds.Height - Margin)
+        {
+            dy = (Bounds.Height - Margin) - caret.Top.Y;
+        }
+        else if (caret.Top.Y < Margin)
+        {
+            dy = Margin - caret.Top.Y;
+        }
+
+        if (dx == 0 && dy == 0)
+        {
+            return;
+        }
+
+        _offset = new Vector2D(_offset.X + dx, _offset.Y + dy);
+        InvalidateVisual();
     }
 
     /// <summary>
