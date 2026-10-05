@@ -178,8 +178,11 @@ public class ArtBrushOperationTests
         Assert.False(art.GetProperty("flipAcross").GetBoolean());
         Assert.Equal("tintandshade", art.GetProperty("colourisation").GetString());
 
-        // The mode is held and the effect is not: a caller must not read "tint" as "it has been tinted".
-        Assert.False(art.GetProperty("colourisationApplied").GetBoolean());
+        // **Turned round when the gap closed** (issue #214). This pinned the old truth - the mode was held and the
+        // effect was not, so a caller must not have read "tint" as "it has been tinted". PlacedArt now recolours the
+        // artwork it places, so the flag reports what happened, and the assertion becomes the positive one the
+        // pinned behaviour was standing in for.
+        Assert.True(art.GetProperty("colourisationApplied").GetBoolean());
 
         // And a nib reports no art at all, so the member says which kind the brush is rather than being noise.
         path.Stroke = path.Stroke with { Brush = BrushSpec.Calligraphic("Chisel", 35, 0.2, 24) };

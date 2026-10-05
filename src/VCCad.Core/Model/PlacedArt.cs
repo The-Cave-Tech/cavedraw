@@ -106,13 +106,84 @@ public readonly record struct PlacedArt(
             return Array.Empty<PlacedArt>();
         }
 
+        // **The colourisation is honoured here, where the art is built** (issue #214). A recoloured copy of the
+        // asset is what gets placed, and both consumers - the canvas and the exporter - draw what this returns, so
+        // no renderer learns a tinting rule of its own.
+        LayerItem artwork = Coloured(asset, spec, path);
         var resolved = new PlacedArt[placements.Count];
         for (int i = 0; i < placements.Count; i++)
         {
-            resolved[i] = new PlacedArt(asset, bounds, placements[i]);
+            resolved[i] = new PlacedArt(artwork, bounds, placements[i]);
         }
 
         return resolved;
+    }
+
+    /// <summary>
+    /// The asset as the brush's colourisation draws it: unchanged for <see cref="ArtColourisation.None"/>, and
+    /// otherwise a copy whose paints are the tint, or a blend of the tint and the shade (issue #214).
+    ///
+    /// **A tint replaces the paint, it does not wash over it.** Illustrator's tints are the stroke's colour at the
+    /// artwork's own strengths, so a black asset drawn with a red stroke is red. A clone is used rather than an edit
+    /// because the asset is a document item other strokes may draw untouched.
+    ///
+    /// **Tint-and-shade keeps the artwork's light and dark apart**, each paint placed between the brush's shade
+    /// colour and the stroke's colour by its own luminance - so a two-tone asset stays two-tone. Where the brush
+    /// names no shade, black is the shade, which is Illustrator's own default.
+    /// </summary>
+    private static LayerItem Coloured(LayerItem asset, BrushSpec spec, PathItem path)
+    {
+        if (spec.Colourisation == ArtColourisation.None)
+        {
+            return asset;
+        }
+
+        ColorRgb tint = path.Strokes.Count > 0 ? path.Strokes[^1].Color : ColorRgb.Black;
+        ColorRgb shade = spec.ShadeColour ?? ColorRgb.Black;
+        LayerItem copy = asset.Clone();
+
+        switch (copy)
+        {
+            case PathItem art:
+                art.Fill = Recolour(art.Fill, spec.Colourisation, tint, shade);
+                for (int i = 0; i < art.Strokes.Count; i++)
+                {
+                    art.Strokes[i] = art.Strokes[i] with
+                    {
+                        Color = Recolour(
+                            FillSpec.Solid(art.Strokes[i].Color), spec.Colourisation, tint, shade).Color,
+                    };
+                }
+
+                break;
+
+            case TextItem text:
+                text.Color = Recolour(FillSpec.Solid(text.Color), spec.Colourisation, tint, shade).Color;
+                break;
+        }
+
+        return copy;
+    }
+
+    /// <summary>One paint, taken to the brush's tint or to its tint-and-shade.</summary>
+    private static FillSpec Recolour(FillSpec? paint, ArtColourisation how, ColorRgb tint, ColorRgb shade)
+    {
+        if (paint?.Color is not { } original)
+        {
+            return paint ?? FillSpec.Solid(tint);
+        }
+
+        double luminance = Math.Clamp(
+            (0.2126 * original.R) + (0.7152 * original.G) + (0.0722 * original.B), 0.0, 1.0);
+
+        ColorRgb result = how == ArtColourisation.Tint
+            ? tint
+            : new ColorRgb(
+                shade.R + ((tint.R - shade.R) * luminance),
+                shade.G + ((tint.G - shade.G) * luminance),
+                shade.B + ((tint.B - shade.B) * luminance));
+
+        return paint with { Color = result };
     }
 
     /// <summary>

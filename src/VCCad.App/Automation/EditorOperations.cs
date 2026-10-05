@@ -10054,7 +10054,11 @@ public static class EditorOperations
                         // placed art **is** drawn (the canvas and the exporter both resolve it), so this flag is
                         // now the only part of an art brush that is recorded and not honoured - which is exactly
                         // why it is a member of its own rather than left to be inferred.
-                        colourisationApplied = false,
+                        // **Honoured now** (issue #214): PlacedArt recolours the artwork it places, so an art
+                        // brush that names a colourisation draws it. The flag stays a readout of what happened
+                        // rather than the constant "false" it was while the member was recorded and ignored.
+                        colourisationApplied = brush.Kind == BrushKind.Art &&
+                                               brush.Colourisation != ArtColourisation.None,
                     }
                     : null,
 
