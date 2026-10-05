@@ -6189,7 +6189,10 @@ public sealed class CanvasWorkspace : Control
 
         IBrush accent = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
         var pen = new Pen(accent, 1.2) { DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0) };
-        double half = 4.0;
+
+        // **6x6 rather than 8x8**, which is what the edit box's own handles use - the person's "a little too
+        // large" was the selection chrome being visibly chunkier than the box it surrounds (issue #247).
+        double half = 3.0;
 
         // Oriented outline through the four corners (TL → TR → BR → BL).
         var outline = new StreamGeometry();
@@ -6205,7 +6208,33 @@ public sealed class CanvasWorkspace : Control
         context.DrawGeometry(null, pen, outline);
 
         // Eight resize handles (all 3×3 cells except the centre).
-        var handlePen = new Pen(accent, 1.2);
+        //
+        // **Filled with the accent, not with white** (issue #247). A white fill on a white page is
+        // indistinguishable from no fill: four of these crossed the grey band on the Lillie header and read as
+        // filled while the other four read as empty outlines - one kind of handle looking like two different
+        // things depending on what happened to be behind it. The edit box's handles are accent-filled already;
+        // these now match, so the answer to "is it painted?" no longer depends on the artwork.
+        var handleFill = new SolidColorBrush(Color.FromRgb(0x4C, 0x9A, 0xFF));
+        foreach (Point center in SelectionHandleCentres(bounds))
+        {
+            context.FillRectangle(handleFill, new Rect(center.X - half, center.Y - half, half * 2, half * 2));
+        }
+
+        // Rotation knob above the oriented top-centre, filled the same way for the same reason.
+        Point2D top = OrientedCell(bounds, 1);
+        Point rot = ModelToScreen(RotationHandlePoint(bounds));
+        double r = 4.0;
+        context.DrawLine(pen, ModelToScreen(top), rot);
+        context.DrawEllipse(handleFill, new Pen(accent, 1.4), rot, r, r);
+    }
+
+    /// <summary>
+    /// The eight resize-handle centres in screen coordinates: the 3×3 cells of the selection rectangle except
+    /// its middle. The painter and the readout below both come here, so a test asserting where a handle is
+    /// cannot disagree with the code that draws it.
+    /// </summary>
+    private IEnumerable<Point> SelectionHandleCentres(Rect2D bounds)
+    {
         for (int i = 0; i < 9; i++)
         {
             if (i == 4)
@@ -6213,17 +6242,15 @@ public sealed class CanvasWorkspace : Control
                 continue;
             }
 
-            Point center = ModelToScreen(OrientedCell(bounds, i));
-            context.DrawRectangle(Brushes.White, handlePen,
-                new Rect(center.X - half, center.Y - half, half * 2, half * 2));
+            yield return ModelToScreen(OrientedCell(bounds, i));
         }
+    }
 
-        // Rotation knob above the oriented top-centre.
-        Point2D top = OrientedCell(bounds, 1);
-        Point rot = ModelToScreen(RotationHandlePoint(bounds));
-        double r = 4.5;
-        context.DrawLine(handlePen, ModelToScreen(top), rot);
-        context.DrawEllipse(Brushes.White, new Pen(accent, 1.4), rot, r, r);
+    /// <summary>Where the eight selection handles are, for a test that has to look at them (issue #247).</summary>
+    internal IReadOnlyList<Point> SelectionHandleCentresForTests()
+    {
+        Rect2D bounds = ChromeRect();
+        return bounds.IsEmpty ? Array.Empty<Point>() : SelectionHandleCentres(bounds).ToArray();
     }
 
     /// <summary>
