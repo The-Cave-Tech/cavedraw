@@ -1,6 +1,8 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.VisualTree;
 using VCCad.App.Controls;
 using VCCad.App.ViewModels;
 
@@ -44,6 +46,24 @@ public static class UndoShortcuts
         if (!undo && !redo)
         {
             return false;
+        }
+
+        // **An open text edit owns the key, wherever the focus is** (issue #252). Deferring is not enough here:
+        // this is a tunneling handler on the window root, so returning false only lets the key reach the canvas
+        // when the canvas happens to be on its route - and the ordinary case is that focus is in the text panel or
+        // the toolbar, where the canvas never sees it and the document undo runs against a stack that has no entry
+        // for the edit in progress. So the key is given to the canvas that is editing.
+        if (viewModel.IsEditingText)
+        {
+            CanvasWorkspace? editing = e.Source is Visual visual
+                ? TopLevel.GetTopLevel(visual)?.GetVisualDescendants().OfType<CanvasWorkspace>().FirstOrDefault()
+                : null;
+
+            if (editing is not null && editing.StepTextEdit(redo))
+            {
+                e.Handled = true;
+                return true;
+            }
         }
 
         // The canvas owns this key: it routes it into its own text editing.

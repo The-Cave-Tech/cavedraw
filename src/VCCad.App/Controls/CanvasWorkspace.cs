@@ -273,6 +273,14 @@ public sealed class CanvasWorkspace : Control
     // On-canvas text editing.
     private TextItem? _editingText;
     private TextItem? _editBefore;
+
+    /// <summary>The block at each step of the edit being made (issue #252), oldest first, with the caret and anchor
+    /// of each state; entry 0 is where the edit opened. A session is one step in the document - its command is
+    /// pushed when it ends - so Ctrl+Z during it finds nothing on the document's stack.</summary>
+    private readonly List<(TextItem Text, int Caret, int Anchor)> _editHistory = new();
+
+    /// <summary>How many entries of <see cref="_editHistory"/> are applied; the rest are redoable.</summary>
+    private int _editHistoryAt;
     private int _caret;
     private int _editAnchor;
     private bool _textSelecting;
@@ -6510,6 +6518,7 @@ public sealed class CanvasWorkspace : Control
             ? IndexAtLocal(text, ToTextLocal(text, point))
             : TextEditing.Length(text);
         _editAnchor = _caret;
+        ResetTextHistory();
 
         // The caret is published **before** the edit is announced. Opening the block is what makes the type
         // toolbar and the text panel re-read the caret, so announcing first left both describing the run of the
@@ -6554,6 +6563,8 @@ public sealed class CanvasWorkspace : Control
 
         _editingText = null;
         _editBefore = null;
+        _editHistory.Clear();
+        _editHistoryAt = 0;
         _textSelecting = false;
         if (_vm is not null)
         {
@@ -6718,6 +6729,63 @@ public sealed class CanvasWorkspace : Control
     private (int Start, int End) Selection()
         => (Math.Min(_caret, _editAnchor), Math.Max(_caret, _editAnchor));
 
+    /// <summary>Starts the session history at the state the block opened in (issue #252).</summary>
+    private void ResetTextHistory()
+    {
+        _editHistory.Clear();
+        _editHistoryAt = 0;
+        if (_editingText is not null)
+        {
+            _editHistory.Add(((TextItem)_editingText.Clone(), _caret, _editAnchor));
+        }
+    }
+
+    /// <summary>Records the block after a change; a new change drops anything undone (issue #252).</summary>
+    private void RecordTextChange()
+    {
+        if (_editingText is null)
+        {
+            return;
+        }
+
+        for (int i = _editHistory.Count - 1; i > _editHistoryAt; i--)
+        {
+            _editHistory.RemoveAt(i);
+        }
+
+        _editHistory.Add(((TextItem)_editingText.Clone(), _caret, _editAnchor));
+        _editHistoryAt = _editHistory.Count - 1;
+    }
+
+    /// <summary>Steps one change back or forward inside the edit, and says whether it could (issue #252). False is
+    /// the signal to hand the key on, so the whole edit is still one undo step once it has been made.</summary>
+    internal bool StepTextEdit(bool redo)
+    {
+        if (_editingText is null)
+        {
+            return false;
+        }
+
+        int target = redo ? _editHistoryAt + 1 : _editHistoryAt - 1;
+        if (target < 0 || target >= _editHistory.Count)
+        {
+            return false;
+        }
+
+        _editHistoryAt = target;
+        (TextItem snapshot, int caret, int anchor) = _editHistory[target];
+
+        // Copied, not referenced: a state has to be a snapshot, or a later keystroke edits the history it is
+        // measured against.
+        _editingText.Runs.Clear();
+        _editingText.Runs.AddRange(snapshot.Runs.Select(run => (TextRun)run.Clone()));
+
+        _caret = Math.Clamp(caret, 0, TextEditing.Length(_editingText));
+        _editAnchor = Math.Clamp(anchor, 0, TextEditing.Length(_editingText));
+        AfterTextEdit();
+        return true;
+    }
+
     private void InsertText(string value)
     {
         if (_editingText is null)
@@ -6736,6 +6804,7 @@ public sealed class CanvasWorkspace : Control
         _caret += value.Length;
         _editAnchor = _caret;
         AfterTextEdit();
+        RecordTextChange();
     }
 
     private void BackspaceText()
@@ -6759,6 +6828,7 @@ public sealed class CanvasWorkspace : Control
 
         _editAnchor = _caret;
         AfterTextEdit();
+        RecordTextChange();
     }
 
     private void DeleteText()
@@ -6781,6 +6851,7 @@ public sealed class CanvasWorkspace : Control
 
         _editAnchor = _caret;
         AfterTextEdit();
+        RecordTextChange();
     }
 
     private void MoveCaret(int index, bool extend)
@@ -7520,13 +7591,19 @@ public sealed class CanvasWorkspace : Control
 
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.Z)
         {
-            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+            // **The edit being made is undone first** (issue #252). Its changes are not on the document's stack,
+            // which holds one entry for the whole session pushed when it ends.
+            bool wantsRedo = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            if (!(_editingText is not null && StepTextEdit(wantsRedo)))
             {
-                _vm.Redo();
-            }
-            else
-            {
-                _vm.Undo();
+                if (wantsRedo)
+                {
+                    _vm.Redo();
+                }
+                else
+                {
+                    _vm.Undo();
+                }
             }
 
             e.Handled = true;
