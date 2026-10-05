@@ -4921,6 +4921,15 @@ public static class EditorOperations
                         italic = r.Italic,
                         advance = Math.Round(
                             VCCad.Core.Text.TextMeasurement.Advances(r).Sum(), 4),
+
+                        // **The file's own statement of how far this run runs** (issue #250). `advance` above is what
+                        // the face measures; this is what the document says, and the layout scales the glyphs to it -
+                        // which is how a substituted face still occupies the space the PDF laid out. It is null where
+                        // the document states none, and reading it is the difference between "the run is 120 wide"
+                        // and "the run was told to be 102.89 wide and the face wants 120".
+                        advanceWidth = r.AdvanceWidth is { } a ? Math.Round(a, 4) : (double?)null,
+                        glyphIds = r.GlyphIds?.Length ?? 0,
+                        embedded = r.EmbeddedFont is not null,
                         ascent = Math.Round(VCCad.Core.Text.TextMeasurement.Ascent(r), 4),
                         descent = Math.Round(VCCad.Core.Text.TextMeasurement.Descent(r), 4),
 
