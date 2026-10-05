@@ -182,6 +182,27 @@ public static class TextEditing
         text.Runs.Insert(run + 1, tail);
     }
 
+    /// <summary>
+    /// **Forgets what the file said about a run's glyphs** (issue #257).
+    ///
+    /// `GlyphIds`, the embedded programme and the file's position and inline offsets all describe the text the file wrote.
+    /// Once a run's characters are edited they describe nothing, and the paint path asks only whether the ids are long
+    /// enough for the piece it is drawing - so a short run whose id count still matches is drawn from the file's programme
+    /// by glyph id, and the characters that were typed come out as the glyphs of the characters they replaced. That is
+    /// two faces inside one word: the edited run drawn from the file's programme, its neighbour from the system face.
+    ///
+    /// Splitting is deliberately **not** covered: it partitions a run's characters without changing them, so both halves'
+    /// ids still name their own text and the imported rendering keeps its fidelity.
+    /// </summary>
+    private static void ForgetImportedGlyphs(TextRun run)
+    {
+        run.GlyphIds = null;
+        run.EmbeddedFont = null;
+        run.PositionOffsets = null;
+        run.InlineOffsets = null;
+        run.RawCodes = null;
+    }
+
     /// <summary>Inserts text at a global index, using the style of the run there.</summary>
     public static void Insert(TextItem text, int index, string value)
     {
@@ -204,6 +225,7 @@ public static class TextEditing
         target = Math.Clamp(target, 0, text.Runs.Count - 1);
         int at = ch == 0 && run > 0 ? text.Runs[target].Text.Length : ch;
         text.Runs[target].Text = text.Runs[target].Text.Insert(at, value);
+        ForgetImportedGlyphs(text.Runs[target]);
         GrewBy(text.Runs[target], value);
         Merge(text);
     }
@@ -238,6 +260,7 @@ public static class TextEditing
             int cut = Math.Min(take, len - localStart);
             string removedText = text.Runs[r].Text.Substring(localStart, cut);
             text.Runs[r].Text = text.Runs[r].Text.Remove(localStart, cut);
+            ForgetImportedGlyphs(text.Runs[r]);
             ShrunkBy(text.Runs[r], removedText);
             removed += take;
             pos += len - take;
