@@ -7073,22 +7073,7 @@ public static class EditorOperations
                     ? StandardFontResolver.Missing(ctx.Document)
                     : new[] { wanted! };
 
-                // The places worth looking. Deliberately a short, well-known list rather than a scrape of whatever a
-                // search engine returns: each entry is a site whose licensing behaviour is known, and the note beside it
-                // is what the person needs to judge before installing anything.
-                var sites = new (string Name, string Search, string Licence)[]
-                {
-                    ("Google Fonts", "https://fonts.google.com/?query={0}",
-                        "Open-source faces, free to install and use."),
-                    ("Font Squirrel", "https://www.fontsquirrel.com/fonts/list/search?q={0}",
-                        "Only faces whose licence permits commercial use, each with its licence file."),
-                    ("fonts.google.com (families)", "https://fonts.google.com/?query={0}&subset=latin",
-                        "As above, restricted to Latin subsets."),
-                    ("MyFonts", "https://www.myfonts.com/search/{0}/",
-                        "Commercial foundry marketplace: licensed, usually paid."),
-                    ("DaFont", "https://www.dafont.com/search.php?q={0}",
-                        "Mixed licences - free for personal use far more often than for commercial; check each face."),
-                };
+
 
                 return new
                 {
@@ -7101,10 +7086,10 @@ public static class EditorOperations
                     searches = missing.Select(name => new
                     {
                         font = name,
-                        sites = sites.Select(s => new
+                        sites = FontSites.All.Select(s => new
                         {
                             site = s.Name,
-                            url = string.Format(CultureInfo.InvariantCulture, s.Search, Uri.EscapeDataString(name)),
+                            url = s.UrlFor(name),
                             licence = s.Licence,
                         }).ToArray(),
                     }).ToArray(),
