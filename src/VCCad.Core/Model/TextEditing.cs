@@ -228,6 +228,7 @@ public static class TextEditing
         int at = ch == 0 && run > 0 ? text.Runs[target].Text.Length : ch;
         text.Runs[target].Text = text.Runs[target].Text.Insert(at, value);
         ForgetImportedGlyphs(text.Runs[target]);
+            TextWeights.NormaliseSourceWeights(text);
         GrewBy(text.Runs[target], value);
         Merge(text);
     }
@@ -263,6 +264,7 @@ public static class TextEditing
             string removedText = text.Runs[r].Text.Substring(localStart, cut);
             text.Runs[r].Text = text.Runs[r].Text.Remove(localStart, cut);
             ForgetImportedGlyphs(text.Runs[r]);
+            TextWeights.NormaliseSourceWeights(text);
             ShrunkBy(text.Runs[r], removedText);
             removed += take;
             pos += len - take;
