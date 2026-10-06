@@ -24,6 +24,9 @@ public sealed class TextToolbar
     private readonly ComboBox _font;
     private readonly TextBox _size;
     private readonly ToggleButton _bold;
+
+    /// <summary>The document the picker's own section was built for, so it is rebuilt only when that changes.</summary>
+    private VCCad.Core.Model.CadDocument? _fontListDocument;
     private readonly ToggleButton _italic;
     private readonly ComboBox _align;
     private readonly TextBox _lineSpacing;
@@ -54,7 +57,7 @@ public sealed class TextToolbar
         // The chooser's own list: labels carry the face count, and each row is drawn in the
         // face it offers. A family nothing can draw says so instead of quietly rendering in
         // the default, which would look exactly like a row that worked.
-        _font.ItemsSource = FontChoices.For(FontChooser.Select(null, FontCategory.All));
+        RebuildFontList();
 
         _font.SelectionChanged += (_, _) => ApplyFace();
         _size.LostFocus += (_, _) => ApplyFace();
@@ -102,9 +105,60 @@ public sealed class TextToolbar
                 or "EditingText"
                 or "IsEditingText")
             {
+                // The document may have changed under us - a second file opened, or the first one loaded after the toolbar
+                // was built - and the picker's own section belongs to whatever document is open now (issue #261).
+                RebuildFontList();
                 Sync();
             }
         };
+    }
+
+    /// <summary>
+    /// **Fills the picker: the document's faces first, in their own section, then the machine's** (issue #261).
+    ///
+    /// The list used to be the machine's families alone, built once when the window opened - **before any document
+    /// existed** - so a face the open file uses appeared nowhere: `All` never consulted the document, and the `Used`
+    /// category looked each name up in the machine's families, which answers nothing for a name like
+    /// `NPFRLV+CenturyGothic-Bold`. A person looking for "the font this file uses" was reading a list that did not contain it.
+    ///
+    /// A document face the machine does not have still gets a row: `FontFamilyEntry` requires at least one face, so it cannot
+    /// represent one, but `FontChoice` may carry `Face = null` and the row prints with the `· unavailable` convention the
+    /// machine rows already use. Each row says what the text is actually drawn with.
+    ///
+    /// Rebuilt only when the document changes: the machine's two hundred rows are not worth rebuilding on every keystroke.
+    /// </summary>
+    private void RebuildFontList()
+    {
+        VCCad.Core.Model.CadDocument? document = _view.ViewModel.Document;
+        if (ReferenceEquals(document, _fontListDocument) && _font.ItemsSource is not null)
+        {
+            return;
+        }
+
+        _fontListDocument = document;
+
+        var rows = new List<FontChoice>();
+        IReadOnlyList<FontFamilyEntry> machine = FontCatalog.Families();
+
+        foreach ((FontUsageEntry font, string source) in FontUsage.Detail(document))
+        {
+            FontFamilyEntry? entry = machine.FirstOrDefault(
+                f => string.Equals(f.Name, font.BaseFont, StringComparison.OrdinalIgnoreCase));
+
+            FontFamily? face = entry is null
+                ? null
+                : FontChooser.RowFace(entry) is { } row ? new FontFamily(row.Family) : null;
+
+            rows.Add(new FontChoice(
+                font.BaseFont,
+                $"{font.BaseFont} \u00b7 in this file \u2014 {source}",
+                face,
+                Math.Max(1, font.Runs),
+                false));
+        }
+
+        rows.AddRange(FontChoices.For(FontChooser.Select(document, FontCategory.All)));
+        _font.ItemsSource = rows;
     }
 
     public void Sync()
