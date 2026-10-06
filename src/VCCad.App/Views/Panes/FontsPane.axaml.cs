@@ -104,7 +104,12 @@ public partial class FontsPane : UserControl
     /// </summary>
     private void OnSearchPressed(object? sender, RoutedEventArgs e)
     {
-        if (RowOf(sender) is not { } row)
+        // **The row comes from the sender's DataContext.** `RowOf` walks the control's ancestry looking for the row, and it
+        // is written for the heart; a Button inside the row's template gave it nothing, so the handler returned before doing
+        // anything and the control was inert however it was clicked. Taking the bound row directly does not depend on where
+        // the control sits in the tree.
+        FontRow? row = RowOf(sender) ?? (sender as Control)?.DataContext as FontRow;
+        if (row is null)
         {
             return;
         }
