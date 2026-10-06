@@ -2503,12 +2503,30 @@ internal sealed class PdfContentImporter
 
         string baseFont = (fontDict?.GetValueOrDefault("BaseFont") as PdfName)?.Value ?? fontName;
 
+        // **The face's own name states its weight and slant, and the flags have to carry them** (issue #257).
+        //
+        // This asked the standard-font table for the *regular* face - `bold: false, italic: false` - and then took the
+        // weight from the face it got back, so a run imported from `Helvetica-Bold` came out `Bold == false` while the
+        // file's own text was drawn from the bold programme (`SourceFont`, resolved a few lines further down, names it
+        // correctly). Imported text therefore looked bold and text *typed* into the same block looked regular, because
+        // the shaped path draws from `FontFamily` + `Bold`, and the weight changed in front of the person as they typed.
+        //
+        // The style is read from the file's resolved name here, and it is OR'd with what the table reports so a table
+        // that declines the request cannot silently drop it again.
+        string sourceFace = SourceFontName(fontName, resources) ?? baseFont;
+        bool namedBold = sourceFace.Contains("Bold", StringComparison.OrdinalIgnoreCase) ||
+                         sourceFace.Contains("Black", StringComparison.OrdinalIgnoreCase) ||
+                         sourceFace.Contains("Heavy", StringComparison.OrdinalIgnoreCase) ||
+                         sourceFace.Contains("Semibold", StringComparison.OrdinalIgnoreCase);
+        bool namedItalic = sourceFace.Contains("Italic", StringComparison.OrdinalIgnoreCase) ||
+                           sourceFace.Contains("Oblique", StringComparison.OrdinalIgnoreCase);
+
         // Classify through the standard-font table rather than a handful of substring
         // tests: a PDF may name any of the fourteen standard faces, or any of their
         // many aliases, and each one identifies its family by a family word.
-        StandardFonts.TryResolve(baseFont, bold: false, italic: false, out StandardFace face);
-        bool bold = face.Bold;
-        bool italic = face.Italic;
+        StandardFonts.TryResolve(baseFont, bold: namedBold, italic: namedItalic, out StandardFace face);
+        bool bold = face.Bold || namedBold;
+        bool italic = face.Italic || namedItalic;
         string family = StandardFonts.UrwFamily(face);
 
         // The origin lift needs the ascent of the face we will actually render with.
