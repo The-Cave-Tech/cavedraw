@@ -4931,6 +4931,11 @@ public static class EditorOperations
                         // completely different face. Reported beside the rest so the two runs either side of a typed
                         // character can be compared in one state.
                         sourceFont = r.SourceFont,
+
+                        // **The face that actually appears.** `family` and `sourceFont` both agree while the drawing
+                        // changes, because `StandardFontResolver.FamilyFor` answers from one or the other: this is the
+                        // answer itself, and the only value that decides what is on the page (issue #257).
+                        resolvedFamily = VCCad.App.Fonts.FontFamilyResolver.NameFor(r),
                         positionOffsets = r.PositionOffsets?.Length,
                         inlineOffsets = r.InlineOffsets?.Length,
                         letterSpacing = r.LetterSpacing,
