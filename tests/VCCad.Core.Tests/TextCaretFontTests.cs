@@ -29,12 +29,12 @@ public class TextCaretFontTests
         TextItem text = TwoRuns();
 
         // Positions 1..4 are inside the first run; 5 is its end, which is still the first run's business.
-        Assert.Equal(("Face A", 36.0), TextEditing.FontAt(text, 3));
-        Assert.Equal(("Face A", 36.0), TextEditing.FontAt(text, 5));
+        Assert.Equal(("Face A", 36.0, false, false), TextEditing.FontAt(text, 3));
+        Assert.Equal(("Face A", 36.0, false, false), TextEditing.FontAt(text, 5));
 
         // Position 6 is one character into the second run.
-        Assert.Equal(("Face B", 12.0), TextEditing.FontAt(text, 6));
-        Assert.Equal(("Face B", 12.0), TextEditing.FontAt(text, 9));
+        Assert.Equal(("Face B", 12.0, false, false), TextEditing.FontAt(text, 6));
+        Assert.Equal(("Face B", 12.0, false, false), TextEditing.FontAt(text, 9));
     }
 
     /// <summary>
@@ -45,7 +45,7 @@ public class TextCaretFontTests
     public void AtTheStartTheFollowingCharacterDecides()
     {
         TextItem text = TwoRuns();
-        Assert.Equal(("Face A", 36.0), TextEditing.FontAt(text, 0));
+        Assert.Equal(("Face A", 36.0, false, false), TextEditing.FontAt(text, 0));
     }
 
     /// <summary>
@@ -59,7 +59,7 @@ public class TextCaretFontTests
         var empty = new TextItem();
         empty.Runs.Add(new TextRun { Text = string.Empty, FontFamily = "Face A", FontSize = 36 });
 
-        Assert.Equal(("Face A", 36.0), TextEditing.FontAt(empty, 0));
+        Assert.Equal(("Face A", 36.0, false, false), TextEditing.FontAt(empty, 0));
     }
 
     /// <summary>A block with no runs at all has nothing to adopt, and says so rather than guessing.</summary>
@@ -71,7 +71,7 @@ public class TextCaretFontTests
     [Fact]
     public void ACaretPastTheEndIsTheLastRun()
     {
-        Assert.Equal(("Face B", 12.0), TextEditing.FontAt(TwoRuns(), 99));
+        Assert.Equal(("Face B", 12.0, false, false), TextEditing.FontAt(TwoRuns(), 99));
     }
 
     /// <summary>And the run itself is what both the controls and the adoption read.</summary>

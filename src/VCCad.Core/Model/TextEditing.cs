@@ -79,8 +79,10 @@ public static class TextEditing
     /// position 0 there is nothing before, so the character after it decides. An empty block has neither, and
     /// returns null: adopting a default there would throw away the face the person chose.
     /// </summary>
-    public static (string Family, double Size)? FontAt(TextItem text, int caret)
-        => RunAt(text, caret) is { } run ? (run.FontFamily, run.FontSize) : null;
+    public static (string Family, double Size, bool Bold, bool Italic)? FontAt(TextItem text, int caret)
+        => RunAt(text, caret) is { } run
+            ? (run.FontFamily, run.FontSize, run.Bold, run.Italic)
+            : null;
 
     /// <summary>
     /// The run that applies at a caret position, or null when the block has no runs.
