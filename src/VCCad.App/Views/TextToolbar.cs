@@ -78,9 +78,35 @@ public sealed class TextToolbar
 
         Button width = view.FindControl<Button>("TtWidth")!;
         width.Click += OnSetWidth;
+        FollowCaret();
     }
 
     /// <summary>Shows the toolbar while editing and mirrors the current run into it.</summary>
+    /// <summary>
+    /// **The caret moving is what these controls follow** (issue #260).
+    ///
+    /// <see cref="Sync"/> already reads the run at `TextCaretOffset` and writes the face, the size, the weight and the slant
+    /// from it - but nothing called it when the caret moved, so the fields described the selected block rather than the text
+    /// under the caret. In a block holding regular and bold words that meant the B button showed one answer for both, and the
+    /// person had no way to see from the controls what the text at the caret actually was.
+    ///
+    /// The view model publishes every caret move already, so the subscription is all that was missing.
+    /// </summary>
+    private void FollowCaret()
+    {
+        _view.ViewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is "TextCaretOffset"
+                or "TextSelectionStart"
+                or "TextSelectionEnd"
+                or "EditingText"
+                or "IsEditingText")
+            {
+                Sync();
+            }
+        };
+    }
+
     public void Sync()
     {
         bool editing = _view.ViewModel.IsEditingText;
