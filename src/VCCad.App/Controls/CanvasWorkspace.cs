@@ -286,6 +286,9 @@ public sealed class CanvasWorkspace : Control
     private bool _textSelecting;
     private string? _textClipboard;
 
+    /// <summary>What this editor last put on the system clipboard, so text copied elsewhere can be told apart from it.</summary>
+    private string? _textClipboardWritten;
+
     /// <summary>
     /// **What the block's clipboard holds, as runs rather than characters** (issue #253). A `string` cannot carry a
     /// run's face, size, weight or slant, so pasting used to drop every one of them - the half of the request that
@@ -6865,6 +6868,17 @@ public sealed class CanvasWorkspace : Control
         (int start, int end) = Selection();
         _textClipboard = TextEditing.GetRange(_editingText, start, end);
         RememberClipboardRuns(start, end);
+
+        // **The characters also go to the system clipboard** (issue #256). The block keeps runs, which is what makes a
+        // paste inside the editor keep its formatting; the system clipboard gets the text, which is what makes a paste
+        // into another application work at all. Fire and forget: a copy must not wait on another process to answer.
+        TopLevel? top = TopLevel.GetTopLevel(this);
+        if (top?.Clipboard is { } clipboard && !string.IsNullOrEmpty(_textClipboard))
+        {
+            _textClipboardWritten = _textClipboard;
+            _ = clipboard.SetTextAsync(_textClipboard);
+        }
+
         return _textClipboard.Length;
     }
 
@@ -6895,9 +6909,45 @@ public sealed class CanvasWorkspace : Control
     /// <summary>Puts the clipboard in at the caret (issue #253).</summary>
     internal int PasteTextClipboard()
     {
-        if (_editingText is null || string.IsNullOrEmpty(_textClipboard))
+        if (_editingText is null)
         {
             return 0;
+        }
+
+        // **The system clipboard is consulted whenever it holds something newer than our own copy** (issue #256). The
+        // block's clipboard is preferred when it is still the text we put on the system one - that is the copy that
+        // carries formatting - and the system clipboard wins when its text differs, because that means the person copied
+        // something elsewhere and that is what they mean by "paste".
+        if (TopLevel.GetTopLevel(this)?.Clipboard is { } systemClipboard)
+        {
+            try
+            {
+                IAsyncDataTransfer? transfer = systemClipboard.TryGetDataAsync().GetAwaiter().GetResult();
+                string? outside = transfer?.TryGetTextAsync().GetAwaiter().GetResult();
+                if (!string.IsNullOrEmpty(outside) &&
+                    !string.Equals(outside, _textClipboardWritten, StringComparison.Ordinal))
+                {
+                    _textClipboard = outside;
+                    _textClipboardRuns.Clear();
+                }
+            }
+            catch (Exception)
+            {
+                // No clipboard, or another process holding it: the block's own copy is still what we paste.
+            }
+        }
+
+        if (string.IsNullOrEmpty(_textClipboard))
+        {
+            return 0;
+        }
+
+        // Text that came from outside the editor has no runs of its own; it is inserted in the style already at the
+        // caret, which is what pasting plain text into a styled block should do.
+        if (_textClipboardRuns.Count == 0)
+        {
+            InsertText(_textClipboard);
+            return _textClipboard.Length;
         }
 
         int total = 0;
