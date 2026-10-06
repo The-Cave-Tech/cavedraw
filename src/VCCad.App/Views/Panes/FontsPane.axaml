@@ -21,7 +21,7 @@
     <ListBox Grid.Row="2" Name="Rows" SelectionMode="Single" SelectionChanged="OnRowSelected">
       <ListBox.ItemTemplate>
         <DataTemplate DataType="fonts:FontRow">
-          <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+          <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
             <!-- The triangle points the way the row will go. -->
             <TextBlock Grid.Column="0" Width="14" VerticalAlignment="Center"
                        Text="{Binding Chevron}" PointerPressed="OnChevronPressed"/>
@@ -35,7 +35,14 @@
                        FontStyle="{Binding Slant}"
                        VerticalAlignment="Center" Padding="0,2"/>
 
-            <TextBlock Grid.Column="3" Width="16" Text="&#x2665;" VerticalAlignment="Center"
+            <!-- **A face the machine cannot draw can be searched for** (issue #262). The pane is where this belongs rather
+                 than the toolbar's combo: a popup is outside the visual tree and nothing can click or photograph it, and
+                 this control has to be both. Shown on every row, because "where do I get this" is a fair question of any
+                 family, installed or not. -->
+            <TextBlock Grid.Column="3" Width="34" Text="find" VerticalAlignment="Center"
+                       Foreground="{DynamicResource VcTextDim}" PointerPressed="OnSearchPressed"/>
+
+            <TextBlock Grid.Column="4" Width="16" Text="&#x2665;" VerticalAlignment="Center"
                        Opacity="{Binding HeartOpacity}" PointerPressed="OnHeartPressed"/>
           </Grid>
         </DataTemplate>

@@ -95,6 +95,26 @@ public partial class FontsPane : UserControl
         Rebuild();
     }
 
+    /// <summary>
+    /// **Shows where a face can be found** (issue #262).
+    ///
+    /// The person's half of `fonts.findMissing`: the same list from the same helper, printed where the automation surface can
+    /// read it - the preview strip under the list. Nothing is downloaded and nothing is installed from here; each site is
+    /// listed with the licence note it is known for, because DaFont's "free" and Google's "free" are not the same offer.
+    /// </summary>
+    private void OnSearchPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (RowOf(sender) is not { } row)
+        {
+            return;
+        }
+
+        e.Handled = true;
+
+        string places = string.Join("   ", FontSites.Downloads.Select(s => s.Name + " (" + s.Licence + ")"));
+        Preview.Text = row.Family + " - where to get it:  " + places + "   " + FontSites.InstallHint;
+    }
+
     /// <summary>Stars or unstars the row's family.</summary>
     private void OnHeartPressed(object? sender, PointerPressedEventArgs e)
     {
