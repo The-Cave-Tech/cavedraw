@@ -102,7 +102,7 @@ public partial class FontsPane : UserControl
     /// read it - the preview strip under the list. Nothing is downloaded and nothing is installed from here; each site is
     /// listed with the licence note it is known for, because DaFont's "free" and Google's "free" are not the same offer.
     /// </summary>
-    private void OnSearchPressed(object? sender, PointerPressedEventArgs e)
+    private void OnSearchPressed(object? sender, RoutedEventArgs e)
     {
         if (RowOf(sender) is not { } row)
         {

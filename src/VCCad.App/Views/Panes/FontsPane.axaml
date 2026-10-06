@@ -39,8 +39,12 @@
                  than the toolbar's combo: a popup is outside the visual tree and nothing can click or photograph it, and
                  this control has to be both. Shown on every row, because "where do I get this" is a fair question of any
                  family, installed or not. -->
-            <TextBlock Grid.Column="3" Width="34" Text="find" VerticalAlignment="Center"
-                       Foreground="{DynamicResource VcTextDim}" PointerPressed="OnSearchPressed"/>
+            <!-- A Button, not a TextBlock with a pointer handler: the pointer events for a row's content are taken by
+                 the ListBoxItem before they reach a child, so the TextBlock version was rendered, clickable by the
+                 automation surface and completely inert. The pane's own category buttons use Click, and that path works. -->
+            <Button Grid.Column="3" Content="find" Padding="4,0" Margin="0,0,4,0"
+                    VerticalAlignment="Center" FontSize="10"
+                    Click="OnSearchPressed"/>
 
             <TextBlock Grid.Column="4" Width="16" Text="&#x2665;" VerticalAlignment="Center"
                        Opacity="{Binding HeartOpacity}" PointerPressed="OnHeartPressed"/>
