@@ -4070,7 +4070,15 @@ public sealed class CanvasWorkspace : Control
         // on this — it draws each piece at full size on every sheet it touches and
         // lets the page edge do the cutting — so without it the artwork spills across
         // the pasteboard. The document keeps the overflow; only the view clips it.
-        if (ClipToArtboard)
+        //
+        // **Except while a block is being edited** (issue #258). The clip is right for looking at a page and wrong for
+        // writing on one: text typed past the MediaBox was cut at the page edge, so a person saw what they were typing
+        // disappear at a boundary they had no control over - "the text is still being clipped at the end". While an edit
+        // is open the page's cutting edge is lifted, so everything being written is visible; it returns the moment the
+        // edit closes. Only the artboard holding the block is relaxed, so every other page keeps its edge.
+        bool editingHere = _editingText is not null;
+
+        if (ClipToArtboard && !editingHere)
         {
             using (context.PushClip(rect))
             {
