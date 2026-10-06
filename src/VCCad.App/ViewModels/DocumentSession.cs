@@ -1275,6 +1275,13 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 TextRun run = text.Runs[r];
                 bool faceChanged = false;
 
+                // **A weight or a slant is not a choice of face** (issue #257). Clearing `SourceFont` on a bold or italic
+                // change made the canvas stop resolving the face the *file* asked for and fall back to the run's stored
+                // `FontFamily` - so a bold toggle on the Lillie licence block swapped Century Gothic for Nimbus Sans, with
+                // nothing on screen to explain it. The file's name is what carries that face; a weight change keeps it, and
+                // the resolver then answers with the same face in its bold variant, which is exactly right.
+                bool familyChosen = false;
+
                 // **A blank family is not a choice of face.** The size/bold/italic handler passes the font
                 // field's text along with the field it is actually editing, and that text is empty whenever
                 // the block holds no single face - so writing it through wiped the run's family. Measured:
@@ -1287,6 +1294,7 @@ public sealed class DocumentSession : INotifyPropertyChanged
                 {
                     run.FontFamily = family;
                     faceChanged = true;
+                    familyChosen = true;
                 }
 
                 if (bold is { } weight && run.Bold != weight)
@@ -1303,8 +1311,9 @@ public sealed class DocumentSession : INotifyPropertyChanged
 
                 // A face the person chose no longer means what the file said: the name the document asked for and
                 // the programme it carried both belonged to the face just replaced. A size alone does not replace a
-                // face - the programme is scale-independent - so it is not treated as a choice of face.
-                if (faceChanged)
+                // face - the programme is scale-independent - so it is not treated as a choice of face; and neither is
+                // a weight or a slant, which the file's own face can express.
+                if (faceChanged && familyChosen)
                 {
                     ChoseFace(run, run.FontFamily);
                 }
