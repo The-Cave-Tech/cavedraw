@@ -4925,6 +4925,12 @@ public static class EditorOperations
                         // reaches. They were invisible from outside, which is why seven fixes for this symptom were
                         // written against assumptions: reported as lengths, so "is this run on the tracked route, and
                         // does its data cover its text" is a fact rather than a guess.
+                        // **The face the file asked for, which decides what is drawn** (issue #257). `FontFamily` alone
+                        // does not say which face appears: the resolver answers from `SourceFont` when a run has one and
+                        // from `FontFamily` when it does not, so a run that looks identical here can be drawn in a
+                        // completely different face. Reported beside the rest so the two runs either side of a typed
+                        // character can be compared in one state.
+                        sourceFont = r.SourceFont,
                         positionOffsets = r.PositionOffsets?.Length,
                         inlineOffsets = r.InlineOffsets?.Length,
                         letterSpacing = r.LetterSpacing,

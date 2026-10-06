@@ -400,7 +400,16 @@ public static class TextEditing
         return probe.Advances().Sum();
     }
 
-    /// <summary>Merges adjacent runs whose style is identical.</summary>
+    /// <summary>
+    /// Merges adjacent runs whose style is identical - **including the face the file asked for** (issue #257).
+    ///
+    /// The comparison used to stop at `FontFamily`, size, weight and slant, and `FontFamily` does not describe what is
+    /// drawn: `StandardFontResolver.FamilyFor` answers from `SourceFont` when a run has one and from `FontFamily` when it
+    /// does not. Two runs can therefore agree on every member compared here and still be drawn in completely different
+    /// faces - `Arial` and `Century Gothic`, say, both stored as `FontFamily = "Nimbus Sans"`. Typing merges runs, so a
+    /// character inserted between two such runs joined them and kept the first one's face, and the rest of the text
+    /// changed font under the person's hands with nothing on screen to explain it.
+    /// </summary>
     public static void Merge(TextItem text)
     {
         for (int r = 0; r + 1 < text.Runs.Count;)
@@ -408,7 +417,8 @@ public static class TextEditing
             TextRun a = text.Runs[r];
             TextRun b = text.Runs[r + 1];
             if (a.FontFamily == b.FontFamily && Math.Abs(a.FontSize - b.FontSize) < 1e-9 &&
-                a.Bold == b.Bold && a.Italic == b.Italic)
+                a.Bold == b.Bold && a.Italic == b.Italic &&
+                string.Equals(a.SourceFont, b.SourceFont, StringComparison.Ordinal))
             {
                 a.Text += b.Text;
                 MergeAdvances(a, b);
