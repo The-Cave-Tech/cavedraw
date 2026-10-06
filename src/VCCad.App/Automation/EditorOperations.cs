@@ -7058,6 +7058,61 @@ public static class EditorOperations
                 };
             });
 
+        Add("fonts.findMissing",
+            "**Where to get a font a document names but this machine cannot draw** (issue #262). " +
+            "For each such face it returns the sites that carry it, each with the licence note the site is known for, so " +
+            "the choice is informed rather than automatic. Nothing is downloaded: installing a face is the person's " +
+            "decision, and a face installed into the user's own font directory is picked up by the running application. " +
+            "Pass a font name to search for one face, or omit it for every face the document needs and cannot draw.",
+            "font?:string",
+            (ctx, p) =>
+            {
+                string? wanted = p.GetString("font");
+
+                IReadOnlyList<string> missing = string.IsNullOrWhiteSpace(wanted)
+                    ? StandardFontResolver.Missing(ctx.Document)
+                    : new[] { wanted! };
+
+                // The places worth looking. Deliberately a short, well-known list rather than a scrape of whatever a
+                // search engine returns: each entry is a site whose licensing behaviour is known, and the note beside it
+                // is what the person needs to judge before installing anything.
+                var sites = new (string Name, string Search, string Licence)[]
+                {
+                    ("Google Fonts", "https://fonts.google.com/?query={0}",
+                        "Open-source faces, free to install and use."),
+                    ("Font Squirrel", "https://www.fontsquirrel.com/fonts/list/search?q={0}",
+                        "Only faces whose licence permits commercial use, each with its licence file."),
+                    ("fonts.google.com (families)", "https://fonts.google.com/?query={0}&subset=latin",
+                        "As above, restricted to Latin subsets."),
+                    ("MyFonts", "https://www.myfonts.com/search/{0}/",
+                        "Commercial foundry marketplace: licensed, usually paid."),
+                    ("DaFont", "https://www.dafont.com/search.php?q={0}",
+                        "Mixed licences - free for personal use far more often than for commercial; check each face."),
+                };
+
+                return new
+                {
+                    // What the document asks for and what is actually drawn instead, which is what makes a face worth
+                    // chasing in the first place.
+                    needs = FontUsage.Detail(ctx.Document)
+                        .Where(d => missing.Any(m => string.Equals(m, d.Font.BaseFont, StringComparison.OrdinalIgnoreCase)))
+                        .Select(d => new { font = d.Font.BaseFont, drawnWith = d.Source })
+                        .ToArray(),
+                    searches = missing.Select(name => new
+                    {
+                        font = name,
+                        sites = sites.Select(s => new
+                        {
+                            site = s.Name,
+                            url = string.Format(CultureInfo.InvariantCulture, s.Search, Uri.EscapeDataString(name)),
+                            licence = s.Licence,
+                        }).ToArray(),
+                    }).ToArray(),
+                    installHint = "Install a face into your own font directory and this application picks it up; nothing is " +
+                                  "redistributed with it. fonts.list then reports the face itself instead of a substitute.",
+                };
+            });
+
         Add("fonts.list",
             "Every font the active document uses, whether its programme is embedded in the file, " +
             "and whether the canvas is drawing with it. A font that is embedded but not resolved, " +
