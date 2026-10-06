@@ -22,6 +22,15 @@ public partial class FontsPane : UserControl
     private EditorViewModel? _vm;
     private bool _syncing;
 
+    /// <summary>
+    /// **The places a face can be found, once asked for** (issue #262).
+    ///
+    /// Held rather than only written to the strip: selecting the row fires `OnRowSelected`, which calls `ShowPreview` and puts
+    /// the sample back - so the list was wiped a moment after it was written, and the control looked inert when it had in
+    /// fact worked. Keeping it here means the strip shows the search until another row is chosen.
+    /// </summary>
+    private string? _sites;
+
     public FontsPane()
     {
         InitializeComponent();
@@ -61,7 +70,7 @@ public partial class FontsPane : UserControl
     /// <summary>Sets the sample line in the given family.</summary>
     private void ShowPreview(FontRow row)
     {
-        Preview.Text = FontChooser.PreviewText;
+        Preview.Text = _sites ?? FontChooser.PreviewText;
         Preview.FontFamily = row.Face ?? FontFamily.Default;
         Preview.FontWeight = row.Weight;
         Preview.FontStyle = row.Slant;
@@ -117,7 +126,8 @@ public partial class FontsPane : UserControl
         e.Handled = true;
 
         string places = string.Join("   ", FontSites.Downloads.Select(s => s.Name + " (" + s.Licence + ")"));
-        Preview.Text = row.Family + " - where to get it:  " + places + "   " + FontSites.InstallHint;
+        _sites = row.Family + " - where to get it:  " + places + "   " + FontSites.InstallHint;
+        Preview.Text = _sites;
     }
 
     /// <summary>Stars or unstars the row's family.</summary>
@@ -147,6 +157,8 @@ public partial class FontsPane : UserControl
             return;
         }
 
+        // A new row is a new subject: the last search's answer no longer belongs on the strip.
+        _sites = null;
         ShowPreview(row);
 
         if (_vm is null || _vm.SelectedTextItems().ToList() is not { Count: > 0 })
