@@ -138,6 +138,15 @@ public sealed class DocumentSession : INotifyPropertyChanged
     /// being edited.
     /// </summary>
     public double DefaultFontSize { get; set; } = 12.0;
+    /// <summary>
+    /// **The weight and the slant the text controls show** (issue #260), published from the run at the caret exactly as the
+    /// face and the size are. A block can hold regular and bold words, so these are what the toolbar's B and I buttons
+    /// reflect - without them the buttons described wherever the block was last set rather than the text being edited.
+    /// </summary>
+    public bool DefaultBold { get; set; }
+
+    /// <summary>See <see cref="DefaultBold"/>.</summary>
+    public bool DefaultItalic { get; set; }
 
     public TextItem? EditingText { get; set; }
 

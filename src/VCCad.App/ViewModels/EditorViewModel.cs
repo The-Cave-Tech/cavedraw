@@ -533,6 +533,19 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         get => _active.DefaultFontSize;
         set => _active.DefaultFontSize = value;
     }
+    /// <summary>Whether the text controls show bold - the weight of the run at the caret (issue #260).</summary>
+    public bool DefaultBold
+    {
+        get => _active.DefaultBold;
+        set => _active.DefaultBold = value;
+    }
+
+    /// <summary>Whether the text controls show italic - the slant of the run at the caret (issue #260).</summary>
+    public bool DefaultItalic
+    {
+        get => _active.DefaultItalic;
+        set => _active.DefaultItalic = value;
+    }
 
     /// <summary>The text block being edited, if any; the target of styling operations.</summary>
     public TextItem? EditingText

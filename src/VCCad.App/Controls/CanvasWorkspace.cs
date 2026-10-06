@@ -6659,6 +6659,11 @@ public sealed class CanvasWorkspace : Control
         {
             _vm.DefaultFontSize = font.Size;
         }
+        // **The weight and the slant follow the caret too** (issue #260). They are what the toolbar's B and I buttons
+        // show; taken from the block they described wherever it was last set rather than the text under the caret, so a
+        // block holding regular and bold words gave one answer for both.
+        _vm.DefaultBold = font.Bold;
+        _vm.DefaultItalic = font.Italic;
     }
 
     private void UpdateCaretInfo()
