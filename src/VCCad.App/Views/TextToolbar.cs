@@ -158,6 +158,24 @@ public sealed class TextToolbar
         }
 
         rows.AddRange(FontChoices.For(FontChooser.Select(document, FontCategory.All)));
+
+        // **The faces the canvas actually draws with belong in the list too** (issue #263). The chooser's own catalogue is
+        // the machine's registered families; a document that names Helvetica (or any of the fourteen standard names) is
+        // drawn with the standard chain - the URW faces located on this machine, then the metric-compatible platform clones.
+        // Those are not registered families, so they were absent from the list, and `Sync` could not select the caret's
+        // family: the toolbar showed an empty box for text that was plainly in Nimbus Sans.
+        IReadOnlyList<string> offered = StandardFontResolver.OfferedFamilies();
+        IReadOnlyList<string> standard = StandardFontResolver.StandardFamilyNames();
+        foreach (string name in offered)
+        {
+            if (rows.Any(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            rows.Add(new FontChoice(name, name, new FontFamily(name), 1, standard.Contains(name, StringComparer.OrdinalIgnoreCase)));
+        }
+
         _font.ItemsSource = rows;
     }
 

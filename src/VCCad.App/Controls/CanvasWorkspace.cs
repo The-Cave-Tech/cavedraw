@@ -4207,9 +4207,19 @@ public sealed class CanvasWorkspace : Control
         var scopes = new List<DrawingContext.PushedState>();
         try
         {
-            foreach (StreamGeometry clip in ClipGeometries(item))
+            // **While a block is being edited, the file's clips do not cut it** (issue #263). A clip in a PDF is a fixed
+            // shape - here a "Clipping Mask" group whose clip is the box the header text occupied when the file was
+            // written. Typing into that text grows it past the clip and the new characters are simply not drawn: the line
+            // stopped in the middle of a word and the rest was invisible, with no way to see what had been typed. The clip
+            // is the file's statement about the file's text, so it is suspended for the block being edited and for the
+            // groups containing it - the whole path a keystroke can change - and left alone everywhere else. This is the
+            // same decision the artboard's page clip already makes while editing.
+            if (!ContainsEditingText(item))
             {
-                scopes.Add(context.PushGeometryClip(clip));
+                foreach (StreamGeometry clip in ClipGeometries(item))
+                {
+                    scopes.Add(context.PushGeometryClip(clip));
+                }
             }
 
             PaintItemCore(context, item, opacity, toWorld);
@@ -4221,6 +4231,38 @@ public sealed class CanvasWorkspace : Control
                 scopes[i].Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Whether this item is the block being edited, or a group containing it (issue #263).
+    ///
+    /// The path from the root to the edited block is exactly the set of items a keystroke can change the shape of, so it
+    /// is the set whose file clips have to stand aside while the person types.
+    /// </summary>
+    private bool ContainsEditingText(LayerItem item)
+    {
+        if (_editingText is null)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(item, _editingText))
+        {
+            return true;
+        }
+
+        if (item is ArtGroup group)
+        {
+            foreach (LayerItem child in group.Children)
+            {
+                if (ContainsEditingText(child))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>One geometry per clip on the item, in the order the file set them.</summary>
